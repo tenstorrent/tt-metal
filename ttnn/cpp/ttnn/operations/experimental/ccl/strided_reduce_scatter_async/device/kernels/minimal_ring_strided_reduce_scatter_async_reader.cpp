@@ -27,18 +27,19 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t dim = get_compile_time_arg_val(15);
-constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(16);
-constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
-constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
-constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(22);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
+constexpr uint32_t dim = get_compile_time_arg_val(13);
+constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(14);
+constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(15);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
+constexpr uint32_t N_block_wt = get_compile_time_arg_val(18);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
+constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(20);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -51,12 +52,10 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
-    arg_idx += 5;  // skip unused: chunks_per_sync, start_tiles_read, start_tiles_to_read, start_pages_read_in_row,
-                   // start_row_offset
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 23;
+    constexpr uint32_t ct_idx = 21;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;

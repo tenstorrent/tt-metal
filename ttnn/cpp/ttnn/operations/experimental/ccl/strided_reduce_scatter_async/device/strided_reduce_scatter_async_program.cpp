@@ -207,9 +207,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t input_tensor_Wt,
     const uint32_t slice_C,
-    const uint32_t slice_Ht,
     const uint32_t slice_Wt,
-    const bool fuse_op,
     const uint32_t normalized_dim,
     const uint32_t M_blocks_per_core,
     const uint32_t mm_N_blocks_per_slice,
@@ -232,9 +230,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         input_tensor_B,           // input_tensor_B
         input_tensor_Wt,          // input_tensor_Wt
         slice_C,                  // slice_C
-        slice_Ht,                 // slice_Ht
         slice_Wt,                 // slice_Wt
-        fuse_op,                  // fused op
         normalized_dim,           // dim normalized to 4D
         M_blocks_per_core,        // M_blocks_per_core
         mm_N_blocks_per_slice,    // mm_N_blocks_per_slice
@@ -260,7 +256,6 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t input_tensor_Wt,
     const uint32_t slice_C,
-    const uint32_t slice_Ht,
     const uint32_t slice_Wt,
     const uint32_t normalized_dim,
     const uint32_t M_blocks_per_core,
@@ -285,7 +280,6 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         input_tensor_B,                 // input_tensor_B
         input_tensor_Wt,                // input_tensor_Wt
         slice_C,                        // slice_C
-        slice_Ht,                       // slice_Ht
         slice_Wt,                       // slice_Wt
         normalized_dim,                 // dim normalized to 4D
         M_blocks_per_core,              // M_blocks_per_core
@@ -309,7 +303,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t mm_N_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
-    const uint32_t N_block_wt,
     const uint32_t chunk_width_in_tiles,
     const uint32_t chunks_per_mm_N_block,
     const uint32_t slice_Wt) {
@@ -325,7 +318,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         mm_N_blocks_per_slice,    // mm_N_blocks_per_slice
         mm_block_ht,              // mm_block_ht
         mm_cores_y,               // mm_cores_y
-        N_block_wt,               // N_block_wt
         chunk_width_in_tiles,     // chunk_width_in_tiles
         chunks_per_mm_N_block,    // chunks_per_mm_N_block
         slice_Wt,                 // slice_Wt
@@ -407,7 +399,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
@@ -664,9 +655,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             input_tensor_B,
             input_tensor_Wt,
             slice_C,
-            slice_Ht,
             slice_Wt,
-            fuse_op,
             normalized_dim,
             M_blocks_per_core,
             mm_N_blocks_per_slice,
@@ -713,7 +702,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             input_tensor_B,
             input_tensor_Wt,
             slice_C,
-            slice_Ht,
             slice_Wt,
             normalized_dim,
             M_blocks_per_core,
@@ -774,7 +762,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
-            mm_N_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_block_val,
             slice_Wt);
@@ -818,33 +805,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
-                auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
-                    operations::experimental::ccl::strided_reduce_scatter_async::detail::get_tile_offsets(
-                        worker_id,
-                        num_workers,
-                        output_batch_num_pages,
-                        output_channel_num_pages,
-                        slice_Wt,
-                        input_tensor_Wt,
-                        normalized_dim);
-
-                uint32_t tiles_to_process_per_slice =
-                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(
-                    operations::experimental::ccl::strided_reduce_scatter_async::detail::default_chunks_per_sync(
-                        topology, tiles_to_process_per_slice, tile_granularity));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
-
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     semaphore.at(dir).address(),              // out_ready_semaphore
                     dir,                                      // direction
-                    chunks_per_sync_val,                      // chunks_per_sync
-                    start_tiles_read,                         // start_tiles_read
-                    start_tiles_to_read,                      // start_tiles_to_read
-                    start_pages_read_in_row,                  // start_pages_read_in_row
-                    start_row_offset,                         // start_row_offset
                     worker_id,                                // worker_id
                     num_workers,                              // num_workers
                 };
@@ -875,14 +840,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                     barrier_semaphore.has_value()                                // barrier_sem
                         ? barrier_semaphore.value().address()
                         : 0,
-                    dir,                      // direction
-                    chunks_per_sync_val,      // chunks_per_sync
-                    start_pages_read_in_row,  // start_pages_read_in_row
-                    start_row_offset,         // start_row_offset
-                    start_tiles_read,         // start_tiles_read
-                    start_tiles_to_read,      // tiles_to_read
-                    worker_id,                // worker_id
-                    num_workers,              // num_workers
+                    dir,          // direction
+                    worker_id,    // worker_id
+                    num_workers,  // num_workers
                 };
                 append_fabric_mux_connection_rt_args(
                     mux_connection_valid(dir),
@@ -904,11 +864,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
                 std::vector<uint32_t> reduce_rt_args = {
-                    start_tiles_read,     // start_tiles_read
-                    start_tiles_to_read,  // start_tiles_to_read
-                    dir,                  // direction
-                    worker_id,            // worker_id
-                    num_workers};         // num_workers
+                    dir,           // direction
+                    worker_id,     // worker_id
+                    num_workers};  // num_workers
                 tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
@@ -1034,7 +992,6 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.using_persistent_buffers,
         operation_attributes.sub_device_id,
         fused_op_signaler,
-        operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),

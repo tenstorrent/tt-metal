@@ -19,12 +19,11 @@ void kernel_main() {
     constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(7);
     constexpr uint32_t mm_block_ht = get_compile_time_arg_val(8);
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
-    constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(12);
-    constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
+    constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(11);
+    constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 
     uint32_t arg_idx = 0;
-    arg_idx += 2;  // skip unused: start_tiles_read, start_tiles_to_read
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);

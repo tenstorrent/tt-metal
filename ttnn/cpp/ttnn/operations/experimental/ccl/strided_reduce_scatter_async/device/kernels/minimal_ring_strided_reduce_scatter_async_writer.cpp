@@ -35,25 +35,27 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
-constexpr uint32_t dim = get_compile_time_arg_val(15);
-constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(16);
-constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(17);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(18);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(19);
-constexpr uint32_t N_block_wt = get_compile_time_arg_val(20);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(21);
-constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t dim = get_compile_time_arg_val(14);
+constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(15);
+constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(16);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(17);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
+constexpr uint32_t N_block_wt = get_compile_time_arg_val(19);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
+constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
 
-constexpr uint32_t num_ct_args = 28;
+constexpr uint32_t num_ct_args = 27;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -83,8 +85,6 @@ void kernel_main() {
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
-    arg_idx += 5;  // skip unused: chunks_per_sync, start_pages_read_in_row, start_row_offset, start_tiles_read,
-                   // start_tiles_to_read
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
