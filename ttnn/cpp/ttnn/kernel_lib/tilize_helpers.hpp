@@ -17,7 +17,7 @@
  * - Compile-time type safety via template parameters for CB IDs
  * - Descriptive enum-based configuration instead of boolean flags
  * - Automatic fast tilize detection at compile time
- * - Support for both symmetric and asymmetric CB page sizes
+ * - Support for both symmetric and asymmetric CB page consumption
  *
  * Key Features:
  * - ONE function handles all tilize patterns
@@ -28,19 +28,24 @@
  * IMPORTANT: Tilize functions require compute kernel hardware initialization.
  * You MUST call compute_kernel_hw_startup() or equivalent before using tilize.
  *
- * Symmetric vs Asymmetric Page Sizes:
+ * Symmetric vs Asymmetric Pages:
+ *
+ * The terms "symmetric" and "asymmetric" refer to whether the number of pages
+ * consumed from the input CB equals the number of pages produced on the output CB.
+ * This is determined by whether the input and output CBs have the same page size.
  *
  *   **Symmetric** (default, total_input_pages = 0):
- *   Both input and output CBs have tile-sized pages. Each block waits for and
- *   pops exactly block_width_tiles input pages. This is the common case.
+ *   Input and output CBs have the same page size (both tile-sized), so each
+ *   block consumes and produces the same number of pages (block_width_tiles).
+ *   This is the common case.
  *
  *   **Asymmetric** (total_input_pages > 0):
- *   Input CB pages are NOT tile-sized (e.g., row-major sticks where each page
- *   is one row). The total number of input pages differs from the total number
- *   of output tiles. Pass total_input_pages to tell the function how many input
- *   pages exist in total; each block then waits/pops min(32, pages_left).
- *   Use this whenever the reader produces non-tile-aligned pages that the
- *   tilize hardware must reassemble into tiles.
+ *   Input and output CBs have different page sizes (e.g., input pages are
+ *   row-major sticks, output pages are tiles). Because page sizes differ, the
+ *   number of input pages consumed differs from the number of output tiles
+ *   produced. Pass total_input_pages to specify how many input pages exist;
+ *   each block then consumes min(32, pages_left) input pages while producing
+ *   block_width_tiles output tiles.
  *
  * Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -48,11 +53,11 @@
  *   // Initialize compute kernel hardware FIRST
  *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
  *
- *   // Symmetric — both CBs have tile-sized pages (most common)
+ *   // Symmetric — same page size on both CBs, pages consumed == pages produced
  *   compute_kernel_lib::tilize<cb_in, cb_out>(block_width_tiles, num_blocks);
  *
- *   // Asymmetric — input CB has row-sized pages, output CB has tile-sized pages
- *   // total_input_pages = total rows the reader will produce
+ *   // Asymmetric — different page sizes, pages consumed != pages produced
+ *   // (e.g., input CB has row-sized pages, output CB has tile-sized pages)
  *   compute_kernel_lib::tilize<cb_in, cb_out>(out_tiles, num_blocks, total_rows);
  */
 
@@ -110,9 +115,10 @@ enum class WaitMode : uint8_t {
 /**
  * @brief Unified tilize function handling all patterns with type-safe API
  *
- * Handles symmetric and asymmetric CB page sizes, automatic fast tilize
- * detection, data type reconfiguration, init/uninit chaining, and flexible
- * wait strategies — all with zero runtime overhead via compile-time dispatch.
+ * Handles symmetric and asymmetric page consumption (see file header for
+ * definitions), automatic fast tilize detection, data type reconfiguration,
+ * init/uninit chaining, and flexible wait strategies — all with zero runtime
+ * overhead via compile-time dispatch.
  *
  * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
  * Before calling this function, you MUST initialize the compute kernel hardware by
@@ -126,20 +132,21 @@ enum class WaitMode : uint8_t {
  *
  * @param block_width_tiles Output tiles per block
  * @param num_blocks Number of blocks to process
- * @param total_input_pages Total input pages across all blocks.
- *        Default 0 = symmetric: each block waits/pops block_width_tiles input pages.
- *        When > 0 = asymmetric: each block waits/pops min(32, pages_left) input pages,
- *        where pages_left counts down from total_input_pages.
+ * @param total_input_pages Total input pages across all blocks (0 = symmetric, >0 = asymmetric).
+ *        When 0 (default): input and output CBs have the same page size, so pages consumed
+ *        equals pages produced — each block consumes/produces block_width_tiles CB pages.
+ *        When >0: input and output CBs have different page sizes, so pages consumed differs
+ *        from pages produced — each block up to 32 input pages while
+ *        producing block_width_tiles output tiles.
  *
  * @example
- *   // Symmetric — input and output CBs both have tile-sized pages.
- *   // Each block waits for block_width_tiles pages, tilizes, and pops them.
+ *   // Symmetric — same page size, pages consumed == pages produced.
  *   tilize<cb_in, cb_out>(32, num_blocks);
  *
  * @example
- *   // Asymmetric — input CB has non-tile pages (e.g., one page per row).
- *   // The reader produces total_rows pages; the function distributes them
- *   // across blocks in chunks of up to 32 (one tile height).
+ *   // Asymmetric — different page sizes, pages consumed != pages produced.
+ *   // Input CB has row-sized pages, output CB has tile-sized pages.
+ *   // Each block consumes up to 32 input pages and produces out_tiles_per_block output tiles.
  *   tilize<cb_in, cb_out>(out_tiles_per_block, num_blocks, total_rows);
  *
  * @example

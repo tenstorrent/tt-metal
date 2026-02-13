@@ -82,17 +82,18 @@ ALWI void tilize(
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
-    // Capture once — compiler propagates constexpr 0 and eliminates dead branches at symmetric call sites
+    // Asymmetric: input and output CBs have different page sizes, so pages consumed != pages produced.
+    // Capture once — compiler propagates constexpr 0 and eliminates dead branches at symmetric call sites.
     const bool asymmetric_cb_pages = (total_input_pages > 0);
 
     // Sanity checks: verify CB page sizes match the usage pattern
     const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
     const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
     if (asymmetric_cb_pages) {
-        // Asymmetric: input and output CBs must have different page sizes
+        // Asymmetric: page sizes must differ (pages consumed != pages produced)
         ASSERT(in_page_size != out_page_size);
     } else {
-        // Symmetric: page sizes must match and input must be tile-aligned
+        // Symmetric: page sizes must match (pages consumed == pages produced)
         ASSERT(in_page_size == out_page_size);
         UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
     }
@@ -152,12 +153,12 @@ ALWI void tilize(
     }
 
     // Main loop
-    uint32_t pages_left = total_input_pages;  // 0 when symmetric — optimized away by compiler
-    uint32_t input_pages = block_width_tiles;
+    uint32_t pages_left = total_input_pages;   // 0 when symmetric — optimized away by compiler
+    uint32_t input_pages = block_width_tiles;  // symmetric default: consume same count as produced
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        // Determine input pages for this block
+        // Determine input pages to consume for this block
         if (asymmetric_cb_pages) {
-            // Asymmetric: min(32, pages_left)
+            // Asymmetric: consume up to 32 input pages per block (last block may be fewer)
             input_pages = (pages_left < 32) ? pages_left : 32;
         }
 
