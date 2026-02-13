@@ -1247,15 +1247,16 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         sync_req_data,
         CoreType::WORKER);
 
-    // Collect samples (+1 for the first one we discard)
+    // Collect samples (+1 for the first one we discard).
+    // Use half-round-trip bracketing: capture host time before the PCIe write and
+    // after the device response, then use the midpoint. This cancels the one-way
+    // PCIe latency bias under the assumption the path is roughly symmetric.
     for (uint32_t i = 0; i < num_samples + 1; i++) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-        // Capture host time with full 64-bit precision
-        int64_t host_time = TracyGetCpuTime() - host_start_time;
-
         // Send truncated 32-bit value as echo identifier for pairing
-        uint32_t host_time_id = static_cast<uint32_t>(host_time);
+        int64_t host_before = TracyGetCpuTime() - host_start_time;
+        uint32_t host_time_id = static_cast<uint32_t>(host_before);
         std::vector<uint32_t> host_time_data = {host_time_id};
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
@@ -1266,6 +1267,7 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
 
         // Wait for response from D2H socket
         dev_state.socket->wait_for_pages(1);
+        int64_t host_after = TracyGetCpuTime() - host_start_time;
         uint32_t* data = dev_state.socket->get_read_ptr();
 
         // Extract device timestamp and echoed host timestamp
@@ -1281,8 +1283,9 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
             continue;
         }
 
-        // Verify echo matches and marker is valid; use full 64-bit host_time
+        // Verify echo matches and marker is valid; use midpoint of host bracket
         if (marker == REALTIME_PROFILER_SYNC_MARKER_ID && echoed_host_time == host_time_id) {
+            int64_t host_time = (host_before + host_after) / 2;
             samples.push_back({host_time, device_time});
         }
     }
@@ -1650,7 +1653,9 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        // Send a host timestamp to trigger device response
+        // Send a host timestamp to trigger device response.
+        // Bracket the exchange to place the host mark as close to the device capture
+        // moment as possible (half-round-trip estimate).
         uint32_t host_time_id = 0x5C5C5C5C;  // recognizable pattern
         std::vector<uint32_t> host_time_data = {host_time_id};
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -1660,8 +1665,10 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             host_time_data,
             CoreType::WORKER);
 
-        // Wait for device response
+        // Wait for device response — emit host mark immediately so it's as close
+        // to the device capture moment as possible.
         dev_state.socket->wait_for_pages(1);
+        TracyMessageL("SYNC_CHECK");
         uint32_t* data = dev_state.socket->get_read_ptr();
         uint64_t device_time = (static_cast<uint64_t>(data[0]) << 32) | data[1];
         dev_state.socket->pop_pages(1);
@@ -1675,9 +1682,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             dev_state.sync_request_addr,
             sync_req,
             CoreType::WORKER);
-
-        // Push host-side mark right now
-        TracyMessageL("SYNC_CHECK");
 
         // Push device-side mark at the device timestamp we just measured
         realtime_profiler_tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
@@ -1699,44 +1703,52 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             "[Real-time profiler] Receiver thread started for {} devices",
             realtime_profiler_devices_.size());
 
+        // Helper lambda: process one page from a device socket.
+        // Returns true if a page was consumed, false if nothing was available.
+        auto process_one_page = [&](RealtimeProfilerDeviceState& dev_state) -> bool {
+            uint32_t available = dev_state.socket->pages_available();
+            if (available == 0) {
+                return false;
+            }
+
+            dev_state.socket->wait_for_pages(1);
+            uint32_t* read_ptr = dev_state.socket->get_read_ptr();
+
+            // Extract timestamps: kernel_start (words 0-3), kernel_end (words 4-7)
+            // Each realtime_profiler_timestamp_t: time_hi, time_lo, id, header
+            uint64_t start_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
+            uint32_t start_id = read_ptr[2];
+            uint64_t end_time = (static_cast<uint64_t>(read_ptr[4]) << 32) | read_ptr[5];
+
+            // Invoke registered real-time profiler callbacks.
+            // Skip records with id==0: these are non-GO dispatch commands
+            // (e.g. SET_NUM_WORKER_SEMS, SET_GO_SIGNAL_NOC_DATA) that have
+            // no valid program and may contain stale end timestamps.
+            if (start_id != 0) {
+                tt::ProgramRealtimeRecord record;
+                record.program_id = start_id;
+                record.start_timestamp = start_time;
+                record.end_timestamp = end_time;
+                record.frequency = dev_state.sync_frequency;
+                record.chip_id = dev_state.chip_id;
+                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                tt::InvokeProgramRealtimeProfilerCallbacks(record);
+            }
+
+            dev_state.socket->pop_pages(1);
+            dev_state.socket->notify_sender();
+            pages_received++;
+            return true;
+        };
+
         while (!realtime_profiler_stop_.load()) {
             bool any_data = false;
 
             for (auto& dev_state : realtime_profiler_devices_) {
                 try {
-                    uint32_t available = dev_state.socket->pages_available();
-                    if (available == 0) {
-                        continue;
+                    if (process_one_page(dev_state)) {
+                        any_data = true;
                     }
-
-                    dev_state.socket->wait_for_pages(1);
-                    uint32_t* read_ptr = dev_state.socket->get_read_ptr();
-
-                    // Extract timestamps: kernel_start (words 0-3), kernel_end (words 4-7)
-                    // Each realtime_profiler_timestamp_t: time_hi, time_lo, id, header
-                    uint64_t start_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
-                    uint32_t start_id = read_ptr[2];
-                    uint64_t end_time = (static_cast<uint64_t>(read_ptr[4]) << 32) | read_ptr[5];
-
-                    // Invoke registered real-time profiler callbacks.
-                    // Skip records with id==0: these are non-GO dispatch commands
-                    // (e.g. SET_NUM_WORKER_SEMS, SET_GO_SIGNAL_NOC_DATA) that have
-                    // no valid program and may contain stale end timestamps.
-                    if (start_id != 0) {
-                        tt::ProgramRealtimeRecord record;
-                        record.program_id = start_id;
-                        record.start_timestamp = start_time;
-                        record.end_timestamp = end_time;
-                        record.frequency = dev_state.sync_frequency;
-                        record.chip_id = dev_state.chip_id;
-                        record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
-                        tt::InvokeProgramRealtimeProfilerCallbacks(record);
-                    }
-
-                    dev_state.socket->pop_pages(1);
-                    dev_state.socket->notify_sender();
-                    pages_received++;
-                    any_data = true;
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
@@ -1751,7 +1763,42 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             }
         }
 
-        log_info(tt::LogMetal, "[Real-time profiler] Receiver thread stopped after {} pages", pages_received);
+        // Drain remaining data from sockets. The device may have pushed pages
+        // that arrived after the last poll iteration or while the thread was
+        // sleeping. Keep draining until all sockets are empty for several
+        // consecutive attempts to account for in-flight PCIe writes.
+        constexpr uint32_t kDrainQuietRounds = 10;
+        uint64_t drain_pages = 0;
+        uint32_t quiet_rounds = 0;
+        while (quiet_rounds < kDrainQuietRounds) {
+            bool any_data = false;
+            for (auto& dev_state : realtime_profiler_devices_) {
+                try {
+                    if (process_one_page(dev_state)) {
+                        any_data = true;
+                        drain_pages++;
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Exception draining device {}: {}",
+                        dev_state.chip_id,
+                        e.what());
+                }
+            }
+            if (any_data) {
+                quiet_rounds = 0;
+            } else {
+                quiet_rounds++;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
+        log_info(
+            tt::LogMetal,
+            "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown)",
+            pages_received,
+            drain_pages);
     });
 }
 
