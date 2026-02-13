@@ -841,7 +841,7 @@ void LatencyResultsManager::setup_ci_artifacts() {
     }
 
     // Latency artifacts
-    for (const std::filesystem::path& csv_filepath : {csv_file_path_, diff_csv_file_path_}) {
+    for (const std::filesystem::path& csv_filepath : {csv_file_path_, diff_csv_file_path_, csv_summary_file_path_}) {
         if (csv_filepath.empty()) {
             continue;
         }
