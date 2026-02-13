@@ -638,9 +638,11 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 //
 // Pipeline path: T1D2(send) -> T1D6 -> T3D6 -> T3D4 -> T4D4 -> T4D7 -> T2D7 -> T2D4 -> T1D4 -> T1D2(recv)
 void run_single_galaxy_pipeline(
-    std::shared_ptr<distributed::MeshDevice>& mesh_device, PipelineType pipeline_type, bool enable_correctness_check) {
+    std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    PipelineType pipeline_type,
+    uint32_t num_iterations,
+    bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;  // size of data being moved across pipeline stages for the workload
-    constexpr uint32_t NUM_ITERATIONS = 500;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto my_rank = *distributed_context->rank();
@@ -708,7 +710,7 @@ void run_single_galaxy_pipeline(
     // Create Latency Measurement Buffer
     // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
     // First address is reused for credit/barrier synchronization
-    constexpr auto latency_measurement_buffer_size = (8 * NUM_ITERATIONS) + 32;
+    const uint32_t latency_measurement_buffer_size = (8 * num_iterations) + 32;
     CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     distributed::DeviceLocalBufferConfig latency_measurement_buffer_specs = {
@@ -790,12 +792,12 @@ void run_single_galaxy_pipeline(
             intermed_send,
             intermed_recv_2,
             latency_measurement_address,
-            NUM_ITERATIONS,
+            num_iterations,
             enable_correctness_check);
         tt::tt_metal::socket_forward(
-            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
         tt::tt_metal::socket_forward(
-            mesh_device.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, num_iterations);
     } else {
         // Non-start ranks: receive from upstream, forward locally, send to downstream
 
@@ -831,29 +833,29 @@ void run_single_galaxy_pipeline(
 
         // Launch kernels: forward from upstream to downstream through local intermed
         tt::tt_metal::socket_forward(
-            mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, num_iterations);
         tt::tt_metal::socket_forward(
-            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, num_iterations);
     }
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto start_device_id = mesh_device->get_device(start_coord)->id();
         auto start_core_coord = mesh_device->worker_core_from_logical_core(logical_coord);
-        std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
+        std::vector<uint64_t> latencies = std::vector<uint64_t>(num_iterations, 0);
         uint32_t base_addr = latency_measurement_address;
         cluster.read_core(
             latencies.data(),
-            sizeof(uint64_t) * NUM_ITERATIONS,
+            sizeof(uint64_t) * num_iterations,
             tt_cxy_pair(start_device_id, start_core_coord),
             base_addr);
         // Skip first iteration (often an outlier due to cold start)
-        constexpr uint32_t LATENCY_ITERATIONS_FOR_AVG = NUM_ITERATIONS > 1 ? NUM_ITERATIONS - 1 : 1;
+        const uint32_t latency_iterations_for_avg = num_iterations > 1 ? num_iterations - 1 : 1;
         double avg_latency_cycles = 0.0;
-        for (uint32_t i = 1; i < NUM_ITERATIONS; i++) {
+        for (uint32_t i = 1; i < num_iterations; i++) {
             avg_latency_cycles += static_cast<double>(latencies[i]);
         }
-        avg_latency_cycles /= LATENCY_ITERATIONS_FOR_AVG;
+        avg_latency_cycles /= latency_iterations_for_avg;
         double freq_mhz = static_cast<double>(cluster.get_device_aiclk(start_device_id));
         double avg_latency_us = (avg_latency_cycles / (freq_mhz * 1e6)) * 1e6;
         double avd_latency_per_stage_us = avg_latency_us / static_cast<double>(num_stages);
@@ -864,29 +866,41 @@ void run_single_galaxy_pipeline(
 }
 
 TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SINGLE_GALAXY, /*enable_correctness_check=*/false);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/false);
 }
 
 TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxyWithCorrectnessCheck) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SINGLE_GALAXY, /*enable_correctness_check=*/true);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 // SUPERPOD_4: 17 stages (4 pods × 4 stages + 1 wrap-around), 16 ranks; loopback stage on rank 0.
 TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/false);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/false);
 }
 
 TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4WithCorrectnessCheck) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/true);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 // SUPERPOD_4_POD: 65 stages (16+16+16+16+1), 64 ranks; loopback stage on rank 0.
 TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4Pod) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4_POD, /*enable_correctness_check=*/false);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
 }
 
 TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4PodWithCorrectnessCheck) {
-    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4_POD, /*enable_correctness_check=*/true);
+    constexpr uint32_t NUM_ITERATIONS = 500;
+    run_single_galaxy_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 // ─── Rate (throughput) pipeline test ─────────────────────────────────────────
