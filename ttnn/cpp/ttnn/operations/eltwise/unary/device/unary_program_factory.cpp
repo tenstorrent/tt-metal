@@ -301,6 +301,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     uint32_t nblocks = (num_tiles / ntiles_per_block);
     uint32_t nblocks_per_core = nblocks / ncores;
     std::vector<CoreCoord> cores_with_rtargs;
+    cores_with_rtargs.reserve(cores.size());
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
 

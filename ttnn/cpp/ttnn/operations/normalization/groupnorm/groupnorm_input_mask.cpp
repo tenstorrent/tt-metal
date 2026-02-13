@@ -44,6 +44,7 @@ ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_
     const int64_t num_cols_per_group = num_channel / num_groups;
 
     std::vector<int64_t> start_strides;
+    start_strides.reserve(num_cores_across_channel * num_groups_per_core);
     for (int64_t core = 0; core < num_cores_across_channel; ++core) {
         int64_t row_offset = 0;
         start_strides.push_back(0);

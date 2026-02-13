@@ -24,6 +24,7 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     int chunk_size = tt::div_up(size_along_dim, num_chunks);
 
     std::vector<ttnn::Tensor> chunks;
+    chunks.reserve(num_chunks);
     int start = 0;
 
     while (start < size_along_dim) {

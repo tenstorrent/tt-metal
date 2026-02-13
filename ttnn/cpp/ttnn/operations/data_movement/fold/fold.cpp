@@ -461,6 +461,7 @@ Tensor FoldOperation::invoke(
         // Apply padding if needed
         if (has_hw_padding || has_c_padding) {
             ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            padding_spec.reserve(4);
             padding_spec.push_back({0, 0});                     // N dimension
             padding_spec.push_back({pad_top, pad_bottom});      // H dimension
             padding_spec.push_back({pad_left, pad_right});      // W dimension

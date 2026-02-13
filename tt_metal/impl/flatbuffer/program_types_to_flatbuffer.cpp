@@ -26,6 +26,7 @@ flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    range_offsets.reserve(range_set.ranges().size());
     for (const auto& range : range_set.ranges()) {
         range_offsets.push_back(to_flatbuffer(builder, range));
     }
@@ -62,7 +63,7 @@ FlatbufferCoreCoordVector to_flatbuffer(
 FlatbufferUInt32VecOfVec to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec) {
     std::vector<flatbuffers::Offset<flatbuffer::UInt32Vector>> vec_offsets;
-
+    vec_offsets.reserve(vec_of_vec.size());
     for (const auto& sub_vector : vec_of_vec) {
         auto values_offset = builder.CreateVector(sub_vector);
         vec_offsets.push_back(flatbuffer::CreateUInt32Vector(builder, values_offset));
@@ -76,6 +77,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);
@@ -99,6 +101,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);
@@ -133,6 +136,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
+    defines_vector.reserve(config.defines.size());
     for (const auto& [key, value] : config.defines) {
         auto key_offset = builder.CreateString(key);
         auto value_offset = builder.CreateString(value);

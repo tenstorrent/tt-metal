@@ -234,6 +234,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
+    dest_mesh_id.reserve(all_mesh_coordinates.size());
+    dest_chip_id.reserve(all_mesh_coordinates.size());
     for (const auto& coord : all_mesh_coordinates) {
         const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);

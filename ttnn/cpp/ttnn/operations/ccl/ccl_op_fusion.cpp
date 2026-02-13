@@ -36,6 +36,7 @@ void AllGatherFusedOpSignaler::init_all_gather(
 
     // Get the noc coords for the all gather workers
     this->all_gather_worker_cores_noc.clear();
+    this->all_gather_worker_cores_noc.reserve(all_gather_worker_cores.size());
     for (const auto& core : all_gather_worker_cores) {
         this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
     }
@@ -99,6 +100,7 @@ void StridedAllGatherFusedOpSignaler::init_all_gather(
 
     // Get the noc coords for the all gather workers
     this->all_gather_worker_cores_noc.clear();
+    this->all_gather_worker_cores_noc.reserve(all_gather_worker_cores.size());
     for (const auto& core : all_gather_worker_cores) {
         this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
     }
