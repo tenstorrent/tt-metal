@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole, is_watcher_enabled
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -367,14 +367,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
-    if (
-        is_watcher_enabled()
-        and in1_dtype in (ttnn.bfloat16, ttnn.bfloat8_b)
-        and tile_w == 32
-        and n == 1280
-        and k == 1024
-    ):
-        pytest.skip("Skipping the test since it is failing with watcher github issue #36314")
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_blackhole():
@@ -1877,6 +1869,51 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     assert_with_pcc(torch_output_tensor, output, 0.999)
 
 
+@pytest.mark.parametrize(
+    "m, k, n",
+    [
+        (8193, 512, 2048),
+        (11008, 256, 2048),
+    ],
+)
+def test_matmul_transpose_a_with_core_grid(device, m, k, n):
+    torch.manual_seed(0)
+
+    # transpose a to test corner case for CB size estimate
+    transpose_a = True
+    shape_a = (k, m)
+    shape_b = (k, n)
+
+    input_tensor_a = ttnn.rand(
+        shape_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
+    )
+    input_tensor_b = ttnn.rand(
+        shape_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
+    )
+
+    # Get core grid from device
+    compute_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+    # ttnn matmul with transpose_a=True, core_grid, and compute_kernel_config
+    output_tensor_c = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        core_grid=core_grid,
+    )
+    output_tensor = ttnn.to_torch(output_tensor_c)
+
+    # torch equivalent: transpose A then matmul
+    torch_a = ttnn.to_torch(input_tensor_a)
+    torch_b = ttnn.to_torch(input_tensor_b)
+    torch_output_tensor = torch.matmul(torch_a.transpose(-1, -2), torch_b)
+
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("transpose_a", [True, False])
 @pytest.mark.parametrize("transpose_b", [True, False])
 @pytest.mark.parametrize(
@@ -2566,8 +2603,6 @@ def test_matmul_padding(
     input_b_memory_config,
     output_memory_config,
 ):
-    if is_watcher_enabled() and isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-        pytest.skip("Skipping test_matmul_padding dram_sharded with watcher enabled, github issue #36314")
     torch.manual_seed(0)
 
     # Create input tensors with specified shapes and values

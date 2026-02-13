@@ -16,6 +16,7 @@
 #include "metal_context.hpp"
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
@@ -298,7 +299,7 @@ void MetalContext::initialize(
 
         // Wait for all async tasks to complete
         for (auto& fut : futures) {
-            fut.wait();
+            fut.get();
         }
     }
 
@@ -514,27 +515,26 @@ void MetalContext::initialize_base_objects() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
 
-    const auto initialize_objects = [&]() {
-        hal_ = std::make_unique<Hal>(
-            platform_arch,
-            is_base_routing_fw_enabled,
-            rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
-        rtoptions_.ParseAllFeatureEnv(*hal_);
-        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-    };
+    cluster_ = std::make_unique<Cluster>(rtoptions_);
 
-    initialize_objects();
+    FirmwareCapabilityRequest req;
+    req.enable_2_erisc_mode = rtoptions_.get_enable_2_erisc_mode();
 
-    // Requires reinit with features disabled
-    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
-    // during the first init
-    if (!cluster_->verify_eth_fw_capability()) {
-        rtoptions_.set_enable_2_erisc_mode(false);
-        teardown_base_objects();
-        initialize_objects();
+    FirmwareCapabilityResult res;
+
+    if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
+        rtoptions_.set_enable_2_erisc_mode(res.enable_2_erisc_mode);
     }
+
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    hal_ = std::make_unique<Hal>(
+        platform_arch,
+        is_base_routing_fw_enabled,
+        rtoptions_.get_enable_2_erisc_mode(),
+        get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
+
+    rtoptions_.ParseAllFeatureEnv(*hal_);
+    cluster_->set_hal(hal_.get());
 }
 
 MetalContext::MetalContext() {

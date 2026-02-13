@@ -30,11 +30,6 @@ void MorehClipGradNormStep1Operation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehClipGradNormStep1Operation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 MorehClipGradNormStep1Operation::spec_return_value_t MorehClipGradNormStep1Operation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.tmp_pow_sum.tensor_spec();
