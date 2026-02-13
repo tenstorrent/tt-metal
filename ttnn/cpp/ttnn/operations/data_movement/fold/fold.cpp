@@ -331,8 +331,7 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, reshaped_tensor.memory_config(), false);
+    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ttnn::Shape padded_shape(

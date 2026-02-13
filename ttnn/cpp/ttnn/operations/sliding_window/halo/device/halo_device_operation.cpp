@@ -74,30 +74,11 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
         default: output_dtype = tt::tt_metal::DataType::BFLOAT16; break;
     }
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == args.output_memory_config.memory_layout(),
-        "{} {}",
-        input_tensor.memory_config(),
-        args.output_memory_config);
-
-    // Validate that input and output core grids match
-    const auto& input_grid = input_tensor.memory_config().shard_spec()->grid;
-    const auto& output_grid = args.output_memory_config.shard_spec()->grid;
-
-    TT_FATAL(
-        input_grid == output_grid,
-        "Halo operation assumes matching input and output core grids. Input grid: {}, Output grid: {}",
-        input_grid.str(),
-        output_grid.str());
-
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
 
-    auto out_mem_config = args.output_memory_config.with_shard_spec(ShardSpec{
-        args.output_memory_config.shard_spec()->grid,
-        shard_shape,
-        args.output_memory_config.shard_spec()->orientation});
+    auto out_mem_config = input_tensor.memory_config();
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
@@ -119,7 +100,6 @@ Tensor halo(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram) {
     using OperationType = HaloDeviceOperation;
@@ -157,7 +137,6 @@ Tensor halo(
             .transpose_mcast = transpose_mcast,
             .max_out_nsticks_per_core = max_out_nsticks_per_core,
             .in_nsticks_per_core = in_nsticks_per_core,
-            .output_memory_config = output_memory_config,
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram},
         input_tensor);

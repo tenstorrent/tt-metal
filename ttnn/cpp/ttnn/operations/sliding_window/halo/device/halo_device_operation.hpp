@@ -39,7 +39,6 @@ Tensor halo(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram);
 
