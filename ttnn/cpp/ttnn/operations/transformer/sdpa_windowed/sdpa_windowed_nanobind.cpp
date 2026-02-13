@@ -51,26 +51,16 @@ void bind_sdpa_windowed(nb::module_& mod) {
     ttnn::bind_function<"windowed_scaled_dot_product_attention">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const ttnn::Tensor&,
-                const ttnn::Tensor&,
-                const ttnn::Tensor&,
-                std::optional<float>,
-                const std::optional<MemoryConfig>&,
-                const std::optional<SDPAProgramConfig>&,
-                std::optional<DeviceComputeKernelConfig>>(
-                &ttnn::transformer::windowed_scaled_dot_product_attention),
-            nb::arg("input_tensor_q").noconvert(),
-            nb::arg("input_tensor_k").noconvert(),
-            nb::arg("input_tensor_v").noconvert(),
-            nb::arg("cu_window_seqlens").noconvert(),
-            nb::kw_only(),
-            nb::arg("scale") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::transformer::windowed_scaled_dot_product_attention,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("cu_window_seqlens").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

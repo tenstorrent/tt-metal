@@ -79,21 +79,14 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
     ttnn::bind_function<"split_query_key_value_and_split_heads">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const Tensor&,
-                const std::optional<Tensor>&,
-                uint32_t,
-                std::optional<uint32_t>,
-                bool,
-                const std::optional<MemoryConfig>&>(&ttnn::transformer::split_query_key_value_and_split_heads),
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("kv_input_tensor") = nb::none(),
-            nb::kw_only(),
-            nb::arg("num_heads"),
-            nb::arg("num_kv_heads") = nb::none(),
-            nb::arg("transpose_key") = true,
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::transformer::split_query_key_value_and_split_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("kv_input_tensor") = nb::none(),
+        nb::kw_only(),
+        nb::arg("num_heads"),
+        nb::arg("num_kv_heads") = nb::none(),
+        nb::arg("transpose_key") = true,
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

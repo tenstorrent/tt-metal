@@ -33,12 +33,10 @@ void bind_concatenate_heads(nb::module_& mod) {
     ttnn::bind_function<"concatenate_heads">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const std::optional<MemoryConfig>&>(
-                &ttnn::transformer::concatenate_heads),
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::transformer::concatenate_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer
