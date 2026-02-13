@@ -34,14 +34,11 @@ void kernel_main() {
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
         const uint32_t row = id + core_loop * total_number_of_cores;
-        // DPRINT << "Writer: core_loop: " << core_loop << ", row: " << row << ", Kt: " << Kt << ENDL();
 
         // TopK values
         for (uint32_t k = 0; k < Kt; ++k) {
             cb_wait_front(values_cb_index, onetile);
             const uint32_t l1_read_addr_val = get_read_ptr(values_cb_index);
-            // DPRINT << "Writer: core_loop: " << core_loop << ", row: " << row << ", w: " << k
-            //        << " , address: " << l1_read_addr_val << ENDL();
 
             noc_async_write_tile(row * Kt + k, values_tensor_accessor, l1_read_addr_val);
             noc_async_write_barrier();

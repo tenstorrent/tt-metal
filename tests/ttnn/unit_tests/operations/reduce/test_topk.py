@@ -13,34 +13,6 @@ from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 UINT16_MAX = 65535
 
 
-def save_tensor(tensor, filename):
-    import pandas as pd
-
-    # Write tensor to CSV file
-    # Tensor data should be
-    # _,0,1,2,3,4, ...
-    # 0,y,y,y,y,y
-    # 1,y,y,y,y,y
-    # 2,y,y,y,y,y
-    # 3,y,y,y,y,y
-    #
-    # First row -> column indices
-    # First column -> row indices
-    # y = data value
-
-    # Convert to numpy 2D (handle torch and ttnn tensors; squeeze batch/extra dims)
-    import numpy as np
-
-    data = np.asarray(tensor.to(torch.float32))
-
-    print("saving tensor to csv {filename}")
-    while data.ndim > 2:
-        data = data[0]
-    df = pd.DataFrame(data)
-    df.index.name = ""
-    df.to_csv(filename, index=True)
-
-
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
     torch.set_printoptions(profile="full")
@@ -177,14 +149,14 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     "sorted",
     [
         True,
-        # False,
+        False,
     ],
 )
 @pytest.mark.parametrize(
     "largest",
     [
         True,
-        # False,
+        False,
     ],
 )
 @pytest.mark.parametrize(
@@ -197,7 +169,6 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
 
 
-"""
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
@@ -342,4 +313,3 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
-"""
