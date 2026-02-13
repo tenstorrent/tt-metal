@@ -309,11 +309,11 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
                     compute_with_storage_grid_size=mlp_grid,
                     in0_block_w=dim_t__x,
                     out_subblock_h=1,
-                    out_subblock_w=(dim_t__x * 4) // 2,
+                    out_subblock_w=dim_t__x,
                     per_core_M=per_core_M,
                     per_core_N=dim_t__x * 4,
                     transpose_mcast=False,
-                    fused_activation=(ttnn.UnaryOpType.GELU, True),
+                    fused_activation=None,
                 )
                 mlp_prog_cfgs["ff2_matmul_program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=mlp_grid,
