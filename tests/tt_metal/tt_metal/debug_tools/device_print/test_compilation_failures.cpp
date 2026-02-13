@@ -10,7 +10,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-class NewDPrintFailuresFixture : public NewDPrintFixture {
+class DevicePrintFailuresFixture : public DevicePrintFixture {
 public:
     void TestCompileKernelFailure(
         const std::string& kernel_path,
@@ -30,38 +30,38 @@ public:
     }
 };
 
-TEST_F(NewDPrintFailuresFixture, MixedPlaceholders) {
+TEST_F(DevicePrintFailuresFixture, MixedPlaceholders) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/mixed_placeholders.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/mixed_placeholders.cpp",
         "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");
 }
 
-TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderSyntax) {
+TEST_F(DevicePrintFailuresFixture, InvalidPlaceholderSyntax) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_syntax.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/invalid_placeholder_syntax.cpp",
         "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");
 }
 
-TEST_F(NewDPrintFailuresFixture, InvalidPlaceholderIndex) {
+TEST_F(DevicePrintFailuresFixture, InvalidPlaceholderIndex) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/invalid_placeholder_index.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/invalid_placeholder_index.cpp",
         "Placeholder index exceeds number of arguments");
 }
 
-TEST_F(NewDPrintFailuresFixture, NotAllArgumentsReferenced) {
+TEST_F(DevicePrintFailuresFixture, NotAllArgumentsReferenced) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/not_all_arguments_referenced.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/not_all_arguments_referenced.cpp",
         "All arguments must be referenced when using indexed placeholders");
 }
 
-TEST_F(NewDPrintFailuresFixture, TooManyArguments) {
+TEST_F(DevicePrintFailuresFixture, TooManyArguments) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/too_many_arguments.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/too_many_arguments.cpp",
         "Number of {} placeholders must match number of arguments");
 }
 
-TEST_F(NewDPrintFailuresFixture, NotEnoughArguments) {
+TEST_F(DevicePrintFailuresFixture, NotEnoughArguments) {
     TestCompileKernelFailure(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/failures/not_enough_arguments.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/device_print/failures/not_enough_arguments.cpp",
         "Number of {} placeholders must match number of arguments");
 }

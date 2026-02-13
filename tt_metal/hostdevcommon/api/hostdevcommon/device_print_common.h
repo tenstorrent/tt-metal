@@ -14,7 +14,7 @@
 
 #include "core_config.h"
 
-struct NewDebugPrintMemLayout {
+struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #else

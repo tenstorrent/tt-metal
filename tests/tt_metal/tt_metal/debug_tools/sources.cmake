@@ -2,6 +2,8 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
+    device_print/test_compilation_failures.cpp
+    device_print/test_format_updates.cpp
     dprint/test_eth_cores.cpp
     dprint/test_invalid_print_core.cpp
     dprint/test_mute_device.cpp
@@ -14,8 +16,6 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_tile.cpp
     dprint/test_print_tiles_multiple.cpp
     dprint/test_print_config_register.cpp
-    new_dprint/test_compilation_failures.cpp
-    new_dprint/test_format_updates.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_noc_sanitize_delays.cpp

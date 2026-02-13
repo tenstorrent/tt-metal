@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/new_dprint.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // All arguments must be referenced when using indexed placeholders
-    NEW_DPRINT("Unreferenced: n = {0}, m = {0}\n", 42, 5);
+    DEVICE_PRINT("Unreferenced: n = {}, m = {}\n", 42, 5, 10);
 }

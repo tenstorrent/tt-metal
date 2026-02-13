@@ -299,7 +299,7 @@ public:
     }
 };
 
-class NewDPrintFixture : public DebugToolsMeshFixture {
+class DevicePrintFixture : public DebugToolsMeshFixture {
 public:
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device

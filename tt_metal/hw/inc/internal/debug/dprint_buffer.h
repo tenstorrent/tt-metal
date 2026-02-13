@@ -19,6 +19,6 @@ inline volatile tt_l1_ptr DebugPrintMemLayout* get_debug_print_buffer() {
 #endif
 }
 
-inline volatile tt_l1_ptr NewDebugPrintMemLayout* get_new_debug_print_buffer() {
-    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.new_data);
+inline volatile tt_l1_ptr DevicePrintMemoryLayout* get_device_print_buffer() {
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.shared_data);
 }

@@ -9,134 +9,136 @@
 #include <optional>
 #include <type_traits>
 
-#include "new_dprint_structures.h"
-#include "hostdevcommon/new_dprint_common.h"
+#include "device_print_structures.h"
+#include "hostdevcommon/device_print_common.h"
 #include "stream_io_map.h"
 
-#define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
-#define NEW_DPRINT_STRINGS_INFO_SECTION_NAME ".dprint_strings_info"
+#define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
+#define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
 #ifdef UCK_CHLKC_UNPACK
-#define NEW_DPRINT_UNPACK(format, ...) NEW_DPRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_UNPACK(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
 #else
-#define NEW_DPRINT_UNPACK(format, ...)
+#define DEVICE_PRINT_UNPACK(format, ...)
 #endif
 
 #ifdef UCK_CHLKC_MATH
-#define NEW_DPRINT_MATH(format, ...) NEW_DPRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_MATH(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
 #else
-#define NEW_DPRINT_MATH(format, ...)
+#define DEVICE_PRINT_MATH(format, ...)
 #endif
 
 #ifdef UCK_CHLKC_PACK
-#define NEW_DPRINT_PACK(format, ...) NEW_DPRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_PACK(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
 #else
-#define NEW_DPRINT_PACK(format, ...)
+#define DEVICE_PRINT_PACK(format, ...)
 #endif
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
-#define NEW_DPRINT_DATA0(format, ...)    \
-    if (noc_index == 0) {                \
-        NEW_DPRINT(format, __VA_ARGS__); \
+#define DEVICE_PRINT_DATA0(format, ...)    \
+    if (noc_index == 0) {                  \
+        DEVICE_PRINT(format, __VA_ARGS__); \
     }
-#define NEW_DPRINT_DATA1(format, ...)    \
-    if (noc_index == 1) {                \
-        NEW_DPRINT(format, __VA_ARGS__); \
+#define DEVICE_PRINT_DATA1(format, ...)    \
+    if (noc_index == 1) {                  \
+        DEVICE_PRINT(format, __VA_ARGS__); \
     }
 #else
-#define NEW_DPRINT_DATA0(format, ...)
-#define NEW_DPRINT_DATA1(format, ...)
+#define DEVICE_PRINT_DATA0(format, ...)
+#define DEVICE_PRINT_DATA1(format, ...)
 #endif
 
 #if defined(KERNEL_BUILD)
-#define NEW_DPRINT_IS_KERNEL 1
+#define DEVICE_PRINT_IS_KERNEL 1
 #else
-#define NEW_DPRINT_IS_KERNEL 0
+#define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
-#define NEW_DPRINT_GET_STRING_INDEX(variable_name, updated_format)                                           \
-    {                                                                                                        \
-        static const auto allocated_string __attribute__((section(NEW_DPRINT_STRINGS_SECTION_NAME), used)) = \
-            updated_format.to_array();                                                                       \
-        static const auto allocated_file_string                                                              \
-            __attribute__((section(NEW_DPRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
-                dprint_detail::helpers::static_string<sizeof(__FILE__)> file_str;                            \
-                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                         \
-                    file_str.push_back(__FILE__[i]);                                                         \
-                }                                                                                            \
-                return file_str.to_array();                                                                  \
-            }();                                                                                             \
-        static dprint_detail::structures::DPrintStringInfo allocated_string_info                             \
-            __attribute__((section(NEW_DPRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
-                allocated_string.data(), allocated_file_string.data(), __LINE__};                            \
-    }                                                                                                        \
+#define DEVICE_PRINT_GET_STRING_INDEX(variable_name, updated_format)                                           \
+    {                                                                                                          \
+        static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
+            updated_format.to_array();                                                                         \
+        static const auto allocated_file_string                                                                \
+            __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
+                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                        \
+                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                           \
+                    file_str.push_back(__FILE__[i]);                                                           \
+                }                                                                                              \
+                return file_str.to_array();                                                                    \
+            }();                                                                                               \
+        static device_print_detail::structures::DevicePrintStringInfo allocated_string_info                    \
+            __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
+                allocated_string.data(), allocated_file_string.data(), __LINE__};                              \
+    }                                                                                                          \
     constexpr uint32_t variable_name = __COUNTER__;
 
-#define NEW_DPRINT(format, ...)                                                                                        \
-    {                                                                                                                  \
-        /* Validate format string syntax */                                                                            \
-        static_assert(                                                                                                 \
-            dprint_detail::checks::is_valid_format_string(format),                                                     \
-            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                          \
-        /* Validate placeholder format */                                                                              \
-        static_assert(                                                                                                 \
-            !dprint_detail::checks::has_mixed_placeholders(format),                                                    \
-            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                   \
-        /* For indexed placeholders, validate no index exceeds argument count */                                       \
-        static_assert(                                                                                                 \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                                                \
-                dprint_detail::checks::get_max_index(format) < dprint_detail::helpers::count_arguments(__VA_ARGS__),   \
-            "Placeholder index exceeds number of arguments");                                                          \
-        /* For indexed placeholders, validate all arguments are referenced */                                          \
-        static_assert(                                                                                                 \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                                                \
-                dprint_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                                  \
-            "All arguments must be referenced when using indexed placeholders");                                       \
-        /* For non-indexed placeholders, count must match argument count */                                            \
-        static_assert(                                                                                                 \
-            dprint_detail::checks::has_indexed_placeholders(format) ||                                                 \
-                dprint_detail::checks::count_placeholders(format) ==                                                   \
-                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                                              \
-            "Number of {} placeholders must match number of arguments");                                               \
-        /* Update format to include all necessary data */                                                              \
-        constexpr auto updated_format =                                                                                \
-            dprint_detail::formatting::update_format_string_from_args(format, __VA_ARGS__);                            \
-        /* Store updated format string in a special section for dprint */                                              \
-        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                                                \
-        /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                           \
-        dprint_detail::locking::acquire_lock();                                                                        \
-        /* Get dprint buffer*/                                                                                         \
-        volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                       \
-        /* Check if we need to wrap buffer and wait for enough space in it */                                          \
-        constexpr auto message_size = dprint_detail::serialization::get_total_message_size(__VA_ARGS__);               \
-        auto write_position = dprint_detail::locking::wait_for_space(dprint_buffer, message_size);                     \
-        /* Generate dprint message header */                                                                           \
-        dprint_detail::structures::DPrintHeader header = {};                                                           \
-        header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                       \
-        header.risc_id = PROCESSOR_INDEX;                                                                              \
-        header.message_payload = message_size - sizeof(header); /* Payload size does not include header itself */      \
-        static_assert(                                                                                                 \
-            dprint_info_index <= dprint_detail::structures::DPrintHeader::max_info_id_value,                           \
-            "Too many DPRINT calls, exceeds limit");                                                                   \
-        header.info_id = dprint_info_index;                                                                            \
-        auto header_value = header.value;                                                                              \
-        /* Serialize message */                                                                                        \
-        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;                                           \
-        dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value); \
-        dprint_detail::serialization::serialize_arguments(dprint_buffer_ptr, __VA_ARGS__);                             \
-        /* Move write pointer in dprint buffer */                                                                      \
-        asm volatile("" ::: "memory");                                                                                 \
-        dprint_buffer->aux.wpos = write_position + message_size;                                                       \
-        /* Release buffer lock */                                                                                      \
-        dprint_detail::locking::release_lock();                                                                        \
+#define DEVICE_PRINT(format, ...)                                                                                 \
+    {                                                                                                             \
+        /* Validate format string syntax */                                                                       \
+        static_assert(                                                                                            \
+            device_print_detail::checks::is_valid_format_string(format),                                          \
+            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                     \
+        /* Validate placeholder format */                                                                         \
+        static_assert(                                                                                            \
+            !device_print_detail::checks::has_mixed_placeholders(format),                                         \
+            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");              \
+        /* For indexed placeholders, validate no index exceeds argument count */                                  \
+        static_assert(                                                                                            \
+            !device_print_detail::checks::has_indexed_placeholders(format) ||                                     \
+                device_print_detail::checks::get_max_index(format) <                                              \
+                    device_print_detail::helpers::count_arguments(__VA_ARGS__),                                   \
+            "Placeholder index exceeds number of arguments");                                                     \
+        /* For indexed placeholders, validate all arguments are referenced */                                     \
+        static_assert(                                                                                            \
+            !device_print_detail::checks::has_indexed_placeholders(format) ||                                     \
+                device_print_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                       \
+            "All arguments must be referenced when using indexed placeholders");                                  \
+        /* For non-indexed placeholders, count must match argument count */                                       \
+        static_assert(                                                                                            \
+            device_print_detail::checks::has_indexed_placeholders(format) ||                                      \
+                device_print_detail::checks::count_placeholders(format) ==                                        \
+                    device_print_detail::helpers::count_arguments(__VA_ARGS__),                                   \
+            "Number of {} placeholders must match number of arguments");                                          \
+        /* Update format to include all necessary data */                                                         \
+        constexpr auto updated_format =                                                                           \
+            device_print_detail::formatting::update_format_string_from_args(format, __VA_ARGS__);                 \
+        /* Store updated format string in a special section for device_print */                                   \
+        DEVICE_PRINT_GET_STRING_INDEX(device_print_info_index, updated_format);                                   \
+        /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                      \
+        device_print_detail::locking::acquire_lock();                                                             \
+        /* Get device_print buffer*/                                                                              \
+        volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();              \
+        /* Check if we need to wrap buffer and wait for enough space in it */                                     \
+        constexpr auto message_size = device_print_detail::serialization::get_total_message_size(__VA_ARGS__);    \
+        auto write_position = device_print_detail::locking::wait_for_space(device_print_buffer, message_size);    \
+        /* Generate device_print message header */                                                                \
+        device_print_detail::structures::DevicePrintHeader header = {};                                           \
+        header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                                \
+        header.risc_id = PROCESSOR_INDEX;                                                                         \
+        header.message_payload = message_size - sizeof(header); /* Payload size does not include header itself */ \
+        static_assert(                                                                                            \
+            device_print_info_index <= device_print_detail::structures::DevicePrintHeader::max_info_id_value,     \
+            "Too many DEVICE_PRINT calls, exceeds limit");                                                        \
+        header.info_id = device_print_info_index;                                                                 \
+        auto header_value = header.value;                                                                         \
+        /* Serialize message */                                                                                   \
+        auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;                          \
+        device_print_detail::formatting::device_print_type<decltype(header_value)>::serialize(                    \
+            device_print_buffer_ptr, 0, header_value);                                                            \
+        device_print_detail::serialization::serialize_arguments(device_print_buffer_ptr, __VA_ARGS__);            \
+        /* Move write pointer in device_print buffer */                                                           \
+        asm volatile("" ::: "memory");                                                                            \
+        device_print_buffer->aux.wpos = write_position + message_size;                                            \
+        /* Release buffer lock */                                                                                 \
+        device_print_detail::locking::release_lock();                                                             \
     }
 
-#define NEW_DPRINT_INITIALIZE_LOCK() dprint_detail::locking::initialize_lock();
+#define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock();
 
-namespace dprint_detail {
+namespace device_print_detail {
 
 template <typename BufferType>
-using dprint_buffer_ptr = volatile tt_l1_ptr BufferType*;
+using device_print_buffer_ptr = volatile tt_l1_ptr BufferType*;
 
 namespace helpers {
 
@@ -538,109 +540,109 @@ constexpr std::size_t count_placeholders(const char (&format)[N]) {
 
 namespace formatting {
 
-struct dprint_type_info {
+struct device_print_type_info {
     char type_char;
     uint32_t size_in_bytes;
 };
 
 // Type-to-info mapping for format strings and serialization
 template <typename T>
-struct dprint_type {
-    static constexpr dprint_type_info value = {'#', 0};  // Unknown type default
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, T argument) {
+struct device_print_type {
+    static constexpr device_print_type_info value = {'#', 0};  // Unknown type default
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
         static_assert(true, "No serialization defined for this type");
     }
 };
 
 // Specializations for different types
 template <>
-struct dprint_type<std::int8_t> {
-    static constexpr dprint_type_info value = {'b', sizeof(std::int8_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int8_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<int8_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::int8_t> {
+    static constexpr device_print_type_info value = {'b', sizeof(std::int8_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int8_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<int8_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::uint8_t> {
-    static constexpr dprint_type_info value = {'B', sizeof(std::uint8_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint8_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<uint8_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::uint8_t> {
+    static constexpr device_print_type_info value = {'B', sizeof(std::uint8_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint8_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint8_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::int16_t> {
-    static constexpr dprint_type_info value = {'h', sizeof(std::int16_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int16_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<int16_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::int16_t> {
+    static constexpr device_print_type_info value = {'h', sizeof(std::int16_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int16_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<int16_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::uint16_t> {
-    static constexpr dprint_type_info value = {'H', sizeof(std::uint16_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint16_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<uint16_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::uint16_t> {
+    static constexpr device_print_type_info value = {'H', sizeof(std::uint16_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint16_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::int32_t> {
-    static constexpr dprint_type_info value = {'i', sizeof(std::int32_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int32_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<int32_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::int32_t> {
+    static constexpr device_print_type_info value = {'i', sizeof(std::int32_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int32_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<int32_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::uint32_t> {
-    static constexpr dprint_type_info value = {'I', sizeof(std::uint32_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint32_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::uint32_t> {
+    static constexpr device_print_type_info value = {'I', sizeof(std::uint32_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint32_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::int64_t> {
-    static constexpr dprint_type_info value = {'q', sizeof(std::int64_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, int64_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<int64_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::int64_t> {
+    static constexpr device_print_type_info value = {'q', sizeof(std::int64_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, int64_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<int64_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<std::uint64_t> {
-    static constexpr dprint_type_info value = {'Q', sizeof(std::uint64_t)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, uint64_t argument) {
-        *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) = argument;
+struct device_print_type<std::uint64_t> {
+    static constexpr device_print_type_info value = {'Q', sizeof(std::uint64_t)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, uint64_t argument) {
+        *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<float> {
-    static constexpr dprint_type_info value = {'f', sizeof(float)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, float argument) {
-        *reinterpret_cast<dprint_buffer_ptr<float>>(dprint_buffer + offset) = argument;
+struct device_print_type<float> {
+    static constexpr device_print_type_info value = {'f', sizeof(float)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, float argument) {
+        *reinterpret_cast<device_print_buffer_ptr<float>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<double> {
-    static constexpr dprint_type_info value = {'d', sizeof(double)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, double argument) {
-        *reinterpret_cast<dprint_buffer_ptr<double>>(dprint_buffer + offset) = argument;
+struct device_print_type<double> {
+    static constexpr device_print_type_info value = {'d', sizeof(double)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, double argument) {
+        *reinterpret_cast<device_print_buffer_ptr<double>>(device_print_buffer + offset) = argument;
     }
 };
 template <>
-struct dprint_type<bool> {
-    static constexpr dprint_type_info value = {'?', 1};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, bool argument) {
-        *(dprint_buffer + offset) = static_cast<uint8_t>(argument);
+struct device_print_type<bool> {
+    static constexpr device_print_type_info value = {'?', 1};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bool argument) {
+        *(device_print_buffer + offset) = static_cast<uint8_t>(argument);
     }
 };
 
 // Pointer types (including strings)
 template <typename T>
-struct dprint_type<T*> {
-    static constexpr dprint_type_info value = {'p', sizeof(T*)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, T* argument) {
+struct device_print_type<T*> {
+    static constexpr device_print_type_info value = {'p', sizeof(T*)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T* argument) {
         if constexpr (sizeof(T*) == 4) {
-            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint32_t>(argument);
         } else if constexpr (sizeof(T*) == 8) {
-            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint64_t>(argument);
         } else {
             static_assert(sizeof(T*) == 4 || sizeof(T*) == 8, "Unsupported pointer size");
@@ -648,14 +650,14 @@ struct dprint_type<T*> {
     }
 };
 template <>
-struct dprint_type<char*> {
-    static constexpr dprint_type_info value = {'s', sizeof(char*)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, char* argument) {
+struct device_print_type<char*> {
+    static constexpr device_print_type_info value = {'s', sizeof(char*)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
         if constexpr (sizeof(char*) == 4) {
-            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint32_t>(argument);
         } else if constexpr (sizeof(char*) == 8) {
-            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint64_t>(argument);
         } else {
             static_assert(sizeof(char*) == 4 || sizeof(char*) == 8, "Unsupported pointer size");
@@ -663,14 +665,14 @@ struct dprint_type<char*> {
     }
 };
 template <>
-struct dprint_type<const char*> {
-    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
-    static void serialize(dprint_buffer_ptr<uint8_t> dprint_buffer, uint32_t offset, const char* argument) {
+struct device_print_type<const char*> {
+    static constexpr device_print_type_info value = {'s', sizeof(const char*)};
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
         if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<dprint_buffer_ptr<uint32_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint32_t>(argument);
         } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<dprint_buffer_ptr<uint64_t>>(dprint_buffer + offset) =
+            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
                 reinterpret_cast<uint64_t>(argument);
         } else {
             static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
@@ -680,23 +682,23 @@ struct dprint_type<const char*> {
 
 // Array types (treat as strings)
 template <std::size_t N>
-struct dprint_type<char[N]> {
-    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
+struct device_print_type<char[N]> {
+    static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
 template <std::size_t N>
-struct dprint_type<const char[N]> {
-    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
+struct device_print_type<const char[N]> {
+    static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
 
 // Helper to get type character for a single type, removing cv-qualifiers and references
 template <typename T>
-constexpr dprint_type_info get_type_info() {
+constexpr device_print_type_info get_type_info() {
     using base_type = std::remove_cv_t<std::remove_reference_t<T>>;
-    return dprint_type<base_type>::value;
+    return device_print_type<base_type>::value;
 }
 
 template <typename... Args>
-constexpr std::array<dprint_type_info, sizeof...(Args)> get_types_info() {
+constexpr std::array<device_print_type_info, sizeof...(Args)> get_types_info() {
     return {get_type_info<Args>()...};
 }
 
@@ -728,7 +730,7 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
     constexpr auto type_infos = get_types_info<Args...>();
     constexpr auto arg_reorder = get_arg_reorder<Args...>();
     std::array<uint32_t, sizeof...(Args)> arg_offset = {};
-    uint32_t current_offset = sizeof(dprint_detail::structures::DPrintHeader::value);
+    uint32_t current_offset = sizeof(device_print_detail::structures::DevicePrintHeader::value);
     for (std::size_t i = 0; i < arg_offset.size(); ++i) {
         arg_offset[i] = current_offset;
         current_offset += type_infos[arg_reorder[i]].size_in_bytes;
@@ -944,10 +946,10 @@ using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 
 namespace locking {
 
-uint32_t wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size);
+uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size);
 
 void acquire_lock() {
-    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
 
     while (true) {
         // Wait until lock is free (0)
@@ -984,27 +986,29 @@ void acquire_lock() {
     // TODO: Once kernel is being started, we should update kernel_printed to 0.
 
     // Check if we should print kernel id
-    volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();
-    if (!dprint_buffer->aux.kernel_printed[PROCESSOR_INDEX]) {
+    volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
+    if (!device_print_buffer->aux.kernel_printed[PROCESSOR_INDEX]) {
         uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
         auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
-        dprint_detail::structures::DPrintHeader new_kernel_message = {};
+        device_print_detail::structures::DevicePrintHeader new_kernel_message = {};
         new_kernel_message.is_kernel = 1;
         new_kernel_message.risc_id = PROCESSOR_INDEX;
-        new_kernel_message.message_payload = dprint_detail::structures::DPrintHeader::max_message_payload_size;
+        new_kernel_message.message_payload =
+            device_print_detail::structures::DevicePrintHeader::max_message_payload_size;
         new_kernel_message.info_id = kernel_id;
         auto header_value = new_kernel_message.value;
-        wait_for_space(dprint_buffer, sizeof(new_kernel_message));
-        auto write_position = dprint_buffer->aux.wpos;
-        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;
-        dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value);
-        dprint_buffer->aux.kernel_printed[PROCESSOR_INDEX] = 1;
+        wait_for_space(device_print_buffer, sizeof(new_kernel_message));
+        auto write_position = device_print_buffer->aux.wpos;
+        auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
+        device_print_detail::formatting::device_print_type<decltype(header_value)>::serialize(
+            device_print_buffer_ptr, 0, header_value);
+        device_print_buffer->aux.kernel_printed[PROCESSOR_INDEX] = 1;
     }
 }
 
 void release_lock() {
-    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
 
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Release lock by setting to 0
@@ -1012,33 +1016,35 @@ void release_lock() {
 }
 
 void initialize_lock() {
-    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+    volatile uint32_t* lock_ptr = get_device_print_sync_register_ptr();
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
 }
 
-uint32_t wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size) {
+uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size) {
     // Check if we are wrapped around
-    auto write_position = dprint_buffer->aux.wpos;
-    auto read_position = dprint_buffer->aux.rpos;
+    auto write_position = device_print_buffer->aux.wpos;
+    auto read_position = device_print_buffer->aux.rpos;
     if (write_position > read_position) {
         // We are writing in front of the read position. Check if we need to wrap around.
-        if (write_position + message_size >= sizeof(dprint_buffer->data)) {
+        if (write_position + message_size >= sizeof(device_print_buffer->data)) {
             // There is not enough space for our message until end of buffer.
             // Check if we should add wrap around message in the buffer.
-            if (write_position < sizeof(dprint_buffer->data) - sizeof(dprint_detail::structures::DPrintHeader::value)) {
+            if (write_position <
+                sizeof(device_print_buffer->data) - sizeof(device_print_detail::structures::DevicePrintHeader::value)) {
                 // We can fit a wrap around message, write it now so reader can process it while we wait for space.
-                dprint_detail::structures::DPrintHeader wrap_header = {};
+                device_print_detail::structures::DevicePrintHeader wrap_header = {};
                 wrap_header.is_kernel = 0;
                 wrap_header.risc_id = 0;
                 wrap_header.message_payload = 0;
-                wrap_header.info_id = dprint_detail::structures::DPrintHeader::max_info_id_value;
+                wrap_header.info_id = device_print_detail::structures::DevicePrintHeader::max_info_id_value;
                 auto value = wrap_header.value;
-                *reinterpret_cast<dprint_buffer_ptr<decltype(value)>>(dprint_buffer->data + write_position) = value;
+                *reinterpret_cast<device_print_buffer_ptr<decltype(value)>>(
+                    device_print_buffer->data + write_position) = value;
             }
             // Wrap around to the beginning of the buffer and continue waiting for space there.
-            write_position = dprint_buffer->aux.wpos = 0;
+            write_position = device_print_buffer->aux.wpos = 0;
         } else {
             // There is enough space in the buffer.
             return write_position;
@@ -1055,10 +1061,10 @@ uint32_t wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer
             internal_::risc_context_switch();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
-            if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+            if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
                 return 0;
             };  // wait for host to catch up to wpos with it's rpos
-            read_position = dprint_buffer->aux.rpos;
+            read_position = device_print_buffer->aux.rpos;
         }
         WAYPOINT("DPD");
     }
@@ -1071,31 +1077,35 @@ namespace serialization {
 
 // Helper to serialize a single argument based on its type info
 template <typename ArgumentType>
-void serialize_argument(volatile tt_l1_ptr uint8_t* dprint_buffer, uint32_t offset, const ArgumentType& argument) {
+void serialize_argument(
+    volatile tt_l1_ptr uint8_t* device_print_buffer, uint32_t offset, const ArgumentType& argument) {
     using base_type = std::remove_cv_t<std::remove_reference_t<ArgumentType>>;
-    formatting::dprint_type<base_type>::serialize(dprint_buffer, offset, argument);
+    formatting::device_print_type<base_type>::serialize(device_print_buffer, offset, argument);
 }
 
 template <typename Tuple, typename ArgOffsetsType, std::size_t... Is>
 inline void serialize_arguments_impl(
-    volatile tt_l1_ptr uint8_t* dprint_buffer, Tuple&& tup, ArgOffsetsType arg_offsets, std::index_sequence<Is...>) {
-    (serialize_argument(dprint_buffer, arg_offsets[Is], std::get<Is>(std::forward<Tuple>(tup))), ...);
+    volatile tt_l1_ptr uint8_t* device_print_buffer,
+    Tuple&& tup,
+    ArgOffsetsType arg_offsets,
+    std::index_sequence<Is...>) {
+    (serialize_argument(device_print_buffer, arg_offsets[Is], std::get<Is>(std::forward<Tuple>(tup))), ...);
 }
 
 template <typename... Args>
-void serialize_arguments(volatile tt_l1_ptr uint8_t* dprint_buffer, Args&&... args) {
+void serialize_arguments(volatile tt_l1_ptr uint8_t* device_print_buffer, Args&&... args) {
     auto tup = std::forward_as_tuple(std::forward<Args>(args)...);
 
     constexpr auto arg_offsets = formatting::get_arg_offsets<Args...>();
     using seq = formatting::arg_reorder_seq_t<Args...>;  // std::index_sequence<perm[0], perm[1], ...>
 
-    serialize_arguments_impl(dprint_buffer, tup, arg_offsets, seq{});
+    serialize_arguments_impl(device_print_buffer, tup, arg_offsets, seq{});
 }
 
 template <typename... Args>
 constexpr uint32_t get_total_message_size(Args&&...) {
     constexpr auto type_infos = formatting::get_types_info<Args...>();
-    uint32_t total_size = sizeof(dprint_detail::structures::DPrintHeader::value);  // Start with header size
+    uint32_t total_size = sizeof(device_print_detail::structures::DevicePrintHeader::value);  // Start with header size
     for (size_t i = 0; i < sizeof...(Args); ++i) {
         total_size += type_infos[i].size_in_bytes;
     }
@@ -1107,4 +1117,4 @@ constexpr uint32_t get_total_message_size(Args&&...) {
 
 }  // namespace serialization
 
-}  // namespace dprint_detail
+}  // namespace device_print_detail

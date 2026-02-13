@@ -29,7 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/new_dprint_common.h"
+#include "hostdevcommon/device_print_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -318,10 +318,10 @@ struct watcher_msg_t {
 struct dprint_buf_msg_t {
     union {
         DebugPrintMemLayout data[PROCESSOR_COUNT];
-        NewDebugPrintMemLayout new_data;
+        DevicePrintMemoryLayout shared_data;
     };
 
-    static_assert(sizeof(data) == sizeof(new_data));
+    static_assert(sizeof(data) == sizeof(shared_data));
 };
 #endif
 
