@@ -91,7 +91,7 @@ inline void llk_unpack_tilizeA_B_init(
         unpack_src_format[get_operand_id(operandB)],
         unpack_dst_format[get_operand_id(operandB)],
         unpA_face_r_dim,
-        get_operand_face_r_dim(get_operand_id(operandB)),
+        unpB_face_r_dim),
         num_faces,
         get_operand_num_faces(get_operand_id(operandB))), "");
 
