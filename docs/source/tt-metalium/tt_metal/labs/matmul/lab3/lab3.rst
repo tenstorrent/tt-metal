@@ -738,7 +738,7 @@ as the receiver cores.
 
 Perform the following steps to complete the exercise:
 
-#. Start by copying the files from the ``lab_multicast`` directory into a new directory (e.g. ``lab3_exercise2``),
+#. Start by copying the files from the ``lab_multicast`` directory into a new directory (e.g. ``lab3_ex2``),
    and rename the copied ``lab_eltwise_binary.cpp`` file to match the directory name (e.g. ``lab1_matmul.cpp``).
 
 #. Update all ``CreateKernel`` calls to point to kernel source files in the new directory.
@@ -804,7 +804,7 @@ one tile at a time, and then profile both versions to measure the performance im
 Perform the following steps to complete the exercise:
 
 #. Start by copying the files from the ``lab_multicast`` directory into a new directory
-   (e.g. ``lab3_exercise3``). Update the ``CMakeLists.txt`` files in the new directory and in the
+   (e.g. ``lab3_ex3``). Update the ``CMakeLists.txt`` files in the new directory and in the
    parent directory to include the new executable, then build and run the new program to confirm that
    it produces the expected output.
 
@@ -862,7 +862,7 @@ This is shown in Figure 5.
 
 .. figure:: images/core_roles.png
    :alt: Core roles in Matrix Multiplication with Multicast
-   :width: 700
+   :width: 500
    :align: center
 
    Figure 5: Core roles in Matrix Multiplication with Multicast
@@ -894,429 +894,234 @@ slabs of tiles of ``A`` and ``B`` differently depending on their role:
   This core reads slabs of both ``A`` and ``B`` it needs for its own computation from DRAM
   It multicasts slabs of ``A`` to all the other cores in row 0, and multicasts slabs of ``B`` to all the other cores in column 0.
 
+What this translates to is that matrix multiplication implementation with multicast will require
+four different types of reader kernels, corresponding to the four different roles identified above.
+
 Similar to exercises 2 and 3, we observe that the compute and writer kernels do not need to change at all.
 Compute kernel uses CBs for its data, without any awareness of whether the data was received via multicast or DRAM read.
 The writer kernel reads tiles from the output of the compute kernel, and also doesn't requirte any changes.
 
 
-,
-as outlined above.
+Exercise 4: Multi Core Matrix Multiplication with Multicast
+***********************************************************
 
-
-Pseudocode with Slabs and Multicast
-===================================
-
-At slab level, the Lab 2 compute pseudocode remains:
-
-.. code-block:: cpp
-
-   // For every K-block:
-   for (b in 0 ..
-        num_k_blocks - 1) {
-
-       // After slab loading:
-       //  - A_slab(b) is present in CB0 on this core.
-       //  - B_slab(b) is present in CB1 on this core.
-
-       for (i in 0 ..
-            M_block_tiles - 1) {
-           for (j in 0 ..
-                N_block_tiles - 1) {
-
-               // Load partial result for C(i, j) if b > 0
-               // or initialize acc_tile if b == 0, as in Lab 2.
-               ...
-
-               // For each K tile inside this K-block slab:
-               for (k_local in 0 ..
-                    K_block_tiles - 1) {
-                   // Compute tile indices into A_slab(b) and B_slab(b)
-                   a_tile = A_slab_tile(i, k_local);
-                   b_tile = B_slab_tile(k_local, j);
-                   acc_tile += matmul(a_tile, b_tile);
-               }
-
-               // Store partial or final result into appropriate CB.
-               ...
-           }
-       }
-   }
-
-The only new phase is **how A_slab(b) and B_slab(b) get into CBs** for each core.
-
-For A slabs (row multicast), you can describe the protocols as follows:
-
-*On the A-source core for row y:*
-
-.. code-block:: cpp
-
-   // For A slabs on row y
-   for (b in 0 ..
-        num_k_blocks - 1) {
-
-       // Read and multicast all tiles in A_slab(b)
-       for (t in 0 ..
-            M_block_tiles * K_block_tiles - 1) {
-
-           // 1. Read the next A tile of this slab from DRAM
-           cb_reserve_back(A_cb, 1);
-           uint32_t addr = get_write_ptr(A_cb);
-           noc_async_read_tile(global_a_tile_idx_for_row_y_and_kblock(b, t),
-                               A_addr_gen, addr);
-           noc_async_read_barrier();
-           cb_push_back(A_cb, 1);
-
-           // 2. Wait until all row receivers are ready for this tile
-           noc_semaphore_wait(A_receivers_ready_sem_ptr[y], num_receivers_in_row[y]);
-           noc_semaphore_set(A_receivers_ready_sem_ptr[y], 0);
-
-           // 3. Multicast the tile to all cores in row y
-           uint64_t mcast_addr = get_noc_multicast_addr(
-               row_start_x, y,
-               row_end_x,   y,
-               addr);
-           noc_async_write_multicast(addr, mcast_addr, tile_size_bytes, num_receivers_in_row[y]);
-
-           // 4. Ensure multicast command is issued before signaling receivers
-           noc_async_writes_flushed();
-
-           // 5. Multicast "tile sent = VALID" semaphore
-           *A_tile_sent_sem_ptr[y] = VALID;
-           noc_semaphore_set_multicast(
-               local_A_tile_sent_sem_addr[y],
-               mcast_A_tile_sent_sem_addr[y],
-               num_receivers_in_row[y]);
-
-           // 6. Wait for multicast completion before reusing this CB slot
-           noc_async_write_barrier();
-       }
-
-       // After this loop:
-       //  - This core's CB0 contains A_slab(b).
-       //  - All cores in row y have received A_slab(b) into their CB0.
-   }
-
-*On each A-receiver core in the same row y (including optionally the source if you choose to reuse the same CB protocol):*
-
-.. code-block:: cpp
-
-   for (b in 0 ..
-        num_k_blocks - 1) {
-
-       for (t in 0 ..
-            M_block_tiles * K_block_tiles - 1) {
-
-           // Reserve space for incoming A tile
-           cb_reserve_back(A_cb, 1);
-
-           // Reset local "tile sent" semaphore and signal ready to source
-           noc_semaphore_set(A_tile_sent_sem_ptr[y], INVALID);
-           noc_semaphore_inc(A_receivers_ready_sem_addr[y], 1);
-
-           // Wait until source multicasts "tile sent = VALID"
-           noc_semaphore_wait(A_tile_sent_sem_ptr[y], VALID);
-
-           // The tile is now at the CB write pointer
-           cb_push_back(A_cb, 1);
-       }
-
-       // After this loop, CB0 on this core holds the full A_slab(b),
-       // in the same order as on the source core.
-   }
-
-For B slabs (column multicast), the structure is analogous, but along columns and using a B-specific set of CBs (e.g., CB1), address generators, and semaphores.
-
-Interaction with Double Buffering
-=================================
-
-In Lab 2 you were instructed to size CBs so that:
-
-* Input CBs (for A and B slabs) can hold **full slabs** and use **double buffering**:
-
-  * CB0 has capacity for at least ``2 * M_block_tiles * K_block_tiles`` tiles,
-  * CB1 has capacity for at least ``2 * K_block_tiles * N_block_tiles`` tiles.
-
-This allowed the reader kernels to:
-
-* Load slab ``b+1`` while the compute kernel is still processing slab ``b`` for the same core.
-
-In Lab 3, double buffering plays the same role:
-
-* On A- and B-source cores, double buffering allows overlapping:
-
-  * DRAM reads and multicast for slab ``b+1``,
-  * With compute and writeback for slab ``b`` on all cores in that row or column.
-
-* On receiver cores, double buffering allows:
-
-  * Receiving the tiles of slab ``b+1`` via multicast,
-  * While the compute kernel is still consuming slab ``b``.
-
-To maintain correctness:
-
-* You must not reuse a CB slot (for slab ``b+1``) until:
-
-  * The compute kernel has called ``cb_pop_front`` for the tile held in that slot (freeing it from the CB's perspective), and
-  * The source kernel has ensured that all multicast transfers involving that tile have completed (using ``noc_async_write_barrier``).
-
-As long as these two conditions are enforced, double buffering and multicast coexist correctly with slab-based processing.
-
-Exercise 4: Multi Core Matrix Multiplication with Multicast and Slabs
-*********************************************************************
-
-In this exercise, you will start from your **Exercise 2 solution from Lab 2** (multi core matrix multiplication with blocked data reuse using slabs) and extend it to:
+In this exercise, you will start from your **Exercise 2 solution from Lab 2** (multi core matrix multiplication with
+data reuse) and extend it to:
 
 * Use slab-level multicast for A slabs across rows,
 * Use slab-level multicast for B slabs down columns,
 * Retain the same blocked compute kernel and writer kernel,
 * Preserve correctness and then compare performance to the Lab 2 version.
+  For this, you will use the same matrix sizes and core grid sizes as in Lab 2.
 
-Use the same matrix sizes and tile sizes as before:
+Perform the following steps to complete the exercise:
 
-* ``A``: ``640x320``,
-* ``B``: ``320x640``,
-* ``C``: ``640x640``,
-* Tiles: ``TILE_HEIGHT == TILE_WIDTH == 32``.
+#. **Set up a new project directory**
 
-And test at least the same core grid sizes as in Lab 2, such as:
+   Copy your Lab 2 Exercise 2 solution files into a new directory (e.g. ``lab3_ex4``).
+   Update the ``CMakeLists.txt`` files in the new directory and in the parent directory to
+   include the new executable. Build and run the program to confirm that it still produces
+   correct results before making any changes.
 
-* ``5x5`` core grid,
-* ``10x10`` core grid.
+#. **Define core ranges for the four different roles**
 
-Follow these steps:
+   As described in Figure 5 and the accompanying text, the core grid is divided into four
+   roles based on each core's logical coordinates:
 
-#. **Review your Lab 2 implementation**
+   Define ``CoreRange`` objects in your host code containing **logical**
+   coordinates for four core groups corresponding to the four different roles.
+   These ranges should be used when calling ``CreateKernel`` to assign the correct reader
+   kernel to each core group.
 
-   Make sure your Lab 2 code:
+#. **Create semaphores for multicast synchronization**
 
-   * Defines ``M_block_tiles``, ``N_block_tiles``, ``K_block_tiles``, and ``num_k_blocks``.
-   * Sizes input CBs to store full slabs (with double buffering):
+   For A-slab multicast, create two semaphores on all cores: one "receivers ready" semaphore
+   for receivers to signal readiness to the row's A-source core, and one "slab sent" semaphore
+   for the A-source core to signal that the slab has been multicast. Create an analogous pair
+   of semaphores for B-slab multicast, for a total of four semaphores.
 
-     * CB0 for ``A_slab(b)`` of size ``M_block_tiles * K_block_tiles`` tiles,
-     * CB1 for ``B_slab(b)`` of size ``K_block_tiles * N_block_tiles`` tiles.
+   Although not every core will use every semaphore locally, creating all four semaphores on
+   all cores ensures that ``get_semaphore`` returns the same on-chip SRAM address on every core
+   for a given semaphore ID. This is required for the multicast protocol to work correctly,
+   as described in the *Semaphores: Local vs. Remote Access* section earlier in this lab.
 
-   * Loads ``A_slab(b)`` and ``B_slab(b)`` into CBs in slab row-major order.
-   * Uses the blocked compute structure shown in Lab 2's pseudocode.
+#. **Replace the single reader kernel with four role-specific reader kernels**
 
-#. **Assign core roles**
+   In Lab 2, all cores used the same reader kernel that read both A and B slabs from DRAM.
+   Replace this with four separate reader kernels, one for each core role defined above. Each
+   kernel implements a different combination of DRAM reads and multicast send/receive operations
+   for A and B slabs. Use ``CreateKernel`` to create each kernel on the corresponding
+   ``CoreRange`` defined for the four core groups.
 
-   For your chosen core grid:
+   The compute and writer kernels remain identical to Lab 2 and should continue to be created
+   on all cores, just as before.
 
-   * Define roles:
+#. **Implement the top-left core reader kernel**
 
-     * Top-left core: ``(0, 0)``,
-     * Top row B-source cores: ``(x, 0)`` with ``x > 0``,
-     * Left column A-source cores: ``(0, y)`` with ``y > 0``,
-     * Interior cores: ``(x, y)`` with ``x > 0`` and ``y > 0``.
+   This kernel reads slabs of both ``A`` and ``B`` matrices from DRAM the same way as it did in Lab 2.
+   However, it also needs to multicast slabs of ``A`` and ``B`` to all other cores in the
+   same row and column, respectively. To achieve this, it needs to take as kernel arguments
+   ranges of core coordinates to multicast to. Remember that these coordinates must be
+   device coordinates, obtained via ``worker_core_from_logical_core``.
+   It also needs to take as kernel argument IDs of the semaphores to use for the multicast
+   operations. Then it needs to implement the sender side of the multicast protocol for both
+   ``A`` and ``B`` slabs, similar to the one described earlier in this lab.
 
-   * Verify that:
+   **IMPORTANT**:
+   When forming the multicast destination address using ``get_noc_multicast_addr``, make sure
+   to pass the device coordinates in the order such that "start" coordinates are always lower
+   values than the end coordinates. This is a requirement for the NOC1 ports used by all the
+   reader kernels when using the default NOC mapping, as specified earlier in the lab.
+   This applies to all the ranges of device coordinates that you will need to form in this exercise.
+   While you technically don't know the values of the device coordinates, only logical coordinates
+   you can safely assume that relative ordering of values of device coordinates will correspond
+   to the relative ordering of values of logical coordinates.
+   For example, if the logical coordinates of the first and last receiver cores
+   in a range are ``(0, 0)`` and ``(2, 2)``, corresponding device coordinates will have some
+   values ``(x0, y0)`` and ``(x1, y1)``. You can safely assume that ``x0 < x1`` and ``y0 < y1``.
 
-     * All cores in row ``y`` share the same rows of ``C`` (same ``M_block_tiles``),
-     * All cores in column ``x`` share the same columns of ``C`` (same ``N_block_tiles``).
+#. **Implement the left-column core reader kernel**
 
-#. **Add semaphores for slab-level multicast**
+   This kernel behaves differently with respect to slabs of ``A`` and ``B`` matrices:
 
-   For A slabs:
+   * **Sends A slabs:** reads slabs of ``A`` from DRAM from DRAM the same way as it did in Lab 2.
+     However, it also needs to multicast slabs of ``A`` and ``B`` to all other cores in the
+     same row. This behavior is just a subset of the behavior of the top-left core described in the
+     previous step.
 
-   * For each row ``y``, allocate:
+   * **Receives B slab:** Rather than reading ``B`` slabs from DRAM, this kernel receives the
+     ``B`` slabs via multicast from the topmost core in its column. To achieve this, it needs to
+     take as kernel arguments device coordinates of the sender kernel (the topmost core in its column).
+     It also needs to take as kernel argument IDs of the semaphores to use for the multicast
+     operations. Then it needs to implement the receiver side of the multicast protocol for the
+     ``B`` slabs, similar to the one described earlier in this lab.
 
-     * A row-specific "receivers ready" semaphore for A,
-     * A row-specific "tile sent" semaphore for A.
+#. **Implement the top-row core reader kernel**
 
-   For B slabs:
+   This kernel mirrors the left-column kernel with A and B roles swapped. All requirements
+   are otherwise identical.
 
-   * For each column ``x``, allocate:
+#. **Implement the interior core reader kernel**
 
-     * A column-specific "receivers ready" semaphore for B,
-     * A column-specific "tile sent" semaphore for B.
+   This is the simplest reader kernel. Rather than reading slabs of ``A`` and ``B`` from DRAM,
+   it receives both the ``A`` and ``B`` slabs via multicast from the corresponding source cores.
+   If you already implemented the left-column and top-row kernels, you can reuse the code for these.
+   Consider refactoring common code into helper functions to reduce the risk of copy-paste
+   errors.
 
-   These can be created on the corresponding source cores and passed as runtime arguments to all source and receiver kernels that need them.
+#. **Create appropriate reader kernels on appropriate core groups**
 
-#. Create code for four types of reader kernels for the four types of cores.
+   Create the four reader kernels on the appropriate core groups using ``CreateKernel``.
+   Use the ``CoreRange`` objects defined for the four core groups earlier in this exercise.
+   Define ``KernelHandle`` objects for the four reader kernel groups to be used to set runtime
+   arguments below.
 
-#. Create appropriate kernels on appropriate cores for each of the four types of cores.
-   Define ``CoreRange`` objects for each of the four types of cores to be used when calling ``CreateKernel`` for each of the four types of kernels.
-
-#. **Implement A-slab multicast kernels**
-
-   Modify your existing A reader logic from Lab 2:
-
-   * On left column cores (A-source cores):
-
-     * Create or adapt a kernel that:
-
-       * For each K-block ``b``, reads all tiles of ``A_slab(b)`` for this row into CB0 in slab row-major order.
-       * For each tile, uses the row-specific semaphores and NoC multicast APIs to:
-
-         * Wait until all cores in the row are ready,
-         * Multicast the tile to all cores in that row,
-         * Signal that the tile has been sent,
-         * Use NoC barriers before reusing CB slots for the next K-block.
-
-   * On other cores in the row (A receivers):
-
-     * Replace their A-reader kernel with an A-receiver kernel that:
-
-       * For each K-block and each tile index in the slab:
-
-         * Reserves CB0 space,
-         * Signals readiness to the row's A-source core,
-           Observe that receivers no longer read data from DRAM, so they don't need to calculate offsets within the slab.
-           All such computations are done by the sender core which pushes data into CB..
-         * Waits on the row's A "tile sent" semaphore,
-         * Pushes the received tile into CB0.
-
-   At the end of slab loading for K-block ``b``, every core in the row should have the same ``A_slab(b)`` in CB0.
-
-
-#. **Implement B-slab multicast kernels**
-
-   Apply the same pattern for B:
-
-   * On top row cores (B-source cores):
-
-     * For each K-block ``b``, read all tiles of ``B_slab(b)`` for that column into CB1.
-     * For each tile, multicast down the column using column-specific semaphores and NoC multicast.
-
-   * On other cores in the column (B receivers):
-
-     * For each K-block and each tile index in the slab:
-
-       * Reserve CB1 space,
-       * Signal readiness to the column's B-source core,
-       * Wait for the column's B "tile sent" semaphore,
-       * Push the received tile into CB1.
-
-   After slab loading for each K-block, every core in a given column should have the same ``B_slab(b)`` in CB1.
-
-Make sure to account for the fact that number of receivers for A may be different than number of receivers for B in a general case.
-
-
-#. **Reuse compute and writer kernels**
-
-   Keep your Lab 2 compute and writer kernels unchanged:
-
-   * Compute kernels still:
-
-     * Expect full ``A_slab(b)`` in CB0 and full ``B_slab(b)`` in CB1,
-     * Implement the K-blocked accumulation strategy using intermediate CBs.
-
-   * Writer kernels still read ``C_block`` tiles from the output CB in row-major order and write them to the destination tensor in DRAM.
-
-   Because slabs in CBs have the same layout and ordering as before, the compute and writer kernels do not need to know whether slabs arrived via DRAM reads or multicast.
 
 #. **Set per-core runtime arguments**
 
-   Update host code that sets runtime arguments:
+   Update the host code to iterate over all logical core coordinates in the grid. For each
+   core, determine its role based on its ``(x, y)`` position and call ``SetRuntimeArgs``
+   with the appropriate arguments for that core's reader kernel.
 
-   * For each A-source core:
+   In addition to runtime arguments used in Lab 2, sender kernels need:
 
-     * Pass DRAM base addresses for A,
-     * Row index ``y`` and the number of cores in that row,
-     * Row-specific semaphore indices and any device coordinates needed to construct multicast addresses.
+   * Device coordinates of the first and last receiver cores in the multicast destination
+     range (for use with ``get_noc_multicast_addr`` in the kernel).
+   * Semaphore IDs for the relevant "receivers ready" and "slab sent" semaphores.
+   * The number of receiver cores in the destination range.
 
-   * For each A-receiver core:
+   Similarly, receiver kernels need:
 
-     * Pass device coordinates of its row's A-source core,
-     * Row-specific semaphore indices,
-     * Slab tile count.
+   * Device coordinates of their source core (for use with ``noc_semaphore_inc``).
+   * Semaphore IDs for the relevant "receivers ready" and "slab sent" semaphores.
 
-   * Similarly for B-source and B-receiver kernels.
+   Be careful with coordinate systems: ``SetRuntimeArgs`` is a host API that takes
+   **logical** coordinates to identify which core receives the arguments, but any coordinates
+   passed **as** runtime argument values must be **device** coordinates, obtained via
+   ``worker_core_from_logical_core``. Perform all coordinate arithmetic (e.g., determining
+   the core one position to the right or below, or the last core in a row) in logical coordinate space,
+   then convert the final result to device coordinates. This is important because adjacent
+   logical cores may not be adjacent in device coordinates due to non-compute cores in the
+   physical layout (e.g. DRAM or Ethernet cores).
 
-   As in Lab 2, iterate over all logical cores in your core grid, determine their role based on ``(x, y)``, and set the appropriate runtime arguments.
+   Also keep in mind that ``worker_core_from_logical_core`` accepts only valid logical coordinates.
+   For example, it is not legal to pass in a logical coordinate outside the grid size or a negative
+   coordinate, so make sure you structure all your computations to only result in legal logical coordinates.
+   Finally, ``worker_core_from_logical_core`` converts only a single logical coordinate at a time,
+   so if you need to convert a range of logical coordinates, you need to convert coordinates of
+   the start and end of the range individually.
 
-   Be careful: kernels are multicasting only within one row or one column, no core ever multicasts across both rows and columns.
+   It is a good practice to include "logical" or "device" in the names of all coordinate
+   variables to avoid accidental misuse.
 
-   Remember that any coordinates in host code (e.g., in ``CreateKernel``, ``CreateSemaphore``, etc.) must be logical coordinates.
-   Be particularly careful about the ``SetRuntimeArgs`` function, which is a host function that takes logical coordinates to specify
-   which cores will receive the runtime arguments, while any runtime arguments that refer to coordinates must themselves use device coordinates.
-   Similarly, coordinates determining what is leftmost or top are logical coordinates.
+#. **Build, verify correctness, and profile performance**
 
-   On the other hand, any coordinates passed to kernels as arguments must be device coordinates. This includes the coordinates of the core whose
-   logical coordinates are ``(0, 0)`` (i.e. you shouldn't assume that core with logical coordinates ``(0, 0)`` has device coordinates ``(0, 0)``).
-   Advice: name all your coordinate variables with logical/device in the name to avoid any ambiguity.
+   Build and run your program and verify correctness in the same manner as in Lab 2.
 
-   When converting lofgical to device coordinates, you can use the ``worker_core_from_logical_core`` function.
-  Keep in mind that this function accepts only valid logical coordinates. For example, passing a coordinate outside the grid size will throw an error.
+   If you encounter hangs, use the Watcher (as practiced in Exercise 1) and DPRINT statements
+   to diagnose the issue. Common causes include incorrect semaphore updates, mismatched
+   semaphore IDs between sender and receiver kernels, and incorrect device coordinates in
+   multicast addresses. When debugging, consider reducing matrix and core grid sizes to
+   simplify the problem while respecting divisibility constraints. Remember to reset the
+   device with ``tt-smi -r`` after any hang.
 
-   Make sure to perform all arithmetic on coordinates before converting to device coordinates. Add or subtract any offsets
-   (e.g., to determine the core to the right of the current core) in logical coordinate space, then convert the final result to device coordinates.|
+   If the program runs but produces incorrect results, common causes include incorrect slab
+   tile indexing, accidentally using ``A``-related addresses or semaphores for ``B``
+   (or vice versa), and incorrect runtime argument ordering. Use DPRINT statements to print
+   runtime argument values and CB contents to identify the source of the mismatch.
+   Remember that output of DPRINT automatically indicates ``(x, y)`` logical coordinates of the core.
+   However, it doesn't automatically indicate the name of the kernel, so make sure to include
+   brief kernel name if the text of DPRINT statement doesn't uniquely identify the kernel.
 
+   If you are copy-pasting code segments between kernels, take extra care to update all variable
+   names and parameters used in the copied code.
+   Consider refactoring common code into helper functions to reduce the risk of copy-paste
+   errors.
 
+#. Once correctness is verified, profile both your Lab 2 implementation and your new
+   multicast-enabled implementation using the device profiler.
+   Compare firmware times for the same matrix sizes and core grid configurations.
+   Plot firmware time or speedup versus the number of cores and compare against:
 
-   Reason: The adjacent physical core may be a non-tensix core, or it could be a harvested core.
+   * Your single-core baseline from Lab 1,
+   * Your multi core with data reuse implementation from Lab 2 (no multicast),
+   * Your multicast-enabled implementation from this exercise.
 
-#. **Verify correctness and profile performance**
-
-   * Verify correctness by comparing the resulting C tensor to your CPU reference matmul (as in Lab 2).
-   * Then enable the device profiler (``TT_METAL_DEVICE_PROFILER=1``) and measure firmware time for:
-
-     * Your Lab 2 data reuse implementation (no multicast),
-     * Your Lab 3 multicast implementation (same matrix sizes and core grids).
-
-   * Plot firmware time (or speedup) vs number of cores, and compare:
-
-     * Single-core baseline (Lab 1),
-     * Multi core with slab-based reuse only (Lab 2),
-     * Multi core with slab-based reuse plus multicast (this lab).
-
-Debugging Advice
-================
-
-When debugging this lab, you may run into two broad classes of issues:
-
-#. Program hangs
-   This is most commonly because of sempahores not being updated correctly.
-   Use DPRINT statements before and after ``noc_semaphore_wait``, ``noc_semaphore_set`` and ``noc_semaphore_inc`` statements.
-   Remember that output of DPRINT automatically indicates ``(x, y)`` coordinates of the core.
-   However, it doesn't automtically indicate the name of the kernel, so make sure to include brief kernel name
-   if you're adding similar DPRINT statements in different kernels.
-
-#. Program doesn't produce correct results
-   This is most commonly because of incorrect slab loading, or mistakenly using addresses associated with matrix ``A`` for matrix ``B`` and vice versa.
-   Use DPRINT statements to print the values in the CBs to verify that they are correct.
-   To make debugging easier, you can reduce matrix and core grid sizes, while respecting the constraints on divisibility of different parameters.
-   If you're copy-pasting code segments, it is easy to forget to update all the relevant variables.
-   Consider whether you can refactor common code into functions to avoid copy-pasting and thus make your code less error prone
-   (of course, in such a case make sure that all parameters passed to the function are correct when the function is called in multiple places with different parameters).
-
-   Could also be due to incorrectly assigned runtime parameters to kernels.
-   Make sure to DPRINT the runtime parameters to verify that they are correct.
+   You should observe that the multicast version reduces overall DRAM read traffic and can
+   yield a measurable performance improvement.
 
 
-TODO: Consider adding an exercise where different cores are assigned to different NOCs.
+   **Important Note**
+   If you observe that multicast implementation performs worse than the data reuse implementation,
+   it is likely because you are multicasting one tile at a time, rather than a slab at a time.
+   In lab 2, you had a choice of pushing one tile at a time or a slab at a time into the CB.
+   If you pushed one tile at a time and simply added multicast to that solution, you would
+   experience the handshake overhead explored in Exercise 3. to achieve performance
+   improvement, update your code to push a slab at a time into the CB and also multicast the slab
+   rather than individual tiles, similarly to how you did in Exercise 3.
 
-TODO: lab_example still uses confusing semaphore names in a few places. Review every use and fix them.
+In this exercise you have applied slab-level multicast to multi core matrix multiplication,
+combining the blocked compute structure from Lab 2 with the NoC multicast protocols practiced
+earlier in this lab. By reading each slab from DRAM only once per row or column and distributing
+it to all cores via multicast, you have reduced redundant DRAM traffic and demonstrated how
+cross-core data reuse can improve performance on Tenstorrent hardware.
+
 
 Conclusion
 **********
 
-In this lab, you refined the multi core, slab-based matrix multiplication implementation from Lab 2 by adding **cross-core reuse of slabs via multicast**:
+In this lab, you refined the multi core matrix multiplication with reuse implementation from Lab 2 by adding
+**cross-core reuse of data via multicast** by taking care of regular pattern of data use across cores.
+This was possible because all cores in the same row need the same data from the ``A`` matrix
+ and all cores in the same column need the same data from the ``B`` matrix.
+Multicast is perfectly suited for this use case because it allows a sender core to write the same data
+to multiple destination cores efficiently, in a single NoC operation.
 
-* You kept the blocked structure and slab definitions from Lab 2:
+This lab shows how higher-level algorithmic structure (blocked matmul with slabs) can be combined with
+low-level architectural features (NoC multicast and semaphores) to further reduce DRAM traffic and
+improve performance, without changing the core mathematical computation.
 
-  * Each core still computes a ``C_block`` using ``A_slab(b)`` and ``B_slab(b)`` for multiple K-blocks,
-  * Partial results still live in an intermediate CB across K-blocks.
-
-* You observed that for each K-block:
-
-  * All cores in the same row need the **same** A slab, ``A_slab(b)``,
-  * All cores in the same column need the **same** B slab, ``B_slab(b)``.
-
-* You applied NoC multicast so that:
-
-  * Each ``A_slab(b)`` is read from DRAM **once per row** and then multicast to all cores in that row,
-  * Each ``B_slab(b)`` is read from DRAM **once per column** and then multicast to all cores in that column.
-
-* You integrated multicast with:
-
-  * The existing slab-sized CBs,
-  * Double buffering for slab loading,
-  * The same compute and writer kernels from Lab 2.
-
-This lab shows how higher-level algorithmic structure (blocked matmul with slabs) can be combined with low-level architectural features (NoC multicast and semaphores) to further reduce DRAM traffic and potentially improve performance, without changing the core mathematical computation.
-
-Additional information about Tenstorrent NoC can be found in the following resources:
+Additional information about features used in this lab can be found in the following resources:
 
 * NoC (Network on Chip) Readme: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md
 * Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
