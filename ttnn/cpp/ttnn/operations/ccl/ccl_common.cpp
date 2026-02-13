@@ -1761,8 +1761,11 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        // Only validate topology for non-torus 2D fabric (TORUS configs support Ring topology)
+        if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+            validate_fabric_2d_dynamic_config(topology);
+        }
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
@@ -1823,8 +1826,11 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        // Only validate topology for non-torus 2D fabric (TORUS configs support Ring topology)
+        if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+            validate_fabric_2d_dynamic_config(topology);
+        }
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,
