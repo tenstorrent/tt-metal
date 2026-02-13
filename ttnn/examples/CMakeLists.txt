@@ -29,6 +29,15 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_executable(example_lab3_ex2)
+target_sources(example_lab3_ex2 PRIVATE lab3_ex2/lab3_ex2.cpp)
+target_link_libraries(
+    example_lab3_ex2
+    PRIVATE
+        TT::Metalium
+        TTNN::CPP
+)
+
 add_executable(example_lab3_matmul_ex1)
 target_sources(example_lab3_matmul_ex1 PRIVATE lab3_matmul_ex1/lab3_matmul_ex1.cpp)
 target_link_libraries(

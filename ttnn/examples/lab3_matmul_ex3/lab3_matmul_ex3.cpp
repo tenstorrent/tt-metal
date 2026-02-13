@@ -242,19 +242,19 @@ void matmul_multi_core(
 
     // Create a set of all cores in the compute grid.
     CoreCoord top_left_core_logical{0, 0};
-    CoreRangeSet all_cores_logical{CoreRange(top_left_core_logical, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+    CoreRange all_cores_logical(top_left_core_logical, CoreCoord(core_grid.x - 1, core_grid.y - 1));
 
     // All cores except the top row and left column are receiving A and B.
-    CoreRangeSet ab_receiver_cores_logical{CoreRange(
-        {top_left_core_logical.x + 1, top_left_core_logical.y + 1}, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+    CoreRange ab_receiver_cores_logical(
+        {top_left_core_logical.x + 1, top_left_core_logical.y + 1}, CoreCoord(core_grid.x - 1, core_grid.y - 1));
 
     // First column, excluding the top left core is sending A and receiving B.
-    CoreRangeSet a_sender_b_receiver_cores_logical{CoreRange(
-        {top_left_core_logical.x, top_left_core_logical.y + 1}, CoreCoord(top_left_core_logical.x, core_grid.y - 1))};
+    CoreRange a_sender_b_receiver_cores_logical(
+        {top_left_core_logical.x, top_left_core_logical.y + 1}, CoreCoord(top_left_core_logical.x, core_grid.y - 1));
 
     // First row, excluding the top left core is sending B and receiving A.
-    CoreRangeSet b_sender_a_receiver_cores_logical{CoreRange(
-        {top_left_core_logical.x + 1, top_left_core_logical.y}, CoreCoord(core_grid.x - 1, top_left_core_logical.y))};
+    CoreRange b_sender_a_receiver_cores_logical(
+        {top_left_core_logical.x + 1, top_left_core_logical.y}, CoreCoord(core_grid.x - 1, top_left_core_logical.y));
 
     // Create circular buffers for the input and output data.
     // Using 2x tiles when double buffering is desired.
