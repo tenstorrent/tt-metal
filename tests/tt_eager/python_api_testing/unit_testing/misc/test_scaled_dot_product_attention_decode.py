@@ -1567,6 +1567,7 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
         # Test different sliding window sizes
         [1, 4, 2, 1024 * 16, 128, (8, 8), 1024],  # Gemma test
         [1, 8, 1, 1024 * 16, 128, (8, 8), 128],  # GPT-OSS test
+        [32, 8, 1, 1024 * 16, 128, (8, 8), 128],  # GPT-OSS test high batch
         [4, 8, 1, 1024, 128, (8, 4), 64],  # Small window
         [4, 8, 1, 1024, 128, (8, 4), 128],  # Medium window
         [4, 8, 1, 1024, 128, (8, 4), 256],  # Large window
@@ -1603,10 +1604,11 @@ def test_sdpa_decode_sliding_window(
         sliding_window_size // 2,
         sliding_window_size - 1,
         s // 2,
+        s - 33,
         s - 10,
     ]
     for cur_pos in test_positions:
-        if cur_pos >= s:
+        if cur_pos + b - 1 >= s:
             continue
 
         logger.info(f"Testing sliding window={sliding_window_size} at position {cur_pos}")

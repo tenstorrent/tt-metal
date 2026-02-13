@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include <vector>
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -124,13 +125,14 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
-        cur_pos,
-        cur_batch,
-        core_num_in_reduce,
-        num_cores_per_head,
-        k_chunk_size_dynamic,
-        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
+        get_workload_for_core(
+            cur_pos,
+            cur_batch,
+            core_num_in_reduce,
+            num_cores_per_head,
+            k_chunk_size_dynamic,
+            sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
