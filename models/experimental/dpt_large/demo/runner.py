@@ -258,6 +258,7 @@ def main():
 
         stage_breakdowns = []
         timings = []
+        trace_wall_timings = []
         depth = None
 
         if use_tt and effective_dp > 1:
@@ -285,6 +286,13 @@ def main():
                 outs = dp_executor.run(iter_tt_inputs, normalize=True)
                 end = time.perf_counter()
                 timings.append((end - start) * 1000.0)
+                try:
+                    if getattr(dp_executor, "last_perf", None) is not None:
+                        v = dp_executor.last_perf.get("trace_wall_ms", None)
+                        if isinstance(v, (int, float)):
+                            trace_wall_timings.append(float(v))
+                except Exception:
+                    pass
                 if len(outs) > 0:
                     depth = outs[-1]
         else:
@@ -311,6 +319,13 @@ def main():
                         assert len(tt_pipelines) == 1
                         if iter_tt_inputs is not None:
                             depth = tt_pipelines[0].forward_tt_host_tensor(iter_tt_inputs[i], normalize=True)
+                            try:
+                                lp = getattr(tt_pipelines[0], "last_perf", None) or {}
+                                v = lp.get("trace_wall_ms", None) if isinstance(lp, dict) else None
+                                if isinstance(v, (int, float)):
+                                    trace_wall_timings.append(float(v))
+                            except Exception:
+                                pass
                         else:
                             depth = tt_pipelines[0].forward_pixel_values(iter_pixel_values[i], normalize=True)
                     else:
@@ -331,7 +346,27 @@ def main():
         num_images_per_iter = max(1, len(iter_pixel_values))
         per_image_ms_mean = latency_ms_mean / float(num_images_per_iter)
         per_image_ms_std = latency_ms_std / float(num_images_per_iter)
-        fps = 1000.0 / per_image_ms_mean if per_image_ms_mean > 0 else 0.0
+        fps_e2e = 1000.0 / per_image_ms_mean if per_image_ms_mean > 0 else 0.0
+
+        device_wall_ms_mean = float(np.mean(trace_wall_timings)) if len(trace_wall_timings) > 0 else None
+        device_wall_ms_std = float(np.std(trace_wall_timings)) if len(trace_wall_timings) > 0 else None
+
+        # DP executor reports trace_wall_ms per DP step (covers `num_images_per_iter` images).
+        # Non-DP traced calls report trace_wall_ms per image call.
+        per_image_device_ms_mean = None
+        per_image_device_ms_std = None
+        fps_device = None
+        if isinstance(device_wall_ms_mean, (int, float)) and device_wall_ms_mean > 0:
+            if use_tt and effective_dp > 1:
+                per_image_device_ms_mean = device_wall_ms_mean / float(num_images_per_iter)
+                per_image_device_ms_std = (
+                    (device_wall_ms_std / float(num_images_per_iter)) if isinstance(device_wall_ms_std, (int, float)) else None
+                )
+                fps_device = 1000.0 / per_image_device_ms_mean if per_image_device_ms_mean > 0 else None
+            else:
+                per_image_device_ms_mean = device_wall_ms_mean
+                per_image_device_ms_std = device_wall_ms_std
+                fps_device = 1000.0 / per_image_device_ms_mean if per_image_device_ms_mean > 0 else None
         inference_time_s = latency_ms_mean / 1000.0
         inference_time_std_s = latency_ms_std / 1000.0
         throughput_iter_per_s = (1.0 / inference_time_s) if inference_time_s > 0 else 0.0
@@ -347,7 +382,16 @@ def main():
             num_images_per_iter=num_images_per_iter,
             per_image_ms_mean=per_image_ms_mean,
             per_image_ms_std=per_image_ms_std,
-            fps=fps,
+            # For trace/trace_2cq runs, report Stage-1 throughput as device-only traced-step FPS.
+            # Always keep the end-to-end FPS for transparency.
+            fps=float(fps_device) if isinstance(fps_device, (int, float)) else float(fps_e2e),
+            fps_e2e=float(fps_e2e),
+            # Device-only traced-step metrics (exclude readback + CPU normalize). Present for trace/trace_2cq modes.
+            trace_wall_ms_mean=device_wall_ms_mean,
+            trace_wall_ms_std=device_wall_ms_std,
+            per_image_ms_device_mean=per_image_device_ms_mean,
+            per_image_ms_device_std=per_image_device_ms_std,
+            fps_device=fps_device,
             inference_time_s=inference_time_s,
             inference_time_std_s=inference_time_std_s,
             throughput_iter_per_s=throughput_iter_per_s,

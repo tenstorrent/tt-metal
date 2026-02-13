@@ -429,14 +429,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
             }
         }
         // prepend exponents to follow data packing order:
-        //  16 exponents for sub-tile 0
-        //      exp_row0, exp_row1, … exp_row15
-        //  16 exponents for sub-tile 1
-        //  16 exponents for sub-tile 2
-        //  16 exponents for sub-tile 3
-        //  entire sub-tile 0 (RM layout)
-        //  entire sub-tile 1 (RM layout)
-        //  entire sub-tile 2 (RM layout)
+        //  16 exponents for sub-tile 0​
+        //      exp_row0, exp_row1, … exp_row15​
+        //  16 exponents for sub-tile 1​
+        //  16 exponents for sub-tile 2​
+        //  16 exponents for sub-tile 3​
+        //  entire sub-tile 0 (RM layout)​
+        //  entire sub-tile 1 (RM layout)​
+        //  entire sub-tile 2 (RM layout)​
         //  entire sub-tile 3 (RM layout)
         // align the exponent section to 16B
         if (exponent_padding) {

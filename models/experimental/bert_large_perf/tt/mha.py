@@ -48,7 +48,7 @@ def tt2torch_tensor(tt_tensor):
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     assert isinstance(num_heads, int) and num_heads > 0
 
-    # Weights pre-transposed on host. No on-the fly transpose of W
+    # Weights pre-transposed on host​. No on-the fly transpose of W​
     qw = torch.transpose(qw, -1, -2)
     kw = torch.transpose(kw, -1, -2)
     vw = torch.transpose(vw, -1, -2)

@@ -35,6 +35,7 @@ class SubmeshTraceDPExecutor:
         if self.execution_mode not in {"trace", "trace_2cq"}:
             raise ValueError(f"SubmeshTraceDPExecutor requires trace/trace_2cq, got {execution_mode!r}")
         self._prepared = False
+        self.last_perf = None
 
     def prepare(self, tt_inputs_host: list):
         if self._prepared:
@@ -54,6 +55,9 @@ class SubmeshTraceDPExecutor:
             raise RuntimeError("SubmeshTraceDPExecutor.prepare() must be called before run()")
         if len(tt_inputs_host) != len(self.tt_pipelines):
             raise ValueError(f"Expected {len(self.tt_pipelines)} host inputs, got {len(tt_inputs_host)}")
+
+        total_start = time.perf_counter()
+        trace_wall_start = time.perf_counter()
 
         completions = []
         for pipe, host_in in zip(self.tt_pipelines, tt_inputs_host):
@@ -80,14 +84,13 @@ class SubmeshTraceDPExecutor:
                 completions.append((pipe, completion_event, t_exec))
 
         # Wait for both devices to finish before reading from outputs.
+        per_worker = []
         for pipe, ev, t_exec in completions:
             ttnn.wait_for_event(0, ev)
             trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
             if self.execution_mode == "trace_2cq":
                 pipe._trace_op_event = ev
-            # Provide a device-synced timing breakdown alongside end-to-end timings
-            # measured in the outer runner.
-            pipe.last_perf = {
+            entry = {
                 "mode": "tt",
                 "execution_mode": self.execution_mode,
                 "effective_execution_mode": self.execution_mode,
@@ -95,10 +98,17 @@ class SubmeshTraceDPExecutor:
                 "num_images": 1,
                 "trace_exec_ms": trace_exec_ms,
             }
+            pipe.last_perf = dict(entry)
+            per_worker.append(entry)
+
+        trace_wall_ms = (time.perf_counter() - trace_wall_start) * 1000.0
 
         outs = []
+        readback_ms = 0.0
+        normalize_ms = 0.0
         for pipe in self.tt_pipelines:
             depth = pipe._full_trace_output
+            rb_start = time.perf_counter()
             try:
                 if isinstance(depth, ttnn.Tensor):
                     depth = depth.cpu().to_torch()
@@ -107,9 +117,38 @@ class SubmeshTraceDPExecutor:
             depth_t = torch.as_tensor(depth)
             if depth_t.dim() == 3:
                 depth_t = depth_t.unsqueeze(1)
+            readback_ms += (time.perf_counter() - rb_start) * 1000.0
             if normalize:
+                norm_start = time.perf_counter()
                 depth_t = pipe.fallback._normalize_depth(depth_t.float())
+                normalize_ms += (time.perf_counter() - norm_start) * 1000.0
             else:
                 depth_t = depth_t.float()
             outs.append(depth_t.cpu().numpy())
+
+        total_wall_ms = (time.perf_counter() - total_start) * 1000.0
+        self.last_perf = {
+            "mode": "tt",
+            "execution_mode": self.execution_mode,
+            "effective_execution_mode": self.execution_mode,
+            "requested_execution_mode": self.execution_mode,
+            "num_images": len(self.tt_pipelines),
+            "trace_wall_ms": trace_wall_ms,
+            "readback_ms": readback_ms,
+            "normalize_ms": normalize_ms,
+            "total_wall_ms": total_wall_ms,
+            "per_worker": per_worker,
+        }
+
+        # Make per-worker breakdowns visible through the pipeline objects as well,
+        # since the runner already collects `pipeline.last_perf`.
+        for pipe in self.tt_pipelines:
+            try:
+                pipe.last_perf = dict(pipe.last_perf or {})
+                pipe.last_perf["trace_wall_ms"] = trace_wall_ms
+                pipe.last_perf["readback_ms"] = readback_ms
+                pipe.last_perf["normalize_ms"] = normalize_ms
+                pipe.last_perf["total_wall_ms"] = total_wall_ms
+            except Exception:
+                pass
         return outs
