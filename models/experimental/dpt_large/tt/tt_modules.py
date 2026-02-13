@@ -608,8 +608,11 @@ class TTAttention:
                 else:
                     raise
             # Merge heads back to [B, N, C]
+            concat_kwargs = {}
+            if need_interleaved_sdpa:
+                concat_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
             try:
-                merged = ttnn.transformer.concatenate_heads(ctx_tt)
+                merged = ttnn.transformer.concatenate_heads(ctx_tt, **concat_kwargs)
             except TypeError:
                 merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
