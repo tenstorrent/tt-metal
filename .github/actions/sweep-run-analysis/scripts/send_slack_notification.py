@@ -18,6 +18,7 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")  # Alternative: OAuth bo
 SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "")  # Required with bot token
 CONCLUSION = os.environ.get("CONCLUSION", "success")  # success, failure, cancelled
 GITHUB_RUN_ID = os.environ.get("SOURCE_GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_ID", ""))
+GITHUB_RUN_NUMBER = os.environ.get("SOURCE_GITHUB_RUN_NUMBER", "")
 SUPERSET_BASE_URL = "https://superset.tenstorrent.com/superset/dashboard/lead-models-sweep-run/"
 GITHUB_ACTIONS_URL = f"https://github.com/tenstorrent/tt-metal/actions/runs/{GITHUB_RUN_ID}"
 
@@ -343,17 +344,19 @@ def build_cancelled_block() -> list[dict]:
 def build_superset_link_block() -> dict:
     """Build the run links block with both Superset and GitHub links.
 
-    Uses gh_run_number (GITHUB_RUN_ID) for Superset since it's available immediately,
+    Uses gh_run_number (GITHUB_RUN_NUMBER) for Superset since it's available immediately,
     whereas run_id (database PK) requires Airflow ingestion first.
     """
     links = []
-    if GITHUB_RUN_ID:
-        superset_url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_ID}"
-        github_url = GITHUB_ACTIONS_URL
+    if GITHUB_RUN_NUMBER:
+        superset_url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_NUMBER}"
         links.append(f"<{superset_url}|View in Superset>")
-        links.append(f"<{github_url}|View in GitHub Actions>")
     else:
-        links.append("Superset link unavailable (missing run ID)")
+        links.append("Superset link unavailable (missing run number)")
+
+    if GITHUB_RUN_ID:
+        links.append(f"<{GITHUB_ACTIONS_URL}|View in GitHub Actions>")
+    else:
         links.append("GitHub Actions link unavailable (missing run ID)")
 
     return {

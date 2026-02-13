@@ -31,6 +31,7 @@ jobs:
           SHOULD_NOTIFY="false"
           RUN_TYPE=""
           RUN_ID=""
+          RUN_NUMBER=""
           CONCLUSION=""
           SOURCE_GIT_SHA=""
           SOURCE_GIT_BRANCH=""
@@ -44,6 +45,7 @@ jobs:
             WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
             CONCLUSION=$(echo "$WORKFLOW_INFO" | jq -r '.conclusion // "unknown"')
             RUN_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
+            RUN_NUMBER=$(echo "$WORKFLOW_INFO" | jq -r '.run_number // ""')
             SOURCE_GIT_SHA=$(echo "$WORKFLOW_INFO" | jq -r '.head_sha // ""')
             SOURCE_GIT_BRANCH=$(echo "$WORKFLOW_INFO" | jq -r '.head_branch // ""')
 
@@ -63,6 +65,7 @@ jobs:
           elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
             # Triggered by workflow_run event
             RUN_ID="${{ github.event.workflow_run.id }}"
+            RUN_NUMBER="${{ github.event.workflow_run.run_number }}"
             CONCLUSION="${{ github.event.workflow_run.conclusion }}"
             RUN_NAME="${{ github.event.workflow_run.name }}"
             EVENT_TYPE="${{ github.event.workflow_run.event }}"
@@ -100,6 +103,7 @@ jobs:
           echo "should_notify=$SHOULD_NOTIFY" >> $GITHUB_OUTPUT
           echo "run_type=$RUN_TYPE" >> $GITHUB_OUTPUT
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "run_number=$RUN_NUMBER" >> $GITHUB_OUTPUT
           echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
           echo "source_git_sha=$SOURCE_GIT_SHA" >> $GITHUB_OUTPUT
           echo "source_git_branch=$SOURCE_GIT_BRANCH" >> $GITHUB_OUTPUT
@@ -109,6 +113,7 @@ jobs:
           echo "Should notify: $SHOULD_NOTIFY"
           echo "Run type: $RUN_TYPE"
           echo "Run ID: $RUN_ID"
+          echo "Run Number: ${RUN_NUMBER:-unknown}"
           echo "Conclusion: $CONCLUSION"
           echo "Source Git SHA: ${SOURCE_GIT_SHA:-unknown}"
           echo "Source Git Branch: ${SOURCE_GIT_BRANCH:-unknown}"
@@ -118,6 +123,7 @@ jobs:
         uses: ./.github/actions/sweep-run-analysis
         with:
           github-run-id: ${{ steps.check.outputs.run_id }}
+          source-github-run-number: ${{ steps.check.outputs.run_number }}
           run-type: ${{ steps.check.outputs.run_type }}
           conclusion: ${{ steps.check.outputs.conclusion }}
           source-git-sha: ${{ steps.check.outputs.source_git_sha }}

@@ -5,6 +5,9 @@ inputs:
   github-run-id:
     description: 'GitHub Actions run ID to analyze'
     required: true
+  source-github-run-number:
+    description: 'GitHub Actions run number from the triggering ttnn-run-sweeps workflow run'
+    required: false
   run-type:
     description: 'Type of sweep run (nightly, comprehensive, model_traced, lead_models)'
     required: true
@@ -77,6 +80,7 @@ runs:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
         CONCLUSION: ${{ inputs.conclusion }}
         SOURCE_GITHUB_RUN_ID: ${{ inputs.github-run-id }}
+        SOURCE_GITHUB_RUN_NUMBER: ${{ inputs.source-github-run-number }}
         RESULTS_FILE: sweep_results.json
       run: |
         echo "Sending Slack notification..."
