@@ -42,8 +42,14 @@ def get_current_run(conn, github_run_id: int) -> Optional[dict]:
 
 
 def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, current_run_id: int) -> Optional[dict]:
-    """Find previous run of same type for comparison."""
+    """Find previous run of same type for comparison.
+
+    Selection order:
+    1) Same run_contents, card_type, and git_branch
+    2) If none found, same run_contents/card_type on 'main' branch
+    """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # First try: previous run on the same branch.
         cur.execute(
             """
             SELECT run_id, run_start_ts,
@@ -58,6 +64,26 @@ def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, c
             LIMIT 1
             """,
             (run_contents, card_type, git_branch, current_run_id),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+
+        # Fallback: previous run on main branch.
+        cur.execute(
+            """
+            SELECT run_id, run_start_ts,
+                   test_count, pass_count, fail_count,
+                   ROUND(pass_count * 100.0 / NULLIF(test_count, 0), 2) AS pass_pct
+            FROM sweep_run
+            WHERE run_contents = %s
+              AND card_type = %s
+              AND git_branch = 'main'
+              AND run_id < %s
+            ORDER BY run_id DESC
+            LIMIT 1
+            """,
+            (run_contents, card_type, current_run_id),
         )
         row = cur.fetchone()
         return dict(row) if row else None
