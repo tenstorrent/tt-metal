@@ -263,6 +263,7 @@ uint32_t finalize_dfbs(
         // Calculate total DFB size for this kernel group
         uint32_t kg_dfb_size = 0;
         for (const auto& dfb : dataflow_buffers) {
+            TT_FATAL(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             // Check if this DFB overlaps with any core in the kernel group
             bool dfb_on_kg = false;
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {

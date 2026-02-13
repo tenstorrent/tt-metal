@@ -1452,8 +1452,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     Inspector::program_compile_started(this, device, build_env.build_key());
 
-    finalize_dataflow_buffer_configs();
-
     TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
