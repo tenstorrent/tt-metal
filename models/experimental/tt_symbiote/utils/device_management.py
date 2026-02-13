@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device management utilities for TTNN modules."""
-from __future__ import annotations
-
 import time
-from typing import TYPE_CHECKING
 
 from torch import nn
 
-if TYPE_CHECKING:
-    from models.experimental.tt_symbiote.core.module import TTNNModule
-
+from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 
 
@@ -36,17 +31,15 @@ class DeviceInit:
         return DistributedConfig(device)
 
 
-def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
+def _initialize_module_on_device(module: TTNNModule, device, device_init=DeviceInit):
     """Initialize a TTNN module on the specified device."""
     module.to_device(device)
-    if getattr(device, "get_num_devices", lambda: 1)() > 1 and hasattr(module, "set_device_state"):
+    if device.get_num_devices() > 1:
         module.set_device_state(device_init.init_state(device))
 
 
 def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
-    from models.experimental.tt_symbiote.core.module import TTNNModule
-
     # Build module name mapping before recursion
     module_names = {}
     if isinstance(obj, nn.Module):
