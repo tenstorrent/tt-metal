@@ -180,6 +180,14 @@ jobs:
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
 
+          echo "::group::CCache Debug Log (Hit/Miss Reasons)"
+          if [ -f /tmp/ccache/ccache.log ]; then
+            tail -500 /tmp/ccache/ccache.log
+          else
+            echo "No ccache debug log found"
+          fi
+          echo "::endgroup::"
+
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

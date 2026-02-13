@@ -138,6 +138,8 @@ runs:
         echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+        echo "CCACHE_DEBUG=1" >> $GITHUB_ENV
+        echo "CCACHE_LOGFILE=/tmp/ccache/ccache.log" >> $GITHUB_ENV
 
         if [ -z "${{ inputs.redis-ccache-password }}" ]; then
           echo "Redis ccache password is missing. Did you forget to pass redis credentials?"
