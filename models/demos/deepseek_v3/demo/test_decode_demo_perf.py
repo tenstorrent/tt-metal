@@ -40,7 +40,7 @@ def _assert_within_margin(metric_name: str, measured: float, expected: float, ma
 @pytest.mark.parametrize(
     "expected_kernel_duration_us, expected_op_to_op_latency_us, expected_e2e_time_us, margin",
     [
-        pytest.param(12373.07, 189.20, 12562.27, 0.03, id="decode_e2e_perf"),
+        pytest.param(10386.34, 191.52, 10577.85, 0.03, id="decode_e2e_perf"),
     ],
 )
 def test_decode_demo_perf(expected_kernel_duration_us, expected_op_to_op_latency_us, expected_e2e_time_us, margin):
