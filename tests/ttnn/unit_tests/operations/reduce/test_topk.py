@@ -13,6 +13,34 @@ from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 UINT16_MAX = 65535
 
 
+def save_tensor(tensor, filename):
+    import pandas as pd
+
+    # Write tensor to CSV file
+    # Tensor data should be
+    # _,0,1,2,3,4, ...
+    # 0,y,y,y,y,y
+    # 1,y,y,y,y,y
+    # 2,y,y,y,y,y
+    # 3,y,y,y,y,y
+    #
+    # First row -> column indices
+    # First column -> row indices
+    # y = data value
+
+    # Convert to numpy 2D (handle torch and ttnn tensors; squeeze batch/extra dims)
+    import numpy as np
+
+    data = np.asarray(tensor.to(torch.float32))
+
+    print("saving tensor to csv {filename}")
+    while data.ndim > 2:
+        data = data[0]
+    df = pd.DataFrame(data)
+    df.index.name = ""
+    df.to_csv(filename, index=True)
+
+
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
     torch.set_printoptions(profile="full")
@@ -22,7 +50,20 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     # ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
     # torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
     torch_dtype = torch.bfloat16
-    input = torch.randn(shape, dtype=torch_dtype) * 0.9
+    input = torch.randint(0, 100, shape, dtype=torch_dtype)
+
+    # Build an indices tensor with increasing integer values along the 'dim' dimension:
+    indices_shape = list(shape)
+    axis_len = shape[dim]
+    # Create a 1D increasing range and reshape to broadcast along the required axis
+    axis_input = torch.arange(1, axis_len + 1, dtype=torch.int64)
+    # Create a shape with 1 in all dims, except axis which gets axis_len
+    idx_shape = [1] * len(shape)
+    idx_shape[dim] = axis_len
+    axis_input = axis_input.view(*idx_shape)
+    # Broadcast to full shape
+    input = axis_input.expand(*shape)
+
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
@@ -74,6 +115,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     # if dtype == ttnn.bfloat8_b:
     #     assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
     # else:
+    # save_tensor(ttnn_torch_values, "ttnn_torch_values.csv")
+    # save_tensor(pyt_topk_values, "torch_topk_values.csv")
+
     assert_equal(ttnn_torch_values, pyt_topk_values)
 
     # # Assert indices correctness using gather
@@ -107,25 +151,26 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        # (1, 1, 32, 8192, 3, 50),
-        # (1, 1, 64, 64, 2, 32),
-        # (1, 1, 64, 64, 2, 64),
-        # (1, 2048, 1, 64, 1, 32),
-        # (1, 1, 32, 64, 3, 2),
-        # (1, 1, 32, 64, 3, 4),
-        # (1, 1, 32, 8192, 3, 6),
-        # (1, 2048, 1, 64, 1, 8),
-        # (1, 1, 32, 32768, 3, 3000),
-        # (1, 1, 32, 18992, 3, 3000),
-        # (1, 1, 32, 18992, 3, 32),
-        # (1, 1, 32, 10000, 3, 32),
-        # (1, 1, 32, 64128, 3, 32),
-        # (1, 1, 65 * 32, 32 * 3, 3, 32),
+        (1, 1, 32, 8192, 3, 50),
+        (1, 1, 64, 64, 2, 32),
+        (1, 1, 32, 32 * 512, 3, 32),
+        (1, 1, 64, 64, 2, 64),
+        (1, 2048, 1, 64, 1, 32),
+        (1, 1, 32, 64, 3, 2),
+        (1, 1, 32, 64, 3, 4),
+        (1, 1, 32, 8192, 3, 6),
+        (1, 2048, 1, 64, 1, 8),
+        (1, 1, 32, 32768, 3, 3000),
+        (1, 1, 32, 18992, 3, 3000),
+        (1, 1, 32, 18992, 3, 32),
+        (1, 1, 32, 10000, 3, 32),
+        (1, 1, 32, 64128, 3, 32),
         (1, 1, 65 * 32, 32 * 3, 3, 32),
-        # (1, 10, 32, 512, 2, 32),
-        # (5, 9, 96, 1024, 2, 32),
-        # (5, 9, 1024, 96, 3, 32),
-        # (3, 2, 160, 960, 2, 32),
+        (1, 1, 65 * 32, 32 * 3, 3, 32),
+        (1, 10, 32, 512, 2, 32),
+        (5, 9, 96, 1024, 2, 32),
+        (5, 9, 1024, 96, 3, 32),
+        (3, 2, 160, 960, 2, 32),
     ),
 )
 @pytest.mark.parametrize(
