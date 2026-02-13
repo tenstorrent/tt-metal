@@ -366,7 +366,10 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
         # Perf path only: pad sequence to tile multiple for sharded program configs.
         orig_len = int(tokens_tt3.shape[1])
-        pad_seq = bool(getattr(self.config, "tt_perf_encoder", False))
+        # Sharded-token path is opt-in because attention ops vary across runtime versions.
+        pad_seq = bool(getattr(self.config, "tt_perf_encoder", False)) and bool(
+            getattr(self.config, "tt_shard_encoder_tokens", False)
+        )
         seq_len = int(orig_len)
         if pad_seq:
             # Use a wider pad multiple for perf mode so SDPA chunking can pick

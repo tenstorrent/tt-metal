@@ -175,6 +175,11 @@ def main():
         choices=("eager", "trace", "trace_2cq"),
         help="Execution mode for TT path. trace/trace_2cq execute a captured full-model trace (backbone+neck+head).",
     )
+    parser.add_argument(
+        "--tt-shard-encoder-tokens",
+        action="store_true",
+        help="Experimental: enable sharded ViT encoder tokens (required for sharded program configs).",
+    )
     args = parser.parse_args()
 
     images = _collect_images(args)
@@ -202,6 +207,7 @@ def main():
         tt_device_reassembly=use_tt,
         tt_device_fusion=use_tt,
         tt_perf_encoder=use_tt,
+        tt_shard_encoder_tokens=bool(args.tt_shard_encoder_tokens),
         tt_perf_neck=use_tt,
         tt_approx_align_corners=use_tt,
         tt_execution_mode=str(args.tt_execution_mode),
