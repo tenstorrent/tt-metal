@@ -18,32 +18,42 @@
 // Global DFB interface array - defined in firmware, declared here for use by setup functions
 // For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
 extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[32];
+#ifndef COMPILE_FOR_TRISC
 extern RemapperAPI g_remapper_configurator;
+#endif
 
 namespace experimental {
 
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
+#ifdef COMPILE_FOR_TRISC
+    std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+    hartid = 8 + neo_id;  // after 8 DM cores
+#else
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
+#endif
     uint16_t hart_bit = 1 << hartid;
 
     uint32_t num_dfbs =
         local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
     volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
 
+#ifndef COMPILE_FOR_TRISC
     bool enable_remapper = false;  // if remapper used once then needs to be globally set
+#endif
 
     for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
         // Read dfb_initializer_t (shared config)
         volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
-        // TODO: update risc mask handling for tensix
-        uint16_t risc_mask = init_ptr->risc_mask_bits.dm_mask;
+        uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
         uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
 
         // Per-risc configs start after dfb_initializer_t
         volatile dfb_initializer_per_risc_t* per_risc_base =
             reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
+        DPRINT << "hartid: 0x" << HEX() << hartid << " risc_mask: 0x" << HEX() << risc_mask << " hart_bit: 0x" << HEX()
+               << hart_bit << DEC() << ENDL();
         if (risc_mask & hart_bit) {
             // Find this risc's per-risc config by counting set bits before this position
             uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
@@ -93,15 +103,16 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     enable_remapper = true;
                 }
                 // remapper_consumer_ids_mask is a bitmask of clientTypes (id_R) for BLOCKED consumers
-                uint8_t remapper_consumer_ids_mask = init_ptr->remapper_consumer_ids_mask;
+                uint8_t remapper_consumer_ids_mask = per_risc_ptr->remapper_consumer_ids_mask;
+                uint8_t producer_client_type = per_risc_ptr->producer_client_type;  // clientL for this producer
                 uint8_t num_clientRs = static_cast<uint8_t>(__builtin_popcount(remapper_consumer_ids_mask));
                 uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
                 g_remapper_configurator.set_pair_index(dfb_interface.remapper_pair_index);
-                DPRINT << "Setting clientL fields " << static_cast<uint32_t>(risc_index)
-                       << " id: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
+                DPRINT << "Setting clientL fields clientL=" << static_cast<uint32_t>(producer_client_type)
+                       << " tc: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
                        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                 g_remapper_configurator.configure_clientL_all_fields(
-                    risc_index,                                            // id_L
+                    producer_client_type,                                  // id_L
                     get_counter_id(per_risc_ptr->packed_tile_counter[0]),  // in SxB mode, producers have 1 TC
                     clientR_valid_mask,
                     1,  // is_producer
@@ -131,13 +142,13 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
     }
 
+#ifndef COMPILE_FOR_TRISC
     // all DFBs were initialized, safe to enable remapper if used
     if (enable_remapper && hartid == 0) {  // update how one risc enables the remapper
         DPRINT << "Enabling remapper" << ENDL();
         g_remapper_configurator.enable_remapper();
     }
 
-#ifndef COMPILE_FOR_TRISC
     // Initialize TCs after remapper is enabled - only the RISC marked as responsible should do this
     base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
     for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
@@ -181,8 +192,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
             volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
-            // TODO: update risc mask handling for tensix
-            uint16_t risc_mask = init_ptr->risc_mask_bits.dm_mask;
+
+            uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
             uint8_t num_riscs = static_cast<uint8_t>(__builtin_popcount(risc_mask));
 
             // TODO: Ring buffer is in uncached region so its okay to poll value. Needs to be uplifted when caching is

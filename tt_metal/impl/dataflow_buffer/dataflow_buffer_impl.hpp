@@ -22,7 +22,7 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t (40 bytes)
+// Per-risc config matching dfb_initializer_per_risc_t
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> base_addr = {0};
     std::array<uint32_t, 4> limit = {0};
@@ -31,6 +31,8 @@ struct LocalDFBInterfaceHost {
     uint8_t remapper_pair_index = 0;
     bool should_init_tc = false;
     uint32_t consumer_tcs = 0;
+    uint8_t remapper_consumer_ids_mask = 0;
+    uint8_t producer_client_type = 0;
 };
 
 struct DFBRiscConfig {
@@ -55,7 +57,11 @@ struct DataflowBufferImpl {
     uint8_t num_entries_per_txn_id = 0;
     uint8_t num_entries_per_txn_id_per_tc = 0;
     uint8_t num_txn_ids = 0;
-    uint8_t remapper_consumer_ids_mask = 0;  // Bitmask of clientTypes (id_R) for BLOCKED consumers
+
+    // Flag to track if TC/remapper allocation has been finalized
+    bool configs_finalized = false;
+    // Flag to track if this DFB uses remapper (set during finalization)
+    bool use_remapper = false;
 
     std::optional<uint32_t> allocated_address;
 
