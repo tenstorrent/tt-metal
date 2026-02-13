@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,28 +9,41 @@
 
 /**
  * Common utility functions for ring reduce scatter kernels.
- * Add your shared functions here.
  */
+
+FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool direction, const uint32_t ring_size) {
+    if (direction) {
+        return slice_idx < 0 ? slice_idx + ring_size : slice_idx;
+    } else {
+        return slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
+    }
+}
+
+FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
+    const uint32_t chunk_idx, const uint32_t chunk_width_in_tiles, const uint32_t mm_N_block_wt) {
+    const uint32_t start_col = chunk_idx * chunk_width_in_tiles;
+    const uint32_t remaining_width = mm_N_block_wt - start_col;
+
+    return std::min(remaining_width, chunk_width_in_tiles);
+}
 
 FORCE_INLINE void get_next_tile_coordinates(
     uint32_t& tile_row_in_mm_M_block,
     uint32_t& chunk_col_in_tiles,
     uint32_t& mm_core_idx,
     uint32_t advance_by_tiles,
-    uint32_t chunk_piece_size,
-    uint32_t chunk_width_in_tiles,
-    uint32_t mm_block_unit_ht) {
+    const uint32_t chunk_piece_size,
+    const uint32_t chunk_width_in_tiles,
+    const uint32_t mm_block_unit_ht) {
     // Optimized to avoid modulo operations.
     // Note: chunk_piece_size == mm_block_unit_ht * chunk_width_in_tiles
 
-    // 1. Handle Piece Jumps
     if (advance_by_tiles >= chunk_piece_size) [[unlikely]] {
         uint32_t move_by_pieces = advance_by_tiles / chunk_piece_size;
         advance_by_tiles -= move_by_pieces * chunk_piece_size;
         mm_core_idx += move_by_pieces;
     }
 
-    // 2. Handle Row Jumps
     if (advance_by_tiles >= chunk_width_in_tiles) {
         uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
         uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
@@ -140,12 +153,4 @@ FORCE_INLINE TileIndices coordinates_to_tile_indices(
         .slice = slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt),
         .global =
             slice_coordinates_to_global_tile_index(slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt)};
-}
-
-FORCE_INLINE uint32_t
-get_effective_chunk_width_in_tiles(uint32_t chunk_idx, uint32_t chunk_width_in_tiles, uint32_t N_block_wt) {
-    uint32_t start_col = chunk_idx * chunk_width_in_tiles;
-    uint32_t remaining_width = N_block_wt - start_col;
-
-    return std::min(remaining_width, chunk_width_in_tiles);
 }

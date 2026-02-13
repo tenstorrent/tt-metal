@@ -42,7 +42,7 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t dim = get_compile_time_arg_val(14);
-constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(15);
+constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(15);
 constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(16);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(17);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
@@ -228,7 +228,7 @@ void kernel_main() {
         // Let's set some particular values for the params used
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
-        const uint32_t tiles_ht_per_core = mm_block_ht * M_blocks_per_core;
+        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_blocks_per_core;
 
         uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
@@ -257,7 +257,7 @@ void kernel_main() {
             DPRINT << "================================================" << ENDL();
             DPRINT << "batch: " << b << " started" << ENDL();
 
-            for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+            for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
                 DPRINT << "--------------------------------" << ENDL();
                 DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
                 uint32_t output_tile_id_start = b * output_batch_num_pages;
@@ -272,13 +272,7 @@ void kernel_main() {
                         DPRINT << "slice_idx: " << slice_idx << ENDL();
                         DPRINT << "direction: " << (uint32_t)direction << ENDL();
 
-                        uint32_t actual_slice_idx;
-                        if (direction) {
-                            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                        } else {
-                            actual_slice_idx =
-                                slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-                        }
+                        const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                         DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
                                << ", chunk_idx: " << chunk_idx << ENDL();
                         uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;

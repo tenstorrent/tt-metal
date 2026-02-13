@@ -33,11 +33,11 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t dim = get_compile_time_arg_val(13);
-constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(14);
+constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(14);
 constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(15);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t N_block_wt = get_compile_time_arg_val(18);
+constexpr uint32_t mm_N_block_wt = get_compile_time_arg_val(18);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
 constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(20);
 
@@ -107,12 +107,10 @@ void kernel_main() {
     DPRINT << "page_size: " << page_size << ENDL();
     DPRINT << "batch_size: " << input_tensor_B << ENDL();
 
-    // Let's set some particular values for the params used
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
-    const uint32_t tiles_ht_per_core = mm_block_ht * M_blocks_per_core;
-
-    uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
+    const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_blocks_per_core;
+    const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
     ASSERT(dim == 3);
@@ -131,21 +129,22 @@ void kernel_main() {
     DPRINT << " num_workers: " << num_workers << ENDL();
     DPRINT << " effective_worker_id: " << effective_worker_id << ENDL();
 
-    uint32_t sem_target = 0;
+    uint32_t out_ready_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
         DPRINT << "================================================" << ENDL();
         DPRINT << "batch: " << b << " started" << ENDL();
 
-        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
             DPRINT << "--------------------------------" << ENDL();
             DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
 
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
-                uint32_t effective_chunk_width_in_tiles =
+                const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
+                const uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                 for (uint32_t i = 0; i < ring_size; i++) {
@@ -155,24 +154,18 @@ void kernel_main() {
                     DPRINT << "direction: " << (uint32_t)direction << ENDL();
 
                     const bool do_reduce = i != 0;
-                    uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
-                    uint32_t actual_slice_idx;
-                    if (direction) {
-                        actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-                    } else {
-                        actual_slice_idx =
-                            slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-                    }
+                    const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+                    const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                     DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
                            << ", chunk_idx: " << chunk_idx << ENDL();
 
                     // Wait for all chunk_piece_idx tiles for this ring iteration to be written
                     if (do_reduce) {
                         DPRINT << "Waiting for the semaphore" << ENDL();
-                        DPRINT << "sem_target: " << sem_target << ENDL();
+                        DPRINT << "out_ready_sem_target: " << out_ready_sem_target << ENDL();
                         noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                        sem_target++;
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
+                        out_ready_sem_target++;
                     }
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
@@ -180,7 +173,6 @@ void kernel_main() {
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
-                        uint32_t effective_chunk_piece_size = mm_block_ht * effective_chunk_width_in_tiles;
                         get_next_tile_coordinates(
                             first_tile_row_in_mm_M_block,
                             first_chunk_col_in_tiles,
@@ -218,7 +210,7 @@ void kernel_main() {
                                     chunk_piece_idx,
                                     m_block_iter,
                                     chunk_idx,
-                                    N_block_wt,
+                                    mm_N_block_wt,
                                     tiles_ht_per_core,
                                     mm_block_ht,
                                     chunk_width_in_tiles,
@@ -272,9 +264,9 @@ void kernel_main() {
         }
         // Reset the semaphore before the next batch
         DPRINT << "Resetting the semaphore before the next batch" << ENDL();
-        DPRINT << "sem_target: " << sem_target << ENDL();
+        DPRINT << "out_ready_sem_target: " << out_ready_sem_target << ENDL();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-        sem_target = 0;
+        out_ready_sem_target = 0;
         DPRINT << "batch: " << b << " done" << ENDL();
     }
 }
