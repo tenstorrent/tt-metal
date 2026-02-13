@@ -177,9 +177,9 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
         out_shape.push_back(operation_attributes.output_tensor_end[i] + 1);
     }
     Shape output_shape(std::move(out_shape));
-
     DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
-    if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
+    if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
+        input_tensor_a.shard_spec().has_value()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape{};
