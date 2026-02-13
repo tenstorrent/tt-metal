@@ -155,6 +155,12 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-kernel-ccache: true
+          redis-ccache-user: ${{ vars.REDIS_CCACHE_USER }}
+          redis-ccache-password: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+          redis-ccache-host: ${{ vars.REDIS_CCACHE_HOST }}
+          redis-ccache-port: ${{ vars.REDIS_CCACHE_PORT }}
+          redis-ccache-readonly: ${{ vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: Set ttnn fast runtime if exists in config
@@ -166,6 +172,21 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
+
+          echo "::group::CCache Debug Log (Hit/Miss Reasons)"
+          if [ -f /tmp/ccache/ccache.log ]; then
+            tail -500 /tmp/ccache/ccache.log
+          else
+            echo "No ccache debug log found"
+          fi
+          echo "::endgroup::"
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

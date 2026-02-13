@@ -4,7 +4,6 @@
 
 #include "build.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -65,12 +64,6 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
-    }
-}
-
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
@@ -105,24 +98,6 @@ void JitBuildEnv::init(
 
     this->arch_ = arch;
     this->max_cbs_ = max_cbs;
-
-#ifndef GIT_COMMIT_HASH
-    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
-#else
-    std::string git_hash(GIT_COMMIT_HASH);
-
-    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-    std::filesystem::path root_path(this->out_root_);
-    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
-        });
-    } else {
-        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
-    }
-
-    this->out_root_ = this->out_root_ + git_hash + "/";
-#endif
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
