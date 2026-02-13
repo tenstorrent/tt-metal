@@ -17,6 +17,7 @@ struct ExecuteDitLayerNormPreAllGather {
     // Computes Welford stats (sum and sumsq) over the last dim for LayerNorm.
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& recip_tensor,
         DataType dtype = DataType::BFLOAT16,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);

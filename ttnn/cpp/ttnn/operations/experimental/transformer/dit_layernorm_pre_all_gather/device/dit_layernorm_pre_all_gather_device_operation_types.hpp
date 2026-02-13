@@ -17,4 +17,9 @@ struct DitLayernormPreAllGatherParams {
     tt::tt_metal::MemoryConfig memory_config;
 };
 
+struct DitLayernormPreAllGatherInputs {
+    Tensor input;
+    Tensor recip_tensor;
+};
+
 }  // namespace ttnn::experimental::prim
