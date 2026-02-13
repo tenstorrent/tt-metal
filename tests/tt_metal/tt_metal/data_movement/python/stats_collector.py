@@ -141,6 +141,8 @@ class StatsCollector:
             grouped_durations = defaultdict(list)
             grouped_bandwidths = defaultdict(list)
             grouped_cores = defaultdict(list)
+            grouped_start_cycles = defaultdict(list)
+            grouped_end_cycles = defaultdict(list)
 
             for entry in dm_stats[riscv]["analysis"]["series"]:
                 run_host_id = entry["duration_type"][0]["run_host_id"]
@@ -154,6 +156,8 @@ class StatsCollector:
                 grouped_durations[run_host_id].append(duration)
                 grouped_bandwidths[run_host_id].append(bandwidth)
                 grouped_cores[run_host_id].append(entry["core"])
+                grouped_start_cycles[run_host_id].append(entry.get("start_cycle", 0))
+                grouped_end_cycles[run_host_id].append(entry.get("end_cycle", 0))
 
             agg = {}
             for run_host_id, durations in grouped_durations.items():
@@ -161,6 +165,8 @@ class StatsCollector:
                 attributes = dm_stats[riscv]["attributes"][run_host_id]
                 test_id = attributes.get("Test id")
                 cores = grouped_cores[run_host_id]
+                start_cycles = grouped_start_cycles[run_host_id]
+                end_cycles = grouped_end_cycles[run_host_id]
 
                 if method == "median":
                     agg_duration = float(np.median(durations))
@@ -171,6 +177,18 @@ class StatsCollector:
                 else:
                     raise ValueError(f"Unknown method: {method}")
 
+                # Calculate combined bandwidth metrics for multi-core tests
+                # Combined bandwidth = total_bytes / wall_clock_time
+                # Wall clock time = end of last core - start of first core
+                num_cores = len(durations)
+                min_start = float(np.min(start_cycles)) if start_cycles else 0
+                max_end = float(np.max(end_cycles)) if end_cycles else 0
+                wall_clock_time = max_end - min_start if max_end > min_start else float(np.max(durations))
+                transaction_size = attributes.get("Transaction size in bytes", 0)
+                num_transactions = attributes.get("Number of transactions", 1)
+                total_bytes = num_cores * transaction_size * num_transactions
+                combined_bandwidth = total_bytes / wall_clock_time if wall_clock_time > 0 else 0
+
                 agg_data = {
                     "duration_cycles": agg_duration,
                     "bandwidth": agg_bandwidth,
@@ -178,8 +196,13 @@ class StatsCollector:
                     "all_durations": durations,
                     "all_bandwidths": bandwidths,
                     "all_cores": cores,
-                    "transaction_size": attributes.get("Transaction size in bytes"),
-                    "num_transactions": attributes.get("Number of transactions"),
+                    "transaction_size": transaction_size,
+                    "num_transactions": num_transactions,
+                    # Combined bandwidth metrics
+                    "num_cores": num_cores,
+                    "wall_clock_time": wall_clock_time,
+                    "total_bytes": total_bytes,
+                    "combined_bandwidth": combined_bandwidth,
                 }
 
                 # Dynamically add attributes based on test type
