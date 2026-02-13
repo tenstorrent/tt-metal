@@ -4,15 +4,15 @@
 #include <cfloat>
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/copy_dest_values.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/copy_dest_values.h"
 
 #define DEBUG_PRINT 0
 
@@ -30,9 +30,7 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -75,6 +73,9 @@ void MAIN {
     constexpr uint32_t kernel_h = get_compile_time_arg_val(34);
     constexpr uint32_t kernel_w = get_compile_time_arg_val(35);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(36);
+    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(37);
+
+    constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 
     constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
@@ -113,8 +114,8 @@ void MAIN {
 
     uint32_t current_idx_col;
     uint32_t current_idx_row;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(2);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(3);
+    const uint32_t start_row = get_arg_val<uint32_t>(2);
+    const uint32_t start_col = get_arg_val<uint32_t>(3);
     current_idx_col = start_col;
     current_idx_row = start_row;
 
@@ -129,7 +130,6 @@ void MAIN {
     }
 
     unary_op_init_common(in_cb_id_0, in_cb_id_0);
-    copy_tile_to_dst_init_short(in_cb_id_0);
     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
@@ -146,6 +146,7 @@ void MAIN {
             tile_regs_acquire();
             uint32_t intra_kernel_h = 0;
             uint32_t intra_kernel_w = 0;
+            copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
             if (first_iteration) {  // move the initial indexes from the reader to DST
                 cb_wait_front(in_idx_cb_id, 1);
@@ -161,17 +162,19 @@ void MAIN {
                 // clear the accumulation tiles since they will contain garbage data which is partially loaded
                 // since max SFPU offset if 62 DST rows, but 4 rows are loaded each time so we load 2 rows of
                 // DST tiles 1 and 3 during the reduction of tiles 0 and 2
+                copy_tile_to_dst_init_short(clear_value_cb_id);
                 reconfig_data_format_srca(clear_value_cb_id);
                 copy_tile(clear_value_cb_id, mpwi_cb_tile_idx, data_accum_dst_idx);
 
                 // make a copy of the initial indexes to be used for restoring between C blocks
-                copy_dest_values<DataFormat::UInt16>(index_dst_idx, index_temp_dst_idx);
+                copy_dest_values<copy_format>(index_dst_idx, index_temp_dst_idx);
             }
 
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 bool last_chunk = chunk == interm_reduction_chunks - 1;
 
                 cb_wait_front(curr_in_cb_id, 1);
+                copy_tile_to_dst_init_short(curr_in_cb_id);
                 reconfig_data_format_srca(curr_in_cb_id);
                 copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
@@ -179,6 +182,7 @@ void MAIN {
                 bool increment_needed = false;
                 if (last_c_block && last_chunk) {  // increment for the next kernel position
                     increment_needed = true;
+                    copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                     reconfig_data_format_srca(compute_tmp_idx_cb_id);
                     // update the current index column
                     if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
@@ -200,6 +204,7 @@ void MAIN {
                 } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
                     if (!last_chunk) {         // increment for the next chunk within the same C block
                         increment_needed = true;
+                        copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                         reconfig_data_format_srca(compute_tmp_idx_cb_id);
                         if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
                             intra_kernel_w += sticks_per_chunk;
@@ -212,23 +217,22 @@ void MAIN {
                     }
                 }
                 if (!increment_needed) {
-                    copy_dest_values<DataFormat::UInt16>(index_dst_idx, index_scratch_out_dst_idx);
+                    copy_dest_values<copy_format>(index_dst_idx, index_scratch_out_dst_idx);
                 } else {
                     // we allow overflow here for negative values as this only occurs in padding regions
                     add_int_tile_init();
-                    add_int_tile<DataFormat::UInt16>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                    add_int_tile<copy_format>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                 }
 
-                // TODO # 27845: implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels
-                // as well
+                // TODO implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels as well
                 constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
                 max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR, is_large_kernel>(
                     data_dst_idx, index_dst_idx, chunk);
 
                 if constexpr (is_large_kernel) {
                     if (!last_chunk) {
-                        copy_dest_values<DataFormat::UInt16>(index_scratch_out_dst_idx, index_dst_idx);
+                        copy_dest_values<copy_format>(index_scratch_out_dst_idx, index_dst_idx);
                     }
                 }
 
@@ -238,7 +242,7 @@ void MAIN {
             // After all chunks: if not last C block, restore base indices for next C block
             if constexpr (is_large_kernel) {
                 if (!last_c_block) {
-                    copy_dest_values<DataFormat::UInt16>(index_temp_dst_idx, index_scratch_out_dst_idx);
+                    copy_dest_values<copy_format>(index_temp_dst_idx, index_scratch_out_dst_idx);
                 }
             }
 
@@ -283,5 +287,3 @@ void MAIN {
         cb_pop_front(clear_value_cb_id, 1);
     }
 }
-
-}  // namespace NAMESPACE

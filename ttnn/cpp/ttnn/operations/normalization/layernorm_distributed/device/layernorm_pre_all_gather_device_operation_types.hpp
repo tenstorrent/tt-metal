@@ -19,4 +19,9 @@ struct LayerNormPreAllGatherParams {
     std::optional<bool> use_2d_core_grid;
 };
 
+struct LayerNormPreAllGatherInputs {
+    Tensor input;
+    std::optional<Tensor> recip_tensor;
+};
+
 }  // namespace ttnn::prim

@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole, is_watcher_enabled
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.activations import get_golden_function_for_activation
 
@@ -367,14 +367,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
-    if (
-        is_watcher_enabled()
-        and in1_dtype in (ttnn.bfloat16, ttnn.bfloat8_b)
-        and tile_w == 32
-        and n == 1280
-        and k == 1024
-    ):
-        pytest.skip("Skipping the test since it is failing with watcher github issue #36314")
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_blackhole():
@@ -1877,6 +1869,51 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     assert_with_pcc(torch_output_tensor, output, 0.999)
 
 
+@pytest.mark.parametrize(
+    "m, k, n",
+    [
+        (8193, 512, 2048),
+        (11008, 256, 2048),
+    ],
+)
+def test_matmul_transpose_a_with_core_grid(device, m, k, n):
+    torch.manual_seed(0)
+
+    # transpose a to test corner case for CB size estimate
+    transpose_a = True
+    shape_a = (k, m)
+    shape_b = (k, n)
+
+    input_tensor_a = ttnn.rand(
+        shape_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
+    )
+    input_tensor_b = ttnn.rand(
+        shape_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
+    )
+
+    # Get core grid from device
+    compute_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+    # ttnn matmul with transpose_a=True, core_grid, and compute_kernel_config
+    output_tensor_c = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        core_grid=core_grid,
+    )
+    output_tensor = ttnn.to_torch(output_tensor_c)
+
+    # torch equivalent: transpose A then matmul
+    torch_a = ttnn.to_torch(input_tensor_a)
+    torch_b = ttnn.to_torch(input_tensor_b)
+    torch_output_tensor = torch.matmul(torch_a.transpose(-1, -2), torch_b)
+
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("transpose_a", [True, False])
 @pytest.mark.parametrize("transpose_b", [True, False])
 @pytest.mark.parametrize(
@@ -2566,8 +2603,6 @@ def test_matmul_padding(
     input_b_memory_config,
     output_memory_config,
 ):
-    if is_watcher_enabled() and isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-        pytest.skip("Skipping test_matmul_padding dram_sharded with watcher enabled, github issue #36314")
     torch.manual_seed(0)
 
     # Create input tensors with specified shapes and values
@@ -2737,3 +2772,84 @@ def test_matmul_activation_with_sharded_input(device):
         assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
         pytest.fail(f"Got unexpected exception {e}")
+
+
+# ============================================================================
+# Sub-device tests: verify ttnn.matmul works on a sub-device whose start core
+# is NOT (0, 0).  This exercises the sub_device_start_core offset that was
+# added to the 2-D and 1-D multicast program factories.
+# ============================================================================
+
+
+def _setup_subdevice(device, skip_rows=1):
+    """Create two sub-devices: row(s) 0..skip_rows-1 as a 'dummy' sub-device
+    and the remaining rows as the 'worker' sub-device.  Returns a tuple of
+    (sub_device_manager, worker_sub_device_id, worker_core_grid) that the
+    caller must tear down via _teardown_subdevice().
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+    assert rows > skip_rows, f"Device grid has only {rows} rows; need >{skip_rows} for this sub-device test"
+
+    dummy_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, skip_rows - 1))})
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, skip_rows), ttnn.CoreCoord(cols - 1, rows - 1))})
+
+    dummy_sub_device = ttnn.SubDevice([dummy_crs])
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+
+    dummy_sub_device_id = ttnn.SubDeviceId(0)
+    worker_sub_device_id = ttnn.SubDeviceId(1)
+
+    sub_device_manager = device.create_sub_device_manager([dummy_sub_device, worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
+
+    worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
+    return sub_device_manager, worker_sub_device_id, worker_core_grid
+
+
+def _teardown_subdevice(device, sub_device_manager):
+    """Clean up the sub-device manager."""
+    device.reset_sub_device_stall_group()
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "m_size, k_size, n_size",
+    [
+        (32, 1024, 1024),  # narrow M → auto-selects 1D mcast_in0 (wide output)
+        (1024, 1024, 32),  # narrow N → auto-selects 1D mcast_in1 (tall output)
+    ],
+)
+def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
+    """Run ttnn.matmul on a sub-device with narrow shapes that trigger the
+    1-D multicast program config auto-selection.
+
+    This exercises the sub_device_start_core fix in the 1-D multicast
+    program factory (both mcast_in0 and mcast_in1 paths).
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need at least 2 rows for sub-device test")
+
+    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    try:
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
+        torch_output = torch_input_a @ torch_input_b
+
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        output = ttnn.matmul(
+            input_a,
+            input_b,
+            core_grid=worker_core_grid,
+            sub_device_id=worker_sub_device_id,
+        )
+        output = ttnn.to_torch(output)
+        assert_with_pcc(torch_output, output, 0.999)
+    finally:
+        _teardown_subdevice(device, sub_device_manager)

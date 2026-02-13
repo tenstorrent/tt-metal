@@ -16,6 +16,7 @@
 #include "metal_context.hpp"
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "firmware_capability.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
@@ -298,7 +299,7 @@ void MetalContext::initialize(
 
         // Wait for all async tasks to complete
         for (auto& fut : futures) {
-            fut.wait();
+            fut.get();
         }
     }
 
@@ -501,6 +502,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
@@ -513,27 +515,26 @@ void MetalContext::initialize_base_objects() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
 
-    const auto initialize_objects = [&]() {
-        hal_ = std::make_unique<Hal>(
-            platform_arch,
-            is_base_routing_fw_enabled,
-            rtoptions_.get_enable_2_erisc_mode(),
-            get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
-        rtoptions_.ParseAllFeatureEnv(*hal_);
-        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-    };
+    cluster_ = std::make_unique<Cluster>(rtoptions_);
 
-    initialize_objects();
+    FirmwareCapabilityRequest req;
+    req.enable_2_erisc_mode = rtoptions_.get_enable_2_erisc_mode();
 
-    // Requires reinit with features disabled
-    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
-    // during the first init
-    if (!cluster_->verify_eth_fw_capability()) {
-        rtoptions_.set_enable_2_erisc_mode(false);
-        teardown_base_objects();
-        initialize_objects();
+    FirmwareCapabilityResult res;
+
+    if (!check_firmware_capabilities(platform_arch, {.eth_fw = cluster_->get_ethernet_firmware_version()}, req, res)) {
+        rtoptions_.set_enable_2_erisc_mode(res.enable_2_erisc_mode);
     }
+
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    hal_ = std::make_unique<Hal>(
+        platform_arch,
+        is_base_routing_fw_enabled,
+        rtoptions_.get_enable_2_erisc_mode(),
+        get_profiler_dram_bank_size_for_hal_allocation(rtoptions_));
+
+    rtoptions_.ParseAllFeatureEnv(*hal_);
+    cluster_->set_hal(hal_.get());
 }
 
 MetalContext::MetalContext() {
@@ -840,6 +841,16 @@ void MetalContext::set_fabric_config(
     this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
     this->fabric_router_config_ = router_config;
+
+    // Reinitialize control plane with updated fabric settings
+    if (control_plane_ != nullptr) {
+        log_info(
+            tt::LogMetal,
+            "Fabric config changed from {} to {}, reinitializing control plane",
+            this->get_control_plane().get_fabric_config(),
+            this->fabric_config_);
+        this->initialize_control_plane_impl();
+    }
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -850,11 +861,7 @@ void MetalContext::initialize_fabric_config() {
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
-    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_router_config_);
-    }
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels(
-        this->fabric_config_, this->fabric_reliability_mode_);
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
@@ -893,9 +900,31 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-            mesh_graph_desc_path.string(), logical_mesh_chip_id_to_physical_chip_id_mapping_);
+            *this->cluster_,
+            this->rtoptions_,
+            *hal_,
+            *distributed_context_,
+            mesh_graph_desc_path.string(),
+            logical_mesh_chip_id_to_physical_chip_id_mapping_,
+            this->fabric_config_,
+            this->fabric_reliability_mode_,
+            this->fabric_tensix_config_,
+            this->fabric_udm_mode_,
+            this->fabric_router_config_,
+            this->fabric_manager_);
     } else {
-        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+        control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            *this->cluster_,
+            this->rtoptions_,
+            *hal_,
+            *distributed_context_,
+            mesh_graph_desc_path.string(),
+            this->fabric_config_,
+            this->fabric_reliability_mode_,
+            this->fabric_tensix_config_,
+            this->fabric_udm_mode_,
+            this->fabric_router_config_,
+            this->fabric_manager_);
     }
 }
 
@@ -911,7 +940,17 @@ void MetalContext::construct_control_plane() {
             "physical mapping.");
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
-    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>();
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+        *this->cluster_,
+        this->rtoptions_,
+        *hal_,
+        *distributed_context_,
+        this->fabric_config_,
+        this->fabric_reliability_mode_,
+        this->fabric_tensix_config_,
+        this->fabric_udm_mode_,
+        this->fabric_router_config_,
+        this->fabric_manager_);
 }
 
 void MetalContext::initialize_control_plane() {
@@ -939,7 +978,7 @@ void MetalContext::initialize_control_plane_impl() {
         this->construct_control_plane();
     } else {
         auto cluster_type = cluster_->get_cluster_type();
-        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_->is_ubb_galaxy());
         std::filesystem::path mesh_graph_desc_path =
             tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
                 cluster_type, rtoptions_.get_root_dir(), fabric_type);

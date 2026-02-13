@@ -25,7 +25,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
         while (outstanding_data_size) {
             socket_wait_for_pages(receiver_socket, 1);
-            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+            noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
                 NOC_INDEX,
                 pcie_xy_enc,
                 pcie_data_addr + receiver_socket.read_ptr - receiver_socket.fifo_addr,
