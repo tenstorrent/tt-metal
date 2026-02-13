@@ -566,6 +566,7 @@ def test_all_gather_async_wan_galaxy_4x32(
     # assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "ag_output_shape, dim, cluster_axis, ag_input_dtype, layout, mem_config_input, mem_config_ag",
     [
