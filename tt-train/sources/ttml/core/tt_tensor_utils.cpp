@@ -62,7 +62,7 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
 }
 
 std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
-    TT_FATAL(is_device_tensor(tensor), "Tensor must be on host");
+    TT_FATAL(is_cpu_tensor(tensor), "Tensor must be on host");
     const auto& storage = tensor.host_storage();
     std::vector<tt::tt_metal::HostBuffer> buffers;
     buffers.reserve(storage.buffer().shard_coords().size());
