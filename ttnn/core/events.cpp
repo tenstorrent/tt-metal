@@ -5,7 +5,6 @@
 #include "events.hpp"
 
 #include <memory>
-#include <tt-metalium/event.hpp>
 #include "tt-metalium/distributed.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"

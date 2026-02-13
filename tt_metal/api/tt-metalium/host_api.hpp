@@ -627,6 +627,7 @@ void ReadMeshDeviceProfilerResults(
  * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
  */
 // clang-format on
+[[deprecated("Use distributed::EventQuery with distributed::MeshEvent instead.")]]
 bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
