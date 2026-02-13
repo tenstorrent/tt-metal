@@ -131,7 +131,7 @@ def test_flux1_pipeline(
 
     prompts = [
         "A luxury sports car.",
-        # "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot",
+        "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot",
         # "Golden retriever astronaut drifting in sunlit space",
         # "Minimalist Scandinavian kitchen, morning light, ultra clean",
         # "Ancient desert temple at dawn, soft fog, wide angle",

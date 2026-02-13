@@ -113,7 +113,8 @@ def test_motif_pipeline(
         "cinematic film still of Kodak Motion Picture Film (Sharp Detailed Image) An Oscar winning movie for Best "
         "Cinematography a woman in a kimono standing on a subway train in Japan Kodak Motion Picture Film Style, "
         "shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, "
-        "film grain, grainy"
+        "film grain, grainy",
+        "A dog riding a skateboard in Times Square, New York City, with a crowd of people watching and taking photos, ",
     ]
 
     filename_prefix = f"motif_{width}_{height}_{mesh_test_id}"

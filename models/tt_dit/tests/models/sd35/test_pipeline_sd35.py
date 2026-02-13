@@ -96,38 +96,41 @@ def test_sd35_pipeline(
     )
 
     if no_prompt:
-        # Run single generation
-        negative_prompt = ""
-        benchmark_profiler = BenchmarkProfiler()
-        with benchmark_profiler("run", iteration=0):
-            images = pipeline(
-                prompt_1=[prompt],
-                prompt_2=[prompt],
-                prompt_3=[prompt],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
-                num_inference_steps=num_inference_steps,
-                seed=0,
-                traced=traced,
-                profiler=benchmark_profiler,
-                profiler_iteration=0,
-            )
+        for i in range(2):
+            # Run single generation
+            negative_prompt = ""
+            benchmark_profiler = BenchmarkProfiler()
+            with benchmark_profiler("run", iteration=0):
+                images = pipeline(
+                    prompt_1=[prompt],
+                    prompt_2=[prompt],
+                    prompt_3=[prompt],
+                    negative_prompt_1=[negative_prompt],
+                    negative_prompt_2=[negative_prompt],
+                    negative_prompt_3=[negative_prompt],
+                    num_inference_steps=num_inference_steps,
+                    seed=i,
+                    traced=traced,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=0,
+                )
 
-        # Save image
-        output_filename = f"sd35_new_{image_w}_{image_h}.png"
-        images[0].save(output_filename)
-        logger.info(f"Image saved as {output_filename}")
+            # Save image
+            output_filename = f"sd35_new_{image_w}_{image_h}_{i:02}"
+            if traced:
+                output_filename += "_traced"
+            output_filename += ".png"
+            images[0].save(output_filename)
+            logger.info(f"Image saved as {output_filename}")
 
-        # Print timing information
-        logger.info(f"CLIP encoding time: {benchmark_profiler.get_duration('clip_encoding', 0):.2f}s")
-        logger.info(f"T5 encoding time: {benchmark_profiler.get_duration('t5_encoding', 0):.2f}s")
-        logger.info(f"Total encoding time: {benchmark_profiler.get_duration('encoder', 0):.2f}s")
-        logger.info(f"VAE decoding time: {benchmark_profiler.get_duration('vae', 0):.2f}s")
-        logger.info(f"Total pipeline time: {benchmark_profiler.get_duration('total', 0):.2f}s")
-        avg_step_time = benchmark_profiler.get_duration("denoising", 0) / num_inference_steps
-        logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
-
+            # Print timing information
+            logger.info(f"CLIP encoding time: {benchmark_profiler.get_duration('clip_encoding', 0):.2f}s")
+            logger.info(f"T5 encoding time: {benchmark_profiler.get_duration('t5_encoding', 0):.2f}s")
+            logger.info(f"Total encoding time: {benchmark_profiler.get_duration('encoder', 0):.2f}s")
+            logger.info(f"VAE decoding time: {benchmark_profiler.get_duration('vae', 0):.2f}s")
+            logger.info(f"Total pipeline time: {benchmark_profiler.get_duration('total', 0):.2f}s")
+            avg_step_time = benchmark_profiler.get_duration("denoising", 0) / num_inference_steps
+            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
     else:
         # Interactive demo
         for i in itertools.count():
@@ -151,7 +154,11 @@ def test_sd35_pipeline(
                 traced=traced,
             )
 
-            output_filename = f"sd35_new_{image_w}_{image_h}_{i}.png"
+            output_filename = f"sd35_new_{image_w}_{image_h}_{i:02}"
+            if traced:
+                output_filename += "_traced"
+            output_filename += ".png"
+
             images[0].save(output_filename)
             logger.info(f"Image saved as {output_filename}")
 

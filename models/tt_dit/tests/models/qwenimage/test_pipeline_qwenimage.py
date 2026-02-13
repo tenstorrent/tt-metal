@@ -47,7 +47,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
     "traced",
     [
         pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(
@@ -140,7 +140,7 @@ def test_qwenimage_pipeline(
         logger.info(f"Image saved as {output_filename}")
 
     if no_prompt:
-        for i, prompt in enumerate(prompts[:1]):  # only run with the first prompt by default. Increase as needed.
+        for i, prompt in enumerate(prompts[:2]):  # only run with the first prompt by default. Increase as needed.
             run(prompt=prompt, number=i, seed=0)
     else:
         prompt = prompts[0]

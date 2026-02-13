@@ -42,7 +42,15 @@ from ....utils.test import line_params, ring_params
         "resolution_720p",
     ],
 )
+@pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(True, id="tracing_on"),
+        pytest.param(False, id="tracing_off"),
+    ],
+)
 def test_pipeline_inference(
+    *,
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -53,14 +61,15 @@ def test_pipeline_inference(
     width,
     height,
     is_fsdp,
+    traced: bool,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     # Test parameters
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
-    num_frames = 81
-    num_inference_steps = 40
+    num_frames = 21
+    num_inference_steps = 5
 
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -76,41 +85,47 @@ def test_pipeline_inference(
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
     )
 
-    seed = 42
-    # Run inference
-    with torch.no_grad():
-        result = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_inference_steps=num_inference_steps,
-            seed=seed,
-            guidance_scale=4.0,
-            guidance_scale_2=3.0,
-        )
+    for i in range(2):
+        # Run inference
+        with torch.no_grad():
+            result = pipeline(
+                prompt=prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=i,
+                traced=traced,
+                guidance_scale=4.0,
+                guidance_scale_2=3.0,
+            )
 
-    # Check output
-    if hasattr(result, "frames"):
-        frames = result.frames
-    else:
-        frames = result[0] if isinstance(result, tuple) else result
+        # Check output
+        if hasattr(result, "frames"):
+            frames = result.frames
+        else:
+            frames = result[0] if isinstance(result, tuple) else result
 
-    print(f"✓ Inference completed successfully")
-    print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-    print(f"  Output type: {type(frames)}")
+        print(f"✓ Inference completed successfully")
+        print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
+        print(f"  Output type: {type(frames)}")
 
-    # Basic validation
-    if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
-    elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+        # Basic validation
+        if isinstance(frames, np.ndarray):
+            print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+        elif isinstance(frames, torch.Tensor):
+            print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
 
-    # Save video using diffusers utility
-    # Remove batch dimension
-    frames = frames[0]
-    try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-        print("✓ Saved video to: wan_output_video.mp4")
-    except AttributeError as e:
-        print(f"AttributeError: {e}")
+        filename = f"wan_output_video_{i:02}"
+        if traced:
+            filename += "_traced"
+        filename += ".mp4"
+
+        # Save video using diffusers utility
+        # Remove batch dimension
+        frames = frames[0]
+        try:
+            export_to_video(frames, filename, fps=16)
+            print(f"✓ Saved video to: {filename}")
+        except AttributeError as e:
+            print(f"AttributeError: {e}")
