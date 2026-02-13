@@ -6,9 +6,9 @@
 
 #include "device/manual_seed_operation.hpp"
 
-namespace ttnn::operations::reduction {
+namespace ttnn {
 
-Tensor ExecuteManualSeed::invoke(
+Tensor manual_seed(
     const std::variant<uint32_t, Tensor>& seeds,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
@@ -16,4 +16,4 @@ Tensor ExecuteManualSeed::invoke(
     return ttnn::prim::manual_seed(seeds, device, user_ids, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn
