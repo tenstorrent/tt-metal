@@ -7,17 +7,18 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::transformer {
-
-struct ExecuteConcatenateHeads {
-    static ttnn::Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
-};
-}  // namespace operations::transformer
+namespace operations::transformer {}  // namespace operations::transformer
 
 namespace transformer {
-constexpr auto concatenate_heads = ttnn::register_operation<
-    "ttnn::transformer::concatenate_heads",
-    ttnn::operations::transformer::ExecuteConcatenateHeads>();
+
+/**
+ * @brief Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size], 
+ * concatenates heads back along the width dimension and returns the tensor of shape 
+ * [batch_size, sequence_size, num_heads * head_size]
+ */
+ttnn::Tensor concatenate_heads(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace transformer
 }  // namespace ttnn

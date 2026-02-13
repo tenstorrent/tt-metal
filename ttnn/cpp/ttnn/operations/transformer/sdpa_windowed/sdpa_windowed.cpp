@@ -9,9 +9,11 @@
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::transformer {}  // namespace ttnn::operations::transformer
 
-ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
+namespace ttnn::transformer {
+
+ttnn::Tensor windowed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -34,4 +36,4 @@ ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
         kernel_config_val);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer
