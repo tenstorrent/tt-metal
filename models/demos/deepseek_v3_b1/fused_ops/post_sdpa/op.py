@@ -848,7 +848,8 @@ class PostSDPA:
                     fabric_node_id = mesh_device.get_fabric_node_id(coord)
                     neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                     neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
-
+                    print("fabric node id (local):", fabric_node_id)
+                    print("fabric node id (neighbor):", neighbor_fabric_node_id)
                     # Setup sender fabric connection
                     sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
                     sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
