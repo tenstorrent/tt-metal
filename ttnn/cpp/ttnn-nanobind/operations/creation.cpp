@@ -16,7 +16,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bfloat16_type_caster.hpp"  // NOLINT - for nanobind bfloat16 binding support.
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"  // NOLINT - for nanobind SmallVector binding support.
 #include "ttnn-nanobind/types.hpp"
@@ -26,125 +26,143 @@
 namespace ttnn::operations::creation {
 namespace {
 
-template <typename creation_operation_t, typename fill_value_t>
-auto create_nanobind_full_overload() {
-    return ttnn::nanobind_overload_t{
-        [](const creation_operation_t& self,
-           const ttsl::SmallVector<uint32_t>& shape,
-           const fill_value_t fill_value,
-           const std::optional<DataType>& dtype,
-           const std::optional<Layout>& layout,
-           const std::optional<MeshDevice*> device,
-           const std::optional<MemoryConfig>& memory_config,
-           std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-            return self(  // afuller
-                ttnn::Shape(shape),
-                fill_value,
-                dtype,
-                layout,
-                nbh::rewrap_optional(device),
-                memory_config,
-                optional_output_tensor);
-        },
-        nb::keep_alive<0, 6>(),  // test
-        nb::arg("shape"),
-        nb::arg("fill_value"),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("layout") = nb::none(),
-        nb::arg("device") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("optional_tensor") = nb::none()};
-}
+// Helper lambdas for full operations with explicit fill_value
+auto full_float_lambda = [](const ttsl::SmallVector<uint32_t>& shape,
+                            const float fill_value,
+                            const std::optional<DataType>& dtype,
+                            const std::optional<Layout>& layout,
+                            const std::optional<MeshDevice*> device,
+                            const std::optional<MemoryConfig>& memory_config,
+                            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::full(
+        ttnn::Shape(shape), fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
 
-template <typename creation_operation_t, typename fill_value_t>
-auto create_nanobind_full_like_overload() {
-    return ttnn::nanobind_overload_t{
-        [](const creation_operation_t& self,
-           const ttnn::Tensor& tensor,
-           const fill_value_t fill_value,
-           const std::optional<DataType>& dtype,
-           const std::optional<Layout>& layout,
-           const std::optional<MeshDevice*> device,
-           const std::optional<MemoryConfig>& memory_config,
-           std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-            return self(
-                tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
-        },
-        nb::keep_alive<0, 6>(),  // test
-        nb::arg("tensor"),
-        nb::arg("fill_value"),
-        nb::arg("dtype") = nb::none(),
-        nb::arg("layout") = nb::none(),
-        nb::arg("device") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("optional_tensor") = nb::none()};
-}
+auto full_int_lambda = [](const ttsl::SmallVector<uint32_t>& shape,
+                          const int fill_value,
+                          const std::optional<DataType>& dtype,
+                          const std::optional<Layout>& layout,
+                          const std::optional<MeshDevice*> device,
+                          const std::optional<MemoryConfig>& memory_config,
+                          std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::full(
+        ttnn::Shape(shape), fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
 
-// TODO_NANOBIND: buffer api -> ndarray
-template <typename creation_operation_t>
-auto create_nanobind_from_buffer_overload() {
-    return ttnn::nanobind_overload_t{
-        [](const creation_operation_t& self,
-           const nb::object& buffer,
-           const Shape& shape,
-           const DataType dtype,
-           MeshDevice* device,
-           const std::optional<Layout>& layout,
-           const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-            // Overloading this with templates is not working quite as expected,
-            // the problem is that the buffer is a nb::object, so we can't deduce the type of the data.
-            // and sometimes the wrong type is handling the data.
-            // For instance, a list of int16 can be interpreted as a list of int32 and the data will be a missmatch
-            // in further validations.
-            switch (dtype) {
-                case DataType::UINT8: {
-                    auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::UINT16: {
-                    auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::INT32: {
-                    auto cpp_buffer = nb::cast<std::vector<int32_t>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::UINT32: {
-                    auto cpp_buffer = nb::cast<std::vector<uint32_t>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::FLOAT32: {
-                    auto cpp_buffer = nb::cast<std::vector<float>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::BFLOAT16: {
-                    auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
-                    return self(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-                }
-                case DataType::BFLOAT8_B:
-                case DataType::BFLOAT4_B:
-                case DataType::INVALID: {
-                    // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
-                    // Both are empty structs, so let's not allow users to use them for this particular operation
-                    TT_THROW("Unreachable");
-                }
-            }
-            // This is a fallback to make the compiler happy.
+// Helper lambdas for full_like operations
+auto full_like_float_lambda = [](const ttnn::Tensor& tensor,
+                                 const float fill_value,
+                                 const std::optional<DataType>& dtype,
+                                 const std::optional<Layout>& layout,
+                                 const std::optional<MeshDevice*> device,
+                                 const std::optional<MemoryConfig>& memory_config,
+                                 std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::full_like(
+        tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
+
+auto full_like_int_lambda = [](const ttnn::Tensor& tensor,
+                               const int fill_value,
+                               const std::optional<DataType>& dtype,
+                               const std::optional<Layout>& layout,
+                               const std::optional<MeshDevice*> device,
+                               const std::optional<MemoryConfig>& memory_config,
+                               std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::full_like(
+        tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
+
+// Helper lambdas for zeros/ones operations
+auto zeros_lambda = [](const ttsl::SmallVector<uint32_t>& shape,
+                       const std::optional<DataType>& dtype,
+                       const std::optional<Layout>& layout,
+                       const std::optional<MeshDevice*> device,
+                       const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+    return ttnn::zeros(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
+};
+
+auto ones_lambda = [](const ttsl::SmallVector<uint32_t>& shape,
+                      const std::optional<DataType>& dtype,
+                      const std::optional<Layout>& layout,
+                      const std::optional<MeshDevice*> device,
+                      const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+    return ttnn::ones(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
+};
+
+// Helper lambdas for zeros_like/ones_like operations
+auto zeros_like_lambda = [](const ttnn::Tensor& tensor,
+                            const std::optional<DataType>& dtype,
+                            const std::optional<Layout>& layout,
+                            const std::optional<MeshDevice*> device,
+                            const std::optional<MemoryConfig>& memory_config,
+                            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::zeros_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
+
+auto ones_like_lambda = [](const ttnn::Tensor& tensor,
+                           const std::optional<DataType>& dtype,
+                           const std::optional<Layout>& layout,
+                           const std::optional<MeshDevice*> device,
+                           const std::optional<MemoryConfig>& memory_config,
+                           std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
+    return ttnn::ones_like(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
+};
+
+// Helper lambda for from_buffer operation
+auto from_buffer_lambda = [](const nb::object& buffer,
+                             const Shape& shape,
+                             const DataType dtype,
+                             MeshDevice* device,
+                             const std::optional<Layout>& layout,
+                             const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+    // Overloading this with templates is not working quite as expected,
+    // the problem is that the buffer is a nb::object, so we can't deduce the type of the data.
+    // and sometimes the wrong type is handling the data.
+    // For instance, a list of int16 can be interpreted as a list of int32 and the data will be a missmatch
+    // in further validations.
+    switch (dtype) {
+        case DataType::UINT8: {
+            auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::UINT16: {
+            auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::INT32: {
+            auto cpp_buffer = nb::cast<std::vector<int32_t>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::UINT32: {
+            auto cpp_buffer = nb::cast<std::vector<uint32_t>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::FLOAT32: {
+            auto cpp_buffer = nb::cast<std::vector<float>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::BFLOAT16: {
+            auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
+            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+        }
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::INVALID: {
+            // convert_to_data_type() in types.hpp has not an implementation for bfloat8_b and bfloat4_b
+            // Both are empty structs, so let's not allow users to use them for this particular operation
             TT_THROW("Unreachable");
-        },
-        nb::keep_alive<0, 5>(),  // test
-        nb::arg("buffer"),
-        nb::arg("shape"),
-        nb::arg("dtype"),
-        nb::arg("device"),
-        nb::arg("layout") = std::nullopt,
-        nb::arg("memory_config") = std::nullopt};
-}
+        }
+    }
+    // This is a fallback to make the compiler happy.
+    TT_THROW("Unreachable");
+};
 
-template <typename creation_operation_t>
-void bind_full_operation(nb::module_& mod, const creation_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
+}  // namespace
+
+void py_module(nb::module_& mod) {
+    // Bind full operation
+    {
+        const auto* doc = R"doc(
         Creates a tensor of the specified shape and fills it with the specified scalar value.
 
         Args:
@@ -162,26 +180,37 @@ void bind_full_operation(nb::module_& mod, const creation_operation_t& operation
 
         Returns:
             ttnn.Tensor: A filled tensor of specified shape and value.
-        )doc",
-        operation.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        create_nanobind_full_overload<creation_operation_t, float>(),
-        create_nanobind_full_overload<creation_operation_t, int>());
-}
+        ttnn::bind_function<"full">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                full_float_lambda,
+                nb::keep_alive<0, 6>(),
+                nb::arg("shape"),
+                nb::arg("fill_value"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()),
+            ttnn::overload_t(
+                full_int_lambda,
+                nb::keep_alive<0, 6>(),
+                nb::arg("shape"),
+                nb::arg("fill_value"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()));
+    }
 
-template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(
-    nb::module_& mod,
-    const creation_operation_t& operation,
-    const std::string& value_string,
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Creates a tensor with the specified shape and fills it with the value of {1}.
+    // Bind zeros operation
+    {
+        const auto* doc = R"doc(
+        Creates a tensor with the specified shape and fills it with the value of 0.0.
 
         Args:
             shape (ttnn.Shape): The shape of the tensor.
@@ -195,40 +224,70 @@ void bind_full_operation_with_hard_coded_value(
             TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to be multiple of 32.
 
         Returns:
-            ttnn.Tensor: A tensor filled with {1}.
+            ttnn.Tensor: A tensor filled with 0.0.
 
         Note:
-            {2}
-        )doc",
-        operation.base_name(),
-        value_string,
-        info_doc);
+            Supported dtypes, layouts, and ranks:
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const ttsl::SmallVector<uint32_t>& shape,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<MeshDevice*> device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
-            },
-            nb::keep_alive<0, 5>(),  // test
-            nb::arg("shape"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
-}
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        )doc";
 
-template <typename creation_operation_t>
-void bind_full_like_operation(nb::module_& mod, const creation_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
+        ttnn::bind_function<"zeros">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                zeros_lambda,
+                nb::keep_alive<0, 5>(),
+                nb::arg("shape"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none()));
+    }
+
+    // Bind ones operation
+    {
+        const auto* doc = R"doc(
+        Creates a tensor with the specified shape and fills it with the value of 1.0.
+
+        Args:
+            shape (ttnn.Shape): The shape of the tensor.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+
+        Note:
+            ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to be multiple of 32.
+
+        Returns:
+            ttnn.Tensor: A tensor filled with 1.0.
+
+        Note:
+            
+        )doc";
+
+        ttnn::bind_function<"ones">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                ones_lambda,
+                nb::keep_alive<0, 5>(),
+                nb::arg("shape"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none()));
+    }
+
+    // Bind full_like operation
+    {
+        const auto* doc = R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the specified scalar value. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
 
         Args:
@@ -242,26 +301,37 @@ void bind_full_like_operation(nb::module_& mod, const creation_operation_t& oper
 
         Returns:
             ttnn.Tensor: A filled tensor.
-        )doc",
-        operation.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        create_nanobind_full_like_overload<creation_operation_t, float>(),
-        create_nanobind_full_like_overload<creation_operation_t, int>());
-}
+        ttnn::bind_function<"full_like">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                full_like_float_lambda,
+                nb::keep_alive<0, 6>(),
+                nb::arg("tensor"),
+                nb::arg("fill_value"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()),
+            ttnn::overload_t(
+                full_like_int_lambda,
+                nb::keep_alive<0, 6>(),
+                nb::arg("tensor"),
+                nb::arg("fill_value"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()));
+    }
 
-template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(
-    nb::module_& mod,
-    const creation_operation_t& operation,
-    const std::string& value_string,
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Creates a tensor of the same shape as the input tensor and fills it with the value of {1}. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
+    // Bind zeros_like operation
+    {
+        const auto* doc = R"doc(
+        Creates a tensor of the same shape as the input tensor and fills it with the value of 0.0. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
 
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
@@ -272,42 +342,69 @@ void bind_full_like_operation_with_hard_coded_value(
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: A tensor filled with {1}.
+            ttnn.Tensor: A tensor filled with 0.0.
 
         Note:
-            {2}
-        )doc",
-        operation.base_name(),
-        value_string,
-        info_doc);
+            Supported dtypes, layouts, and ranks:
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const ttnn::Tensor& tensor,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<MeshDevice*> device,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return self(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
-            },
-            nb::keep_alive<0, 5>(),  // test
-            nb::arg("tensor"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("layout") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_tensor") = nb::none()});
-}
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        )doc";
 
-template <typename creation_operation_t>
-void bind_arange_operation(nb::module_& mod, const creation_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
+        ttnn::bind_function<"zeros_like">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                zeros_like_lambda,
+                nb::keep_alive<0, 5>(),
+                nb::arg("tensor"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()));
+    }
+
+    // Bind ones_like operation
+    {
+        const auto* doc = R"doc(
+        Creates a tensor of the same shape as the input tensor and fills it with the value of 1.0. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
+
+        Args:
+            tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: A tensor filled with 1.0.
+
+        Note:
+            
+        )doc";
+
+        ttnn::bind_function<"ones_like">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                ones_like_lambda,
+                nb::keep_alive<0, 5>(),
+                nb::arg("tensor"),
+                nb::arg("dtype") = nb::none(),
+                nb::arg("layout") = nb::none(),
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = nb::none(),
+                nb::arg("optional_tensor") = nb::none()));
+    }
+
+    // Bind arange operation
+    {
+        const auto* doc = R"doc(
         Creates a tensor with values ranging from `start` (inclusive) to `end` (exclusive) with a specified `step` size. The data type, device, layout and memory configuration of the resulting tensor can be specified.
 
         Args:
@@ -321,55 +418,50 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
 
         Returns:
             ttnn.Tensor: A tensor containing evenly spaced values within the specified range.
-        )doc",
-        operation.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const int64_t start,
-               const int64_t end,
-               const int64_t step,
-               const DataType dtype,
-               const std::optional<MeshDevice*> device,
-               const MemoryConfig& memory_config,
-               const Layout layout) -> ttnn::Tensor {  // afuller
-                return self(start, end, step, dtype, nbh::rewrap_optional(device), memory_config, layout);
-            },
-            nb::keep_alive<0, 6>(),  // test
-            nb::arg("start"),
-            nb::arg("end"),
-            nb::arg("step") = 1,
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-            nb::arg("layout") = Layout::ROW_MAJOR},
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const int64_t end,
-               const DataType dtype,
-               const std::optional<MeshDevice*> device,
-               const MemoryConfig& memory_config,
-               const Layout layout) -> ttnn::Tensor {  // afuller
-                return self(end, dtype, nbh::rewrap_optional(device), memory_config, layout);
-            },
-            nb::keep_alive<0, 4>(),  // test
-            nb::arg("end"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-            nb::arg("layout") = Layout::ROW_MAJOR});
-}
+        ttnn::bind_function<"arange">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                [](const int64_t start,
+                   const int64_t end,
+                   const int64_t step,
+                   const DataType dtype,
+                   const std::optional<MeshDevice*> device,
+                   const MemoryConfig& memory_config,
+                   const Layout layout) -> ttnn::Tensor {
+                    return ttnn::arange(start, end, step, dtype, nbh::rewrap_optional(device), memory_config, layout);
+                },
+                nb::keep_alive<0, 6>(),
+                nb::arg("start"),
+                nb::arg("end"),
+                nb::arg("step") = 1,
+                nb::kw_only(),
+                nb::arg("dtype") = DataType::BFLOAT16,
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+                nb::arg("layout") = Layout::ROW_MAJOR),
+            ttnn::overload_t(
+                [](const int64_t end,
+                   const DataType dtype,
+                   const std::optional<MeshDevice*> device,
+                   const MemoryConfig& memory_config,
+                   const Layout layout) -> ttnn::Tensor {
+                    return ttnn::arange(end, dtype, nbh::rewrap_optional(device), memory_config, layout);
+                },
+                nb::keep_alive<0, 4>(),
+                nb::arg("end"),
+                nb::kw_only(),
+                nb::arg("dtype") = DataType::BFLOAT16,
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+                nb::arg("layout") = Layout::ROW_MAJOR));
+    }
 
-template <typename creation_operation_t>
-void bind_empty_operation(nb::module_& mod, const creation_operation_t& operation, const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
+    // Bind empty operation
+    {
+        const auto* doc = R"doc(
         Creates a device tensor with uninitialized values of the specified shape, data type, layout, and memory configuration.
 
         Args:
@@ -383,58 +475,39 @@ void bind_empty_operation(nb::module_& mod, const creation_operation_t& operatio
             ttnn.Tensor: The output uninitialized tensor.
 
         Note:
-            {1}
-        )doc",
-        operation.base_name(),
-        info_doc);
+            Supported dtypes, layouts, and ranks:
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const ttsl::SmallVector<uint32_t>& shape,
-               const DataType& dtype,
-               const Layout& layout,
-               MeshDevice* device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{shape}, dtype, layout, device, memory_config);
-            },
-            nb::keep_alive<0, 5>(),  // test
-            nb::arg("shape"),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::ROW_MAJOR,
-            nb::arg("device"),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
-}
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        )doc";
 
-template <typename creation_operation_t>
-void bind_from_buffer_operation(nb::module_& mod, const creation_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
-        Creates a device tensor with values from a buffer of the specified, data type, layout, and memory configuration.
+        ttnn::bind_function<"empty">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                [](const ttsl::SmallVector<uint32_t>& shape,
+                   const DataType& dtype,
+                   const Layout& layout,
+                   MeshDevice* device,
+                   const MemoryConfig& memory_config) -> ttnn::Tensor {
+                    return ttnn::empty(ttnn::Shape{shape}, dtype, layout, device, memory_config);
+                },
+                nb::keep_alive<0, 5>(),
+                nb::arg("shape"),
+                nb::arg("dtype") = DataType::BFLOAT16,
+                nb::arg("layout") = Layout::ROW_MAJOR,
+                nb::arg("device"),
+                nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG));
+    }
 
-        Args:
-            buffer (List[Any]): The buffer to be used to create the tensor.
-            shape (ttnn.Shape): The shape of the tensor to be created.
-            dtype (ttnn.DataType): The tensor data type.
-            device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
-            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR` unless `dtype` is `ttnn.bfloat4` or `ttnn.bfloat8`, in which case it defaults to `ttnn.TILE`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
-
-        Returns:
-            ttnn.Tensor: A tensor with the values from the buffer.
-        )doc",
-        operation.base_name());
-
-    bind_registered_operation(mod, operation, doc, create_nanobind_from_buffer_overload<creation_operation_t>());
-}
-
-template <typename creation_operation_t>
-void bind_empty_like_operation(nb::module_& mod, const creation_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
+    // Bind empty_like operation
+    {
+        const auto* doc = R"doc(
         Creates a new tensor with the same shape as the given `reference`, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
 
         Args:
@@ -448,80 +521,58 @@ void bind_empty_like_operation(nb::module_& mod, const creation_operation_t& ope
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor with the same shape as the reference tensor.
-        )doc",
-        operation.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const creation_operation_t& self,
-               const ttnn::Tensor& reference,
-               const std::optional<DataType>& dtype,
-               const std::optional<Layout>& layout,
-               const std::optional<MeshDevice*> device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(reference, dtype, layout, nbh::rewrap_optional(device), memory_config);
-            },
-            nb::keep_alive<0, 5>(),  // test
-            nb::arg("tensor"),
-            nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::ROW_MAJOR,
-            nb::arg("device") = nb::none(),
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
-}
+        ttnn::bind_function<"empty_like">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                [](const ttnn::Tensor& reference,
+                   const std::optional<DataType>& dtype,
+                   const std::optional<Layout>& layout,
+                   const std::optional<MeshDevice*> device,
+                   const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+                    return ttnn::empty_like(reference, dtype, layout, nbh::rewrap_optional(device), memory_config);
+                },
+                nb::keep_alive<0, 5>(),
+                nb::arg("tensor"),
+                nb::kw_only(),
+                nb::arg("dtype") = DataType::BFLOAT16,
+                nb::arg("layout") = Layout::ROW_MAJOR,
+                nb::arg("device") = nb::none(),
+                nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG));
+    }
 
-}  // namespace
+    // Bind from_buffer operation
+    {
+        const auto* doc = R"doc(
+        Creates a device tensor with values from a buffer of the specified, data type, layout, and memory configuration.
 
-void py_module(nb::module_& mod) {
-    bind_full_operation(mod, ttnn::full);
-    bind_full_operation_with_hard_coded_value(
-        mod,
-        ttnn::zeros,
-        "0.0",
-        R"doc(Supported dtypes, layouts, and ranks:
+        Args:
+            buffer (List[Any]): The buffer to be used to create the tensor.
+            shape (ttnn.Shape): The shape of the tensor to be created.
+            dtype (ttnn.DataType): The tensor data type.
+            device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
+            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR` unless `dtype` is `ttnn.bfloat4` or `ttnn.bfloat8`, in which case it defaults to `ttnn.TILE`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+        Returns:
+            ttnn.Tensor: A tensor with the values from the buffer.
+        )doc";
 
-    bind_full_operation_with_hard_coded_value(mod, ttnn::ones, "1.0");
-
-    bind_full_like_operation(mod, ttnn::full_like);
-    bind_full_like_operation_with_hard_coded_value(
-        mod,
-        ttnn::zeros_like,
-        "0.0",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-    bind_full_like_operation_with_hard_coded_value(mod, ttnn::ones_like, "1.0");
-
-    bind_arange_operation(mod, ttnn::arange);
-
-    bind_empty_operation(
-        mod,
-        ttnn::empty,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-    bind_empty_like_operation(mod, ttnn::empty_like);
-
-    bind_from_buffer_operation(mod, ttnn::from_buffer);
+        ttnn::bind_function<"from_buffer">(
+            mod,
+            doc,
+            ttnn::overload_t(
+                from_buffer_lambda,
+                nb::keep_alive<0, 5>(),
+                nb::arg("buffer"),
+                nb::arg("shape"),
+                nb::arg("dtype"),
+                nb::arg("device"),
+                nb::arg("layout") = std::nullopt,
+                nb::arg("memory_config") = std::nullopt));
+    }
 }
 
 }  // namespace ttnn::operations::creation
