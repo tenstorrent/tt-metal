@@ -72,10 +72,10 @@ class WarmupForwardMixin:
 
         return sampling_configs
 
-    def _create_decode_warmup_inputs(self, max_batch_size, num_gpu_blocks):
+    def _create_decode_warmup_inputs(self, max_batch_size, num_blocks):
         tokens = torch.zeros(max_batch_size, 1, dtype=torch.int32)
         start_pos = torch.zeros(max_batch_size, dtype=torch.int32)
-        page_table = torch.zeros(max_batch_size, num_gpu_blocks, dtype=torch.int32)
+        page_table = torch.zeros(max_batch_size, num_blocks, dtype=torch.int32)
         return tokens, start_pos, page_table
 
     def warmup_model_decode(
@@ -83,7 +83,7 @@ class WarmupForwardMixin:
         kv_cache,
         enable_trace,
         max_batch_size,
-        num_gpu_blocks,
+        num_blocks,
         can_sample_on_device,
         non_greedy_decoding_on_device,
     ):
@@ -94,7 +94,7 @@ class WarmupForwardMixin:
             can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode="decode"
         )
 
-        tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_gpu_blocks)
+        tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
 
         logger.info("Starting decode warmup")
         logger.info(f"Tokens shape: {tokens.shape}")
