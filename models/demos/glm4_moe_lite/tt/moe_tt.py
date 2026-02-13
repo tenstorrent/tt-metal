@@ -8,6 +8,7 @@ from typing import Any
 
 import os
 import torch
+import numpy as np
 
 import ttnn
 import math
@@ -457,6 +458,7 @@ def moe_dense_experts_forward_decode_tt(
     hparams: Glm4MoeLiteHParams,
     memory_config: ttnn.MemoryConfig,
     compute_kernel_config: Any | None = None,
+    skip_defensive_clones: bool = False,
 ) -> ttnn.Tensor:
     """Correctness-first dense expert execution for decode (seq_len=1).
 
@@ -568,8 +570,7 @@ def moe_dense_experts_forward_decode_tt(
             expert_outputs.append(out)
 
         # `concat` may return a view-like tensor; materialize before freeing sources.
-        _skip_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
-        if _skip_clones:
+        if skip_defensive_clones:
             expert_output = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
         else:
             expert_output_view = ttnn.concat(expert_outputs, dim=0, memory_config=memory_config)  # [E_local,1,1,H]
@@ -673,6 +674,497 @@ def moe_dense_experts_forward_decode_tt(
     return out_sum
 
 
+def moe_dense_experts_forward_prefill_tt(
+    *,
+    device: Any,
+    hidden_states: ttnn.Tensor,  # [1,1,T,H] TILE (consumed)
+    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] TILE uint16 (consumed)
+    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] TILE bf16 (consumed)
+    moe_w: MoELayerTTWeights,
+    hparams: Glm4MoeLiteHParams,
+    memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: Any | None = None,
+    skip_defensive_clones: bool = False,
+) -> ttnn.Tensor:
+    """Dense batched expert execution for prefill (multi-token).
+
+    Runs ALL tokens through ALL local experts using batched dense ttnn.linear
+    (one kernel per projection type, not per expert).  Routing weights zero out
+    inactive expert-token pairs after the matmul.
+
+    This avoids sparse_matmul overhead for near-dense routing patterns
+    (topk=4/E=64, ~87% dense blocks at block_size=32).
+
+    Gate: ``GLM4_MOE_LITE_MOE_DENSE_PREFILL=1``
+
+    Compute: O(E_local * T * H * I) — processes all tokens through all local experts.
+    Memory peak: ~O(E_local * T * max(H, I)) for batched intermediates.
+    """
+    hidden = int(hparams.hidden_size)
+    inter = int(hparams.moe_intermediate_size)
+    num_experts = int(hparams.n_routed_experts)
+    k = int(hparams.num_experts_per_tok)
+    num_devices = _get_num_devices(device)
+    experts_per_device = num_experts // max(1, num_devices)
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+
+    # Flatten to [1, 1, T, dim]
+    tokens = int(hidden_states.shape[0]) * int(hidden_states.shape[2])
+    hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens, hidden))
+    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens, k))
+    topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens, k))
+
+    # ---- Build batched expert weights: [E_local, 1, H, I] ----
+    w_rank = len(moe_w.w1_experts.shape)
+
+    def _batch_weight(w_stacked: ttnn.Tensor, dim_a: int, dim_b: int) -> ttnn.Tensor:
+        parts: list[ttnn.Tensor] = []
+        for e in range(experts_per_device):
+            if w_rank == 5:
+                w_e = ttnn.slice(w_stacked, [0, 0, e, 0, 0], [1, 1, e + 1, dim_a, dim_b])
+                w_e = ttnn.squeeze(w_e, 2)
+            else:
+                w_e = ttnn.slice(w_stacked, [0, e, 0, 0], [1, e + 1, dim_a, dim_b])
+            parts.append(w_e)
+        w_batched = ttnn.concat(parts, dim=0, memory_config=memory_config)
+        for p in parts:
+            ttnn.deallocate(p, force=False)
+        return w_batched  # [E_local, 1, H, I]
+
+    use_fused = getattr(moe_w, "w1w3_experts", None) is not None
+
+    # ---- Batched matmul: broadcast input across expert dim ----
+    x_batch = ttnn.repeat(hidden_states, ttnn.Shape((experts_per_device, 1, 1, 1)))  # [E_local, 1, T, H]
+    ttnn.deallocate(hidden_states, force=False)
+
+    if use_fused:
+        w1w3_batch = _batch_weight(moe_w.w1w3_experts, hidden, inter * 2)  # [E_local, 1, H, 2I]
+        if compute_kernel_config is None:
+            w1w3_out = ttnn.linear(x_batch, w1w3_batch, memory_config=memory_config)
+        else:
+            w1w3_out = ttnn.linear(x_batch, w1w3_batch, memory_config=memory_config,
+                                   compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(w1w3_batch, force=False)
+        ttnn.deallocate(x_batch, force=False)
+
+        # Split fused output into gate (w1) and up (w3) halves.
+        ndim = len(w1w3_out.shape)
+        begin_gate = [0] * ndim
+        end_gate = [int(w1w3_out.shape[i]) for i in range(ndim)]
+        end_gate[-1] = inter
+        begin_up = [0] * ndim
+        begin_up[-1] = inter
+        end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
+
+        if skip_defensive_clones:
+            gate = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up = ttnn.slice(w1w3_out, begin_up, end_up)
+        else:
+            gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+            gate = ttnn.clone(gate_view, memory_config=memory_config)
+            up = ttnn.clone(up_view, memory_config=memory_config)
+            ttnn.deallocate(w1w3_out, force=False)
+    else:
+        w1_batch = _batch_weight(moe_w.w1_experts, hidden, inter)
+        w3_batch = _batch_weight(moe_w.w3_experts, hidden, inter)
+        if compute_kernel_config is None:
+            gate = ttnn.linear(x_batch, w1_batch, memory_config=memory_config)
+            up = ttnn.linear(x_batch, w3_batch, memory_config=memory_config)
+        else:
+            gate = ttnn.linear(x_batch, w1_batch, memory_config=memory_config,
+                               compute_kernel_config=compute_kernel_config)
+            up = ttnn.linear(x_batch, w3_batch, memory_config=memory_config,
+                             compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(w1_batch, force=False)
+        ttnn.deallocate(w3_batch, force=False)
+        ttnn.deallocate(x_batch, force=False)
+
+    gate = ttnn.silu(gate)
+    x_ff = ttnn.mul(gate, up, memory_config=memory_config)
+    ttnn.deallocate(gate, force=False)
+    ttnn.deallocate(up, force=False)
+    if use_fused and skip_defensive_clones:
+        try:
+            ttnn.deallocate(w1w3_out, force=False)
+        except Exception:
+            pass
+
+    # Down projection: [E_local, 1, T, I] × [E_local, 1, I, H] → [E_local, 1, T, H]
+    w2_batch = _batch_weight(moe_w.w2_experts, inter, hidden)
+    if compute_kernel_config is None:
+        expert_output = ttnn.linear(x_ff, w2_batch, memory_config=memory_config)
+    else:
+        expert_output = ttnn.linear(x_ff, w2_batch, memory_config=memory_config,
+                                    compute_kernel_config=compute_kernel_config)
+    ttnn.deallocate(x_ff, force=False)
+    ttnn.deallocate(w2_batch, force=False)
+    # expert_output: [E_local, 1, T, H]
+
+    # ---- Build routing weights: [E_local, 1, T, H] ----
+    topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(topk_expert_indices, force=False)
+    ttnn.deallocate(topk_expert_weights, force=False)
+
+    weights_zero = _get_scatter_zero_tensor(
+        device=device, tokens_per_device=tokens, num_experts=num_experts,
+    )
+    topk_weights_dense = ttnn.scatter(
+        weights_zero, 3, topk_indices_rm, topk_weights_rm,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(topk_indices_rm, force=False)
+    ttnn.deallocate(topk_weights_rm, force=False)
+
+    if is_mesh:
+        local_weights = ttnn.mesh_partition(
+            topk_weights_dense, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,T,E_local]
+        ttnn.deallocate(topk_weights_dense, force=False)
+    else:
+        local_weights = topk_weights_dense
+
+    # Expand [1,1,T,E_local] → [E_local,1,T,1] for broadcast mul with expert_output [E_local,1,T,H].
+    # Uses broadcast on the last dim instead of creating a 33MB intermediate via repeat.
+    local_weights_rm = local_weights
+    if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
+        local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(local_weights, force=False)
+    local_weights_permuted = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E_local,1,T,1]
+    ttnn.deallocate(local_weights_rm, force=False)
+    local_weights_tiled = ttnn.to_layout(local_weights_permuted, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(local_weights_permuted, force=False)
+
+    # Broadcast mul: [E_local,1,T,1] × [E_local,1,T,H] → [E_local,1,T,H]
+    weighted = ttnn.mul(expert_output, local_weights_tiled, memory_config=memory_config)
+    ttnn.deallocate(expert_output, force=False)
+    ttnn.deallocate(local_weights_tiled, force=False)
+    out_local = ttnn.sum(weighted, dim=0, keepdim=True)  # [1, 1, T, H]
+    ttnn.deallocate(weighted, force=False)
+
+    # All-reduce across devices (experts sharded across mesh).
+    if num_devices > 1:
+        out_full = ttnn.all_reduce(
+            out_local,
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+            memory_config=memory_config,
+        )
+        ttnn.deallocate(out_local, force=False)
+        return out_full
+
+    return out_local
+
+
+def moe_packed_experts_forward_prefill_tt(
+    *,
+    device: Any,
+    hidden_states: ttnn.Tensor,  # [1,1,T,H] TILE (consumed)
+    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] TILE uint16 (consumed)
+    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] TILE bf16 (consumed)
+    moe_w: MoELayerTTWeights,
+    hparams: Glm4MoeLiteHParams,
+    memory_config: ttnn.MemoryConfig,
+    compute_kernel_config: Any | None = None,
+    skip_defensive_clones: bool = False,
+    capacity_factor: float = 1.5,
+) -> ttnn.Tensor:
+    """Token-packing MoE prefill: only compute needed expert-token pairs.
+
+    Instead of running ALL tokens through ALL local experts (dense prefill),
+    this packs only the routed tokens for each expert using ttnn.gather,
+    runs smaller matmuls, then scatters results back.
+
+    With topk=4, E=64, E_local=8, each expert processes ~T/16 tokens instead
+    of T, giving ~16x compute reduction minus gather/scatter overhead.
+
+    Gate: ``GLM4_MOE_LITE_MOE_PACKED_PREFILL=1``
+    """
+    H = int(hparams.hidden_size)
+    I = int(hparams.moe_intermediate_size)
+    E = int(hparams.n_routed_experts)
+    K = int(hparams.num_experts_per_tok)
+    num_devices = _get_num_devices(device)
+    E_local = E // max(1, num_devices)
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+
+    T = int(hidden_states.shape[0]) * int(hidden_states.shape[2])
+    hidden_states = ttnn.reshape(hidden_states, (1, 1, T, H))
+
+    # --- Step A: Read routing indices to CPU (~0.1ms for 8KB) ---
+    indices_torch = _tt_to_torch_device0(topk_expert_indices).reshape(T, K)
+    weights_torch = _tt_to_torch_device0(topk_expert_weights).reshape(T, K)
+    ttnn.deallocate(topk_expert_indices, force=False)
+    ttnn.deallocate(topk_expert_weights, force=False)
+    indices_np = indices_torch.numpy().astype(np.int32)
+    weights_np = weights_torch.float().numpy()
+
+    # --- Step B: Compute capacity and build per-expert packing (CPU) ---
+    C_raw = max(1, (T * K) // E)
+    C = max(32, int(C_raw * capacity_factor))
+    C = ((C + 31) // 32) * 32  # tile-align to 32
+
+    # gather_idx[e, c] = token index for slot c of expert e (0-padded)
+    # packed_wt[e, c] = routing weight for that token-expert pair
+    gather_idx = np.zeros((E, C), dtype=np.int64)
+    packed_wt = np.zeros((E, C), dtype=np.float32)
+    counts = np.zeros(E, dtype=np.int32)
+
+    for t in range(T):
+        for k_idx in range(K):
+            e = int(indices_np[t, k_idx])
+            if counts[e] < C:
+                gather_idx[e, counts[e]] = t
+                packed_wt[e, counts[e]] = weights_np[t, k_idx]
+                counts[e] += 1
+
+    # --- Step C: Build gather index for dim=2 in [1, 1, T, H] layout ---
+    # We'll process experts one at a time (loop over E_local) to avoid
+    # the gather/scatter issues with batched expert dims.
+    # For each local expert e, gather C tokens from hidden_states [1,1,T,H]
+    # using gather on dim=2 with index [1,1,C,H].
+
+    # --- Step D: Build batched expert weights ---
+    w_rank = len(moe_w.w1_experts.shape)
+
+    def _extract_expert_weight(w_stacked, e_idx, dim_a, dim_b):
+        """Extract weight for local expert e_idx."""
+        if w_rank == 5:
+            w_e = ttnn.slice(w_stacked, [0, 0, e_idx, 0, 0], [1, 1, e_idx + 1, dim_a, dim_b])
+            w_e = ttnn.squeeze(w_e, 2)
+        else:
+            w_e = ttnn.slice(w_stacked, [0, e_idx, 0, 0], [1, e_idx + 1, dim_a, dim_b])
+        return w_e  # [1, 1, dim_a, dim_b]
+
+    use_fused = getattr(moe_w, "w1w3_experts", None) is not None
+
+    # Determine which device index this is for expert offset calculation
+    # For mesh: experts are sharded along dim=0 of stacked weights
+    # Local expert e maps to global expert (device_idx * E_local + e)
+    # But gather_idx was built for ALL E experts globally.
+    # We need to figure out which global experts map to this device.
+    # On a mesh, device d handles experts [d*E_local .. (d+1)*E_local).
+    # Since we process per-device, we need the device index.
+    # For single device: device_offset = 0
+    if is_mesh:
+        # On mesh, the weight tensor is already sharded so local expert 0
+        # corresponds to the first shard. We need to know which global expert
+        # that is. Use mesh_shape to figure it out.
+        mesh_shape = _get_mesh_shape(device)
+        # Expert sharding is typically along the last mesh dim (dim=1 for 1xN)
+        num_expert_devices = mesh_shape[1] if mesh_shape[1] > 1 else mesh_shape[0]
+        # We'll build per-device indices below, sharded via ShardTensorToMesh
+        device_offsets = [d * E_local for d in range(num_devices)]
+    else:
+        device_offsets = [0]
+
+    # --- Step E: Per-expert loop: gather, matmul, weight, scatter-add ---
+    # Accumulate output into [1, 1, T, H] via scatter-add (loop avoids overwrite issue)
+    out_accum = None
+
+    # hidden_states stays in TILE layout (ttnn.gather requires TILE input)
+
+    for e_local in range(E_local):
+        # Build gather index for this expert across all devices
+        # gather_idx_e: [num_devices, C] → need [1, 1, C, H] per device
+        # The token indices are the same for each hidden dim h.
+        gather_parts = []
+        weight_parts = []
+        for d, d_off in enumerate(device_offsets):
+            e_global = d_off + e_local
+            gi = gather_idx[e_global]  # [C]
+            pw = packed_wt[e_global]   # [C]
+            gather_parts.append(gi)
+            weight_parts.append(pw)
+
+        # Build [num_devices, 1, C, H] gather index (repeated across H dim)
+        if is_mesh:
+            gi_list = []
+            for gi in gather_parts:
+                gi_expanded = torch.tensor(gi, dtype=torch.int32).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+                gi_expanded = gi_expanded.expand(1, 1, C, H).contiguous()
+                gi_list.append(gi_expanded)
+            gi_stacked = torch.cat(gi_list, dim=0)  # [num_devices, 1, C, H]
+            gather_idx_tt = ttnn.from_torch(
+                gi_stacked,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )  # [1, 1, C, H] per device
+        else:
+            gi = gather_parts[0]
+            gi_expanded = torch.tensor(gi, dtype=torch.int32).reshape(1, 1, C, 1).expand(1, 1, C, H).contiguous()
+            gather_idx_tt = ttnn.from_torch(
+                gi_expanded,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+        # Gather: x_packed[0,0,c,h] = hidden_states[0,0, gather_idx[0,0,c,h], h]
+        # Both input and index must be in TILE layout for ttnn.gather
+        x_packed = ttnn.gather(hidden_states, dim=2, index=gather_idx_tt)  # [1,1,C,H]
+        ttnn.deallocate(gather_idx_tt, force=False)
+
+        # Expert matmul
+        w_e_kw = {"memory_config": memory_config}
+        if compute_kernel_config:
+            w_e_kw["compute_kernel_config"] = compute_kernel_config
+
+        if use_fused:
+            w1w3_e = _extract_expert_weight(moe_w.w1w3_experts, e_local, H, I * 2)
+            w1w3_out = ttnn.linear(x_packed, w1w3_e, **w_e_kw)  # [1,1,C,2I]
+            ttnn.deallocate(w1w3_e, force=False)
+            ttnn.deallocate(x_packed, force=False)
+
+            ndim = len(w1w3_out.shape)
+            begin_gate = [0] * ndim
+            end_gate = [int(w1w3_out.shape[i]) for i in range(ndim)]
+            end_gate[-1] = I
+            begin_up = [0] * ndim
+            begin_up[-1] = I
+            end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
+
+            if skip_defensive_clones:
+                gate = ttnn.slice(w1w3_out, begin_gate, end_gate)
+                up = ttnn.slice(w1w3_out, begin_up, end_up)
+            else:
+                gate = ttnn.clone(ttnn.slice(w1w3_out, begin_gate, end_gate), memory_config=memory_config)
+                up = ttnn.clone(ttnn.slice(w1w3_out, begin_up, end_up), memory_config=memory_config)
+                ttnn.deallocate(w1w3_out, force=False)
+        else:
+            w1_e = _extract_expert_weight(moe_w.w1_experts, e_local, H, I)
+            w3_e = _extract_expert_weight(moe_w.w3_experts, e_local, H, I)
+            gate = ttnn.linear(x_packed, w1_e, **w_e_kw)
+            up = ttnn.linear(x_packed, w3_e, **w_e_kw)
+            ttnn.deallocate(w1_e, force=False)
+            ttnn.deallocate(w3_e, force=False)
+            ttnn.deallocate(x_packed, force=False)
+
+        gate = ttnn.silu(gate)
+        x_ff = ttnn.mul(gate, up, memory_config=memory_config)
+        ttnn.deallocate(gate, force=False)
+        ttnn.deallocate(up, force=False)
+        if use_fused and skip_defensive_clones:
+            try:
+                ttnn.deallocate(w1w3_out, force=False)
+            except Exception:
+                pass
+
+        w2_e = _extract_expert_weight(moe_w.w2_experts, e_local, I, H)
+        expert_out = ttnn.linear(x_ff, w2_e, **w_e_kw)  # [1,1,C,H]
+        ttnn.deallocate(x_ff, force=False)
+        ttnn.deallocate(w2_e, force=False)
+
+        # Apply routing weight: [1,1,C,1] broadcast mul
+        if is_mesh:
+            pw_list = []
+            for pw in weight_parts:
+                pw_t = torch.tensor(pw, dtype=torch.bfloat16).reshape(1, 1, C, 1)
+                pw_list.append(pw_t)
+            pw_stacked = torch.cat(pw_list, dim=0)
+            pw_tt = ttnn.from_torch(
+                pw_stacked,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
+        else:
+            pw = weight_parts[0]
+            pw_t = torch.tensor(pw, dtype=torch.bfloat16).reshape(1, 1, C, 1)
+            pw_tt = ttnn.from_torch(pw_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        weighted_out = ttnn.mul(expert_out, pw_tt, memory_config=memory_config)  # [1,1,C,H]
+        ttnn.deallocate(expert_out, force=False)
+        ttnn.deallocate(pw_tt, force=False)
+
+        # Scatter back to [1,1,T,H]: build scatter index and scatter into zero buffer
+        if is_mesh:
+            si_list = []
+            for gi in gather_parts:
+                si_expanded = torch.tensor(gi, dtype=torch.int32).reshape(1, 1, C, 1).expand(1, 1, C, H).contiguous()
+                si_list.append(si_expanded)
+            si_stacked = torch.cat(si_list, dim=0)
+            scatter_idx_tt = ttnn.from_torch(
+                si_stacked,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
+        else:
+            gi = gather_parts[0]
+            si_expanded = torch.tensor(gi, dtype=torch.int32).reshape(1, 1, C, 1).expand(1, 1, C, H).contiguous()
+            scatter_idx_tt = ttnn.from_torch(
+                si_expanded,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        # Create zero buffer [1,1,T,H] for this expert's scatter
+        weighted_out_rm = ttnn.to_layout(weighted_out, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(weighted_out, force=False)
+
+        if is_mesh:
+            zero_host = torch.zeros((1, 1, T, H), dtype=torch.bfloat16)
+            zero_buf = ttnn.from_torch(
+                zero_host,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            zero_buf = ttnn.zeros(
+                (1, 1, T, H), device=device, dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        scattered = ttnn.scatter(zero_buf, 2, scatter_idx_tt, weighted_out_rm,
+                                 memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(weighted_out_rm, force=False)
+        ttnn.deallocate(scatter_idx_tt, force=False)
+        ttnn.deallocate(zero_buf, force=False)
+
+        # Convert to TILE for accumulation
+        scattered_tile = ttnn.to_layout(scattered, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(scattered, force=False)
+
+        # Accumulate
+        if out_accum is None:
+            out_accum = scattered_tile
+        else:
+            old_accum = out_accum
+            out_accum = ttnn.add(old_accum, scattered_tile, memory_config=memory_config)
+            ttnn.deallocate(old_accum, force=False)
+            ttnn.deallocate(scattered_tile, force=False)
+
+    ttnn.deallocate(hidden_states, force=False)
+
+    if out_accum is None:
+        raise RuntimeError("packed prefill produced no output (empty top-k?)")
+
+    # out_accum: [1, 1, T, H] — local expert contribution
+
+    # All-reduce across devices (experts sharded across mesh).
+    if num_devices > 1:
+        out_full = ttnn.all_reduce(
+            out_accum,
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+            memory_config=memory_config,
+        )
+        ttnn.deallocate(out_accum, force=False)
+        return out_full
+
+    return out_accum
+
+
 def moe_sparse_experts_forward_tt(
     *,
     device: Any,
@@ -682,6 +1174,8 @@ def moe_sparse_experts_forward_tt(
     moe_w: MoELayerTTWeights,
     rt: Glm4MoeLiteMoERuntime,
     memory_config: ttnn.MemoryConfig,
+    skip_defensive_clones: bool = False,
+    skip_final_reduce: bool = False,
 ) -> ttnn.Tensor:
     """Run routed experts and return routed output [1,1,T,H] TILE.
 
@@ -695,7 +1189,6 @@ def moe_sparse_experts_forward_tt(
     - The older all-to-all dispatch/combine path remains available behind
       `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a` for future DP-sharded inputs.
     """
-    skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
     packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
     # Default to BF16-speed settings for sparse MoE. Users can opt back into
     # higher-precision accumulation via env overrides if needed for debugging.
@@ -740,9 +1233,20 @@ def moe_sparse_experts_forward_tt(
     unpadded_total_tokens = total_tokens
     # In replicated-token mode, sparse matmul requires total_tokens to be divisible by the block size.
     # all_to_all mode achieves this by padding to the minimum legal multiple for the dispatch width.
+    # When prefill_pcm > 1 and total_tokens >= chunk boundary, align to that boundary so all
+    # chunks use the same per_core_M, preventing kernel recompilation per unique token count.
+    # For inputs smaller than one chunk, only pad to block to avoid excessive waste.
     if not use_all_to_all:
         block = int(rt.sparsity_block_size)
-        pad_tokens = (-total_tokens) % block
+        _prefill_pcm = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM", "1").strip() or "1")
+        chunk_align = block * _prefill_pcm
+        # Only use chunk-align padding when the overhead is ≤ 25% of total tokens;
+        # otherwise fall back to block padding to avoid massive compute waste on short inputs.
+        if _prefill_pcm > 1 and total_tokens > block:
+            tentative_pad = (-total_tokens) % chunk_align
+            pad_tokens = tentative_pad if tentative_pad <= total_tokens // 4 else (-total_tokens) % block
+        else:
+            pad_tokens = (-total_tokens) % block
         if pad_tokens:
             # IMPORTANT: `ttnn.pad` can return a view that aliases the input buffer.
             # Materialize with `ttnn.clone` before deallocating the original tensor.
@@ -791,11 +1295,14 @@ def moe_sparse_experts_forward_tt(
     # Chunking is safe because MoE is token-wise (no cross-token dependencies).
     # We chunk based on *global* token count (local tokens * dispatch devices).
     chunk_total_tokens = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_CHUNK_TOKENS", "4096").strip() or "0")
-    # sparse_matmul program configs use per_core_M=1 → at most 1 sparsity block
-    # (= sparsity_block_size tokens).  When total_tokens exceeds this (prefill),
-    # force chunking so each recursive call processes exactly 1 block.
+    # For prefill (total_tokens > sparsity_block_size), sparse_matmul needs per_core_M
+    # matching num_blocks.  We create dynamic program configs in the compute section below.
+    # Cap chunk size so each call processes at most `prefill_pcm` blocks (L1 bounded).
+    prefill_pcm = int(os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM", "1").strip() or "1")
     if not use_all_to_all and total_tokens > int(rt.sparsity_block_size):
-        chunk_total_tokens = int(rt.sparsity_block_size)
+        max_tokens_per_call = int(rt.sparsity_block_size) * prefill_pcm
+        if total_tokens > max_tokens_per_call:
+            chunk_total_tokens = max_tokens_per_call
     if chunk_total_tokens > 0 and total_tokens > chunk_total_tokens:
         if debug:
             print(
@@ -832,6 +1339,7 @@ def moe_sparse_experts_forward_tt(
                     moe_w=moe_w,
                     rt=rt,
                     memory_config=memory_config,
+                    skip_final_reduce=skip_final_reduce,
                 )
             )
 
@@ -961,6 +1469,31 @@ def moe_sparse_experts_forward_tt(
     num_blocks = total_tokens // block
     expert_input = ttnn.reshape(post_dispatch, shape=(1, num_blocks, block, hidden_size))
 
+    # Select or create program configs matching the actual num_blocks.
+    # Decode (num_blocks == 1) uses pre-created configs; prefill creates dynamic ones
+    # since prefill is not traced (trace_mode=decode_only) and per_core_M must match.
+    if num_blocks > 1:
+        _gate_up_pc = _make_sparse_matmul_program_config(
+            device=device, out_features=int(rt.moe_intermediate_size),
+            in0_block_w=8, per_core_M=num_blocks,
+        )
+        _down_pc = _make_sparse_matmul_program_config(
+            device=device, out_features=int(rt.hidden_size),
+            in0_block_w=8, per_core_M=num_blocks,
+        )
+        _gate_up_fused_pc = (
+            _make_sparse_matmul_program_config(
+                device=device, out_features=int(rt.moe_intermediate_size) * 2,
+                in0_block_w=8, per_core_M=num_blocks,
+            )
+            if rt.gate_up_fused_program_config is not None
+            else None
+        )
+    else:
+        _gate_up_pc = rt.gate_up_program_config
+        _down_pc = rt.down_program_config
+        _gate_up_fused_pc = rt.gate_up_fused_program_config
+
     # Use L1 for decode-sized sparse matmul intermediates when enabled.
     # For large token counts (prefill), fall back to the caller's memory_config.
     sparse_mc = rt.decode_memory_config if total_tokens <= block else memory_config
@@ -975,14 +1508,14 @@ def moe_sparse_experts_forward_tt(
         )
 
     # STEP 4: Expert compute (sparse).
-    if getattr(moe_w, "w1w3_experts", None) is not None and rt.gate_up_fused_program_config is not None:
+    if getattr(moe_w, "w1w3_experts", None) is not None and _gate_up_fused_pc is not None:
         # Fused gate+up projection: single sparse_matmul → split → SiLU-gated multiply.
         w1w3_out = ttnn.sparse_matmul(
             expert_input,
             moe_w.w1w3_experts,
             sparsity=sparsity,
             memory_config=sparse_mc,
-            program_config=rt.gate_up_fused_program_config,
+            program_config=_gate_up_fused_pc,
             is_input_a_sparse=False,
             is_input_b_sparse=True,
             dtype=ttnn.bfloat16,
@@ -1031,7 +1564,7 @@ def moe_sparse_experts_forward_tt(
             moe_w.w1_experts,
             sparsity=sparsity,
             memory_config=sparse_mc,
-            program_config=rt.gate_up_program_config,
+            program_config=_gate_up_pc,
             is_input_a_sparse=False,
             is_input_b_sparse=True,
             dtype=ttnn.bfloat16,
@@ -1043,7 +1576,7 @@ def moe_sparse_experts_forward_tt(
             moe_w.w3_experts,
             sparsity=sparsity,
             memory_config=sparse_mc,
-            program_config=rt.gate_up_program_config,
+            program_config=_gate_up_pc,
             is_input_a_sparse=False,
             is_input_b_sparse=True,
             dtype=ttnn.bfloat16,
@@ -1067,7 +1600,7 @@ def moe_sparse_experts_forward_tt(
         moe_w.w2_experts,
         sparsity=sparsity,
         memory_config=sparse_mc,
-        program_config=rt.down_program_config,
+        program_config=_down_pc,
         is_input_a_sparse=True,
         is_input_b_sparse=False,
         dtype=ttnn.bfloat16,
@@ -1176,7 +1709,7 @@ def moe_sparse_experts_forward_tt(
     ttnn.deallocate(weighted, force=False)
 
     # Sum contributions across devices (experts are sharded across the mesh).
-    if num_devices > 1:
+    if num_devices > 1 and not skip_final_reduce:
         output_all_reduced = ttnn.all_reduce(
             output,
             num_links=rt.num_links,
@@ -1207,5 +1740,6 @@ __all__ = [
     "moe_topk_tt",
     "moe_topk_cpu_reference",
     "moe_dense_experts_forward_decode_tt",
+    "moe_dense_experts_forward_prefill_tt",
     "moe_sparse_experts_forward_tt",
 ]
