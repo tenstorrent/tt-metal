@@ -2027,7 +2027,7 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
     from models.tt_transformers.tests.test_utils import get_ref_model_dype
     from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.common import precompute_freqs
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.model_config import Mode, ModelArgs
     from models.tt_transformers.tt.rope import RotarySetup, get_rot_mats
 
     # Use HF_MODEL env var if set, otherwise use appropriate default based on device count
@@ -2241,7 +2241,7 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
         # Prepare decode input for TT
         attention_input = model_args.prepare_residual_tensor_decode(
             pt_decode_input.clone(),
-            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.get_attn_input_mem_config(Mode.DECODE),
             force_replicated=True,
         )
 
