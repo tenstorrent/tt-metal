@@ -4,32 +4,32 @@ Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication
 Introduction
 ************
 
-In Lab 2 you implemented multi core matrix multiplication with data reuse within each core.
+In Lab 2, you implemented multi core matrix multiplication with data reuse within each core.
 Each core read tiles of input matrices from DRAM into its own circular buffers (CBs) and
 reused them locally across multiple multiply-accumulate steps. However, data was not reused across cores:
-each core independently read its own tiles from DRAM, even when neighboring cores needed the exact same data.
+each core read its own tiles from DRAM, even when neighboring cores needed the same data.
 
 Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it.
 On Tenstorrent devices, cores do not have direct access to each other's circular buffers (CBs), but they are
-connected by a 2D **Network-on-Chip (NoC)** allowing the cores to pass data to each other.
+connected by a 2D **Network on Chip (NoC)** that allows them to pass data to each other.
 While sending data over the NoC is more efficient than reading data from DRAM multiple times,
-it still introduces some overhead. Therefore, we would like to minimize this overhead.
+it still introduces overhead that we would like to minimize.
 The NoC supports **unicast** and **multicast** operations.
 Unicast allows a sender core to write data to a single destination core.
 Multicast allows a sender core to write the same data to multiple destination cores in a single NoC operation,
 minimizing the overhead when the same data needs to be sent to multiple cores.
 
-In this lab you will:
+In this lab, you will:
 
 * Learn how to use simple multicast to send tiles from one sender core to multiple receiver cores.
 * Understand how semaphores, device coordinates, and multicast addressing work together.
-* Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of A and B are reused across cores,
+* Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of ``A`` and ``B`` are reused across cores,
   not just within a single core.
 
-High Level Motivation
+High-Level Motivation
 =====================
 
-Consider an example matrix multiplication shown in Figure 1.
+Consider the example matrix multiplication shown in Figure 1.
 
 .. figure:: images/data_reuse_no_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid
@@ -38,7 +38,7 @@ Consider an example matrix multiplication shown in Figure 1.
 
    Figure 1: Example matrix multiplication on a 3x3 core grid
 
-Each square in Figure 1 represents a tile, and dimensions of matrices are ``9x6`` tiles
+Each square in Figure 1 represents a tile, and the dimensions of the matrices are ``9x6`` tiles
 for ``A`` and ``6x9`` tiles for ``B``, resulting in a ``9x9`` tile output matrix ``C``.
 The squares in the middle of the figure represent the core grid, with each square labeled
 with its core coordinates ``(x, y)``. The core coordinates are also shown over the output
@@ -47,12 +47,12 @@ matrix ``C`` to indicate the core that computes the corresponding rectangular bl
 From the basic matrix multiplication algorithm, we know that computing an element of the output matrix ``C``
 requires all elements of the corresponding row of ``A`` and the corresponding column of ``B``.
 The same applies when computing tiles or rectangular blocks of tiles of ``C``.
-This means that all cores in the same row need the same rows of tiles of ``A``,
-and all cores in the same column need the same columns of tiles of ``B``.
+This means that all cores in the same row need the same tile rows of ``A``,
+and all cores in the same column need the same tile columns of ``B``.
 
-Arrows in Figure 1 indicate reads of tiles from DRAM into the cores' on-chip SRAM,
-illustrating the fact that all cores in the same row read the same rows of tiles of ``A``,
-and all cores in the same column read the same columns of tiles of ``B``.
+Arrows in Figure 1 show tiles being read from DRAM into the cores' on-chip SRAM:
+all cores in the same row read the same tile rows of ``A``, and all cores in the same
+column read the same tile columns of ``B``.
 
 Since DRAM bandwidth is limited, this is inefficient because the same data is read multiple times from DRAM.
 Instead, we would like to load a tile from DRAM once and share it across all cores that need it through the NoC.
@@ -74,21 +74,24 @@ its own CBs for its own computation, and multicasts these tiles to all the other
 The multicast operations are depicted by thick arrows in the figure.
 
 In the rest of this lab, you will first work through a simple example program demonstrating NoC and
-multicast features, then retrofit your Lab 2 matrix multiplication solution to use multicast.
+multicast features, and then retrofit your Lab 2 matrix multiplication with data reuse solution
+to use multicast.
 
 
 Background: Tenstorrent NoC and Multicast
 *****************************************
 
-The Network-on-Chip (NoC) is a 2D mesh interconnect that connects:
+The Network on Chip (NoC) is a high-bandwidth 2D torus interconnect (often visualized as a 2D grid)
+that connects:
+
 * All Tensix cores
 * DRAM controllers
 * PCIe interfaces
 * Ethernet cores (for multi-device systems)
 
-The NoC is used to transfer data between different components of the device, including transferring
-data between DRAM and on-chip SRAM. As you have seen in the preceding labs, TT-Metalium programmer
-doesn't need to understand all the details of the underlying hardware to use the NoC.
+The NoC transfers data between components of the device, including between DRAM and on-chip SRAM.
+As you have seen in earlier labs, a TT-Metalium programmer does not need to understand all of the
+hardware details to use the NoC.
 In this lab, we will expand our use of the NoC to include multicast operations to transfer data between cores.
 For more detailed information about the NoC, refer to the resources listed in the Additional Information
 section at the end of this lab.
@@ -103,16 +106,17 @@ pushes the data into the receivers' on-chip memories.
 From the receiving core's point of view, a multicast operation writes tiles straight into its on-chip SRAM,
 typically into a location it has already set aside in a circular buffer (CB). The receiver does not
 need to perform any explicit read or copy for the data itself; it only needs to prepare space and
-indicate that it is ready to accept a tile (for example, by reserving a CB slot). Once multicast
+indicate that it is ready to accept a tile (for example, by reserving a CB slot). Once the multicast
 completes, the tile is simply present in the CB, ready to be consumed by the compute or writer
 kernels just like any other locally produced data.
 
 We will illustrate the multicast operation with a simple example program in the next section.
 
+
 Example Multicast Program
 *************************
 
-The main host program for the example multicast program is located in ``ttnn/examples/lab_multicast/lab_multicast.cpp``.
+The main host program for the multicast example is ``ttnn/examples/lab_multicast/lab_multicast.cpp``.
 The program creates a 2D tensor and fills it with random data.
 One **sender core** uses a reader kernel to read tiles of this tensor from DRAM and also multicasts them to three **receiver cores**.
 The flow of data is shown in Figure 3.
@@ -132,21 +136,21 @@ Each receiver core has three kernels:
 * A compute kernel, which simply copies each tile to the output CB. In a real application, this is where computation would happen.
 * A writer kernel that writes each tile into an appropriate region of the output tensor in DRAM.
 
-The host reads back all receiver outputs and verifies that the output matches expectations,
-which is a tensor that contains three copies of the original tensor, stacked vertically.
-Note that the number of tiles in Figure 3 is symbolic and doesn't accurately represent the number of tiles in the actual program.
+The host reads back all receiver outputs and verifies that the output tensor contains three
+copies of the original tensor stacked vertically.
+Note that the number of tiles in Figure 3 is symbolic and does not accurately represent
+the number of tiles in the actual program.
 
 Synchronization with Semaphores
 ===============================
 
-Given that multicast uses a "push" model where the sender writes data directly into receivers' on-chip SRAM,
-it is important to coordinate the execution between the sender and receivers to avoid data corruption and
+Given that multicast uses a "push" model in which the sender writes data directly into the receivers' on-chip SRAM,
+it is important to coordinate execution between the sender and receivers to avoid data corruption and
 race conditions. This coordination is done using semaphores.
-In general, a semaphore is a small shared variable used to coordinate execution between different pieces
-of code that run concurrently. For example, a semaphore can be used to signal
-when the receivers are ready to have data written to their memory (i.e., when it is safe to do so, because
-the receivers have reserved a CB slot for the incoming tile). Another semaphore can be used to signal
-that data has been sent (i.e., written to receivers' memory).
+In general, a semaphore is a small shared variable used to coordinate concurrently running code.
+For example, one semaphore can signal that receivers are ready for data (for example, after reserving
+a CB slot for an incoming tile), and another can signal that data has been sent
+(i.e., written to receivers' memory).
 
 In TT-Metalium, a semaphore is an integer value stored in on-chip SRAM that multiple cores can read and update.
 Typical use cases for semaphores include:
@@ -165,7 +169,7 @@ For example, in ``lab_multicast.cpp``, there are two semaphores created:
    uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
-where ``prog_state.program`` is the TT-Metalium ``Program`` these semaphores belong to,
+where ``prog_state.program`` is the TT-Metalium ``Program`` that these semaphores belong to,
 and ``all_cores_logical`` is the logical core range on which to create the semaphore
 (in this example, all four cores). Finally, the last argument is the initial value of the
 semaphore on each core. In this example, ``0`` is used for the ``receivers_ready_semaphore``
@@ -178,10 +182,11 @@ The IDs returned by ``CreateSemaphore`` are then passed as kernel arguments so t
 them to access the semaphore on the core they are running on.
 
 
-High Level Multicast Protocol
+High-Level Multicast Protocol
 =============================
 
-Before looking at code in more detail, it is helpful to describe the multicast protocol at a high level, which is shown in Figure 4.
+Before looking at the code, it is helpful to describe the multicast protocol at a high level,
+as shown in Figure 4.
 
 .. figure:: images/multicast_protocol.png
    :alt: Multicast Protocol
@@ -194,13 +199,12 @@ Figure 4(a) shows the multicast protocol near the beginning of kernel code execu
 with all semaphores at their initial values.
 The sender core has just read a tile from DRAM into its input CB, and is ready to multicast it
 to other cores. However, it must wait until all receivers signal that they are ready for the tile.
-The way this is achieved is by waiting for the ``receivers_ready`` semaphore,
-which resides **in the sender's on-chip SRAM**, to reach the value equal to the number of receivers,
-which is three in our example program.
+The sender does this by waiting for the ``receivers_ready`` semaphore, which resides
+**in the sender's on-chip SRAM**, to reach the number of receivers (three in our example program).
 Waiting on a semaphore is a blocking call and does **not** involve any NoC traffic since the
 semaphore is in the local on-chip SRAM.
 
-Receivers for their part must allocate space in their input CB for the incoming tile and then
+Receivers, for their part, must allocate space in their input CBs for the incoming tile and then
 signal that they are ready to receive the next tile. They do so by calling ``noc_semaphore_inc``
 on the ``receivers_ready`` semaphore **in the sender's on-chip SRAM**, to increment it by 1.
 This is shown in Figure 4(b).
@@ -209,9 +213,9 @@ semaphore is in the sender's on-chip SRAM. These transactions are **unicast tran
 each receiver core sends an independent increment transaction to the sender core, so the order
 of increments is not guaranteed. However, incrementing a semaphore is an atomic operation, so
 the sender will eventually see the correct number of receivers ready for the tile.
-Of course, the sender core will not send the tile to receivers until all receivers have indicated they are ready.
-Having indicated its readiness to receive a tile, each receiver core then waits for the sender to multicast
-the tile to it. This is done by waiting on the ``tile_sent`` semaphore **in the receiver's on-chip SRAM**.
+The sender core does not send the tile until all receivers have indicated they are ready.
+After indicating readiness, each receiver core waits for the sender to multicast the tile to it.
+This is done by waiting on the ``tile_sent`` semaphore **in the receiver's on-chip SRAM**.
 This wait operation also does not involve any NoC traffic since the semaphore is in the local on-chip SRAM.
 
 Once the sender core has seen the correct number of receivers ready for the tile,
@@ -234,8 +238,8 @@ semaphore is in the local on-chip SRAM. This is illustrated in Figure 4(e).
 As can be seen, the state of all the semaphores is now the same as at the beginning of the protocol,
 ready for the next tile to be multicast.
 
-This high-level protocol description is helpful to understand the overall flow of the multicast operation.
-In the following sections, we describe details of TT-Metalium APIs used to implement these operations.
+This high-level protocol helps explain the overall flow of the multicast operation.
+The following sections describe TT-Metalium APIs used to implement it.
 
 
 Overview of Provided Files
@@ -271,16 +275,16 @@ The example multicast program uses **device coordinates**, a new concept not pre
 So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
 Logical coordinates assume that the physical layout of Tensix cores is a contiguous grid of compute cores.
 However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
-Since NoC interconnects all these components, it needs a coordinate system that includes all components, not just compute cores.
+Since the NoC interconnects all these components, it needs a coordinate system that includes all components, not just compute cores.
 
-Tenstorrent architecture actually defines more than two different coordinate systems, but
-for the purpose of TT-Metalium programming for this lab, we only need to consider logical and device coordinates.
+The Tenstorrent architecture defines more than two coordinate systems, but
+for the purposes of TT-Metalium programming for this lab, we only need to consider logical and device coordinates.
 Note that device coordinates are also referred to as *virtual coordinates* in the Tenstorrent architecture documentation.
 
 The host code always uses logical coordinates (e.g., when creating kernels and CBs), and the compiler takes care of converting
 them to device coordinates when needed, making the program easier to write and understand.
 However, to maximize performance, we want to avoid performing such coordinate conversions in device kernels.
-Therefore, device kernels performing NoC operations must use device coordinates when performing NoC operations.
+Therefore, device kernels must use device coordinates when performing NoC operations.
 To facilitate this, TT-Metalium provides the ``worker_core_from_logical_core`` function that is called on the host to
 convert logical coordinates to device coordinates before passing them to the device kernels as either compile-time or runtime arguments.
 For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:
@@ -290,7 +294,7 @@ For example, to convert the logical coordinates of the sender core to device coo
    CoreCoord sender_core_device =
        mesh_device->worker_core_from_logical_core(sender_core_logical);
 
-This conversion allows TT-Metalium programmers to write host code using device independent logical coordinates, while still
+This conversion allows TT-Metalium programmers to write host code using device-independent logical coordinates, while still
 supplying correct NoC addresses to the kernels, which use device coordinates internally when performing NoC operations.
 Remember that host code must pass logical coordinates to all host APIs, such as ``CreateKernel``, ``CreateCircularBuffer``,
 ``SetRuntimeArgs``, etc.
@@ -304,14 +308,14 @@ When creating kernels using ``CreateKernel`` in Labs 1 and 2, we always assigned
 ``DataMovementProcessor::RISCV_0`` and writer kernels to ``DataMovementProcessor::RISCV_1``.
 We also set the ``noc`` field of ``DataMovementConfig`` to its default value for the corresponding RISC-V processor,
 without discussing it in detail.
-On Tensix cores there are two NoC ports, often referred to as NOC0 and NOC1. The default mapping used by TT-Metalium assigns
-``DataMovementProcessor::RISCV_0`` to NOC0 and ``DataMovementProcessor::RISCV_1`` to NOC1.
-As a result, our simple choice of processor index had an implicit effect: all reader kernels (on ``RISCV_0``) used NOC0,
-and all writer kernels (on ``RISCV_1``) used NOC1. We will continue to use this pattern in Lab 3, so that all reader kernels
-use NOC0 and all writer kernels use NOC1.
+On each Tensix core, there are two NoC instances, ``NOC0`` and ``NOC1``. The default mapping used by TT-Metalium assigns
+``DataMovementProcessor::RISCV_0`` to ``NOC0`` and ``DataMovementProcessor::RISCV_1`` to ``NOC1``.
+As a result, our simple choice of processor index had an implicit effect: all reader kernels (on ``RISCV_0``) used ``NOC0``,
+and all writer kernels (on ``RISCV_1``) used ``NOC1``. We will continue to use this pattern in Lab 3, so that all reader kernels
+use ``NOC0`` and all writer kernels use ``NOC1``.
 
 This default assignment is convenient and works well for many examples, but it is not always optimal. If there is significantly
-more NoC traffic on readers than on writers (or vice versa), it may be beneficial to rebalance which kernels use NOC0 vs. NOC1,
+more NoC traffic on readers than on writers (or vice versa), it may be beneficial to rebalance which kernels use ``NOC0`` vs. ``NOC1``,
 or to route specific high-traffic kernels through a particular NoC. TT-Metalium allows more complex assignments by explicitly
 setting the ``noc`` field in ``DataMovementConfig``, but exploring alternative NoC mappings is beyond the scope of this lab.
 
@@ -319,7 +323,7 @@ setting the ``noc`` field in ``DataMovementConfig``, but exploring alternative N
 Receiver Kernel Overview
 ========================
 
-The multicast receiver kernel plays a role that is analogous to a reader kernel that reads tiles from DRAM
+The multicast receiver kernel plays a role analogous to a reader kernel that reads tiles from DRAM
 into a circular buffer. In a DRAM reader kernel, the basic pattern is:
 
 * Reserve space in the CB with ``cb_reserve_back``.
@@ -367,7 +371,7 @@ The next step depends on whether we wish to access the semaphore in local memory
   The ``tt_l1_ptr`` qualifier tells the compiler that this pointer refers to a specific section of on-chip SRAM memory.
   This qualifier does not change program semantics, but it enables better compiler optimizations.
 
-* To access a **remote semaphore** (such as the sender's ``receivers_ready`` semaphore), the kernel doesn't need
+* To access a **remote semaphore** (such as the sender's ``receivers_ready`` semaphore), the kernel does not need
   to cast the address into a pointer. Rather, it is used to compute the NoC address that points to the remote core's on-chip SRAM.
   To compute the NoC address, the kernel calls ``get_noc_addr``. For example:
 
@@ -378,7 +382,7 @@ The next step depends on whether we wish to access the semaphore in local memory
 
   Here, ``sender_x`` and ``sender_y`` identify the sender core in device coordinates, and
   ``receivers_ready_semaphore_addr`` is the on-chip SRAM address of the semaphore obtained from ``get_semaphore()``.
-  It may seem counter-intuitive to use the local semaphore address to compute the NoC address of a remote semaphore.
+  It may seem counterintuitive to use the local semaphore address to compute the NoC address of a remote semaphore.
   This is possible because ``CreateSemaphore`` guarantees that the same semaphore
   ID will always map to the same local on-chip SRAM address on all cores created by one ``CreateSemaphore`` call.
   Therefore, the receiver core can use the local semaphore address, knowing that the same address is used by all cores.
@@ -451,13 +455,17 @@ As noted above, it is assumed that all destination cores use the same on-chip SR
 This is possible because ``CreateCircularBuffer`` guarantees that the same CB index
 will always map to the same local on-chip SRAM addresses on all cores created by one ``CreateCircularBuffer`` call.
 While the range of addresses is guaranteed to be the same, CBs often have room for multiple tiles, so the
-read and write pointers change as tiles are pushed and popped from the CB.
-Therefore, all receiver cores must synchronize their CB push and pop operations so that their read and write pointers always point to the
-same on-chip SRAM address when receiving a tile through multicast.
-Furthermore, if the sender also synchronizes its own CB push and pop operations with receivers, its own read and write pointers
-will be in sync with the receivers' pointers.
-This approach avoids the need for receiver cores to pass their local addresses to the sender; the sender can simply use its own CB
-read and write pointers as the destination address in ``get_noc_multicast_addr`` because they are guaranteed to be in sync.
+read/write pointers change as tiles are pushed and popped from the CB.
+Therefore, all receiver cores must issue their CB push and pop operations in the same order so that their CB read/write pointers,
+when used as multicast source or destination addresses, always point to the same on-chip SRAM addresses when they receive a tile via multicast.
+Furthermore, if the sender also synchronizes its own CB push and pop operations with receivers, its own CB read/write pointers
+will be in sync with the receivers' pointers. Note that different cores only need to synchronize the order of their CB push and
+pop operations, not their precise timing, which would be difficult to achieve given that they run on separate cores.
+The semaphore handshake protocol ensures that the timing of the operations achieves the desired outcome.
+
+This synchronized CB push and pop approach avoids the need for receiver cores to pass their local addresses to the sender;
+the sender can simply use its own CB read/write pointer as the destination address in ``get_noc_multicast_addr`` because it is
+guaranteed to be in sync with the receivers' CB read/write pointers.
 This can be seen in the example multicast program, where the sender uses its own ``cb_read_addr`` in a call to
 ``get_noc_multicast_addr``.
 
@@ -467,28 +475,31 @@ Multicast Operation
 
 Once the sender kernel has obtained the encoded destination address via ``get_noc_multicast_addr``,
 it issues ``noc_async_write_multicast`` to send the data to all receivers using the NoC.
-``noc_async_write_multicast`` is a **non blocking** operation. It enqueues a multicast transfer on the NoC,
+``noc_async_write_multicast`` is a **non-blocking** operation. It enqueues a multicast transfer on the NoC,
 then returns control to the kernel immediately, while the hardware performs the tile transfer in the background.
 
 After issuing the tile multicast operation, the sender needs to inform receivers that the tile has been sent and is valid.
-To do this, it performs another multicast operation to update the receiver's ``tile_sent`` semaphore to
+To do this, it performs another multicast operation to update the receivers' ``tile_sent`` semaphore to
 ``VALID`` by calling ``noc_semaphore_set_multicast``.
 On some architectures, NoC operations may be issued to separate command buffer FIFOs and may not be
 issued in the order they are called. To ensure the commands are issued in the program order,
-the sender calls ``noc_async_writes_flushed()`` before calling ``noc_semaphore_set_multicast``
+the sender calls ``noc_async_writes_flushed()`` before calling ``noc_semaphore_set_multicast``.
 This ensures that the tile multicast command has been sent into the NoC before the ``noc_semaphore_set_multicast``
 command that sets ``tile_sent``.
 
-While this ensures commands are issued in the program order, for multicast protocol correctness it is also necessary
-that the commands be completed in the order they were issued. The default NoC configuration used in this lab ensures
-the NOC operations issued from one core will be completed in the order they were issued.
+While this ensures commands are **issued** in the program order, multicast protocol correctness also requires
+that they **complete** in the same order.
+Because TT-Metalium routes both the tile multicast and the semaphore multicast over the same NoC instance
+(we specified the interface to use when creating the kernels), and the hardware guarantees that writes from
+a single core on one NoC are delivered in program order, any ``noc_semaphore_set_multicast`` issued after a
+``noc_async_write_multicast`` from the same core is guaranteed to complete only after the corresponding tile data.
 
 Finally, the sender calls ``noc_async_write_barrier()`` to wait until the multicast data transfer completes before reusing the CB slot.
 After this barrier the sender calls ``cb_pop_front`` to free the CB entry for the next tile.
 This preserves the usual CB producer-consumer protocol by ensuring that multicast data has been sent before any
 tile data is overwritten.
 
-Another thing worth noting is that ``noc_semaphore_set_multicast`` takes a pointer to a value to be multicast.
+Note that ``noc_semaphore_set_multicast`` takes a pointer to a value to be multicast.
 The NoC hardware does a 4-byte read from that address and multicasts those 4 bytes to the receiver cores.
 We could pass a pointer to any memory location that holds ``VALID`` (e.g., a pointer to a ``uint32_t``) and
 pass that as the source. Instead of using an arbitrary value, we use the ``tile_sent`` semaphore, which is
@@ -497,15 +508,15 @@ makes the code more resilient to any future changes to the semaphore's internal 
 future semaphores hold more than 4 bytes).
 
 It is worth noting that NoC supports other more complex modes of operation, where the order of completion of commands may not match
-the order of their issuance. In such cases, it may be necessary to add an additional ``noc_async_write_barrier()`` after the tile multicast
-data to ensure that the semaphore set command is issued only after the data transfer completes.
+the order of their issuance. In such cases, it may be necessary to add an additional ``noc_async_write_barrier()`` after the tile
+multicast to ensure that the data transfer completes before the semaphore set command is issued.
 
 
 Compute and Writer Kernels
 ==========================
 
 Compute and writer kernels are similar to the ones used in Labs 1 and 2.
-Because they use CBs for their data, they don't need to know whether the data was received via multicast or DRAM read.
+Because they use CBs for their data, they do not need to know whether the data was received via multicast or DRAM read.
 
 
 Multicast and Double Buffering
@@ -517,7 +528,7 @@ On each receiver, double buffering allows overlapping:
 * Receiving a tile via multicast into its input CB.
 * Computing on previously received tiles.
 
-Double buffering still works with multicast, as long as:
+Double buffering still works with multicast as long as:
 
 * You do not reuse a CB slot until all NoC operations that read or write the memory occupied by the slot have completed.
 * You maintain a consistent pattern of ``cb_reserve_back``, ``cb_push_back``, ``cb_wait_front``,
@@ -532,7 +543,7 @@ When calling ``noc_async_write_multicast`` or ``noc_semaphore_set_multicast``, t
 is excluded from the multicast operation by default.
 This means that the number of destination cores and the destination NoC address passed to these functions should not
 include the core initiating the operation.
-While we will not require it for this lab, it is worth noting that separate functions do exist that include the core
+While we will not require it for this lab, separate functions exist that do include the core
 initiating the operation in the multicast operation. These functions are ``noc_async_write_multicast_loopback_src`` and
 ``noc_semaphore_set_multicast_loopback_src``.
 
@@ -540,9 +551,9 @@ initiating the operation in the multicast operation. These functions are ``noc_a
 Debugging Hangs with Watcher
 ****************************
 
-Given that multicast is a relatively complex operation, it is possible to introduce bugs that are difficult to debug.
+Because multicast is relatively complex, it is possible to introduce bugs that are difficult to debug.
 For example, forgetting to update a semaphore, updating semaphores at the wrong points in the code, or passing incorrect
-coordinates to NoC APIs can lead to program hanging indefinitely.
+coordinates to NoC APIs can lead to the program hanging indefinitely.
 While such issues can be debugged using debug features introduced in Lab 1, there is another tool that is particularly
 useful for debugging NoC issues and hangs.
 
@@ -557,7 +568,7 @@ Watcher can be enabled by setting an environment variable before running your pr
     export TT_METAL_WATCHER=10
 
 The numeric value is the interval, in seconds, between Watcher status dumps. Small values like 1 give very frequent snapshots and
-are convenient while debugging a hang, but introduce a significant performance overhead.
+are convenient while debugging a hang, but they introduce a significant performance overhead.
 Larger values like 10 or 60 are less intrusive and are a better starting point when doing initial debugging.
 
 When enabled, Watcher will print messages such as "Watcher checking device 0" to the terminal and write a log file
@@ -577,27 +588,27 @@ and then using the ``WAYPOINT`` macro at the desired points in the code.
       WAYPOINT("MYWY");
    }
 
-Ensure that you use unique waypoint strings for each key position in the code, otherwise the watcher output may be misleading.
+Ensure that you use unique waypoint strings for each key position in the code, otherwise the Watcher output may be misleading.
 
-Since Watcher adds extra checking and bookkeeping code, it adds a performance and code-size cost.
-Therefore, Watcher should be disabled when doing performance benchmarking or production runs.
-In some cases, Watcher can significantly prolong program execution time, making a valid program run appear to hang.
-Therefore, for the purpose of these labs, it is best to disable Watcher by default and only enable it when debugging.
+Because Watcher adds extra checking and bookkeeping, it increases both runtime and code size.
+It should be disabled for performance benchmarking or production runs.
+In some cases, Watcher can significantly prolong execution time, making a valid program run appear to hang.
+For these labs, it is best to disable Watcher by default and enable it only when debugging.
 
-For more information about the Watcher, refer to the Additional resources section at the end of this lab.
+For more information about Watcher, refer to the Additional Information section at the end of this lab.
 
 
 Exercise 1: Debugging Multicast Issues Using Watcher
 ====================================================
 
 In this exercise, you will intentionally introduce errors into the multicast sender and receiver kernels
-and use the Tenstorrent watcher and DPRINT to help diagnose the problem.
-This is intended to give you hands-on experience with debugging tools for distributed NoC and semaphore issues
-in a controlled environment.
+and use the Watcher and DPRINT to help diagnose the problem.
+This exercise gives you hands-on experience with debugging tools for distributed NoC and semaphore issues
+in a controlled environment with a well-defined problem.
 
 Perform the following steps to complete the exercise:
 
-#. If you haven't already done so, from the root of the ``tt-metal`` repository, run the build script ``./build_metal.sh``.
+#. If you have not already done so, from the root of the ``tt-metal`` repository, run the build script ``./build_metal.sh``.
 
 #. Run the multicast example (``./build/ttnn/examples/example_lab_multicast``) and
    verify that it completes successfully and prints a "Test Passed" message on the host.
@@ -617,7 +628,7 @@ Perform the following steps to complete the exercise:
    the updated kernel will be JIT-compiled the next time the program is run.
 
 #. Run the multicast example again:
-   You should see that the program now hangs, running indefinitely without printing a final result or explicit error.
+   The program should now hang, running indefinitely without printing a final result or explicit error.
    This kind of hang is typical for incorrect NoC addressing or synchronization errors.
 
 #. Terminate the program (using ``Ctrl + C``) and execute the ``tt-smi -r`` command from the command line to reset the device.
@@ -643,7 +654,7 @@ Perform the following steps to complete the exercise:
    Open ``ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp`` and comment the ``noc_semaphore_inc``
    line that signals the sender that this receiver is ready for the next tile.
    Rerun the multicast example once more with Watcher disabled.
-   The sender kernel will hang waiting on ``receivers_ready`` semaphore, because receivers no longer
+   The sender kernel will hang waiting on the ``receivers_ready`` semaphore, because receivers no longer
    increment that semaphore.
 
 #. Terminate the program, reset the device using ``tt-smi -r``, then rerun the multicast example, this time
@@ -653,20 +664,20 @@ Perform the following steps to complete the exercise:
 
       TT_METAL_WATCHER=10 ./build/ttnn/examples/example_lab_multicast
 
-   Once program starts, watcher should activate once every 10 seconds and log the state of the device into
+   Once the program starts, Watcher should activate every 10 seconds and log the state of the device to
    its log file. A major difference from the previous hang is that in this case the Watcher does not report an error.
    This is because the program has not performed any invalid operations; the hang occurs because the program logic
    is broken, which is not something that the Watcher can detect.
-   After several watcher messages, terminate the program (using ``Ctrl + C``) and inspect
+   After several Watcher status messages, terminate the program (using ``Ctrl + C``) and inspect
    the log file in ``generated/watcher/watcher.log``.
 
    The log file contains a lot of diagnostic information useful for troubleshooting.
    You can find the detailed explanation of the format of the log file in Appendix A of this lab.
 
    To help us identify the source of the hang, we analyze the **first column of the status** (BRISC status) for the
-   cores running our kernels and observe that they are all stuck at ``NSW`` (**N**OC **S**emaphore **W**ait).
+   cores running our kernels and observe that they are all stuck at ``NSW`` (**N**\ OC **S**\ emaphore **W**\ ait).
    Of course, we need to verify that this is actually a hang and not just a slow operation, which we can do by observing
-   that the program state in multiple dumps doesn't change.
+   that the program state in multiple dumps does not change.
 
    With simple bugs like the one we introduced, this information may be sufficient to diagnose the problem.
    However, in more complex cases, we may need to add additional instrumentation to the kernels to help us diagnose the problem.
@@ -676,18 +687,18 @@ Perform the following steps to complete the exercise:
    Reset the device using ``tt-smi -r``, then rerun the multicast example
    with Watcher disabled and confirm that it completes successfully without hanging.
 
-In this exercise you have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
+In this exercise, you have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
 Taken together, Watcher, waypoints, and DPRINTs provide a powerful set of tools for debugging NoC-related bugs
-in TT-Metalium multicast and multi-core programs.
+in TT-Metalium multicast and multi core programs.
 
 
 Exercise 2: Extending the Standalone Multicast Example
 ******************************************************
 
-You may have noticed that the sender core in the multicast example program doesn't specify any compute or writer kernels.
-While this is acceptable, it is not the most efficient use of the sender core resources, as most of the core is idle.
+You may have noticed that the sender core in the multicast example program does not specify any compute or writer kernels.
+While this is acceptable, it is not an efficient use of the sender core's resources, as most of the core is idle.
 In a real application, the sender core would also perform computation and writeback.
-In this exercise you will extend the example program so that the sender core also participates in the same computation
+In this exercise, you will extend the example program so that the sender core also participates in the same computation
 as the receiver cores.
 
 Perform the following steps to complete the exercise:
@@ -702,7 +713,7 @@ Perform the following steps to complete the exercise:
    This is a good practice to ensure that you are starting with a working program before making any changes.
 
 #. Update the host program to include the sender core in the core range when creating the compute and writer kernels.
-   Don't forget to also pass runtime arguments for all cores where the kernels are created, including the sender core.
+   Do not forget to also pass runtime arguments for all cores where the kernels are created, including the sender core.
    Observe that the compute and writer kernels themselves do not need to change at all.
 
 #. Update ``output_data`` and related variables to account for the additional copy from the sender core.
@@ -711,7 +722,7 @@ Perform the following steps to complete the exercise:
    Make sure that each core writes to a unique region of the output tensor.
 
 #. Update the ``mcast_sender`` kernel code.
-   The sender acting as a "local receiver" for compute does **not** require introduction of
+   The sender acting as a "local receiver" for compute does **not** require the introduction of
    any additional semaphores. This is because the sender already knows when a tile is in its
    local CB immediately after the DRAM read completes. However, there is one change that needs
    to be made to the sender kernel: it should not perform any ``cb_wait_front`` or ``cb_pop_front``
@@ -730,12 +741,14 @@ Perform the following steps to complete the exercise:
    Make sure that the output indicates the correct number of receiver cores and output tiles.
 
 #. Profile your program using the device profiler you learned about in previous labs.
+   Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+   disabled when profiling.
    Record the firmware time of this program as a reference point for the next exercise.
 
-In case you encounter any hangs, don't forget to use the ``tt-smi -r`` command to reset the device
+In case you encounter any hangs, do not forget to use the ``tt-smi -r`` command to reset the device
 before running the program again.
 
-In this exercise you have extended the multicast example program to include the sender core in the computation.
+In this exercise, you extended the multicast example program to include the sender core in the computation.
 This is a common pattern in real applications, where we wish to maximize the utilization of the sender core.
 
 
@@ -753,8 +766,8 @@ Instead of multicasting one tile and then performing the full synchronization pr
 a **batch** of tiles from DRAM, multicasts the entire batch in a single ``noc_async_write_multicast``
 call, and only then performs the semaphore signaling. Receivers similarly reserve space for the entire
 batch and perform a single semaphore exchange per batch rather than per tile. This reduces the number of
-synchronization rounds by a factor equal to the batch size, while the NoC hardware transfers the larger
-payload efficiently.
+synchronization rounds by a factor equal to the batch size, while the NoC hardware efficiently transfers
+the larger payload.
 
 In this exercise, you will modify your solution for Exercise 2 to multicast ten tiles per batch instead of
 one tile at a time, and then compare the performance of the two versions using the device profiler.
@@ -803,23 +816,26 @@ Perform the following steps to complete the exercise:
 #. Profile your batched multicast program, then compare the firmware times of the batched version
    and the non-batched solution of Exercise 2. You should observe that the batched version is
    noticeably faster due to the reduced number of synchronization rounds.
+   Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+   disabled when profiling.
 
-In this exercise you have observed that the semaphore handshake protocol has measurable overhead,
-and that batching multiple tiles per handshake is an effective strategy for amortizing this cost.
+
+In this exercise, you have seen that the semaphore handshake protocol has measurable overhead,
+and that batching multiple tiles per handshake is an effective way to amortize this cost.
 This principle of minimizing synchronization overhead by increasing the granularity of data transfers
 is broadly applicable to multicast-based communication patterns in TT-Metalium programs.
 
 
-Applying Multicast to Multi Core Matmul
-***************************************
+Applying Multicast to Multi Core Matrix Multiplication
+******************************************************
 
 You now have sufficient understanding of the multicast protocol to apply it to the matrix multiplication problem.
 In the introductory sections of this lab, we already described the high-level idea of using multicast to reduce DRAM traffic.
-As shown in Figure 2, the idea is to have only one core read tiles of A and B from DRAM and multicast them to all other cores in
+As shown in Figure 2, the idea is to have only one core read tiles of ``A`` and ``B`` from DRAM and multicast them to all other cores in
 the same row and column. As discussed earlier, to use ``noc_async_write_multicast`` or ``noc_semaphore_set_multicast``,
 the destination must be a rectangular grid of cores. One way to meet this requirement is to have cores in the leftmost column
-read tiles of A from DRAM and multicast them to all other cores in the same row, and have cores in the topmost row
-read tiles of B from DRAM and multicast them to all other cores in the same column.
+read tiles of ``A`` from DRAM and multicast them to all other cores in the same row, and have cores in the topmost row
+read tiles of ``B`` from DRAM and multicast them to all other cores in the same column.
 With this arrangement, all the receiving cores for every multicast operation form a rectangular grid.
 This is shown in Figure 5.
 
@@ -832,7 +848,7 @@ This is shown in Figure 5.
 
 As a reminder, each square in Figure 5 represents a Tensix core labeled with its ``(x, y)`` core coordinates.
 The thick arrows in the figure represent multicast operations.
-While this figure shows a 3x3 core grid, the same pattern and analysis below apply to a grid of any size with four or more cores.
+While this figure shows a ``3x3`` core grid, the same pattern and analysis below apply to a grid of any size with four or more cores.
 
 While computation remains the same on all cores, with each core computing its own output block ``C_block(x, y)``,
 the multicast approach involves four distinct roles that cores play, indicated by different colors in the figure.
@@ -862,12 +878,12 @@ slabs of tiles of ``A`` and ``B`` differently depending on their role:
   It also multicasts slabs of ``A`` it read from DRAM to all the other cores in row ``0``,
   and slabs of ``B`` to all the other cores in column ``0``.
 
-What this translates to is that matrix multiplication implementation with multicast will require
+What this translates to is that a matrix multiplication implementation with multicast will require
 four different types of reader kernels, corresponding to the four different roles identified above.
 
 Similar to Exercises 2 and 3, we observe that the compute and writer kernels do not need to change at all.
 The compute kernel uses CBs for its data, without any awareness of whether the data was received via multicast or DRAM read.
-The writer kernel reads tiles from the output of the compute kernel, and also doesn't require any changes.
+The writer kernel reads tiles from the output of the compute kernel, and also does not require any changes.
 
 
 Exercise 4: Multi Core Matrix Multiplication with Multicast
@@ -876,8 +892,8 @@ Exercise 4: Multi Core Matrix Multiplication with Multicast
 In this exercise, you will start from your **Exercise 2 solution from Lab 2** (multi core matrix multiplication with
 data reuse) and extend it to:
 
-* Use slab-level multicast for A slabs across rows,
-* Use slab-level multicast for B slabs down columns,
+* Use slab-level multicast for ``A`` slabs across rows,
+* Use slab-level multicast for ``B`` slabs down columns,
 * Retain the same blocked compute kernel and writer kernel,
 * Preserve correctness and then compare performance to the Lab 2 version.
   For this, you will use the same matrix sizes and core grid sizes as in Lab 2.
@@ -896,7 +912,7 @@ Perform the following steps to complete the exercise:
    As described in Figure 5 and the accompanying text, the core grid is divided into four
    roles based on each core's logical coordinates:
 
-   Define ``CoreRange`` objects in your host code containing **logical**
+   Define ``CoreRange`` objects in your host code that contain **logical**
    coordinates for four core groups corresponding to the four different roles.
    These ranges should be used when calling ``CreateKernel`` to assign the correct reader
    kernel to each core group.
@@ -915,10 +931,10 @@ Perform the following steps to complete the exercise:
 
 #. **Replace the single reader kernel with four role-specific reader kernels**
 
-   In Lab 2, all cores used the same reader kernel that read both A and B slabs from DRAM.
+   In Lab 2, all cores used the same reader kernel that read both ``A`` and ``B`` slabs from DRAM.
    Replace this with four separate reader kernels, one for each core role defined above. Each
    kernel implements a different combination of DRAM reads and multicast send/receive operations
-   for A and B slabs. Use ``CreateKernel`` to create each kernel on the corresponding
+   for ``A`` and ``B`` slabs. Use ``CreateKernel`` to create each kernel on the corresponding
    ``CoreRange`` defined for the four core groups.
 
    The compute and writer kernels remain identical to Lab 2 and should continue to be created
@@ -937,20 +953,22 @@ Perform the following steps to complete the exercise:
 
    **IMPORTANT**:
    When forming the multicast destination address using ``get_noc_multicast_addr``, make sure
-   to pass the device coordinates in the order such that "start" coordinates are always lower
-   values than the end coordinates. This is a requirement for the NOC1 ports used by all the
-   reader kernels when using the default NOC mapping, as specified earlier in the lab.
+   to pass device coordinates in an order such that the "start" coordinates are always
+   lower than the end coordinates. This is a requirement for the ``NOC0`` instance used by all
+   reader kernels when using the default NoC mapping, as specified earlier in the lab.
    This applies to all the ranges of device coordinates that you will need to form in this exercise.
-   While you technically don't know the values of the device coordinates, only logical coordinates,
+   While you technically do not know the values of the device coordinates, only logical coordinates,
    you can safely assume that relative ordering of values of device coordinates will correspond
    to the relative ordering of values of logical coordinates.
    For example, if the logical coordinates of the first and last receiver cores
-   in a range are ``(0, 0)`` and ``(2, 2)``, corresponding device coordinates will have some
+   in a range are ``(0, 0)`` and ``(2, 2)``, the corresponding device coordinates will have some
    values ``(x0, y0)`` and ``(x1, y1)``. You can safely assume that ``x0 < x1`` and ``y0 < y1``.
+   Thus, ``x0`` and ``y0`` should be passed as the start coordinates and ``x1`` and ``y1`` should
+   be passed as the end coordinates.
 
 #. **Implement the left-column core reader kernel**
 
-   This kernel behaves differently with respect to slabs of ``A`` and ``B`` matrices:
+   This kernel behaves differently with respect to slabs of the ``A`` and ``B`` matrices:
 
    * **Sends A slabs:** reads slabs of ``A`` from DRAM the same way as it did in Lab 2.
      However, it also needs to multicast slabs of ``A`` to all other cores in the
@@ -966,7 +984,7 @@ Perform the following steps to complete the exercise:
 
 #. **Implement the top-row core reader kernel**
 
-   This kernel mirrors the left-column kernel with A and B roles swapped. All requirements
+   This kernel mirrors the left-column kernel with ``A`` and ``B`` roles swapped. All requirements
    are otherwise identical.
 
 #. **Implement the interior core reader kernel**
@@ -1030,16 +1048,18 @@ Perform the following steps to complete the exercise:
    to diagnose the issue. Common causes include incorrect semaphore updates, mismatched
    semaphore IDs between sender and receiver kernels, and incorrect device coordinates in
    multicast addresses. When debugging, consider reducing matrix and core grid sizes to
-   simplify the problem while respecting divisibility constraints. Remember to reset the
-   device with ``tt-smi -r`` after any hang.
+   simplify the problem while respecting divisibility constraints.
+   Do not forget that you can debug host code using the usual debugger tools like ``gdb``.
+   Remember to reset the device with ``tt-smi -r`` after any hang.
 
    If the program runs but produces incorrect results, common causes include incorrect slab
    tile indexing, accidentally using ``A``-related addresses or semaphores for ``B``
    (or vice versa), and incorrect runtime argument ordering. Use DPRINT statements to print
    runtime argument values and CB contents to identify the source of the mismatch.
-   Remember that the output of DPRINT automatically indicates ``(x, y)`` logical coordinates of the core.
-   However, it doesn't automatically indicate the name of the kernel, so make sure to include a
-   brief kernel name if the text of the DPRINT statement doesn't uniquely identify the kernel.
+   Remember that the output of DPRINT automatically indicates ``(x, y)`` logical coordinates of the core,
+   but it does not automatically indicate the name of the kernel. Therefore, make sure to include a
+   brief kernel name if the text of the DPRINT statement does not uniquely identify the kernel,
+   while avoiding very long DPRINT messages, particularly in inner loops.
 
    If you are copy-pasting code segments between kernels, take extra care to update all variable
    names and parameters used in the copied code.
@@ -1050,6 +1070,8 @@ Perform the following steps to complete the exercise:
 
    Once correctness is verified, profile both your Lab 2 implementation and your new
    multicast-enabled implementation using the device profiler.
+   Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+   disabled when profiling.
    Compare firmware times for the same matrix sizes and core grid configurations.
    Plot firmware time or speedup versus the number of cores and compare against:
 
@@ -1062,15 +1084,15 @@ Perform the following steps to complete the exercise:
 
 
    **Important Note**
-   If you observe that multicast implementation performs worse than the data reuse implementation,
+   If you observe that the multicast implementation performs worse than the data reuse implementation,
    it is likely because you are multicasting one tile at a time, rather than a slab at a time.
    In Lab 2, you had a choice of pushing one tile at a time or a slab at a time into the CB.
    If you pushed one tile at a time and simply added multicast to that solution, you would
-   experience the handshake overhead explored in Exercise 3. To achieve performance
-   improvement, update your code to push a slab at a time into the CB and also multicast the slab
-   rather than individual tiles, similarly to how you did in Exercise 3.
+   experience the handshake overhead we explored in Exercise 3. To achieve performance
+   improvement, update your code to push a slab at a time into the CBs and also multicast the slab
+   rather than individual tiles, similarly to how you modified your code in Exercise 3.
 
-In this exercise you have applied slab-level multicast to multi core matrix multiplication,
+In this exercise, you have applied slab-level multicast to multi core matrix multiplication,
 combining the blocked compute structure from Lab 2 with the NoC multicast protocols practiced
 earlier in this lab. By reading each slab from DRAM only once per row or column and distributing
 it to all cores via multicast, you have reduced redundant DRAM traffic and demonstrated how
@@ -1087,11 +1109,11 @@ and all cores in the same column need the same data from the ``B`` matrix.
 Multicast is perfectly suited for this use case because it allows a sender core to write the same data
 to multiple destination cores efficiently, in a single NoC operation.
 
-This lab shows how higher-level algorithmic structure (blocked matmul with slabs) can be combined with
-low-level architectural features (NoC multicast and semaphores) to further reduce DRAM traffic and
-improve performance, without changing the core mathematical computation.
+This lab shows how higher-level algorithmic structure (blocked matrix multiplication with slabs) can
+be combined with low-level architectural features (NoC multicast and semaphores) to further reduce
+DRAM traffic and improve performance, without changing the core mathematical computation.
 
-Additional information about features used in this lab can be found in the following resources:
+Additional information about the features used in this lab can be found in the following resources:
 
 * NoC (Network on Chip) Readme: https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md
 * Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
@@ -1103,7 +1125,7 @@ Additional information about features used in this lab can be found in the follo
 Appendix A: Watcher Log File Format
 ***********************************
 
-The Watcher log file contains information about a Tensix core and its RISC-V processors.
+The Watcher log file contains information about each Tensix core and its RISC-V processors.
 Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
 RISC-V 0 through RISC-V 4 in the Tensix Core figure in Lab 1.
 BRISC is referred to as the primary processor, and the other RISC-V processors are referred
@@ -1117,11 +1139,12 @@ The format is best explained by analyzing an example line:
 
 The meaning of the fields is as follows:
 
-* The first field identifies the device number (in case of multi-device cards) and the logical and device (a.k.a. virtual) coordinates of the core.
+* The first field identifies the device number (some systems may have multiple devices),
+  and the logical and device (a.k.a. virtual) coordinates of the core.
 
 * State of each RISC-V processor is indicated either through a single-character code
-  (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code,
-  (e.g., ``NRW`` = "NOC Read Wait", ``NSW`` = "NOC Semaphore Wait").
+  (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code
+  (e.g., ``NRW`` = "NoC Read Wait", ``NSW`` = "NoC Semaphore Wait").
   These codes correspond to the last waypoint string encountered in that core's execution.
   If you're unsure what some of the codes mean, you can `grep` for the corresponding
   waypoint string in the source code. For example:
@@ -1137,11 +1160,11 @@ The meaning of the fields is as follows:
 * The ``rmsg`` field shows basic info about the state of the Tensix core with respect to code being dispatched to this core.
   The first field indicates whether the kernels were dispatched to this Tensix core
   by the host (H) or by another core on the device (D). The second field indicates the NoC ID used by the
-  primary processor (BRISC). Note that NCRISC uses the other NOC by convention.
+  primary processor (BRISC). Note that NCRISC uses the other NoC by convention.
   The third field indicates the state of the Tensix core with respect to code being dispatched to it:
   initialization (``I``), running/go (``G``) or done (``D``). This is followed by the ``|`` separator and then codes
   for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e., there
-  is a kernel running on it), while lowercase letters means it is disabled (i.e., there is no kernel running on it).
+  is a kernel running on it), while lowercase letters mean it is disabled (i.e., there is no kernel running on it).
   For example, ``BNT`` means that BRISC, NCRISC, and TRISCs are all enabled, whereas ``Bnt`` means that only BRISC is enabled.
 * The ``smsg`` field shows the run state of the subordinate processors, using the same ``I/G/D`` codes mentioned above.
 * The ``k_ids`` field shows the ID of the kernel (by ID) loaded on each of the five processors on this core.
@@ -1149,31 +1172,31 @@ The meaning of the fields is as follows:
 
 Based on this, we can summarize the above line in the following table:
 
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| Field                    | Value                      | Meaning                                                      |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `core(x= 1,y= 0)`        | Logical coordinates        | This is logical core (1,0)                                   |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `virtual(x= 2,y= 2)`     | Device/Virtual coordinates | Used for NOC addressing                                      |
-+--------------------------+-------------------------+--------------------------------------------------------------+
-| `NSW`                    | BRISC status               | **N**\ OC **S**\ emaphore **W**\ ait                         |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `CWFW`                   | NCRISC status              | **C**\ B **W**\ ait **F**\ or **W**\ rite                    |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `K`                      | TRISC0 status              | In **K**\ ernel                                              |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `MWDD`                   | TRISC1 status              | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency            |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `K`                      | TRISC2 status              | In **K**\ ernel                                              |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `rmsg:D0G\|BNT`          | Run message                | Device dispatch, NOC0, Go state; BRISC/NCRISC/TRISCs enabled |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `h_id:  0`               | Host assigned ID           | Internal ID used for profiling                               |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `smsg:GGGG`              | Subordinate message        | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)   |
-+--------------------------+----------------------------+--------------------------------------------------------------+
-| `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs                 | BRISC=5, NCRISC=6, TRISC0/1/2=7                              |
-+--------------------------+----------------------------+--------------------------------------------------------------+
++----------------------------+----------------------------+------------------------------------------------------------------+
+| Field                      | Value                      | Meaning                                                          |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``core(x= 1,y= 0)``        | Logical coordinates        | This is logical core ``(1,0)``                                   |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``virtual(x= 2,y= 2)``     | Device/Virtual coordinates | Used for NoC addressing                                          |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``NSW``                    | BRISC status               | **N**\ OC **S**\ emaphore **W**\ ait                             |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``CWFW``                   | NCRISC status              | **C**\ B **W**\ ait **F**\ or **W**\ rite                        |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``K``                      | TRISC0 status              | In **K**\ ernel                                                  |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``MWDD``                   | TRISC1 status              | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency                |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``K``                      | TRISC2 status              | In **K**\ ernel                                                  |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``rmsg:D0G\|BNT``          | Run message                | Device dispatch, ``NOC0``, Go state; BRISC/NCRISC/TRISCs enabled |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``h_id:  0``               | Host assigned ID           | Internal ID used for profiling                                   |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``smsg:GGGG``              | Subordinate message        | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)       |
++----------------------------+----------------------------+------------------------------------------------------------------+
+| ``k_ids: 5\|6\|7\|7\|7``   | Kernel IDs                 | BRISC=5, NCRISC=6, TRISC0/1/2=7                                  |
++----------------------------+----------------------------+------------------------------------------------------------------+
 
 Kernels are identified by their IDs (``k_ids``). The mapping from kernel ID to source file name for a given section
 is listed at the end of that section. For example:
@@ -1189,4 +1212,7 @@ is listed at the end of that section. For example:
    k_id[  6]: ttnn/examples/lab_multicast/kernels/dataflow/write_tiles.cpp
    k_id[  7]: ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp
 
-Idle cores, where the program hasn't created any kernels, can easily be identified by their ``k_ids`` fields all set to 0.
+Idle cores, where the program has not created any kernels, can easily be identified by their ``k_ids`` fields all set to 0.
+
+Together with waypoints, asserts, and DPRINTs, this log format turns Watcher into a practical tool for quickly pinpointing
+the cores, kernels, and code locations involved in hangs and other hard-to-debug issues.
