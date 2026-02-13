@@ -108,6 +108,7 @@ tt::tt_metal::Program create_send_async_rate_program(
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_buffer);
     auto compile_time_args = input_accessor_args.get_compile_time_args();
 
+    // num_iterations is NOT a compile-time arg — it is a runtime arg so warmup shares the binary
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,             // data_cb_id
         packet_header_cb_index,    // fabric_packet_header_cb_id
@@ -117,7 +118,6 @@ tt::tt_metal::Program create_send_async_rate_program(
         num_whole_packets_link_0,  // num_whole_packets_link_0
         num_whole_packets_link_1,  // num_whole_packets_link_1
         input_page_size,           // input_page_size
-        num_iterations,            // num_iterations
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
@@ -142,6 +142,9 @@ tt::tt_metal::Program create_send_async_rate_program(
             sender_core_coord,
             writer_rt_args);
     }
+
+    // Append num_iterations as the last runtime arg
+    writer_rt_args.push_back(num_iterations);
 
     tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord, writer_rt_args);
 
@@ -229,6 +232,7 @@ tt::tt_metal::Program create_socket_forward_rate_program(
         send_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;
     uint32_t notify_sender_every_n_iterations = socket_fifo_size_in_pages / 2;
 
+    // num_iterations is NOT a compile-time arg — it is a runtime arg so warmup shares the binary
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
@@ -236,7 +240,6 @@ tt::tt_metal::Program create_socket_forward_rate_program(
         fabric_max_payload_size,
         num_whole_packets_link_0,
         num_whole_packets_link_1,
-        num_iterations,
         notify_sender_every_n_iterations,
     };
 
@@ -260,6 +263,9 @@ tt::tt_metal::Program create_socket_forward_rate_program(
         tt::tt_fabric::append_fabric_connection_rt_args(
             my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[i], program, my_core_coord, rt_args);
     }
+
+    // Append num_iterations as the last runtime arg
+    rt_args.push_back(num_iterations);
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);
 
@@ -319,10 +325,10 @@ tt::tt_metal::Program create_recv_async_rate_program(
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
+    // num_iterations is NOT a compile-time arg — it is a runtime arg so warmup shares the binary
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
-        num_iterations,
         notify_sender_every_n_iterations,
         static_cast<uint32_t>(enable_correctness_check),
     };
@@ -339,6 +345,9 @@ tt::tt_metal::Program create_recv_async_rate_program(
         tt::tt_fabric::append_fabric_connection_rt_args(
             my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[i], program, my_core_coord, rt_args);
     }
+
+    // Append num_iterations as the last runtime arg
+    rt_args.push_back(num_iterations);
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);
 

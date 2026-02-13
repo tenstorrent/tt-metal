@@ -55,6 +55,57 @@ public:
     }
 };
 
+// Fixture for Superpod 2-pod pipeline tests (32 ranks; 32 stages).
+// Requires 32 processes and mesh graph with 32 mesh IDs.
+// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the superpod 2-pod mesh graph when running.
+class MeshDeviceSuperpod2PodPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping: Superpod 2-pod pipeline requires 32 ranks and matching mesh graph.";
+        }
+        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
+            return false;
+        }
+        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 32u;
+    }
+};
+
+// Fixture for Superpod 4-pod pipeline tests (64 ranks; 64 stages).
+// Requires 64 processes and mesh graph with 64 mesh IDs.
+class MeshDeviceSuperpod4PodPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping: Superpod 4-pod pipeline requires 64 ranks and matching mesh graph.";
+        }
+        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
+            return false;
+        }
+        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 64u;
+    }
+};
+
 // Pipeline config structs.
 
 // User builds a pipeline in physical space (Host Ranks, Tray IDs, ASIC Locations)
@@ -134,7 +185,9 @@ enum class PipelineType {
     SINGLE_GALAXY,  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
     DUAL_GALAXY,
     QUAD_GALAXY,
-    SUPERPOD_4
+    SUPERPOD_4,
+    SUPERPOD_2_POD,
+    SUPERPOD_4_POD
 };
 
 // Get physical pipeline stage configs for the specified pipeline type.
@@ -240,6 +293,275 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
                  .exit_node_tray_id = 1,
                  .entry_node_asic_location = 5,
                  .exit_node_asic_location = 1},
+            };
+        // SUPERPOD_4_POD: 65 stages (16+16+16+16+1). Order: Pod1 (trays 1,2) -> Pod4 (trays 1,2) -> Pod3 (trays 1,2) ->
+        // Pod2 (trays 3,4) -> wrap-around to Pod1.
+        case PipelineType::SUPERPOD_4_POD:
+            return {
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                // jump to pod 4
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                // jump to pod 3
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 4},
+                // jump to pod 2
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 5},
+                // wrap-around
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 2},
             };
         default: return {};
     }
@@ -556,6 +878,17 @@ TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4) {
 
 TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4WithCorrectnessCheck) {
     run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4, /*enable_correctness_check=*/true);
+}
+
+// SUPERPOD_4_POD: 65 stages (16+16+16+16+1), 64 ranks; loopback stage on rank 0.
+TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4Pod) {
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4_POD, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4PodWithCorrectnessCheck) {
+    run_single_galaxy_pipeline(mesh_device_, PipelineType::SUPERPOD_4_POD, /*enable_correctness_check=*/true);
+}
+
 // ─── Rate (throughput) pipeline test ─────────────────────────────────────────
 // Linear pipeline (no loopback): data flows one-way through pipeline stages.
 // Measures sustained pipeline throughput by pushing data for many iterations.
@@ -566,11 +899,178 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config_rate(Pipel
     switch (type) {
         case PipelineType::SINGLE_GALAXY:
             return {
-                {.tray_id = 1, .entry_node_asic_location = 2, .exit_node_asic_location = 6},
-                {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
-                {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
-                {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 3,
+                 .exit_node_tray_id = 3,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 4,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 4},
             };
+        case PipelineType::SUPERPOD_4: {
+            // Rate: same as full pipeline but without wrap-around stage (64 stages, linear).
+            auto config = get_physical_pipeline_config(PipelineType::SUPERPOD_4);
+            return config;
+        }
+        case PipelineType::SUPERPOD_2_POD:
+            return {
+                // First Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Second Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Third Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Fourth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Fifth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Sixth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Seventh Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Eighth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+            };
+        case PipelineType::SUPERPOD_4_POD: {
+            // Rate: same as full pipeline but without the wrap-around stage (64 stages, linear).
+            auto config = get_physical_pipeline_config(PipelineType::SUPERPOD_4_POD);
+            config.pop_back();
+            config.push_back(
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6});
+            return config;
+        }
         default: return {};
     }
 }
@@ -635,10 +1135,6 @@ void run_single_galaxy_rate_pipeline(
     auto my_entry = pipeline_stages[my_rank].entry_node_coord;
     auto my_exit = pipeline_stages[my_rank].exit_node_coord;
 
-    // Host-side timing variable — each rank records its own start/end time
-    int64_t start_time = 0;
-    int64_t end_time = 0;
-
     if (is_pipeline_start) {
         // Sender: start_coord -> my_exit (local), then my_exit -> downstream_entry (cross-mesh)
         auto start_coord = my_entry;
@@ -670,10 +1166,19 @@ void run_single_galaxy_rate_pipeline(
         distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
-        // Host-side timing: record start time just before launching kernels
-        start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                         std::chrono::high_resolution_clock::now().time_since_epoch())
-                         .count();
+        // Warmup: run a small number of iterations to trigger kernel compilation and caching.
+        // num_iterations is a runtime arg so the same compiled kernel is reused for the timed run.
+        constexpr uint32_t WARMUP_ITERATIONS = 8;
+        tt::tt_metal::send_async_rate(
+            mesh_device.get(), input_buffer, tt::DataFormat::UInt32, intermed_send, WARMUP_ITERATIONS);
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, WARMUP_ITERATIONS);
+        barrier();
+        log_info(tt::LogTest, "Warmup complete ({} iterations)", WARMUP_ITERATIONS);
+
+        // Host-side timing: record start time after warmup, just before launching timed kernels
+        auto start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::high_resolution_clock::now().time_since_epoch())
+                              .count();
 
         // Launch rate-mode kernels:
         // - send_async_rate on start_coord: sends data to local intermed
@@ -681,6 +1186,24 @@ void run_single_galaxy_rate_pipeline(
         tt::tt_metal::send_async_rate(
             mesh_device.get(), input_buffer, tt::DataFormat::UInt32, intermed_send, num_iterations);
         tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, num_iterations);
+        barrier();
+
+        auto end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::high_resolution_clock::now().time_since_epoch())
+                            .count();
+
+        double elapsed_us = static_cast<double>(end_time - start_time);
+        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
+        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
+
+        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
+        log_info(
+            tt::LogTest,
+            "Sender host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
+            elapsed_us,
+            total_bytes / (1024.0 * 1024.0),
+            rate_gbps,
+            rate_gbps * 1e3);
     } else if (is_pipeline_end) {
         // Receiver: upstream_exit -> my_entry (cross-mesh), then my_entry -> end_coord (local)
         auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
@@ -697,10 +1220,17 @@ void run_single_galaxy_rate_pipeline(
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_entry, end_coord);
 
-        // Host-side timing: record start time just before launching kernels
-        start_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                         std::chrono::high_resolution_clock::now().time_since_epoch())
-                         .count();
+        // Warmup
+        constexpr uint32_t WARMUP_ITERATIONS = 8;
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, WARMUP_ITERATIONS);
+        tt::tt_metal::recv_async_rate(mesh_device.get(), intermed_recv, XFER_SIZE, WARMUP_ITERATIONS, false);
+        barrier();
+        log_info(tt::LogTest, "Warmup complete ({} iterations)", WARMUP_ITERATIONS);
+
+        // Host-side timing: record start time after warmup
+        auto start_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::high_resolution_clock::now().time_since_epoch())
+                              .count();
 
         // Launch rate-mode kernels:
         // - socket_forward_rate on my_entry: forwards from cross-mesh recv to local intermed
@@ -708,6 +1238,24 @@ void run_single_galaxy_rate_pipeline(
         tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, num_iterations);
         tt::tt_metal::recv_async_rate(
             mesh_device.get(), intermed_recv, XFER_SIZE, num_iterations, enable_correctness_check);
+        barrier();
+
+        auto end_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::high_resolution_clock::now().time_since_epoch())
+                            .count();
+
+        double elapsed_us = static_cast<double>(end_time - start_time);
+        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
+        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
+
+        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
+        log_info(
+            tt::LogTest,
+            "Receiver host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
+            elapsed_us,
+            total_bytes / (1024.0 * 1024.0),
+            rate_gbps,
+            rate_gbps * 1e3);
     } else {
         // Intermediate: upstream_exit -> my_entry (cross-mesh), local forward, my_exit -> downstream_entry (cross-mesh)
         auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
@@ -734,47 +1282,16 @@ void run_single_galaxy_rate_pipeline(
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_entry, my_exit);
 
+        // Warmup
+        constexpr uint32_t WARMUP_ITERATIONS = 8;
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, WARMUP_ITERATIONS);
+        tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, WARMUP_ITERATIONS);
+        barrier();
+
         // Launch rate-mode kernels: forward from upstream to downstream through local intermed
         tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, num_iterations);
         tt::tt_metal::socket_forward_rate(mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, num_iterations);
-    }
-    barrier();
-
-    // Host-side timing: record end time after barrier (all ranks synchronized)
-    end_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                   std::chrono::high_resolution_clock::now().time_since_epoch())
-                   .count();
-
-    // Report throughput from sender (rank 0)
-    if (is_pipeline_start) {
-        double elapsed_us = static_cast<double>(end_time - start_time);
-        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
-        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
-
-        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
-        log_info(
-            tt::LogTest,
-            "Sender host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
-            elapsed_us,
-            total_bytes / (1024.0 * 1024.0),
-            rate_gbps,
-            rate_gbps * 1e3);
-    }
-
-    // Report throughput from receiver (last rank)
-    if (is_pipeline_end) {
-        double elapsed_us = static_cast<double>(end_time - start_time);
-        double total_bytes = static_cast<double>(num_iterations) * XFER_SIZE;
-        double rate_gbps = (total_bytes * 8.0) / (elapsed_us * 1e3);
-
-        log_info(tt::LogTest, "Rate pipeline: {} iterations, {} bytes/iter", num_iterations, XFER_SIZE);
-        log_info(
-            tt::LogTest,
-            "Receiver host-side elapsed: {:.2f} us, total bytes: {:.2f} MB, {:.4f} Gbps ({:.2f} Mbps)",
-            elapsed_us,
-            total_bytes / (1024.0 * 1024.0),
-            rate_gbps,
-            rate_gbps * 1e3);
+        barrier();
     }
 }
 
@@ -790,4 +1307,41 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, RatePipelineSingleGalaxyWithCorrec
         mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
+// SUPERPOD_4 rate tests: 16 stages (4 pods × 4 stages), 16 ranks; linear pipeline (no loopback).
+TEST_F(MeshDeviceSuperpod4PipelineFixture, RatePipelineSuperpod4) {
+    constexpr uint32_t NUM_ITERATIONS = 100000;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSuperpod4PipelineFixture, RatePipelineSuperpod4WithCorrectnessCheck) {
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/true);
+}
+
+TEST_F(MeshDeviceSuperpod2PodPipelineFixture, RatePipelineSuperpod2Pod) {
+    constexpr uint32_t NUM_ITERATIONS = 100000;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_2_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSuperpod2PodPipelineFixture, RatePipelineSuperpod2PodWithCorrectnessCheck) {
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_2_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
+}
+
+// SUPERPOD_4_POD rate tests: 64 stages (full pipeline minus wrap-around), 64 ranks.
+TEST_F(MeshDeviceSuperpod4PodPipelineFixture, RatePipelineSuperpod4Pod) {
+    constexpr uint32_t NUM_ITERATIONS = 100000;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSuperpod4PodPipelineFixture, RatePipelineSuperpod4PodWithCorrectnessCheck) {
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    run_single_galaxy_rate_pipeline(
+        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
+}
 }  // namespace tt::tt_metal

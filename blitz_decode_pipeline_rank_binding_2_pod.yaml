@@ -1,0 +1,162 @@
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,3,12,14,15,20,25,26
+- rank: 1
+  mesh_id: 1
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 4,6,7,10,13,16,27,29
+- rank: 2
+  mesh_id: 2
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 5,9,17,18,19,22,30,31
+- rank: 3
+  mesh_id: 3
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,2,8,11,21,23,24,28
+- rank: 4
+  mesh_id: 4
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,2,4,7,13,18,19,28
+- rank: 5
+  mesh_id: 5
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 5,6,14,22,23,24,26,31
+- rank: 6
+  mesh_id: 6
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 11,15,16,20,21,25,29,30
+- rank: 7
+  mesh_id: 7
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,3,8,9,10,12,17,27
+- rank: 8
+  mesh_id: 8
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,2,7,8,16,24,25,28
+- rank: 9
+  mesh_id: 9
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 4,5,6,9,17,19,22,29
+- rank: 10
+  mesh_id: 10
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 11,12,14,20,21,26,30,31
+- rank: 11
+  mesh_id: 11
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,3,10,13,15,18,23,27
+- rank: 12
+  mesh_id: 12
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,2,10,13,16,27,29,30
+- rank: 13
+  mesh_id: 13
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 6,7,8,12,14,21,23,28
+- rank: 14
+  mesh_id: 14
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 4,5,9,15,22,24,26,31
+- rank: 15
+  mesh_id: 15
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,3,11,17,18,19,20,25
+- rank: 16
+  mesh_id: 16
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,2,7,8,11,14,16,20
+- rank: 17
+  mesh_id: 17
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 5,12,19,23,26,28,30,31
+- rank: 18
+  mesh_id: 18
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,13,15,17,18,25,27,29
+- rank: 19
+  mesh_id: 19
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,3,4,6,9,21,22,24
+- rank: 20
+  mesh_id: 20
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,3,5,10,23,25,28,29
+- rank: 21
+  mesh_id: 21
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 4,6,8,9,13,16,17,26
+- rank: 22
+  mesh_id: 22
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 11,12,14,15,18,20,27,31
+- rank: 23
+  mesh_id: 23
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,2,7,19,21,22,24,30
+- rank: 24
+  mesh_id: 24
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,11,13,14,15,27,28
+- rank: 25
+  mesh_id: 25
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 4,5,6,7,8,16,17,23
+- rank: 26
+  mesh_id: 26
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 9,10,12,18,19,26,29,31
+- rank: 27
+  mesh_id: 27
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,3,20,21,22,24,25,30
+- rank: 28
+  mesh_id: 28
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,3,4,14,23,24,25,29
+- rank: 29
+  mesh_id: 29
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 10,12,16,17,18,19,20,27
+- rank: 30
+  mesh_id: 30
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 6,7,11,21,22,28,30,31
+- rank: 31
+  mesh_id: 31
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,2,5,8,9,13,15,26
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_2_pod.textproto

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Rate-mode sender kernel for pipeline throughput benchmarking.
-// Sends data downstream for NUM_ITERATIONS without waiting for loopback acks.
-// Timing is performed on the host side (std::chrono), not in this kernel.
+// Sends data downstream for num_iterations without waiting for loopback acks.
+// num_iterations is a runtime arg so that warmup and timed runs share the same compiled binary.
 
 #include <cstddef>
 #include <cstdint>
@@ -23,9 +23,8 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(5);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(6);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_iterations = get_compile_time_arg_val(8);
 
-constexpr uint32_t input_args_cta_idx = 9;
+constexpr uint32_t input_args_cta_idx = 8;
 constexpr uint32_t input_args_crta_idx = 0;
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
@@ -60,6 +59,9 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection_2 =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    // num_iterations is a runtime arg (after fabric connection args) so compilation is shared
+    uint32_t num_iterations = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Two packet headers for dual-link forwarding
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =

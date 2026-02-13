@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Rate-mode forwarding kernel for pipeline throughput benchmarking.
-// Forwards data from recv_socket to send_socket for NUM_ITERATIONS.
+// Forwards data from recv_socket to send_socket for num_iterations.
 // No initial handshake — pipeline synchronization is handled purely by socket flow control.
+// num_iterations is a runtime arg so that warmup and timed runs share the same compiled binary.
 
 #include <cstddef>
 #include <cstdint>
@@ -21,9 +22,8 @@ constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(2);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(5);
-constexpr uint32_t num_iterations = get_compile_time_arg_val(6);
 // Send cumulative ack upstream every N iterations (e.g. fifo_size_in_pages/2 for half-buffer acks).
-constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(7);
+constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(6);
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -55,6 +55,9 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2 =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    // num_iterations is a runtime arg (after fabric connection args) so compilation is shared
+    uint32_t num_iterations = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Three packet headers: one for upstream acks, two for dual-link downstream forwarding
     volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addr =

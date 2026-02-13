@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Rate-mode receiver kernel for pipeline throughput benchmarking.
-// Drains data from recv_socket for NUM_ITERATIONS, acking upstream periodically.
-// Timing is performed on the host side (std::chrono), not in this kernel.
+// Drains data from recv_socket for num_iterations, acking upstream periodically.
+// num_iterations is a runtime arg so that warmup and timed runs share the same compiled binary.
 // When enable_correctness_check is set, validates that each received page contains the
 // expected pattern (sequential uint32_t values: 0, 1, 2, ..., page_size/4 - 1).
 
@@ -19,10 +19,9 @@
 ///////////////////////////////////////////////////
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t socket_block_size = get_compile_time_arg_val(1);
-constexpr uint32_t num_iterations = get_compile_time_arg_val(2);
 // Send cumulative ack upstream every N iterations (e.g. fifo_size_in_pages/2 for half-buffer acks).
-constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(3);
-constexpr uint32_t enable_correctness_check = get_compile_time_arg_val(4);
+constexpr uint32_t notify_sender_every_n_iterations = get_compile_time_arg_val(2);
+constexpr uint32_t enable_correctness_check = get_compile_time_arg_val(3);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -33,6 +32,9 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    // num_iterations is a runtime arg (after fabric connection args) so compilation is shared
+    uint32_t num_iterations = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Single packet header for upstream acks
     volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addr =

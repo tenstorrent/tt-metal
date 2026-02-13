@@ -254,7 +254,20 @@ void run_single_host_rate_pipeline(
     EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
-    // Host-side timing: record start time just before launching kernels
+    // Warmup: run the full pipeline with a small iteration count to trigger kernel compilation
+    // and cache the compiled binaries. num_iterations is a runtime arg so the same compiled
+    // kernel is reused for both warmup and the timed run.
+    constexpr uint32_t WARMUP_ITERATIONS = 8;
+    tt::tt_metal::send_async_rate(
+        mesh_device.get(), input_buffer, tt::DataFormat::UInt32, send_socket_0, WARMUP_ITERATIONS);
+    tt::tt_metal::socket_forward_rate(
+        mesh_device.get(), recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t), WARMUP_ITERATIONS);
+    tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, WARMUP_ITERATIONS);
+    tt::tt_metal::recv_async_rate(mesh_device.get(), recv_socket_end, XFER_SIZE, WARMUP_ITERATIONS, false);
+    Synchronize(mesh_device.get(), std::nullopt);
+    log_info(tt::LogTest, "Warmup complete ({} iterations)", WARMUP_ITERATIONS);
+
+    // Host-side timing: record start time just before launching timed kernels
     auto start_time = std::chrono::duration_cast<std::chrono::microseconds>(
                           std::chrono::high_resolution_clock::now().time_since_epoch())
                           .count();
