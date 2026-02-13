@@ -17,7 +17,7 @@
  * (they affect different threads). Commit releases the lock for math so pack can start; wait
  * ensures math is done. Prefer commit first, then wait.
  */
-inline void pack_and_push(uint32_t reg, uint32_t cb) {
+inline void pack_and_push(const uint32_t reg, const uint32_t cb) {
     constexpr uint32_t onetile = 1U;
     cb_reserve_back(cb, onetile);
     tile_regs_wait();
@@ -33,7 +33,7 @@ inline void pack_and_push(uint32_t reg, uint32_t cb) {
  * (they affect different threads). Commit releases the lock for math so pack can start; wait
  * ensures math is done. Prefer commit first, then wait.
  */
-inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
+inline void pack_and_push_block(const uint32_t cb_output, const uint32_t block_size) {
     cb_reserve_back(cb_output, block_size);
     tile_regs_wait();
     pack_reconfig_data_format(cb_output);
@@ -54,7 +54,8 @@ inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
  * @param num_tiles Number of tiles to pack (consecutive registers 0..num_tiles-1)
  * @param dst_start_index First output tile index in the reserved CB region
  */
-inline void pack_l1_acc_block(uint32_t cb_idx, bool first_block, uint32_t num_tiles, uint32_t dst_start_index) {
+inline void pack_l1_acc_block(
+    const uint32_t cb_idx, const bool first_block, const uint32_t num_tiles, const uint32_t dst_start_index) {
     pack_reconfig_data_format(cb_idx);
     pack_reconfig_l1_acc(first_block ? 0U : 1U);
     for (uint32_t k = 0U; k < num_tiles; ++k) {
@@ -70,7 +71,8 @@ inline void zero_dst_reg(const uint32_t i) {
     fill_tile(i, zero);
 }
 
-inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
+inline void pack_and_push_two_blocks(
+    const uint32_t cb_output_1, const uint32_t cb_output_2, const uint32_t block_size) {
     // NOTE:
     // Packs two blocks from consecutive registers to two output circular buffers.
     // Should be called after tile_regs_commit() for proper synchronization.
@@ -78,11 +80,11 @@ inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2,
     cb_reserve_back(cb_output_2, block_size);
     tile_regs_wait();
     pack_reconfig_data_format(cb_output_1);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+    for (uint32_t block_idx = 0U; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_1);
     }
     pack_reconfig_data_format(cb_output_2);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+    for (uint32_t block_idx = 0U; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_2);
     }
     tile_regs_release();
