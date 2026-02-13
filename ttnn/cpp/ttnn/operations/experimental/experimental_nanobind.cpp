@@ -56,6 +56,7 @@
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -131,6 +132,8 @@ void py_module(nb::module_& mod) {
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);
+
+    deepseek::mla::detail::bind_matmul_wo(mod);
 }
 
 }  // namespace ttnn::operations::experimental
