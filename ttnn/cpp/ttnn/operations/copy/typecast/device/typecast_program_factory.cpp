@@ -244,6 +244,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     uint32_t nblocks_per_core = nblocks / ncores;
 
     std::vector<CoreCoord> cores_with_rtargs;
+    cores_with_rtargs.reserve(cores.size());
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = ntiles_per_block * 2;
