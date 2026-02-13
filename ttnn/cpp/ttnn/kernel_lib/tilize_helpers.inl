@@ -10,6 +10,8 @@
  * This file contains the implementation details for the tilize() function.
  * It should only be included by tilize_helpers.hpp.
  */
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+
 #if __has_include("chlkc_pack_tile_dims.h")
 #include "chlkc_pack_tile_dims.h"
 #define PACK_TILE_DIMS_AVAILABLE
@@ -54,7 +56,7 @@ template <
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
-    tilize_config::NonTileAlignedCBWaitConfig config) {
+    uint32_t total_input_pages) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -68,7 +70,7 @@ ALWI void tilize(
     ASSERT(block_width_tiles > 0);
     ASSERT(num_blocks > 0);
 
-    // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
+    // Determine if we're using fast tilize mode (compile-time detection)
     constexpr bool use_fast = can_use_fast_tilize<output_cb>();
 
     // Determine if we're doing data type reconfiguration
@@ -80,24 +82,22 @@ ALWI void tilize(
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
         (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
 
-    // Validate NonTileAlignedCBWaitConfig parameters
-    if (config.mode != tilize_config::NonTileAlignedMode::Disabled) {
-        ASSERT(config.value > 0);
-    }
+    // Capture once — compiler propagates constexpr 0 and eliminates dead branches at symmetric call sites
+    const bool asymmetric_cb_pages = (total_input_pages > 0);
 
-    // TODO don't wait more than buffer size
-
-    // Validate input CB page size for standard tile-aligned mode
-    if (config.mode == tilize_config::NonTileAlignedMode::Disabled) {
-        UNPACK({
-            uint32_t operand_id = get_operand_id(input_cb);
-            uint32_t input_page_size_units = get_local_cb_interface(operand_id).fifo_page_size;
-            // fifo_page_size is in 16-byte units, convert to actual bytes
-            uint32_t input_page_size = input_page_size_units << 4;
-            // uint8, uint16,bfp16, uint32,fp32 -> don't hardcode values
-            ASSERT(input_page_size == 1024 || input_page_size == 2048 || input_page_size == 4096);
-        })
+    // Sanity checks: verify CB page sizes match the usage pattern
+    const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
+    const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
+    if (asymmetric_cb_pages) {
+        // Asymmetric: input and output CBs must have different page sizes
+        ASSERT(in_page_size != out_page_size);
+    } else {
+        // Symmetric: page sizes must match and input must be tile-aligned
+        ASSERT(in_page_size == out_page_size);
+        UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
     }
+    // Output CB must always have tile-aligned page size
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
 
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {
@@ -121,93 +121,48 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
 
         if constexpr (use_fast) {
-            // Fast tilize mode
             fast_tilize_init(input_cb, block_width_tiles, output_cb);
         } else {
-            // Standard tilize mode
             tilize_init(input_cb, block_width_tiles, output_cb);
         }
     }
 
-    // Main processing loop - handles three patterns based on NonTileAlignedCBWaitConfig:
-    // 1. TotalBatched: Variable row alignment (Conv3D pattern) - chunks of 32
-    // 2. PerIteration: Asymmetric input/output (HWC/SSM pattern) - custom per-iteration count
-    // 3. Disabled: Standard tile-aligned (default) - symmetric block_width_tiles
+    // Validate CB capacity: output CB must hold at least block_width_tiles
+    ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles);
 
-    if (config.mode == tilize_config::NonTileAlignedMode::TotalBatched) {
-        // Variable row alignment pattern (Conv3D)
-        // Handles non-tile-aligned input where the last iteration may have fewer rows
-        // Processes in chunks of TILE_HEIGHT (32) rows
-        uint32_t rows_left = config.value;  // total_pages
-        constexpr uint32_t TILE_HEIGHT = 32;  // Standard tile height for all architectures
+    // Upfront wait (when requested)
+    if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
+        uint32_t total_wait = asymmetric_cb_pages ? total_input_pages : (block_width_tiles * num_blocks);
+        cb_wait_front(input_cb, total_wait);
+    }
 
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            // Calculate current input rows (min of rows_left or TILE_HEIGHT)
-            uint32_t current_input = (rows_left < TILE_HEIGHT) ? rows_left : TILE_HEIGHT;
-
-            // Handle waiting based on WaitMode
-            if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
-                cb_wait_front(input_cb, current_input);
-            } else if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
-                // WaitUpfront: wait for all data at the beginning
-                if (block == 0) {
-                    cb_wait_front(input_cb, config.value);  // wait for all total_pages
-                }
-            }
-            // NoWait: skip cb_wait_front entirely
-
-            cb_reserve_back(output_cb, block_width_tiles);
-
-            // Compile-time selection of tilize function
-            if constexpr (use_fast) {
-                fast_tilize_block(input_cb, block_width_tiles, output_cb);
-            } else {
-                tilize_block(input_cb, block_width_tiles, output_cb);
-            }
-
-            cb_push_back(output_cb, block_width_tiles);
-            cb_pop_front(input_cb, current_input);
-
-            rows_left -= current_input;
+    // Main loop
+    uint32_t pages_left = total_input_pages;  // 0 when symmetric — optimized away by compiler
+    uint32_t input_pages = block_width_tiles;
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        // Determine input pages for this block
+        if (asymmetric_cb_pages) {
+            // Asymmetric: min(32, pages_left)
+            input_pages = (pages_left < 32) ? pages_left : 32;
         }
 
-    } else {
-        // Standard or asymmetric pattern
-        // Determine input wait/pop count
-        uint32_t input_amount;
-        if (config.mode == tilize_config::NonTileAlignedMode::PerIteration) {
-            // Asymmetric: custom pages per iteration
-            input_amount = config.value;  // pages_per_iteration
+        if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
+            cb_wait_front(input_cb, input_pages);
+        }
+
+        cb_reserve_back(output_cb, block_width_tiles);
+
+        if constexpr (use_fast) {
+            fast_tilize_block(input_cb, block_width_tiles, output_cb);
         } else {
-            // Standard tile-aligned: use block_width_tiles
-            input_amount = block_width_tiles;
+            tilize_block(input_cb, block_width_tiles, output_cb);
         }
 
-        // Handle upfront waiting if requested
-        if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
-            uint32_t total_tiles = block_width_tiles * num_blocks;
-            cb_wait_front(input_cb, total_tiles);
-        }
+        cb_push_back(output_cb, block_width_tiles);
+        cb_pop_front(input_cb, input_pages);
 
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            // Handle per-iteration waiting
-            if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
-                cb_wait_front(input_cb, input_amount);
-            }
-            // WaitUpfront: already waited above
-            // NoWait: skip cb_wait_front
-
-            cb_reserve_back(output_cb, block_width_tiles);
-
-            // Compile-time selection of tilize function
-            if constexpr (use_fast) {
-                fast_tilize_block(input_cb, block_width_tiles, output_cb);
-            } else {
-                tilize_block(input_cb, block_width_tiles, output_cb);
-            }
-
-            cb_push_back(output_cb, block_width_tiles);
-            cb_pop_front(input_cb, input_amount);
+        if (asymmetric_cb_pages) {
+            pages_left -= input_pages;
         }
     }
 
@@ -217,10 +172,8 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
-            // Fast tilize mode
             fast_tilize_uninit(input_cb, output_cb);
         } else {
-            // Standard tilize mode
             tilize_uninit(input_cb, output_cb);
         }
     }

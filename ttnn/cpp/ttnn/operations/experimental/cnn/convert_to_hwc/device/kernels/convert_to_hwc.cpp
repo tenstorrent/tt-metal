@@ -45,10 +45,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in_batch, cb_tiled_in);
 
     for (uint32_t block_idx = 0; block_idx < total_num_blocks; block_idx++) {
-        compute_kernel_lib::tilize<cb_in_batch, cb_tiled_in>(
-            total_tiles_per_block,
-            1,
-            compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::per_iteration(total_sticks_per_block));
+        compute_kernel_lib::tilize<cb_in_batch, cb_tiled_in>(total_tiles_per_block, 1, total_sticks_per_block);
 
         pack_untilize_init(cb_in_batch, cb_transpose_in0);
         transpose_wh_init(cb_in_batch, cb_transpose_in0);

@@ -11,6 +11,8 @@
  * It should only be included by untilize_helpers.hpp.
  */
 
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -85,6 +87,10 @@ ALWI void untilize(uint32_t num_blocks) {
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
 
+    // Validate CB page sizes match expected tile sizes
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
+
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
 
     // Determine if we're doing data type reconfiguration
@@ -113,6 +119,14 @@ ALWI void untilize(uint32_t num_blocks) {
         compute_num_blocks(block_width_tiles, dest_limit) : 1;
     constexpr uint32_t sub_block_width = use_block_based_pack ?
         (block_width_tiles / num_sub_blocks) : block_width_tiles;
+
+    // Validate CB capacity
+    ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles);
+    if constexpr (use_block_based_pack) {
+        ASSERT(get_cb_num_pages(input_cb) >= sub_block_width);
+    } else {
+        ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles);
+    }
 
     // =================================================================
     // INITIALIZATION
