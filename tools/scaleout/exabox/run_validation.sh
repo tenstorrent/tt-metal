@@ -13,9 +13,9 @@ Required Options:
 
 Optional:
     --cabling-descriptor-path <path>        Path to cabling descriptor file
-                                            (default: /data/scaleout_configs/4xBH_4x32_intrapod_updated/cabling_descriptor.textproto)
+                                            (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
     --deployment-descriptor-path <path>     Path to deployment descriptor file
-                                            (default: /data/scaleout_configs/4xBH_4x32_intrapod_updated/deployment_descriptor.textproto)
+                                            (default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto)
     --iterations <number>                   Number of times to run the full validation sequence (default: 50)
                                             Each iteration runs run_cluster_validation with 10 internal iterations
     --output <directory>                    Output directory for log files (default: validation_output)
@@ -31,8 +31,8 @@ EOF
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
-CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/4xBH_4x32_intrapod_updated/cabling_descriptor.textproto"
-DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/4xBH_4x32_intrapod_updated/deployment_descriptor.textproto"
+CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
+DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
 OUTPUT_DIR="validation_output"
 
