@@ -1,0 +1,8 @@
+﻿ttnn.fold
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fold:
+
+.. autooperation:: ttnn.fold
