@@ -215,7 +215,7 @@ class SamplingOp:
         ]
 
         unified_kernel = UnifiedKernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/argmax_kernel.cpp",
             core_ranges=all_cores,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=brisc_named_compile_time_args,
@@ -519,7 +519,7 @@ class SamplingOp:
                     )
 
                 unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/argmax_kernel.cpp",
                     core_ranges=all_cores,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Sampling unified kernel (k=1 argmax fast path) wrapper.
-// Logic is implemented in unified_kernels/sampling.hpp so fused kernels can
+// Logic is implemented in unified_kernels/argmax.hpp so fused kernels can
 // invoke the same operation in a composable style.
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
-#include "../../../unified_kernels/sampling.hpp"
+#include "../../../unified_kernels/argmax.hpp"
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #endif
