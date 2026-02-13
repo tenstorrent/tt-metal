@@ -1859,16 +1859,60 @@ class ReduceGolden:
             ReduceDimension.Scalar: self._reduce_scalar,
         }
 
-    def __call__(self, operand, reduce_dim, pool_type, data_format, tile_cnt=1):
+    def __call__(
+        self,
+        operand,
+        reduce_dim,
+        pool_type,
+        data_format,
+        tile_cnt=1,
+        reduce_to_one=False,
+    ):
         if reduce_dim not in self.dim_handlers:
             raise ValueError(f"Unsupported reduce dimension: {reduce_dim}")
 
-        return torch.cat(
-            [
-                self._process_tile(operand, reduce_dim, pool_type, data_format, tile)
-                for tile in range(tile_cnt)
-            ]
-        )
+        if reduce_to_one:
+            # Accumulate all tiles into a single result
+            return self._reduce_all_tiles(
+                operand, reduce_dim, pool_type, data_format, tile_cnt
+            )
+        else:
+            # Process each tile independently
+            return torch.cat(
+                [
+                    self._process_tile(
+                        operand, reduce_dim, pool_type, data_format, tile
+                    )
+                    for tile in range(tile_cnt)
+                ]
+            )
+
+    def _reduce_all_tiles(self, operand, reduce_dim, pool_type, data_format, tile_cnt):
+        """Accumulate reduction across all tiles into a single result."""
+        accumulated = None
+
+        for tile_idx in range(tile_cnt):
+            tile_result = self._process_tile(
+                operand, reduce_dim, pool_type, data_format, tile_idx
+            )
+
+            if accumulated is None:
+                # First tile - just store it
+                accumulated = tile_result
+            else:
+                # Subsequent tiles - pool with previous accumulation
+                if pool_type == ReducePool.Max:
+                    accumulated = torch.maximum(accumulated, tile_result)
+                elif pool_type == ReducePool.Sum:
+                    accumulated = accumulated + tile_result
+                elif pool_type == ReducePool.Average:
+                    # Average reduce operation performs dest += avg(curr_tile) when reducing to populated dest locations.
+                    # Result should simply be the accumulation of averages.
+                    accumulated = accumulated + tile_result
+                else:
+                    raise ValueError(f"Unsupported pool type: {pool_type}")
+
+        return accumulated
 
     def _process_tile(self, operand, reduce_dim, pool_type, data_format, tile_idx):
         tile_start = tile_idx * ELEMENTS_PER_TILE
