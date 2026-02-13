@@ -114,8 +114,6 @@ inline void mul_XW_accumulate_l1(
     cb_pop_front(cb_w_idx, tiles_per_batch);
 
     tile_regs_commit();
-    tile_regs_wait();
-
     pack_l1_acc_block(cb_out_idx, first_p_block, block_size, k_block_start);
 }
 
@@ -249,8 +247,6 @@ inline void mul_MW2_accumulate_Y_l1(
     cb_pop_front(cb_w2_idx, tiles_per_batch);
 
     tile_regs_commit();
-    tile_regs_wait();
-
     pack_l1_acc_block(cb_y_idx, first_k_block, block_size, 0U);
 }
 
