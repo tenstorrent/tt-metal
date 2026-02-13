@@ -145,7 +145,7 @@ void kernel_main() {
     }
 
     // =========================================================================
-    // ROUND 1: Prepare R1 neighbor data for compute
+    // Prepare R1 neighbor data for compute
     // =========================================================================
     if (r1_neighbor_valid) {
         prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
@@ -157,7 +157,7 @@ void kernel_main() {
         cb_push_back(cb_r1_neighbor_l, out_tiles);
     }
     // =========================================================================
-    // ROUND 2: Prepare R2 neighbor data for compute
+    // Prepare R2 neighbor data for compute
     // =========================================================================
 
     // Only receive R2 data if R2 neighbor's R1 result is valid

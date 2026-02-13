@@ -341,6 +341,6 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector)
                 diff = torch.max(torch.abs(actual - expected)).item()
                 scatter_max_diff = max(scatter_max_diff, diff)
 
-        scatter_match = scatter_max_diff < 0.13  # Increased tolerance to match L tensor tolerance
+        scatter_match = scatter_max_diff < 0.07
         logger.info(f"Scatter output match: {scatter_match}, max_diff: {scatter_max_diff:.4f}")
         assert scatter_match, f"Scatter output mismatch! Max diff: {scatter_max_diff}"

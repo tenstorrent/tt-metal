@@ -48,18 +48,6 @@ static constexpr bool final_reduction = get_compile_time_arg_val(15);
 static constexpr uint32_t block_size = tiles_per_l_chunk;
 
 /**
- * Conditional streaming SDPA tail reduction.
- *
- * Handles four cases based on validity of local and neighbor data:
- * 1. Both invalid: Error case (shouldn't happen in valid topology)
- * 2. Only local valid: Copy local data to output (neighbor drops its invalid data)
- * 3. Only neighbor valid: Copy neighbor data to output (local drops its invalid data)
- * 4. Both valid: Normal SDPA reduction
- *
- * This enables the reduce-to-all operation to work when only a subset of devices
- * have valid data, by having invalid devices forward valid data without reduction.
- */
-/**
  * Streaming SDPA tail reduction that processes L tiles in chunks.
  *
  * This function implements the same reduction as sdpa_tail but processes
@@ -204,7 +192,7 @@ ALWI void sdpa_tail_streaming_conditional(
         return;
     }
 
-    // Case 4: Both valid - perform normal SDPA reduction
+    // Both valid - perform normal SDPA reduction
     sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
 }
@@ -216,12 +204,10 @@ void kernel_main() {
     exp_tile_init<EXP_APPROX_MODE, false>();
 
     // Runtime args: device indices for position lookup (when position_enabled)
-    // When position_enabled=0, these defaults are used (all valid)
     bool local_valid = true;
     bool r1_neighbor_valid = true;
     bool r2_neighbor_valid = true;
 
-    // Declare device index variables outside if block so they're accessible later
     uint32_t device_idx = 0;
     uint32_t r1_neighbor_device_idx = 0;
     uint32_t r2_neighbor_device_idx = 0;
@@ -241,7 +227,6 @@ void kernel_main() {
         uint32_t r2_neighbor_r1_val = read_tile_value(cb_position, 0, r2_neighbor_r1_neighbor_idx);
         cb_pop_front(cb_position, 1);
 
-        // Convert to boolean (non-zero means valid)
         local_valid = (local_val != 0);
         r1_neighbor_valid = (r1_val != 0);
         r2_neighbor_valid =
@@ -268,16 +253,15 @@ void kernel_main() {
         local_valid);
 
     // =========================================================================
-    // ROUND 2: reduce(r1_result, r2_neighbor) → final output (ALWAYS normalized)
+    // ROUND 2: reduce(r1_result, r2_neighbor) → final output (normalized L)
     // =========================================================================
     // Compute R1 result validity: valid if at least one device in the pair was valid
     bool local_r1_valid = local_valid || r1_neighbor_valid;
     bool r2_neighbor_r1_valid = r2_neighbor_valid;
 
-    // R2: ALWAYS normalize (simplest approach - always do L/S at the end)
     sdpa_tail_streaming_conditional<
         EXP_APPROX_MODE,
-        final_reduction, /* always normalize */
+        final_reduction, /* don't normalize if data only on a single device */
         block_size,
         scale_fp32,
         num_l_chunks,
