@@ -55,11 +55,6 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     return TilizeWithValPaddingMultiCoreInterleavedFactory{};
 }
 
-void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_hit(
-    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    validate_on_program_cache_miss(operation_attributes, input_tensor);
-}
-
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.padded_shape();

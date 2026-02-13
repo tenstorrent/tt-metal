@@ -32,8 +32,8 @@
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
 
 // For ops where init takes multiple template parameters (e.g., approximate, fast_approx, scale).
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE) \
-    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE>)
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROX>(INIT_CB<APPROX, FAST_APPROX, SCALE, CLAMP_NEGATIVE>)
 
 // For the int32 comparison variants
 #define SFPU_COMP_INT32_KERNEL(OP, MODE, APPROXIMATE, ITERATIONS, DST_IDX, PARAM0) \
@@ -55,6 +55,17 @@
 #define SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(FN, MODE, APPROXIMATE, EXTRA_PARAM, DST_IDX, PARAM0) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                 \
         ckernel::sfpu::FN<APPROXIMATE, EXTRA_PARAM>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+
+// For unary ops with one extra uint parameter AND additional template params (DATA_FORMAT, ITERATIONS)
+#define SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(                                                        \
+    FN, MODE, APPROXIMATE, DATA_FORMAT, EXTRA_PARAM, DST_IDX, PARAM0)                                               \
+    static_assert(                                                                                                  \
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16, \
+        "Unsupported data format. Supported: Int32, UInt32, UInt16");                                               \
+    constexpr InstrModLoadStore _INSTRUCTION_MODE =                                                                 \
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;                   \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                              \
+        ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
 // For ops with exactly two extra uint parameters (and no custom init callback)
 #define SFPU_UNARY_TWO_PARAM_KERNEL_FN(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
@@ -85,21 +96,29 @@
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
-#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                                                                              \
-    FN,                                                                                                              \
-    APPROXIMATE,                                                                                                     \
-    FAST_APPROX,                                                                                                     \
-    IS_FP32_DEST_ACC_EN,                                                                                             \
-    SCALE_EN,                                                                                                        \
-    SKIP_POSITIVE_CHECK,                                                                                             \
-    ITERATIONS,                                                                                                      \
-    DST_IDX,                                                                                                         \
-    VECTOR_MODE,                                                                                                     \
-    SCALE)                                                                                                           \
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                                               \
-        ckernel::sfpu::FN<APPROXIMATE, FAST_APPROX, IS_FP32_DEST_ACC_EN, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>, \
-        DST_IDX,                                                                                                     \
-        VECTOR_MODE,                                                                                                 \
+#define SFPU_TEMPLATE_PARAMS_KERNEL_FN(                \
+    FN,                                                \
+    APPROXIMATE,                                       \
+    FAST_APPROX,                                       \
+    IS_FP32_DEST_ACC_EN,                               \
+    SCALE_EN,                                          \
+    SKIP_POSITIVE_CHECK,                               \
+    CLAMP_NEGATIVE,                                    \
+    ITERATIONS,                                        \
+    DST_IDX,                                           \
+    VECTOR_MODE,                                       \
+    SCALE)                                             \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>( \
+        ckernel::sfpu::FN<                             \
+            APPROXIMATE,                               \
+            FAST_APPROX,                               \
+            IS_FP32_DEST_ACC_EN,                       \
+            SCALE_EN,                                  \
+            ITERATIONS,                                \
+            SKIP_POSITIVE_CHECK,                       \
+            CLAMP_NEGATIVE>,                           \
+        DST_IDX,                                       \
+        VECTOR_MODE,                                   \
         SCALE)
 
 // For kernels with one template parameter and one extra runtime argument.

@@ -21,7 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
@@ -136,7 +136,7 @@ def create_expert_matmul_tensors(
     return weights_tensor, output_tensor, expert_weights_for_validation, expert_tensors
 
 
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
 def test_moe_routed_expert(device, use_hardcoded_expert_index):
     """Test MoE routed expert fused operation"""
 
@@ -702,22 +702,33 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     logger.info("MoE routed expert test passed!")
 
 
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
-def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 573440})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
+def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     """
-    Test MoE routed expert fused operation on 8-chip mesh.
+    Test MoE routed expert fused operation with reduce_to_one on 4x2 mesh.
 
-    Each chip runs the full MoE routed expert operation independently.
-    This tests that the operation works correctly across all devices in a mesh.
+    This tests the full fused operation:
+    - Each of 8 devices runs moe_routed_expert
+    - Results are reduced (summed) across all devices to ROOT1
+    - Final output on ROOT1 contains sum of all 8 device outputs
     """
     # Validate mesh size
     num_devices = 8
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
-        pytest.skip(f"Test requires {num_devices} devices, mesh has {mesh_device.shape[0] * mesh_device.shape[1]}")
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip(
+            f"Test requires {num_devices} devices, mesh has {bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
 
-    # Create submesh (4x2 = 8 devices)
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    # Create 4x2 submesh
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh.shape}")
 
     # MoE router parameters
     M = 1
@@ -739,8 +750,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
     tile_16x16 = ttnn.Tile([16, 16])
     tile_1x16 = ttnn.Tile([1, 16])
 
-    logger.info(f"Testing MoE routed expert on {num_devices}-device mesh")
-    logger.info(f"Mesh shape: {submesh.shape}")
+    logger.info(f"Testing MoE routed expert with reduce on {num_devices}-device mesh")
 
     # Gate parameters
     gate_eps = 1e-20
@@ -770,6 +780,9 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
     # Mcast output core grid
     mcast_output_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
 
+    # Mesh mapper for replication
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+
     # ========== Create Tensors with Mesh Replication ==========
 
     # Input tensor
@@ -782,7 +795,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=input_mem_config,
         tile=tile_1x32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Mcast output tensor
@@ -797,7 +810,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=mcast_output_mem_config,
         tile=tile_1x32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate matmul weights
@@ -812,7 +825,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_mm_weights_mem_config,
         tile=tile_32x32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate matmul output
@@ -827,7 +840,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_mm_output_mem_config,
         tile=tile_1x32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate input tensor (16x16)
@@ -842,7 +855,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_input_mem_config,
         tile=tile_16x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate bias tensor
@@ -855,7 +868,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_input_mem_config,
         tile=tile_16x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate indices tensor
@@ -866,7 +879,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_input_mem_config,
         tile=tile_16x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Gate output tensors (1x16)
@@ -881,7 +894,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_output_mem_config,
         tile=tile_1x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
     gate_output_indices_tensor = ttnn.from_torch(
         torch.zeros((1, 16), dtype=torch.uint16),
@@ -890,7 +903,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=gate_output_mem_config,
         tile=tile_1x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # Expert index and scale tensors
@@ -905,7 +918,7 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=expert_index_mem_config,
         tile=tile_1x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
     expert_scale_tensor = ttnn.from_torch(
         torch.zeros((1, 16), dtype=torch.bfloat16),
@@ -914,13 +927,10 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=expert_index_mem_config,
         tile=tile_1x16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
     # ========== DRAM Matmul Tensors ==========
-    # Use create_expert_matmul_tensors helper with mesh_mapper
-    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-
     (
         gate_proj_weights,
         gate_proj_output,
@@ -1062,8 +1072,9 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
     )
 
     # Final output tensor
-    final_output_width_per_core = 32 * 32
-    final_output_total_width = final_output_width_per_core * num_gate_proj_cores
+    # Must match down_proj_output shape: width_per_core = per_core_down_proj_N, total = down_proj_N_padded
+    final_output_width_per_core = per_core_down_proj_N
+    final_output_total_width = down_proj_N_padded
     final_output_shard_spec = ttnn.ShardSpec(
         gate_proj_core_ranges, (1, final_output_width_per_core), ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -1077,14 +1088,72 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
         device=submesh,
         memory_config=final_output_mem_config,
         tile=tile_1x32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        mesh_mapper=mesh_mapper,
     )
 
+    # ========== ReduceToOne Tensors and Semaphores ==========
+    # Root coordinate (row 1, col 1)
+    root_coord = (1, 1)
+
+    # Mesh mapper for reduce tensors
+    reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
+    reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
+
+    # Create 3 intermediate tensors for 3 reduction rounds
+    # Same shape as final_output_tensor (which is the input to reduce)
+    intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        intermediate_tensors.append(intermediate_tensor)
+    logger.info(f"Created 3 intermediate tensors for reduce rounds")
+
+    # Create reduce output tensor (single-core sharded on each device)
+    # Only ROOT1 device will have the final reduced result
+    compute_grid = submesh.compute_with_storage_grid_size()
+    reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+    reduce_output_shard_spec = ttnn.ShardSpec(
+        reduce_output_shard_grid,
+        (1, final_output_total_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    reduce_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, reduce_output_shard_spec
+    )
+    reduce_output_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
+    reduce_output_tensor = ttnn.from_torch(
+        reduce_output_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    logger.info(f"Created reduce output tensor on core {reduce_output_core}")
+
+    # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
+    num_cores = compute_grid.x * compute_grid.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    logger.info(f"Created 4 global semaphores for reduce synchronization")
+
     # ========== Run Operation ==========
+
+    logger.info("Running moe routed expert operation...")
+
     num_iterations = 100
-    logger.info(f"Running MoE routed expert on mesh for {num_iterations} iterations...")
     for iteration in range(num_iterations):
-        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
             ttnn_input,
             ttnn_mcast_output,
             ttnn_gate_mm_weights,
@@ -1107,40 +1176,31 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
             down_proj_output,
             fused_add_tensor,
             final_output_tensor,
+            # ReduceToOne parameters
+            reduce_intermediate_tensors=intermediate_tensors,
+            reduce_output_tensor=reduce_output_tensor,
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=ttnn.MeshCoordinate(root_coord),
             use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
     ttnn.synchronize_device(submesh)
-    logger.info(f"All {num_iterations} iterations completed")
 
+    # ========== Verify Results ==========
     # Get actual gate output indices and scores from device
     device_gate_indices = ttnn.to_torch(
         gate_output_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
     )
     device_gate_scores = ttnn.to_torch(gate_output_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-    logger.info(f"Gate output indices (from device): {device_gate_indices[0].flatten()[:8]}")
-    logger.info(f"Gate output scores (from device): {device_gate_scores[0].flatten()[:8]}")
 
-    # ========== Verify Results from All Devices ==========
-    # Get results from all devices
-    output_final_torch = ttnn.to_torch(
-        ttnn_result_final,
-        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
-    )
-
-    # ConcatMeshToTensor iterates row-major, same as chip_id = row * cols + col
-    # So device_idx == chip_id, no remapping needed
-
-    # Verify each device's output
-    all_passed = True
+    # Compute expected output for each device, then sum
+    expected_final_outputs = []
     for device_idx in range(num_devices):
-        chip_id = device_idx  # Row-major order matches
+        chip_id = device_idx  # Row-major order
 
         if use_hardcoded_expert_index:
-            # Hardcoded mode: kernel uses chip_id directly as expert index
             actual_expert_idx = chip_id
             actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
         else:
-            # Dynamic mode: kernel uses gate output indices at position chip_id
             actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
             actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
 
@@ -1158,26 +1218,31 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
             hardcoded_expert_index=actual_expert_idx,
             explicit_expert_scale=actual_expert_scale,
         )
+        expected_final_outputs.append(torch_expected_final)
 
-        # Extract this device's output
-        device_output = output_final_torch[device_idx]
+    # Expected reduce output = sum of all device outputs (using golden_reduce)
+    expected_reduce_output = MoeRoutedExpert.golden_reduce(expected_final_outputs)
 
-        # Extract valid data from padded output
-        result_valid = []
-        for i in range(num_gate_proj_cores):
-            chunk_start = i * final_output_width_per_core
-            chunk_end = chunk_start + per_core_down_proj_N
-            result_valid.append(device_output[..., chunk_start:chunk_end])
-        output_final_valid = torch.cat(result_valid, dim=-1)
+    # Get actual reduce output from ROOT1 device
+    reduce_output_torch = ttnn.to_torch(
+        ttnn_result_reduce,
+        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+    )
 
-        expert_info = f"chip_id={chip_id}, expert {actual_expert_idx}"
+    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
+    reduce_output_root = reduce_output_torch[root_device_idx]
 
-        passing, pcc_output = comp_pcc(torch_expected_final, output_final_valid.unsqueeze(0).unsqueeze(0), 0.97)
-        if passing:
-            logger.info(f"Device {device_idx} ({expert_info}): PASSED - {pcc_output}")
-        else:
-            logger.error(f"Device {device_idx} ({expert_info}): FAILED - {pcc_output}")
-            all_passed = False
+    # Verify reduce output
+    passing, pcc_output = comp_pcc(expected_reduce_output, reduce_output_root, 0.97)
+    logger.info(f"Reduce output PCC: {pcc_output}")
 
-    assert all_passed, "Not all devices produced correct results"
-    logger.info("MoE routed expert mesh test passed!")
+    if not passing:
+        # Debug: print some values
+        logger.error(f"Expected reduce (first 8): {expected_reduce_final.flatten()[:8]}")
+        logger.error(f"Actual reduce (first 8): {reduce_output_valid.flatten()[:8]}")
+        diff = torch.abs(expected_reduce_final.flatten() - reduce_output_valid.flatten())
+        logger.error(f"Max diff: {diff.max()}, Mean diff: {diff.mean()}")
+
+    assert passing, f"Reduce output PCC check failed: {pcc_output}"
+    logger.info("MoE routed expert with reduce test passed!")

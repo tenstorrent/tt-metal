@@ -423,12 +423,12 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(50);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(51);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(52);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(53);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(54);
-    constexpr uint32_t reader_tensor_args_index = 55;
+    constexpr uint32_t config_in_dram = get_compile_time_arg_val(51);
+    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(52);
+    constexpr uint32_t config_page_size = get_compile_time_arg_val(53);
+    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(54);
+    constexpr uint32_t reader_page_size = get_compile_time_arg_val(55);
+    constexpr uint32_t reader_tensor_args_index = 56;
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
