@@ -143,12 +143,12 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         return_value = (
             super()
-            .decode_forward(
+            .decode_forward_text(
                 tokens=tokens_step,
-                positions=kwargs["start_pos"],
+                start_pos=kwargs["start_pos"],
                 batch_size_per_row=USERS_PER_ROW,
                 enable_trace=enable_trace,
-                page_tables=page_tables,
+                page_table=page_tables,
             )
             .unsqueeze(1)
         )  # [B, V] -> [B, 1, V]

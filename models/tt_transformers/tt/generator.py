@@ -137,22 +137,15 @@ class Generator(DecodeWarmupMixin):
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-    def warmup_model_prefill(
-        self,
-        kv_cache,
-        enable_trace,
-        sample_on_device_mode=None,
-        non_greedy_decoding_on_device=False,
-        max_batch_size=1,
-    ):
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
 
         sampling_params = self._create_sampling_params(
-            sample_on_device_mode,
+            can_sample_on_device,
             non_greedy_decoding_on_device,
-            max_batch_size,
+            None,
             mode="prefill",
         )
 
