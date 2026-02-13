@@ -7,7 +7,6 @@ from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
 import vllm.envs as envs
-from llama_models.llama3.api.chat_format import create_vision_mask
 from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
@@ -32,6 +31,7 @@ from vllm.multimodal.processing import BaseMultiModalProcessor, EncDecMultiModal
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
+from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer

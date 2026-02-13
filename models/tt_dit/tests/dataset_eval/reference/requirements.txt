@@ -13,4 +13,4 @@ git+https://github.com/huggingface/diffusers.git
 open_clip_torch
 
 # vision + utilities
-Pillow>=9.1.0
+Pillow>=12.1.1

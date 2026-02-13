@@ -111,11 +111,6 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     return NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
 }
 
-void ReshardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void ReshardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;

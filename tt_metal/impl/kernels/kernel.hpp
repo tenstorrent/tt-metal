@@ -107,7 +107,6 @@ public:
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-    uint32_t dispatch_class() const { return this->dispatch_class_; }
 
     virtual bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -178,7 +177,6 @@ protected:
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -217,9 +215,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~DataMovementKernel() override = default;
 
@@ -257,9 +253,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0 + enchantum::to_underlying(config.processor);
-    }
+        config_(config) {}
 
     ~EthernetKernel() override = default;
 
@@ -297,11 +291,7 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {
-        // Note: it's wrong to use HalProcessorClassType here, because DM == 0 and COMPUTE == 1,
-        // but DISPATCH_CLASS_TENSIX_COMPUTE == 2.
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
-    }
+        config_(config) {}
 
     ~ComputeKernel() override = default;
 
