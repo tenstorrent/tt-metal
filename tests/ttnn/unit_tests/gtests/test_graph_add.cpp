@@ -26,7 +26,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

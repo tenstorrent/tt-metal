@@ -10,7 +10,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 

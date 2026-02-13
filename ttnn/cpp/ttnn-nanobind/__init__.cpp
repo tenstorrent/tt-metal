@@ -19,7 +19,6 @@
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
-#include "ttnn-nanobind/operations/creation.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
@@ -34,6 +33,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
+#include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
@@ -129,7 +129,7 @@ void py_module(nb::module_& mod) {
     debug::py_module(m_debug);
 
     auto m_creation = mod.def_submodule("creation", "creation operations");
-    creation::py_module(m_creation);
+    creation::bind_creation_operations(m_creation);
 
     auto m_embedding = mod.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
