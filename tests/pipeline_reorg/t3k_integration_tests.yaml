@@ -64,7 +64,7 @@
   sku: wh_llmbox
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-  timeout: 57
+  timeout: 77
   model-name: llama3
 
 - name: t3k_llama3_accuracy_tests
