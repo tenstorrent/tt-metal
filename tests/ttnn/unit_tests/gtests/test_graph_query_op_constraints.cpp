@@ -870,7 +870,10 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             conv2d_config,
             std::nullopt,
-            output_spec.tensor_layout().get_memory_config());
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // dram_slice_config
+            false,         // return_output_dim
+            false);        // return_weights_and_bias
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
