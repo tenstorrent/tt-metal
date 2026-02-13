@@ -679,7 +679,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     profiler.start(f"decode_time_{gen_idx}")
                     logits = self.decode_forward(
                         tokens=next_tokens,
-                        positions=positions,
+                        start_pos=positions,
                         batch_size_per_row=self.batch_size_per_row,
                         profiler=profiler,
                         gen_idx=gen_idx,
