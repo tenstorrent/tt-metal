@@ -27,7 +27,9 @@ class Program;
 
 namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
-static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
+// Currently, only Tensix engine 0 is supported on Quasar
+// TODO: Change this to 4 once all Tensix engines are supported
+static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 1;
 
 struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use

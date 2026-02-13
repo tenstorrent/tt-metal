@@ -327,23 +327,12 @@ namespace experimental::quasar {
 
 static constexpr uint32_t NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
 
+// TODO: Add enum values for remaining Tensix engines once those are supported
 enum class QuasarComputeProcessor : uint8_t {
     NEO_0_COMPUTE_0 = 0,
     NEO_0_COMPUTE_1 = 1,
     NEO_0_COMPUTE_2 = 2,
-    NEO_0_COMPUTE_3 = 3,
-    NEO_1_COMPUTE_0 = 4,
-    NEO_1_COMPUTE_1 = 5,
-    NEO_1_COMPUTE_2 = 6,
-    NEO_1_COMPUTE_3 = 7,
-    NEO_2_COMPUTE_0 = 8,
-    NEO_2_COMPUTE_1 = 9,
-    NEO_2_COMPUTE_2 = 10,
-    NEO_2_COMPUTE_3 = 11,
-    NEO_3_COMPUTE_0 = 12,
-    NEO_3_COMPUTE_1 = 13,
-    NEO_3_COMPUTE_2 = 14,
-    NEO_3_COMPUTE_3 = 15
+    NEO_0_COMPUTE_3 = 3
 };
 
 class QuasarDataMovementKernel : public Kernel {
