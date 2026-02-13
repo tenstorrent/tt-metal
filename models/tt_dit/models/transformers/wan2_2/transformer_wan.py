@@ -650,7 +650,7 @@ class WanTransformer3DModel(Module):
             - N
 
         Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
-        Spatial output is a torch tensor with same layout.
+        Spatial output is an fp32 ttnn.Tensor on device with same layout.
         """
 
         # Push spatial input to device
@@ -691,11 +691,14 @@ class WanTransformer3DModel(Module):
             spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
         )
 
-        # Gather spatial output and move to host
+        # Gather fp32 spatial output across sequence parallel devices (remains on device)
         spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
             proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
         )
 
-        spatial_1BNI_torch = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BNI)[0])
+        return spatial_1BNI
 
-        return spatial_1BNI_torch
+    @staticmethod
+    def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+        """Move a ttnn device tensor to a torch host tensor."""
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])
