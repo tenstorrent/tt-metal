@@ -110,7 +110,7 @@
   model: gpt-oss
   skus:
     wh_galaxy:
-      timeout: 30
+      timeout: 15
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   arch: wormhole_b0
