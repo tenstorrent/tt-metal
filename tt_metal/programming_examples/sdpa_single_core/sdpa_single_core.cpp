@@ -80,7 +80,7 @@ void sdpa_single_core(
     const uint32_t v_buffer_size = 2 * Sv_chunk_t * head_dim_t * single_tile_size;
     const uint32_t out_buffer_size = Sq_chunk_t * head_dim_t * single_tile_size;
 
-    const uint32_t num_iter = 16;
+    const uint32_t num_iter = 1;
 
     // We'll use these later on to check for correctness.
     distributed::DeviceLocalBufferConfig dram_config{
@@ -258,7 +258,7 @@ int main() {
         constexpr int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        constexpr uint32_t Sq_chunk_t = 8;
+        constexpr uint32_t Sq_chunk_t = 7;
         constexpr uint32_t Sk_chunk_t = 16;
         constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
