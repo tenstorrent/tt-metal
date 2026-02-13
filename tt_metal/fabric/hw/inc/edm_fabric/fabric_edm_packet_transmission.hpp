@@ -118,43 +118,6 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
     }
 }
 
-// template <bool update_counter>
-// FORCE_INLINE void noc_scatter_write_helper(
-//     tt::tt_fabric::NocScatterWriteChunkEncoding chunk_encoding,
-//     const uint32_t payload_start_address,
-//     const uint64_t destination_noc_address,
-//     const uint16_t chunk_size,
-//     const uint32_t transaction_id,
-//     const uint8_t rx_channel_id) {
-//     using Encoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
-
-//     if (chunk_encoding == Encoding::CHUNK_ENCODING_UNICAST_WRITE) {
-//         noc_async_write_one_packet_with_trid<update_counter, false>(
-//             payload_start_address,
-//             destination_noc_address,
-//             chunk_size,
-//             transaction_id,
-//             tt::tt_fabric::local_chip_data_cmd_buf,
-//             tt::tt_fabric::edm_to_local_chip_noc);
-//     } else if (chunk_encoding != Encoding::CHUNK_ENCODING_NOP) {
-//         if (chunk_encoding == Encoding::CHUNK_ENCODING_SEMINC_FLUSH) {
-//             flush_write_to_noc_pipeline(rx_channel_id);
-//         }
-//         // If a semaphore increment is being performed, the increment value is fed in in the chunk size, to
-//         // reduce payload size
-//         noc_semaphore_inc<true>(
-//             destination_noc_address,
-//             chunk_size,
-//             tt::tt_fabric::edm_to_local_chip_noc,
-//             tt::tt_fabric::forward_and_local_write_noc_vc);
-//     } else {
-//         // We expect that scatter writes have >= 2 chunks written contiguously
-//         // Furthermore, every scatter write packet contains a chunk_count, and this function is only called for
-//         // chunk_count times. Therefore, we should never get here (seeing a NOP).
-//         ASSERT(false);
-//     }
-// }
-
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
@@ -242,9 +205,6 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
-            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the first chunk
-            constexpr uint8_t CHUNK_ENCODING_SEMINC_MASK = 0b10;  // Checks if the first chunk is a semaphore increment
-
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
             uint8_t packet_encoding = scatter.chunk_encoding;
@@ -261,7 +221,7 @@ FORCE_INLINE
             // First chunk is guaranteed to be a unicast write
             uint16_t chunk_size = scatter.chunk_size[0];
             noc_async_write_one_packet_with_trid<update_counter, false>(
-                payload_start_address,
+                payload_start_address + offset,
                 scatter.noc_address[0],
                 chunk_size,
                 transaction_id,
@@ -269,19 +229,6 @@ FORCE_INLINE
                 tt::tt_fabric::edm_to_local_chip_noc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
-            // ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
-            // uint16_t chunk_size = scatter.chunk_size[0];
-            // noc_scatter_write_helper<update_counter>(
-            //     chunk_encoding,
-            //     payload_start_address,
-            //     scatter.noc_address[0],
-            //     chunk_size,
-            //     transaction_id,
-            //     rx_channel_id);
-            // if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
-            //     offset += chunk_size;
-            // }
-            // shift_to_next_chunk(packet_encoding);
 
             if (chunk_count > 2) {
                 // Second chunk is guaranteed to be a unicast write
@@ -295,19 +242,6 @@ FORCE_INLINE
                     tt::tt_fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
-                // chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
-                // chunk_size = scatter.chunk_size[1];
-                // noc_scatter_write_helper<update_counter>(
-                //     chunk_encoding,
-                //     payload_start_address + offset,
-                //     scatter.noc_address[1],
-                //     chunk_size,
-                //     transaction_id,
-                //     rx_channel_id);
-                // if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
-                //     offset += chunk_size;
-                // }
-                // shift_to_next_chunk(packet_encoding);
 
                 if (chunk_count == 4) [[likely]] {
                     // If there are 4 chunks, the third chunk is guaranteed to be a unicast write
@@ -321,29 +255,13 @@ FORCE_INLINE
                         tt::tt_fabric::edm_to_local_chip_noc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
-                    // chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
-                    // chunk_size = scatter.chunk_size[2];
-                    // noc_scatter_write_helper<update_counter>(
-                    //     chunk_encoding,
-                    //     payload_start_address + offset,
-                    //     scatter.noc_address[2],
-                    //     chunk_size,
-                    //     transaction_id,
-                    //     rx_channel_id);
-                    // if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
-                    //     offset += chunk_size;
-                    // }
-                    // shift_to_next_chunk(packet_encoding);
                 }
             }
 
             // Last chunk is either a unicast write or a semaphore increment
+            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the least significant chunk
             const ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
             const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
-            // Final chunk size is either based on payload size or a stored semaphore increment
-            const uint16_t final_chunk_size = (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE)
-                                                  ? static_cast<uint16_t>(payload_size_bytes - offset)
-                                                  : scatter.chunk_size[last_chunk_index];
             if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
                 const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
                 noc_async_write_one_packet_with_trid<update_counter, false>(
@@ -364,14 +282,11 @@ FORCE_INLINE
                     scatter.chunk_size[last_chunk_index],
                     tt::tt_fabric::edm_to_local_chip_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc);
+            } else {
+                // Every scatter write packet contains a chunk_count, and the unicast_writes above are only called for
+                // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).
+                ASSERT(false);
             }
-            // noc_scatter_write_helper<update_counter>(
-            //     chunk_encoding,
-            //     payload_start_address + offset,
-            //     final_destination_noc_address,
-            //     final_chunk_size,
-            //     transaction_id,
-            //     rx_channel_id);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
