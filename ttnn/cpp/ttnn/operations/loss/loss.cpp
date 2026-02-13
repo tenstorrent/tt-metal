@@ -38,10 +38,10 @@ Tensor loss_function(
     switch (reduce_mode) {
         case LossReductionMode::SUM:
             return ttnn::sum(
-                result, /*dim=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::MEAN:
             return ttnn::mean(
-                result, /*dim=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
+                result, /*dim_arg=*/std::nullopt, /*keepdim=*/false, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::NONE:
         default:
             // TODO: old code indicated this path is unsupported, but the all post commit test pipeline uses this path.
