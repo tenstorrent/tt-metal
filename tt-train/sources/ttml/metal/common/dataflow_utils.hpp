@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -317,7 +318,7 @@ inline void read_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         read_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
     }
 }
@@ -332,8 +333,50 @@ inline void write_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+/**
+ * Read a 2D batch of tiles (num_rows × tiles_per_row) from DRAM into L1.
+ * Uses padding: for row >= valid_num_rows or tile >= valid_tiles_per_row, reuses the last valid row/tile.
+ * Caller must reserve CB (or have writable L1) and call cb_push_back() after when using a CB.
+ *
+ * @param UseBarrier If true, call noc_async_read_barrier() at the end. If false, caller must call it later.
+ * @param addr_gen Address generator for DRAM (get_noc_addr(tile_idx))
+ * @param l1_addr L1 address to write to (contiguous region of num_rows * tiles_per_row * tile_bytes)
+ * @param first_row_start Tile index of the first row start
+ * @param row_stride Tile stride between rows (e.g. full row length)
+ * @param num_rows Number of rows to read (batch height)
+ * @param tiles_per_row Number of tiles per row (batch width)
+ * @param valid_num_rows Valid rows (rows beyond this are padded from last valid row)
+ * @param valid_tiles_per_row Valid tiles per row (columns beyond this are padded from last valid tile)
+ * @param tile_bytes Bytes per tile
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_batched_rows_with_padding(
+    const AddrGen& addr_gen,
+    uint32_t l1_addr,
+    const uint32_t first_row_start,
+    const uint32_t row_stride,
+    const uint32_t num_rows,
+    const uint32_t tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t tile_bytes) {
+    for (uint32_t row = 0U; row < num_rows; ++row) {
+        const uint32_t actual_row = std::min(row, valid_num_rows - 1U);
+        const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
+        for (uint32_t t = 0U; t < tiles_per_row; ++t) {
+            const uint32_t actual_t = std::min(t, valid_tiles_per_row - 1U);
+            const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
+            noc_async_read(noc_addr, l1_addr, tile_bytes);
+            l1_addr += tile_bytes;
+        }
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
     }
 }
 
@@ -546,20 +589,18 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
         const uint32_t l1_write_addr = get_write_ptr(cb_idx);
 
         // 3. Read all rows from DRAM into CB with padding
-        uint32_t l1_addr = l1_write_addr;
-        for (uint32_t row = 0U; row < num_rows; ++row) {
-            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1U);
-            const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
-            for (uint32_t t = 0U; t < tiles_per_row; ++t) {
-                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1U);
-                const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
-                noc_async_read(noc_addr, l1_addr, tile_bytes);
-                l1_addr += tile_bytes;
-            }
-        }
-        noc_async_read_barrier();
+        read_batched_rows_with_padding(
+            addr_gen,
+            l1_write_addr,
+            first_row_start,
+            row_stride,
+            num_rows,
+            tiles_per_row,
+            valid_num_rows,
+            valid_tiles_per_row,
+            tile_bytes);
 
-        // 3. Multicast to all cores INCLUDING self (loopback)
+        // 4. Multicast to all cores INCLUDING self (loopback)
         mcast_sender_send_data_loopback(
             l1_write_addr,
             noc_start_x,
@@ -569,7 +610,7 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
             total_tiles * tile_bytes,
             num_dests_including_self);
 
-        // 4. Signal all receivers INCLUDING self
+        // 5. Signal all receivers INCLUDING self
         mcast_sender_signal_receivers_loopback(
             receiver_sem_ptr,
             receiver_sem_addr,
@@ -579,23 +620,22 @@ inline void mcast_sender_read_batched_rows_and_send_loopback(
             noc_end_y,
             num_dests_including_self);
 
-        // 5. Push to CB for local compute
+        // 6. Push to CB for local compute
         cb_push_back(cb_idx, total_tiles);
     } else {
         // Single-core path: just read tiles normally
         cb_reserve_back(cb_idx, total_tiles);
-        uint32_t l1_addr = get_write_ptr(cb_idx);
-        for (uint32_t row = 0U; row < num_rows; ++row) {
-            const uint32_t actual_row = (row < valid_num_rows) ? row : (valid_num_rows - 1U);
-            const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
-            for (uint32_t t = 0U; t < tiles_per_row; ++t) {
-                const uint32_t actual_t = (t < valid_tiles_per_row) ? t : (valid_tiles_per_row - 1U);
-                const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
-                noc_async_read(noc_addr, l1_addr, tile_bytes);
-                l1_addr += tile_bytes;
-            }
-        }
-        noc_async_read_barrier();
+        const uint32_t l1_addr = get_write_ptr(cb_idx);
+        read_batched_rows_with_padding(
+            addr_gen,
+            l1_addr,
+            first_row_start,
+            row_stride,
+            num_rows,
+            tiles_per_row,
+            valid_num_rows,
+            valid_tiles_per_row,
+            tile_bytes);
         cb_push_back(cb_idx, total_tiles);
     }
 }

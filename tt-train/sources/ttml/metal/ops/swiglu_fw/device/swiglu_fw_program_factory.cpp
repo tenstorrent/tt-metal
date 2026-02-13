@@ -48,8 +48,6 @@ constexpr auto kMCbIndex = tt::CBIndex::c_8;    // M[r, k_block]
 // CB with output data
 constexpr auto kYCbIndex = tt::CBIndex::c_10;  // Y[r, c_block] - L1 acc target
 
-const std::string kRowOfMFitsInL1DefineKey = "ROW_OF_M_FITS_IN_L1";
-
 }  // namespace
 
 namespace ttml::metal::ops::swiglu_fw::device {
@@ -62,6 +60,10 @@ struct SwiGLUForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
+// TODO(maciek): Consider refactoring this function to a common utils module with parameterized
+// kernel handles and buffer configurations, as different operations will have varying numbers
+// and types of input/output buffers and different kernel configurations (e.g., SwiGLU has 4
+// input buffers + 1 output, while other ops may differ). See tracking issue #32533 for more details.
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const SwiGLUForwardKernels& kernels,
@@ -450,9 +452,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         "SwiGLU buffer must be in DRAM. SwiGLU buffer of type {}",
         enchantum::to_string(swiglu_buffer->buffer_type()));
 
-    // M-fits-L1 algorithm uses flash-attention optimization with full row caching
     std::map<std::string, std::string> defines;
-    defines[kRowOfMFitsInL1DefineKey] = "1";
 
     // -------------------------------------------------------------------------
     // 3.1) Split cores into single sender (0,0) and all receivers
