@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,12 @@ from .multi_head_attention import MultiHeadAttention
 class LayerNorm(AbstractModuleBase):
     """Layer normalization module with gamma and beta parameters."""
 
-    def __init__(self, embedding_dim: int, bias: bool = True) -> None:
+    def __init__(
+        self,
+        embedding_dim: int,
+        bias: bool = True,
+        use_composite_layernorm: bool = False,
+    ) -> None:
         """Initialize layer norm.
 
         Args:
@@ -32,6 +37,7 @@ class LayerNorm(AbstractModuleBase):
         super().__init__()
 
         self.embedding_dim = embedding_dim
+        self.use_composite_layernorm = use_composite_layernorm
 
         # Layer norm requires gamma (scale) and beta (shift) parameters
         ln_shape = (1, 1, 1, embedding_dim)
@@ -59,7 +65,13 @@ class LayerNorm(AbstractModuleBase):
         Returns:
             Normalized output tensor
         """
-        return ttml.ops.layernorm.layernorm(
+
+        if self.use_composite_layernorm:
+            layernorm_op = ttml.ops.layernorm.composite_layernorm
+        else:
+            layernorm_op = ttml.ops.layernorm.layernorm
+
+        return layernorm_op(
             x, self.gamma.tensor, self.beta.tensor if self.beta else None
         )
 
@@ -73,6 +85,7 @@ class GPTBlock(AbstractModuleBase):
         num_heads: int,
         dropout: float = 0.0,
         bias: bool = True,
+        use_composite_layernorm: bool = False,
     ) -> None:
         """Initialize GPT block.
 
@@ -88,8 +101,8 @@ class GPTBlock(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # Layer norms
-        self.ln1 = LayerNorm(embedding_dim, bias)
-        self.ln2 = LayerNorm(embedding_dim, bias)
+        self.ln1 = LayerNorm(embedding_dim, bias, use_composite_layernorm)
+        self.ln2 = LayerNorm(embedding_dim, bias, use_composite_layernorm)
 
         # Attention and MLP
         self.attention = MultiHeadAttention(embedding_dim, num_heads, dropout)
