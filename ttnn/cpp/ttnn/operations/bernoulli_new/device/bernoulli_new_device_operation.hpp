@@ -35,12 +35,21 @@ struct BernoulliNewDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     // ---------------------------------------------------------------
-    // The factory exposes a SINGLE method: create_descriptor.
-    // No shared_variables_t.  No create.  No override_runtime_arguments.
-    // The framework handles everything through DescriptorMeshWorkloadFactoryAdapter.
+    // The factory exposes create_descriptor (builds the program declaratively)
+    // plus an optional override_runtime_arguments (updates the random seed on
+    // each cache hit).  The framework handles buffer address patching
+    // automatically; this method only needs to update non-address runtime args.
     // ---------------------------------------------------------------
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+        // Called by the framework AFTER patching buffer addresses on every cache hit.
+        // Updates the random seed in the compute kernel's runtime args.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
@@ -58,6 +67,7 @@ struct BernoulliNewDeviceOperation {
     // create_descriptor via compute_program_descriptor_hash, which hashes
     // only compile-time parts (kernel sources, core ranges, compile-time args,
     // defines, CB configs) and ignores runtime args (seed, buffer addresses).
+    // The seed is updated via override_runtime_arguments on every cache hit.
 };
 
 }  // namespace ttnn::operations::bernoulli_new

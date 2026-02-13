@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <optional>
 #include <random>
@@ -226,6 +227,20 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+// TEMP: instrumentation for profiling dispatch overhead
+struct LaunchTimingCounters {
+    uint64_t hash_ns{0};
+    uint64_t cache_hit_ns{0};
+    uint64_t validate_ns{0};
+    uint64_t select_ns{0};
+    uint64_t dispatch_ns{0};
+    uint64_t override_ns{0};
+    uint64_t enqueue_ns{0};
+    uint64_t count{0};
+};
+inline thread_local int g_launch_timing_slot = -1;
+inline LaunchTimingCounters g_launch_timing[2];
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -234,28 +249,56 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
+    auto ch_t0 = std::chrono::steady_clock::now();
+
     if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
         mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
     } else {
         mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
+    auto ch_t1 = std::chrono::steady_clock::now();
+
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
     auto program_factory = map_index_to_variant(
         program_factory_index, mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
+
+    auto ch_t2 = std::chrono::steady_clock::now();
 
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
         program_factory, [&]<MeshWorkloadFactoryConcept WorkloadFactory>() {
             using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
             auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
+            auto ch_override_start = std::chrono::steady_clock::now();
             WorkloadFactory::override_runtime_arguments(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            auto ch_override_end = std::chrono::steady_clock::now();
 
             enqueue_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
+            auto ch_enqueue_end = std::chrono::steady_clock::now();
+
+            int slot2 = g_launch_timing_slot;
+            if (slot2 >= 0 && slot2 < 2) {
+                g_launch_timing[slot2].override_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(ch_override_end - ch_override_start).count();
+                g_launch_timing[slot2].enqueue_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(ch_enqueue_end - ch_override_end).count();
+            }
         });
+
+    auto ch_t3 = std::chrono::steady_clock::now();
+
+    int slot = g_launch_timing_slot;
+    if (slot >= 0 && slot < 2) {
+        g_launch_timing[slot].validate_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(ch_t1 - ch_t0).count();
+        g_launch_timing[slot].select_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(ch_t2 - ch_t1).count();
+        g_launch_timing[slot].dispatch_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(ch_t3 - ch_t2).count();
+    }
 }
 
 // Helper for logging operation info to inspector
@@ -369,6 +412,8 @@ void launch_operation_with_adapter(
         }
     }
 
+    auto tp0 = std::chrono::steady_clock::now();
+
     auto& program_cache = mesh_device->get_program_cache();
     auto program_hash = 0;
     bool program_cache_hit = false;
@@ -385,6 +430,8 @@ void launch_operation_with_adapter(
         }
     }
 
+    auto tp1 = std::chrono::steady_clock::now();
+
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
@@ -396,6 +443,15 @@ void launch_operation_with_adapter(
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
+    }
+
+    auto tp2 = std::chrono::steady_clock::now();
+
+    int slot = g_launch_timing_slot;
+    if (slot >= 0 && slot < 2) {
+        g_launch_timing[slot].hash_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(tp1 - tp0).count();
+        g_launch_timing[slot].cache_hit_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(tp2 - tp1).count();
+        g_launch_timing[slot].count++;
     }
 }
 

@@ -142,14 +142,65 @@ struct MeshDeviceOperationAdapter {
     };
 
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of
-    // `ProgramDescriptorFactoryConcept` types.  The framework calls create_descriptor once
-    // per cache miss (to build the Program) and once per cache hit (to refresh runtime args).
+    // `ProgramDescriptorFactoryConcept` types.
+    //
+    // On cache miss: calls create_descriptor to build the Program, scans runtime args
+    // to precompute address slot positions, and (for pure factories) verifies that
+    // create_descriptor is deterministic by calling it a second time and comparing.
+    //
+    // On cache hit: patches the precomputed address slots with fresh buffer addresses.
+    // If the factory provides an optional override_runtime_arguments(Program&, ...),
+    // it is called AFTER address patching to update non-address runtime args (e.g. seeds).
     template <ProgramDescriptorFactoryConcept DescriptorFactory>
     struct DescriptorMeshWorkloadFactoryAdapter {
+        struct AddressSlot {
+            uint32_t kernel_handle;
+            CoreCoord core;
+            uint32_t arg_index;
+            uint16_t buffer_id;  // index into the flat vector returned by collect_buffers
+        };
+
+        struct CBSlot {
+            tt::tt_metal::CBHandle cb_handle;
+            uint16_t buffer_id;  // index into the flat vector returned by collect_buffers
+        };
+
         struct shared_variables_t {
+            std::vector<AddressSlot> address_slots;
+            std::vector<CBSlot> cb_slots;
             uint32_t num_kernel_handles{};
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        // Detect whether the factory provides an optional override_runtime_arguments.
+        static constexpr bool has_factory_override = requires(
+            tt::tt_metal::Program& p,
+            const operation_attributes_t& a,
+            const tensor_args_t& t,
+            tensor_return_value_t& r) { DescriptorFactory::override_runtime_arguments(p, a, t, r); };
+
+        // Collect all buffer pointers from tensor_args and tensor_return_value in a
+        // deterministic order (using the reflection visitor).  The same visitation order
+        // on cache hit produces new buffers at the same indices.
+        static std::vector<tt::tt_metal::Buffer*> collect_buffers(
+            const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+            std::vector<tt::tt_metal::Buffer*> bufs;
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&](const Tensor& t) {
+                    if (t.buffer()) {
+                        bufs.push_back(t.buffer());
+                    }
+                },
+                tensor_args);
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&](const Tensor& t) {
+                    if (t.buffer()) {
+                        bufs.push_back(t.buffer());
+                    }
+                },
+                tensor_return_value);
+            return bufs;
+        }
 
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
@@ -158,12 +209,107 @@ struct MeshDeviceOperationAdapter {
             tensor_return_value_t& tensor_return_value) {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+            // Collect current buffer pointers and build address-to-id / pointer-to-id maps.
+            auto bufs = collect_buffers(tensor_args, tensor_return_value);
+            std::unordered_map<uint32_t, uint16_t> addr_to_id;
+            std::unordered_map<tt::tt_metal::Buffer*, uint16_t> buf_to_id;
+            bool has_addr_collision = false;
+            for (uint16_t i = 0; i < static_cast<uint16_t>(bufs.size()); ++i) {
+                auto [it, inserted] = addr_to_id.emplace(bufs[i]->address(), i);
+                if (!inserted) {
+                    has_addr_collision = true;
+                }
+                buf_to_id.emplace(bufs[i], i);
+            }
+
             for (const auto& range : tensor_coords.ranges()) {
                 auto desc = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
                 uint32_t num_kernels = static_cast<uint32_t>(desc.kernels.size());
+
+                // --- Runtime arg address slots ---
+                std::vector<AddressSlot> slots;
+                if (!has_addr_collision) {
+                    // Scan the descriptor's runtime args to find buffer address positions.
+                    for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
+                        const auto& kernel_desc = desc.kernels[k];
+                        for (const auto& [core, args] : kernel_desc.runtime_args) {
+                            for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
+                                auto it = addr_to_id.find(args[i]);
+                                if (it != addr_to_id.end()) {
+                                    slots.push_back({k, core, i, it->second});
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // For pure descriptor factories (no override_runtime_arguments),
+                // verify determinism now: call create_descriptor a second time and
+                // compare non-address runtime args.  Any difference means the factory
+                // has non-deterministic state (e.g. random seeds) that would go stale
+                // on cache hits.
+                if constexpr (!has_factory_override) {
+                    std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> slot_positions;
+                    for (const auto& slot : slots) {
+                        slot_positions.emplace(slot.kernel_handle, slot.core.x, slot.core.y, slot.arg_index);
+                    }
+
+                    auto desc2 = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+                    for (uint32_t k = 0; k < num_kernels; ++k) {
+                        const auto& k1 = desc.kernels[k];
+                        const auto& k2 = desc2.kernels[k];
+                        for (size_t ci = 0; ci < k1.runtime_args.size(); ++ci) {
+                            const auto& [core1, args1] = k1.runtime_args[ci];
+                            const auto& [core2, args2] = k2.runtime_args[ci];
+                            for (uint32_t ai = 0; ai < static_cast<uint32_t>(args1.size()); ++ai) {
+                                TT_FATAL(
+                                    args1[ai] == args2[ai] || slot_positions.count({k, core1.x, core1.y, ai}),
+                                    "ProgramDescriptorFactory produces non-deterministic runtime "
+                                    "args (kernel={}, core=({},{}), arg_index={}, values {} vs "
+                                    "{}). create_descriptor must be deterministic: only buffer "
+                                    "addresses may vary between calls. If this factory "
+                                    "intentionally produces changing non-address runtime args "
+                                    "(e.g. random seeds), add a static "
+                                    "override_runtime_arguments(Program&, operation_attributes_t, "
+                                    "tensor_args_t, tensor_return_value_t) method to the factory "
+                                    "to update them explicitly on each cache hit.",
+                                    k,
+                                    core1.x,
+                                    core1.y,
+                                    ai,
+                                    args1[ai],
+                                    args2[ai]);
+                            }
+                        }
+                    }
+                }
+
                 tt::tt_metal::Program program{desc};
+
+                // --- Dynamic circular buffer slots ---
+                // Scan descriptor CBs for those backed by tensor buffers (dynamic CBs).
+                // The Program constructor creates CBs in the same order as desc.cbs,
+                // so we can match by index to obtain the opaque CBHandle.
+                std::vector<CBSlot> cb_slots;
+                {
+                    auto program_cbs = program.circular_buffers();
+                    for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
+                        if (desc.cbs[ci].buffer) {
+                            auto it = buf_to_id.find(desc.cbs[ci].buffer);
+                            if (it != buf_to_id.end()) {
+                                cb_slots.push_back({program_cbs[ci]->id(), it->second});
+                            }
+                        }
+                    }
+                }
+
                 mesh_workload.add_program(range, std::move(program));
-                shared_variables[range] = shared_variables_t{.num_kernel_handles = num_kernels};
+                shared_variables[range] = shared_variables_t{
+                    .address_slots = std::move(slots),
+                    .cb_slots = std::move(cb_slots),
+                    .num_kernel_handles = num_kernels,
+                };
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -174,20 +320,26 @@ struct MeshDeviceOperationAdapter {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                auto desc = DescriptorFactory::create_descriptor(attrs, tensor_args, tensor_return_value);
+                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
-                // Update runtime args for each kernel from the fresh descriptor.
-                // Kernel handles are assigned sequentially (0, 1, 2, ...) matching
-                // the order in ProgramDescriptor::kernels.
-                for (uint32_t k = 0; k < sv.num_kernel_handles; ++k) {
-                    const auto& kernel_desc = desc.kernels[k];
-                    for (const auto& [core, args] : kernel_desc.runtime_args) {
-                        auto& existing_args = tt::tt_metal::GetRuntimeArgs(program, k, core);
-                        for (size_t i = 0; i < args.size(); ++i) {
-                            existing_args[i] = args[i];
-                        }
-                    }
+                // Collect all tensor buffers (used for both runtime arg and CB patching).
+                auto bufs = collect_buffers(tensor_args, tensor_return_value);
+
+                // Patch precomputed runtime arg address slots.
+                for (const auto& slot : sv.address_slots) {
+                    auto& args = tt::tt_metal::GetRuntimeArgs(program, slot.kernel_handle, slot.core);
+                    args[slot.arg_index] = bufs[slot.buffer_id]->address();
+                }
+
+                // Patch dynamic circular buffer addresses.
+                for (const auto& cb_slot : sv.cb_slots) {
+                    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                        program, cb_slot.cb_handle, *bufs[cb_slot.buffer_id]);
+                }
+
+                // If the factory handles non-address runtime args, call it.
+                if constexpr (has_factory_override) {
+                    DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value);
                 }
             }
         }
