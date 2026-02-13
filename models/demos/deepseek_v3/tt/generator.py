@@ -913,22 +913,25 @@ class DeepseekGenerator(WarmupForwardMixin):
     def decode_forward(
         self,
         tokens: torch.Tensor,
-        positions: torch.Tensor,
-        batch_size_per_row: int,
+        start_pos: torch.Tensor,
+        batch_size_per_row: int = USERS_PER_ROW,
         gen_idx: int = 0,
         profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
-        page_tables: torch.Tensor | None = None,
+        page_table: torch.Tensor | None = None,
+        kv_cache: None = None,
+        read_from_device: bool = None,
+        sampling_params: SamplingParams = None,
     ) -> torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
         if not enable_trace:
-            return self._decode_step(tokens, positions, batch_size_per_row, page_tables).squeeze(0).squeeze(0)
+            return self._decode_step(tokens, start_pos, batch_size_per_row, page_table).squeeze(0).squeeze(0)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, positions, batch_size_per_row, page_tables)
+                self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
@@ -964,7 +967,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
 
             host_positions = ttnn.from_torch(
-                positions,
+                start_pos,
                 device=None,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.int32,
@@ -972,11 +975,11 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
 
-            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+            host_rot_idxs = self.rope_setup.get_rot_idxs(start_pos, on_host=True)
             ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
 
-            if page_tables is not None:
-                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_tables, device=None)
+            if page_table is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table, device=None)
                 for i, page_table in enumerate(page_tables_to_use):
                     ttnn.copy_host_to_device_tensor(page_table, self._trace_page_tables_to_use[i])
 
