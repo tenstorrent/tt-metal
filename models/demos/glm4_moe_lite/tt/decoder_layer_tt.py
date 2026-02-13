@@ -413,6 +413,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # output N dimension across more cores without requiring any weight resharding.
     explicit_prog_cfg = _env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG")
     skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
+    attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
+    fuse_mlp_moe_reduce = _env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE")
 
     def _compute_1d_prog_cfg(b_weight: ttnn.Tensor, m_total: int) -> Any:
         """Compute 1D multicast program config for decode matmuls."""
@@ -641,10 +643,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             ttnn.deallocate(result, force=False)
             return result_dram
 
-    def _attn_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-        """Attention projection linear (2D weights only). Uses DRAM-sharded when enabled."""
+    def _attn_linear(a: ttnn.Tensor, b: ttnn.Tensor, *, force_no_tp: bool = False) -> ttnn.Tensor:
+        """Attention projection linear (2D weights only). Uses DRAM-sharded when enabled.
+
+        When force_no_tp=True, skip mesh_partition and all_reduce (weight is replicated).
+        """
+        use_tp = tp_enabled and not force_no_tp
         if dram_sharded_attn:
-            if tp_enabled:
+            if use_tp:
                 a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
                 out = _dram_sharded_linear(a_tp, b)
                 ttnn.deallocate(a_tp, force=False)
@@ -657,7 +663,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             else:
                 return _dram_sharded_linear(a, b)
         else:
-            if tp_enabled:
+            if use_tp:
                 return _tp_row_parallel_linear_from_replicated(a, b)
             else:
                 return _mlp_linear(a, b)
@@ -677,7 +683,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         qkv = None
         w_q_kv_a = getattr(w, "w_q_kv_a", None)
         if w_q_kv_a is not None:
-            qkv = _attn_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+            qkv = _attn_linear(x, w_q_kv_a, force_no_tp=attn_dp)  # [1,1,B,q_lora_rank+kvpe_dim]
 
             if skip_defensive_clones:
                 # Skip clone: use slice results directly; keep qkv alive until q_a and kv are consumed.
@@ -703,7 +709,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 ttnn.deallocate(qkv, force=False)
                 qkv = None
         else:
-            kv = _attn_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+            kv = _attn_linear(x, w.w_kv_a, force_no_tp=attn_dp)  # [1,1,B,kvpe_dim]
 
         # `slice` may alias `kv`. Clone slices before freeing `kv`.
         if skip_defensive_clones:
@@ -791,14 +797,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # ---- Q path ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if q_a is None:
-        q_a = _attn_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
+        q_a = _attn_linear(x, w.w_q_a, force_no_tp=attn_dp)  # [1,1,B,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="decode")
     # Deferred qkv deallocation: when skip_defensive_clones is True, q_a was a
     # view of qkv. Now that q_a_layernorm has consumed it, qkv can be freed.
     if qkv is not None:
         ttnn.deallocate(qkv, force=False)
         qkv = None
-    q = _attn_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
+    q = _attn_linear(q_a, w.w_q_b, force_no_tp=attn_dp)  # [1,1,B,num_heads*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
@@ -1074,7 +1080,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    if tp_enabled:
+    if tp_enabled and not attn_dp:
         v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
     else:
         v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
@@ -1148,6 +1154,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # - shared_experts MLP (dense) + routed experts MLP
     from models.demos.glm4_moe_lite.tt.moe_tt import (
         moe_dense_experts_forward_decode_tt,
+        moe_dense_experts_forward_prefill_tt,
+        moe_packed_experts_forward_prefill_tt,
         moe_sparse_experts_forward_tt,
         moe_topk_cpu_reference,
         moe_topk_tt,
@@ -1156,13 +1164,20 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     tokens = int(x.shape[2])
     experts_impl = os.environ.get("GLM4_MOE_LITE_MOE_EXPERTS_IMPL", "sparse").strip().lower()
     use_dense_decode = experts_impl in {"dense_decode", "dense-decode"} and tokens == 1
+    dense_prefill = _env_bool("GLM4_MOE_LITE_MOE_DENSE_PREFILL", default=False)
+    packed_prefill = _env_bool("GLM4_MOE_LITE_MOE_PACKED_PREFILL", default=False)
+    # Packed prefill reads routing indices to CPU, which is forbidden during trace
+    # capture. Decode batches (tokens <= max_batch=32) can trigger tokens>1 but are
+    # traced, so only use packed prefill for genuine prefill (tokens > 32).
+    _PACKED_PREFILL_MIN_TOKENS = 33
+    use_packed_prefill = packed_prefill and tokens >= _PACKED_PREFILL_MIN_TOKENS
+    use_dense_prefill = dense_prefill and not use_packed_prefill and tokens > 1
     moe_decode_mc = getattr(moe_runtime, "decode_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
     # Pad tokens dim for sparse expert kernels (decode tokens are often 1).
-    # Use the minimum legal multiple for the current dispatch width to avoid
-    # inflating decode work on multi-device meshes.
+    # Dense prefill path uses ttnn.linear (no block alignment needed), so skip padding.
     pad_tokens = 0
-    if not use_dense_decode:
+    if not use_dense_decode and not use_dense_prefill and not use_packed_prefill:
         sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
         pad_tokens = (-tokens) % sparse_multiple
         if pad_tokens:
@@ -1179,6 +1194,9 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 x = x_padded
 
     # Shared expert (dense MLP).
+    # When fuse_mlp_moe_reduce is True, skip the per-branch all_reduce and instead
+    # add the local partial results first, then do ONE all_reduce on the sum.
+    _skip_shared_reduce = fuse_mlp_moe_reduce and tp_enabled
     t0 = time.perf_counter() if profile is not None else 0.0
     _use_dram_mlp = dram_sharded_mlp and int(x.shape[2]) == _DS_BATCH
     if _use_dram_mlp:
@@ -1192,7 +1210,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
         ttnn.deallocate(x_ff_shared, force=False)
-    if tp_enabled:
+    if tp_enabled and not _skip_shared_reduce:
         shared_out_reduced = ttnn.all_reduce(
             shared_out,
             num_links=1,
@@ -1229,6 +1247,31 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             hparams=hparams,
             memory_config=moe_decode_mc,
             compute_kernel_config=mlp_compute_kernel_config,
+            skip_defensive_clones=skip_defensive_clones,
+        )
+    elif use_packed_prefill:
+        routed_out = moe_packed_experts_forward_prefill_tt(
+            device=device,
+            hidden_states=x,  # consumed
+            topk_expert_indices=topk_indices,  # consumed
+            topk_expert_weights=topk_weights,  # consumed
+            moe_w=w.moe,
+            hparams=hparams,
+            memory_config=moe_decode_mc,
+            compute_kernel_config=mlp_compute_kernel_config,
+            skip_defensive_clones=skip_defensive_clones,
+        )
+    elif use_dense_prefill:
+        routed_out = moe_dense_experts_forward_prefill_tt(
+            device=device,
+            hidden_states=x,  # consumed
+            topk_expert_indices=topk_indices,  # consumed
+            topk_expert_weights=topk_weights,  # consumed
+            moe_w=w.moe,
+            hparams=hparams,
+            memory_config=moe_decode_mc,
+            compute_kernel_config=mlp_compute_kernel_config,
+            skip_defensive_clones=skip_defensive_clones,
         )
     else:
         routed_out = moe_sparse_experts_forward_tt(
@@ -1239,6 +1282,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             moe_w=w.moe,
             rt=moe_runtime,
             memory_config=moe_decode_mc,
+            skip_defensive_clones=skip_defensive_clones,
+            skip_final_reduce=_skip_shared_reduce,
         )
     _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
@@ -1246,6 +1291,18 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     mlp_out = ttnn.add(shared_out, routed_out, memory_config=moe_decode_mc)
     ttnn.deallocate(shared_out, force=False)
     ttnn.deallocate(routed_out, force=False)
+
+    # When fuse_mlp_moe_reduce is True, do ONE fused all_reduce on the combined output.
+    if _skip_shared_reduce:
+        mlp_out_reduced = ttnn.all_reduce(
+            mlp_out,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(mlp_out, force=False)
+        mlp_out = mlp_out_reduced
 
     # Slice back to the real token count if we padded.
     if pad_tokens:
@@ -1271,15 +1328,17 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 def run_decoder_layer_prefill_update_cache_tt(
     *,
     device: Any,
-    x_embed: ttnn.Tensor,  # [1, 1, S, hidden] tiled
-    page_table_tt: ttnn.Tensor,  # [1, max_num_blocks_per_req] int32 row-major on device
+    x_embed: ttnn.Tensor,  # [1, 1, S, hidden] tiled (S = B*S_pad when batched)
+    page_table_tt: ttnn.Tensor,  # [B, max_num_blocks_per_req] int32 row-major on device
     kvpe_cache: ttnn.Tensor,  # [num_blocks, 1, block_size, kvpe_dim] on device
-    cos_matrix: ttnn.Tensor,  # [1, 1, S, rope_dim] bf16
-    sin_matrix: ttnn.Tensor,  # [1, 1, S, rope_dim] bf16
+    cos_matrix: ttnn.Tensor,  # [1, 1, S_pad, rope_dim] bf16
+    sin_matrix: ttnn.Tensor,  # [1, 1, S_pad, rope_dim] bf16
     trans_matrix: ttnn.Tensor,
     w: Any,
     hparams: Glm4MoeLiteHParams,
-    prompt_len: int,  # number of valid tokens to write into KV cache (<= S)
+    prompt_len: int,  # number of valid tokens to write into KV cache (<= S_pad)
+    batch: int = 1,  # number of requests batched in the S dimension
+    prompt_lens: list[int] | None = None,  # per-request prompt lengths (required when batch > 1)
     moe_runtime: Any | None = None,
     profile: dict[str, float] | None = None,
 ) -> ttnn.Tensor:
@@ -1287,12 +1346,37 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     This is the sequence-length (S>1) counterpart to
     `run_decoder_layer_decode_one_step_update_cache_tt`.
+
+    When ``batch > 1``, the token dimension of ``x_embed`` is ``B * S_pad``
+    (all requests concatenated along dim-2).  Token-wise ops (norms, linears,
+    MoE) operate on the flat ``[1,1,B*S_pad,hidden]`` shape.  For RoPE and
+    FlashMLA the tensors are reshaped to ``[B,...,S_pad,...]`` so that
+    positional encoding and causal masking are per-request.
     """
     if len(x_embed.shape) != 4:
         raise ValueError(f"expected x_embed rank 4, got shape={tuple(x_embed.shape)}")
-    seq_len = int(x_embed.shape[2])
-    if seq_len <= 0:
+    total_seq = int(x_embed.shape[2])
+    if total_seq <= 0:
         raise ValueError("prefill seq_len must be > 0")
+
+    batch = int(batch)
+    if batch < 1:
+        raise ValueError(f"batch must be >= 1, got {batch}")
+
+    if batch > 1:
+        if total_seq % batch != 0:
+            raise ValueError(
+                f"x_embed dim-2 ({total_seq}) must be divisible by batch ({batch})"
+            )
+        seq_len = total_seq // batch
+        if prompt_lens is None:
+            raise ValueError("prompt_lens required when batch > 1")
+        if len(prompt_lens) != batch:
+            raise ValueError(f"prompt_lens length {len(prompt_lens)} != batch {batch}")
+    else:
+        seq_len = total_seq
+        if prompt_lens is None:
+            prompt_lens = [int(prompt_len)]
 
     prompt_len = int(prompt_len)
     if prompt_len <= 0 or prompt_len > seq_len:
@@ -1346,61 +1430,87 @@ def run_decoder_layer_prefill_update_cache_tt(
     t0 = time.perf_counter() if profile is not None else 0.0
     q_a = None
     kv = None
+    # Token-wise linears operate on [1,1,B*S_pad,...] (total_seq tokens).
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
     if w_q_kv_a is not None:
         if tp_enabled:
-            qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,S,q_lora_rank+kvpe_dim]
+            qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
         else:
-            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,S,q_lora_rank+kvpe_dim]
-        q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, seq_len, int(hparams.q_lora_rank)])
+            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
+        q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, total_seq, int(hparams.q_lora_rank)])
         kv = ttnn.slice(
             qkv,
             [0, 0, 0, int(hparams.q_lora_rank)],
-            [1, 1, seq_len, int(hparams.q_lora_rank) + kvpe_dim],
+            [1, 1, total_seq, int(hparams.q_lora_rank) + kvpe_dim],
         )
         ttnn.deallocate(qkv, force=False)
     else:
         if tp_enabled:
-            q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,S,q_lora_rank]
+            q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,T,q_lora_rank]
         else:
-            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,S,q_lora_rank]
+            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,T,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="prefill")
     if tp_enabled:
-        q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
+        q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     else:
-        q = _mlp_linear(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
+        q = _mlp_linear(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
-    q = ttnn.reshape(q, (1, seq_len, num_heads, int(hparams.qk_head_dim)))
-    q = ttnn.permute(q, (0, 2, 1, 3))  # [1,H,S,qk_head_dim]
-    q_nope = ttnn.slice(q, [0, 0, 0, 0], [1, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
-    q_rope = ttnn.slice(q, [0, 0, 0, int(hparams.qk_nope_head_dim)], [1, num_heads, seq_len, int(hparams.qk_head_dim)])
+    # Reshape Q from flat token dim to [B, S_pad, H, qk_head_dim], then permute
+    # to [B, H, S_pad, qk_head_dim] for attention.
+    q = ttnn.reshape(q, (batch, seq_len, num_heads, int(hparams.qk_head_dim)))
+    q = ttnn.permute(q, (0, 2, 1, 3))  # [B,H,S_pad,qk_head_dim]
+    q_nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
+    q_rope = ttnn.slice(q, [0, 0, 0, int(hparams.qk_nope_head_dim)], [batch, num_heads, seq_len, int(hparams.qk_head_dim)])
     ttnn.deallocate(q, force=False)
 
     # Project q_nope into KV latent space (per-head).
+    # TTNN non-bcast matmul requires dim-0==1 for 4D×2D. When batch>1, reshape
+    # [B,H,S,D] → [1,B*H,S,D] so dim-0 is 1, then reshape back after.
     use_tp_kv_b1 = tp_enabled
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)
         qk_nope_per_shard = qk_nope // max(1, int(tp_size))
         if qk_nope % max(1, int(tp_size)) != 0 or qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
             use_tp_kv_b1 = False
-    if use_tp_kv_b1:
-        q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)  # [1,H,S,kv_lora_rank]
+    # w_kv_b1 is a small per-head matmul (qk_nope_head_dim → kv_lora_rank).
+    # TTNN non-bcast matmul doesn't broadcast across dim-0 when B>1.
+    # Loop over batch: each [1,H,S,D] matmul matches the serial-path shape exactly.
+    # This is fast because the matmul is small — the big batching wins come from
+    # the token-wise linears and MoE which stay on flat [1,1,B*S,hidden].
+    if batch > 1:
+        kv_b1_fn = _tp_row_parallel_linear_from_replicated if use_tp_kv_b1 else _mlp_linear
+        q_nope_parts = []
+        for bi in range(batch):
+            q_bi = ttnn.slice(q_nope, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
+            q_bi = kv_b1_fn(q_bi, w.w_kv_b1)
+            q_nope_parts.append(q_bi)
+        ttnn.deallocate(q_nope, force=False)
+        q_nope = ttnn.concat(q_nope_parts, dim=0)  # [B,H,S,kv_lora_rank]
+        for p in q_nope_parts:
+            ttnn.deallocate(p, force=False)
     else:
-        q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,S,kv_lora_rank]
+        if use_tp_kv_b1:
+            q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)
+        else:
+            q_nope = _mlp_linear(q_nope, w.w_kv_b1)
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KVPE for the prompt -> fill cache ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if kv is None:
         if tp_enabled:
-            kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
+            kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
         else:
-            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
+            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
     ttnn.deallocate(x, force=False)
 
-    kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, seq_len, int(hparams.kv_lora_rank)])
-    kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, seq_len, kvpe_dim])
+    # Reshape KV from flat [1,1,B*S_pad,...] to [B,1,S_pad,...] for per-request
+    # RoPE and KV cache fill.
+    kv = ttnn.reshape(kv, (batch, 1, seq_len, kvpe_dim))
+
+    kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, int(hparams.kv_lora_rank)])
+    kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [batch, 1, seq_len, kvpe_dim])
     ttnn.deallocate(kv, force=False)
 
     kv_nope = w.kv_a_layernorm(kv_nope, mode="prefill")
@@ -1411,46 +1521,47 @@ def run_decoder_layer_prefill_update_cache_tt(
     if kv_rope.dtype != ttnn.bfloat16:
         kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
 
+    # RoPE: cos/sin are [1,1,S_pad,rope_dim] and broadcast across batch.
     q_rope = ttnn.experimental.rotary_embedding_llama(
         q_rope,
         cos_matrix,
         sin_matrix,
         trans_matrix,
         is_decode_mode=False,
-    )  # [1,H,S,rope_dim]
+    )  # [B,H,S_pad,rope_dim]
     kv_rope = ttnn.experimental.rotary_embedding_llama(
         kv_rope,
         cos_matrix,
         sin_matrix,
         trans_matrix,
         is_decode_mode=False,
-    )  # [1,1,S,rope_dim]
+    )  # [B,1,S_pad,rope_dim]
 
-    q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,S,kvpe_dim]
+    q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [B,H,S_pad,kvpe_dim]
     ttnn.deallocate(q_nope, force=False)
     ttnn.deallocate(q_rope, force=False)
 
-    kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,S,kvpe_dim]
+    kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [B,1,S_pad,kvpe_dim]
     ttnn.deallocate(kv_nope, force=False)
     ttnn.deallocate(kv_rope, force=False)
 
-    # Fill KV cache only for the valid prefix tokens (prompt_len). Padding after
-    # the prompt must not be written unless vLLM actually allocated those blocks.
-    kvpe_fill = kvpe
-    if prompt_len != seq_len:
-        kvpe_fill = ttnn.slice(kvpe, [0, 0, 0, 0], [1, 1, prompt_len, kvpe_dim])
+    # Fill KV cache for each request. paged_fill_cache operates on one batch
+    # item at a time (no batched API), so we loop over the batch dimension.
+    for bi in range(batch):
+        plen = int(prompt_lens[bi])
+        kvpe_bi = ttnn.slice(kvpe, [bi, 0, 0, 0], [bi + 1, 1, plen, kvpe_dim])
 
-    if kvpe_fill.dtype != kvpe_cache.dtype:
-        kvpe_fill_cast = ttnn.typecast(kvpe_fill, dtype=kvpe_cache.dtype)
-    else:
-        kvpe_fill_cast = kvpe_fill
+        if kvpe_bi.dtype != kvpe_cache.dtype:
+            kvpe_bi_cast = ttnn.typecast(kvpe_bi, dtype=kvpe_cache.dtype)
+        else:
+            kvpe_bi_cast = kvpe_bi
 
-    ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_fill_cast, page_table=page_table_tt, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_bi_cast, page_table=page_table_tt, batch_idx=bi)
 
-    if kvpe_fill_cast is not kvpe_fill:
-        ttnn.deallocate(kvpe_fill_cast, force=False)
-    if kvpe_fill is not kvpe:
-        ttnn.deallocate(kvpe_fill, force=False)
+        if kvpe_bi_cast is not kvpe_bi:
+            ttnn.deallocate(kvpe_bi_cast, force=False)
+        ttnn.deallocate(kvpe_bi, force=False)
+
     _profile_add(profile, "kv_cache_fill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- FlashMLA prefill ----
@@ -1490,6 +1601,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         packer_l1_acc=False,
     )
 
+    # FlashMLA prefill with batch dimension: q_kvpe [B,H,S_pad,kvpe_dim],
+    # kvpe [B,1,S_pad,kvpe_dim].  is_causal=True applies per-batch causal mask.
     t0 = time.perf_counter() if profile is not None else 0.0
     attn_latent = ttnn.transformer.flash_mla_prefill(
         q_kvpe,
@@ -1501,27 +1614,43 @@ def run_decoder_layer_prefill_update_cache_tt(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         attn_mask=None,
         is_causal=True,
-    )  # [1,H_padded,S,kv_lora_rank]
+    )  # [B,H_padded,S_pad,kv_lora_rank]
     ttnn.deallocate(q_kvpe, force=False)
     ttnn.deallocate(kvpe, force=False)
     _profile_add(profile, "flash_mla_prefill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # flash_mla_prefill pads heads up to q_chunk_size. Slice back to num_heads.
-    attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [1, num_heads, seq_len, int(hparams.kv_lora_rank)])
+    attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    if tp_enabled:
-        v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
+    # Same per-batch loop as w_kv_b1 for w_kv_b2 (small per-head matmul).
+    if batch > 1:
+        kv_b2_fn = _tp_row_parallel_linear_from_replicated if tp_enabled else _mlp_linear
+        v_parts = []
+        for bi in range(batch):
+            a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
+            v_bi = kv_b2_fn(a_bi, w.w_kv_b2)
+            ttnn.deallocate(a_bi, force=False)
+            v_parts.append(v_bi)
+        ttnn.deallocate(attn_latent, force=False)
+        v = ttnn.concat(v_parts, dim=0)  # [B,H,S,v_head_dim]
+        for p in v_parts:
+            ttnn.deallocate(p, force=False)
     else:
-        v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
-    ttnn.deallocate(attn_latent, force=False)
+        if tp_enabled:
+            v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)
+        else:
+            v = _mlp_linear(attn_latent, w.w_kv_b2)
+        ttnn.deallocate(attn_latent, force=False)
 
-    v = ttnn.permute(v, (0, 2, 1, 3))  # [1,S,H,v_head_dim]
-    v = ttnn.reshape(v, (1, 1, seq_len, int(num_heads * hparams.v_head_dim)))  # [1,1,S,H*v_head_dim]
+    # Flatten back from [B,H,S_pad,v_head_dim] to [1,1,B*S_pad,H*v_head_dim]
+    # for the output projection (token-wise linear).
+    v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
+    v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
     if tp_enabled:
-        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,S,hidden]
+        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B*S_pad,hidden]
     else:
-        attn_out = _mlp_linear(v, w.w_o)  # [1,1,S,hidden]
+        attn_out = _mlp_linear(v, w.w_o)  # [1,1,B*S_pad,hidden]
     ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
@@ -1563,23 +1692,33 @@ def run_decoder_layer_prefill_update_cache_tt(
         # MoE path:
         # - shared_experts MLP (dense) + routed experts MLP
         from models.demos.glm4_moe_lite.tt.moe_tt import (
+            moe_dense_experts_forward_prefill_tt,
+            moe_packed_experts_forward_prefill_tt,
             moe_sparse_experts_forward_tt,
             moe_topk_cpu_reference,
             moe_topk_tt,
         )
 
+        dense_prefill = _env_bool("GLM4_MOE_LITE_MOE_DENSE_PREFILL", default=False)
+        packed_prefill = _env_bool("GLM4_MOE_LITE_MOE_PACKED_PREFILL", default=False)
+
         # Pad tokens to the minimum legal sparse multiple for this mesh.
+        # Dense/packed prefill paths use ttnn.linear (no block alignment needed), so skip padding.
         tokens = int(x.shape[2])
-        sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
-        pad_tokens = (-tokens) % sparse_multiple
-        if pad_tokens:
-            # IMPORTANT: `ttnn.pad` can return a view that aliases the input buffer.
-            # Materialize with `ttnn.clone` before deallocating the original tensor.
-            x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-            x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
-            ttnn.deallocate(x, force=False)
-            x = x_padded
+        _PACKED_PREFILL_MIN_TOKENS = 33
+        use_packed_prefill_here = packed_prefill and tokens >= _PACKED_PREFILL_MIN_TOKENS
+        pad_tokens = 0
+        if not dense_prefill and not use_packed_prefill_here:
+            sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
+            pad_tokens = (-tokens) % sparse_multiple
+            if pad_tokens:
+                # IMPORTANT: `ttnn.pad` can return a view that aliases the input buffer.
+                # Materialize with `ttnn.clone` before deallocating the original tensor.
+                x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+                x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
+                ttnn.deallocate(x, force=False)
+                x = x_padded
 
         # Shared expert (dense MLP).
         t0 = time.perf_counter() if profile is not None else 0.0
@@ -1617,15 +1756,38 @@ def run_decoder_layer_prefill_update_cache_tt(
             )
         _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
         t0 = time.perf_counter() if profile is not None else 0.0
-        routed_out = moe_sparse_experts_forward_tt(
-            device=device,
-            hidden_states=x,  # consumed
-            topk_expert_indices=topk_indices,  # consumed
-            topk_expert_weights=topk_weights,  # consumed
-            moe_w=w.moe,
-            rt=moe_runtime,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if use_packed_prefill_here:
+            routed_out = moe_packed_experts_forward_prefill_tt(
+                device=device,
+                hidden_states=x,  # consumed
+                topk_expert_indices=topk_indices,  # consumed
+                topk_expert_weights=topk_weights,  # consumed
+                moe_w=w.moe,
+                hparams=hparams,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=mlp_compute_kernel_config,
+            )
+        elif dense_prefill:
+            routed_out = moe_dense_experts_forward_prefill_tt(
+                device=device,
+                hidden_states=x,  # consumed
+                topk_expert_indices=topk_indices,  # consumed
+                topk_expert_weights=topk_weights,  # consumed
+                moe_w=w.moe,
+                hparams=hparams,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=mlp_compute_kernel_config,
+            )
+        else:
+            routed_out = moe_sparse_experts_forward_tt(
+                device=device,
+                hidden_states=x,  # consumed
+                topk_expert_indices=topk_indices,  # consumed
+                topk_expert_weights=topk_weights,  # consumed
+                moe_w=w.moe,
+                rt=moe_runtime,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
         t0 = time.perf_counter() if profile is not None else 0.0
