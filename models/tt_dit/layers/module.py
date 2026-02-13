@@ -419,7 +419,7 @@ class Parameter:
                 msg = "expected host tensor, got device tensor"
                 raise LoadingError(msg)
         elif value.device() is None:
-            if not self.on_host and not allow_on_host:
+            if not allow_on_host:
                 msg = "expected device tensor, got host tensor"
                 raise LoadingError(msg)
         elif value.device() != self.device:
