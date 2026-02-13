@@ -74,29 +74,24 @@ void bind_assign(nb::module_& mod) {
 
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"assign">(
         mod,
-        ttnn::assign,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::assign)& self,
-               const ttnn::Tensor& input,
-               const ttnn::MemoryConfig& memory_config,
-               const std::optional<const ttnn::DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(input, memory_config, dtype, optional_output_tensor);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::MemoryConfig&,
+                std::optional<const ttnn::DataType>,
+                const std::optional<ttnn::Tensor>&>(&ttnn::assign),
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config"),
             nb::arg("dtype") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::assign)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-                return self(input_a, input_b);
-            },
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::assign),
             nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert()});
+            nb::arg("input_b").noconvert()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

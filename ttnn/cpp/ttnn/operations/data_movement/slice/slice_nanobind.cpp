@@ -13,7 +13,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "slice.hpp"
 
@@ -40,62 +40,44 @@ void bind_slice(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    using OperationType = decltype(ttnn::slice);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"slice">(
         mod,
-        ttnn::slice,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& slice_start,
-               const ttnn::Tensor& slice_end,
-               const std::optional<ttnn::SmallVector<uint32_t>>& step,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value,
-               // the following two args are used to calculate the output shape for slice op with tensor args
-               // running on device to avoid host-device data transfer for mesh device and trace cases
-               const std::optional<uint32_t>& slice_dim,
-               const std::optional<uint32_t>& num_devices,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                return self(
-                    input_tensor,
-                    slice_start,
-                    slice_end,
-                    step,
-                    memory_config,
-                    optional_output_tensor,
-                    pad_value,
-                    slice_dim,
-                    num_devices,
-                    sub_core_grids);
-            },
+        // Overload 1: Tensor args version (uint32_t template parameter)
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                const std::optional<ttnn::SmallVector<uint32_t>>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<float>&,
+                const std::optional<uint32_t>&,
+                const std::optional<uint32_t>&,
+                const std::optional<CoreRangeSet>&)>(&ttnn::slice<uint32_t>),
             nb::arg("input_tensor"),
             nb::arg("starts"),
             nb::arg("ends"),
-            nb::arg("slice_step") = nb::none(),  // should consider a better default value
+            nb::arg("slice_step") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("slice_dim") = nb::none(),
             nb::arg("num_devices") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 4>& begins,
-               const std::array<uint32_t, 4>& ends,
-               const std::array<uint32_t, 4>& step,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                return self(
-                    input_tensor, begins, ends, step, memory_config, optional_output_tensor, pad_value, sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        // Overload 2: std::array version (uint32_t template parameter, size 4)
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(
+                const ttnn::Tensor&,
+                const std::array<uint32_t, 4>&,
+                const std::array<uint32_t, 4>&,
+                const std::array<uint32_t, 4>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<float>&,
+                const std::optional<CoreRangeSet>&)>(&ttnn::slice<uint32_t, 4>),
             nb::arg("input_tensor"),
             nb::arg("starts"),
             nb::arg("ends"),
@@ -104,38 +86,26 @@ void bind_slice(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& slice_start,
-               const ttnn::SmallVector<int>& slice_end,
-               const std::optional<ttnn::SmallVector<int>>& step,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
-                return self(
-                    input_tensor,
-                    slice_start,
-                    slice_end,
-                    step_value,
-                    memory_config,
-                    optional_output_tensor,
-                    pad_value,
-                    sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        // Overload 3: SmallVector<int> version (int32_t template parameter)
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(
+                const ttnn::Tensor&,
+                const ttnn::SmallVector<int32_t>&,
+                const ttnn::SmallVector<int32_t>&,
+                const ttnn::SmallVector<int32_t>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<float>&,
+                const std::optional<CoreRangeSet>&)>(&ttnn::slice<int32_t>),
             nb::arg("input_tensor"),
             nb::arg("slice_start"),
             nb::arg("slice_end"),
-            nb::arg("slice_step") = nb::none(),  // should consider a better default value
+            nb::arg("slice_step"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("sub_core_grids") = std::nullopt}
-
-    );
+            nb::arg("sub_core_grids") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::detail

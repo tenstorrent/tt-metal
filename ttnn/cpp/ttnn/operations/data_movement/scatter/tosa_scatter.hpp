@@ -10,19 +10,10 @@
 
 namespace ttnn {
 
-namespace operations::data_movement {
-
-struct TOSAScatterOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const Tensor& index_tensor,
-        const Tensor& source_tensor,
-        const std::optional<MemoryConfig>& output_memory_config);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto tosa_scatter =
-    ttnn::register_operation<"ttnn::tosa_scatter", ttnn::operations::data_movement::TOSAScatterOperation>();
+Tensor tosa_scatter(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config = std::nullopt);
 
 }  // namespace ttnn

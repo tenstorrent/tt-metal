@@ -10,21 +10,22 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 | Metric | Count |
 |--------|-------|
 | Total operations found | 311 |
-| **Completed Migrations** | **79** |
-| **Data Movement** | **47** (COMPLETE!) |
+| **Completed Migrations** | **96** |
+| **Data Movement** | **54** (COMPLETE!) |
 | **Moreh Operations** | **32** (COMPLETE!) |
+| **Reduction Operations** | **10** (merged from PR) |
 | Conv operations (merged from PR) | 3 |
-| In outstanding PRs | ~10 (reduction ops) |
-| Remaining to migrate | ~229 (mostly eltwise ~150 + others) |
+| Remaining to migrate | ~212 (mostly eltwise ~150 + others) |
 
 ### Migration Breakdown
-**Data Movement (47):**
+**Data Movement (54):**
 - Pre-existing: 7 operations
 - Test Batch: 4 operations (squeeze reverted)
 - Batch 1: 10 operations
 - Batch 2: 15 operations
 - Batch 3 Phase 1: 5 operations
 - Batch 3 Phase 2: 6 operations
+- Final Batch: 7 operations (assign, slice, view, reshape, moe_expert_token_remap, tosa_scatter, tosa_gather)
 
 **Moreh Operations (32):**
 - Batch 1: 8 operations (arange, sum, mean, cumsum, getitem, fold, abs_pow, dot)
@@ -33,7 +34,7 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 
 ## Migration Status by Directory
 
-### ✅ Completed (33 directories, 47 operations)
+### ✅ Completed (40 directories, 96 operations)
 **Pre-existing (7):**
 - `ttnn/cpp/ttnn/operations/normalization/layernorm/` - layer_norm
 - `ttnn/cpp/ttnn/operations/normalization/rmsnorm/` - rms_norm
@@ -88,6 +89,15 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 - `ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/` - interleaved_to_sharded (2 overloads) ✅
 - `ttnn/cpp/ttnn/operations/data_movement/sort/` - sort (returns std::vector<Tensor>, uses mod.def lambda) ✅
 
+**Final Batch (7 operations - remaining data_movement):**
+- `ttnn/cpp/ttnn/operations/data_movement/copy/` - assign (2 overloads) ✅
+- `ttnn/cpp/ttnn/operations/data_movement/slice/` - slice (4 template overloads) ✅
+- `ttnn/cpp/ttnn/operations/data_movement/view/` - view (2 overloads) ✅
+- `ttnn/cpp/ttnn/operations/data_movement/reshape_view/` - reshape (3 overloads) ✅
+- `ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/` - moe_expert_token_remap ✅
+- `ttnn/cpp/ttnn/operations/data_movement/scatter/` - tosa_scatter ✅
+- `ttnn/cpp/ttnn/operations/data_movement/gather/tosa/` - tosa_gather ✅
+
 **Conv Operations (3 operations - merged from separate PR):**
 - `ttnn/cpp/ttnn/operations/conv/conv1d/` - conv1d ✅
 - `ttnn/cpp/ttnn/operations/conv/conv2d/` - conv2d ✅
@@ -98,9 +108,8 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 
 ### 📋 TODO - High Priority (Core Operations)
 
-#### Data Movement (~16 operations remaining)
-- [x] `bcast/` - BcastOperation ✅
-- [x] `clone/` - Clone ✅
+#### Data Movement (COMPLETE! ✅)
+All data_movement operations have been migrated to the free function pattern.
 - [x] `concat/` - ConcatOperation ✅
 - [x] `copy/` - Copy ✅
 - [x] `expand/` - ExpandOperation ✅
@@ -150,15 +159,15 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 - [ ] `eltwise/quantization/` - quantize, dequantize, requantize
 
 #### Reduction Operations (~10 operations)
-- [ ] `reduction/argmax/` - ArgMax
-- [ ] `reduction/prod/` - Prod
-- [ ] `reduction/accumulation/cumsum/` - Cumsum
-- [ ] `reduction/accumulation/cumprod/` - Cumprod
-- [ ] `reduction/accumulation/ema/` - EMA
-- [ ] `reduction/moe/` - MOE
-- [ ] `reduction/sampling/` - Sampling
-- [ ] `reduction/manual_seed/` - ManualSeed
-- [ ] `reduction/generic/` - Generic reductions
+- [x] `reduction/argmax/` - ArgMax ✅
+- [x] `reduction/prod/` - Prod ✅
+- [x] `reduction/accumulation/cumsum/` - Cumsum ✅
+- [x] `reduction/accumulation/cumprod/` - Cumprod ✅
+- [x] `reduction/accumulation/ema/` - EMA ✅
+- [x] `reduction/moe/` - MOE ✅
+- [x] `reduction/sampling/` - Sampling ✅
+- [x] `reduction/manual_seed/` - ManualSeed ✅
+- [x] `reduction/generic/` - Generic reductions ✅
 
 #### Pool Operations (~6 operations)
 - [ ] `pool/avg_pool2d/` - AvgPool2D

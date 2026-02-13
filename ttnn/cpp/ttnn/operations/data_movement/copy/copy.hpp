@@ -12,25 +12,14 @@ namespace ttnn {
 
 Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 
-namespace operations::data_movement {
+namespace operations::data_movement {}  // namespace operations::data_movement
 
-struct AssignOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input,
-        const MemoryConfig& output_mem_config,
-        std::optional<const DataType> output_dtype = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor assign(
+    const Tensor& input,
+    const MemoryConfig& output_mem_config,
+    std::optional<const DataType> output_dtype = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        const Tensor& input,
-        const MemoryConfig& output_mem_config,
-        std::optional<const DataType> output_dtype = std::nullopt);
-
-    static ttnn::Tensor invoke(const Tensor& input_a, const Tensor& input_b);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto assign = ttnn::register_operation<"ttnn::assign", ttnn::operations::data_movement::AssignOperation>();
+Tensor assign(const Tensor& input_a, const Tensor& input_b);
 
 }  // namespace ttnn
