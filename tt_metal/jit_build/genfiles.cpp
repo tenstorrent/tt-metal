@@ -21,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -269,7 +268,7 @@ void emit_formats_array(
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data_formats(
-    tt_hlk_desc& desc,
+    const tt_hlk_desc& desc,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
@@ -287,16 +286,16 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
 
 void emit_unpack_data_formats(
     std::ostream& out,
-    const std::vector<DataFormat>& src_formats,
-    const std::vector<DataFormat>& dst_formats,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats);
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats);
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
-    tt_hlk_desc& desc,
+    const tt_hlk_desc& desc,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
@@ -321,11 +320,11 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 
 void emit_pack_data_formats(
     std::ostream& out,
-    const std::vector<DataFormat>& src_formats,
-    const std::vector<DataFormat>& dst_formats,
+    const std::vector<DataFormat>& src_formats_all_cbs,
+    const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
-    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats);
-    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats);
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -357,7 +356,7 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
-void emit_unpack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cbs) {
+void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
@@ -367,7 +366,7 @@ void emit_unpack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cb
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 }
 
-void emit_pack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cbs) {
+void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_cbs, desc.buf_partial_face_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
@@ -377,7 +376,7 @@ void emit_pack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cbs)
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 }
 
-void emit_scalar_descriptors(std::ostream& out, JitBuildOptions& options, tt_hlk_desc& desc) {
+void emit_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, const tt_hlk_desc& desc) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
@@ -391,10 +390,10 @@ void emit_scalar_descriptors(std::ostream& out, JitBuildOptions& options, tt_hlk
         desc.get_hlk_math_approx_mode());
 }
 
-void generate_all_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
+void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
     const uint32_t max_cbs = env.get_max_cbs();
     const tt::ARCH arch = env.get_arch();
-    tt_hlk_desc& desc = options.hlk_desc;
+    const tt_hlk_desc& desc = options.hlk_desc;
 
     // Determine dst format under ambiguous conditions (either or both l1 input & output formats are Float32)
     ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
@@ -408,12 +407,10 @@ void generate_all_descriptors(const JitBuildEnv& env, JitBuildOptions& options) 
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
 
-    vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(
+    auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
 
-    vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
-    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(
+    auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
 
     // equalize "upack src" and "pack dst" data format vectors
@@ -448,7 +445,7 @@ void generate_all_descriptors(const JitBuildEnv& env, JitBuildOptions& options) 
 }  // namespace
 
 // clang-format off
-void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
+void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
