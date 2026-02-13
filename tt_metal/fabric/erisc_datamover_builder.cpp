@@ -339,8 +339,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
 
         // persistent mode field
-        this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;
-        buffer_address += field_size;
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
@@ -1395,8 +1393,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
         for (uint32_t i = 0; i < num_downstream_edms; i++) {
-            receiver_channels_downstream_flow_control_semaphore_id[i] =
-                config.receiver_channels_downstream_flow_control_semaphore_address[i];
+            receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
             receiver_channels_downstream_teardown_semaphore_id[i] =
                 config.receiver_channels_downstream_teardown_semaphore_address[i];
         }

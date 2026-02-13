@@ -264,8 +264,6 @@ struct FabricEriscDatamoverConfig {
     // ----------- Receiver Channels
     // persistent mode field
     std::array<std::size_t, builder_config::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
