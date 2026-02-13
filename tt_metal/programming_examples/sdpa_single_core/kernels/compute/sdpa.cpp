@@ -1206,22 +1206,12 @@ void sdpa_inner_loop(
                     }
                 }
 
-                // 3. Rest of SALAD for PREVIOUS row
+                // 3. Rest of SALAD for PREVIOUS row — fused single DST pass
                 {
-                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_TILES");
-                    mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
-                }
-                {
-                    MATH(DPRINT << "Add tiles inplace for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_ADD_TILES");
-                    add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
-                }
-                {
-                    MATH(DPRINT << "Element-wise mul of Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_BLOCK");
-                    mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
-                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+                    SDPA_DeviceZoneScopedN_5("SALAD");
+                    MATH(DPRINT << "Fused SALAD rescale for Q[" << salad_row << "]" << ENDL());
+                    salad_rescale_fused<sbh, head_dim_t>(
+                        alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
                 }
 
                 // 4. Push completed row for PREVIOUS subblock.
@@ -1245,10 +1235,8 @@ void sdpa_inner_loop(
                 sub_exp_first_col_blocks_no_push<scale_fp32, sbh>(
                     alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                 cb_push_back_hold_wr_ptr(cb_exp_max_diff, sbh);
-                mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
-                add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
-                mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
-                    alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+                salad_rescale_fused<sbh, head_dim_t>(
+                    alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
 
                 // alias_cur_out: SALAD drain packed tiles for last row.
                 // Held push — signals UNPACK but keeps wr_ptr at CB base (same as SALAD loop pushes).
