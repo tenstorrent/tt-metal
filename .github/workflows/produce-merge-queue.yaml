@@ -1,16 +1,10 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # Allow manual runs from GitHub Actions UI
   workflow_dispatch:
 
-  # Run automatically every 5 minutes
   schedule:
     - cron: "*/5 * * * *"
-
-  # Also run when PRs are opened or updated
-  pull_request:
-    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -21,23 +15,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout repository
       - uses: actions/checkout@v4
 
-      # Verify GitHub token works
       - name: Check GitHub API rate limit
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api rate_limit
 
-      # Compute lookback timestamp
-      # We look back 30 minutes to safely capture recent merges or closes
       - name: Compute lookback timestamp
         id: time
         run: |
           echo "LOOKBACK=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-      # Fetch current merge queue entries
       - name: Fetch merge queue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,7 +54,6 @@ jobs:
           }
           ' > merge_queue_raw.json
 
-      # Fetch recently merged PRs
       - name: Fetch merged PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,7 +82,6 @@ jobs:
           }
           " > merged_prs_raw.json
 
-      # Fetch recently closed but not merged PRs
       - name: Fetch closed PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,7 +109,6 @@ jobs:
           }
           " > closed_prs_raw.json
 
-      # Build unified snapshot JSON
       - name: Build merge queue snapshot
         run: |
           set -euo pipefail
@@ -192,14 +178,12 @@ jobs:
           echo "Snapshot record count:"
           jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
 
-      # Add timestamp to filename
       - name: Add timestamp to filename
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
 
-      # Upload file via SFTP
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
