@@ -490,6 +490,23 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             ),
             id="xlarge_4k_y6_Nwt16_cwimb2_rs6",
         ),
+        # Full grid utilization: 56 MM cores (8x7) + 8 RS cores (num_workers_per_link=3) = 64.
+        # M=3584 chosen so M_blocks=14 divides evenly by y=7.
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=3584,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 7),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,  # 8 RS cores, 64 total (full grid)
+            ),
+            id="xlarge_3584_y7_Nwt16_cwimb2_rs3_fullgrid",
+        ),
     ],
 )
 @pytest.mark.parametrize(
