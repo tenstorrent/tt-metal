@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -187,7 +186,7 @@ def time_pipeline_single(pipeline, images: list[str], warmup: int, repeat: int, 
     return stats
 
 
-def time_pipeline_dp(tt_pipelines: list, images: list[str], warmup: int, repeat: int, batch_size: int):
+def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warmup: int, repeat: int, batch_size: int):
     if len(tt_pipelines) < 2:
         raise RuntimeError("time_pipeline_dp requires at least 2 TT pipelines")
 
@@ -198,37 +197,37 @@ def time_pipeline_dp(tt_pipelines: list, images: list[str], warmup: int, repeat:
 
     tt_inputs_host_list = None
     exec_mode = str(getattr(getattr(tt_pipelines[0], "config", None), "tt_execution_mode", "eager")).lower()
-    if exec_mode in ("trace", "trace_2cq"):
-        import ttnn  # type: ignore
+    if exec_mode not in ("trace", "trace_2cq"):
+        raise RuntimeError("DP timing requires trace/trace_2cq execution mode")
+    import ttnn  # type: ignore
 
-        tt_inputs_host_list = [
-            ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
-        ]
+    tt_inputs_host_list = [ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list]
 
     iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(pixel_values_list, tt_inputs_host_list, batch_size=batch_size)
 
     timings_ms: list[float] = []
     last = None
-    with ThreadPoolExecutor(max_workers=len(tt_pipelines)) as executor:
-        # Force one pass on each worker so both chips compile/capture trace before timing.
-        warmup_pixels = [iter_pixel_values[i % len(iter_pixel_values)] for i in range(len(tt_pipelines))]
-        warmup_tt_inputs = None
-        if iter_tt_inputs is not None:
-            warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(len(tt_pipelines))]
-        _ = _run_dp_batch(tt_pipelines, warmup_pixels, warmup_tt_inputs, executor)
+    assert iter_tt_inputs is not None
 
-        for _ in range(max(0, int(warmup))):
-            _ = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
+    from .mesh_trace_dp import MeshTraceDPExecutor
 
-        reset_perf_counters()
+    dp_exec = MeshTraceDPExecutor(mesh_device=mesh_device, tt_pipelines=tt_pipelines, execution_mode=exec_mode)
+    warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(len(tt_pipelines))]
+    dp_exec.capture(warmup_tt_inputs)
 
-        for _ in range(max(1, int(repeat))):
-            start = time.perf_counter()
-            outs = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
-            end = time.perf_counter()
-            timings_ms.append((end - start) * 1000.0)
-            if len(outs) > 0:
-                last = outs[-1]
+    for _ in range(max(0, int(warmup))):
+        _ = dp_exec.run(iter_tt_inputs, normalize=True)
+
+    reset_perf_counters()
+
+    for _ in range(max(1, int(repeat))):
+        start = time.perf_counter()
+        outs = dp_exec.run(iter_tt_inputs, normalize=True)
+        end = time.perf_counter()
+        timings_ms.append((end - start) * 1000.0)
+        if len(outs) > 0:
+            last = outs[-1]
+    dp_exec.close()
 
     total_ms_mean = float(np.mean(timings_ms))
     per_image_ms = total_ms_mean / max(1, len(iter_pixel_values))
@@ -411,8 +410,9 @@ def main():
                     )
                 )
             tt_stats = time_pipeline_dp(
-                tt_pipelines,
-                images,
+                mesh_device=mesh_device,
+                tt_pipelines=tt_pipelines,
+                images=images,
                 warmup=args.warmup,
                 repeat=args.repeat,
                 batch_size=effective_batch_size,

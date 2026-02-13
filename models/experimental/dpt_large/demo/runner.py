@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -115,21 +114,6 @@ def _run_single_tt_call(pipeline, pixel_values, tt_input_host):
     return pipeline.forward_pixel_values(pixel_values, normalize=True)
 
 
-def _run_dp_batch(tt_pipelines: list, pixel_values_batch: list, tt_inputs_host_batch: list | None, executor) -> list:
-    outputs = []
-    worker_count = len(tt_pipelines)
-    for start in range(0, len(pixel_values_batch), worker_count):
-        end = min(start + worker_count, len(pixel_values_batch))
-        futures = []
-        for worker_idx, batch_idx in enumerate(range(start, end)):
-            pipeline = tt_pipelines[worker_idx]
-            tt_input_host = None if tt_inputs_host_batch is None else tt_inputs_host_batch[batch_idx]
-            futures.append(executor.submit(_run_single_tt_call, pipeline, pixel_values_batch[batch_idx], tt_input_host))
-        for future in futures:
-            outputs.append(future.result())
-    return outputs
-
-
 def _aggregate_stage_breakdown(stage_breakdowns: list[dict]) -> dict:
     if len(stage_breakdowns) == 0:
         return {}
@@ -220,6 +204,7 @@ def main():
     tt_pipelines = []
     cpu_pipeline = None
     mesh_device = None
+    dp_executor = None
     try:
         if use_tt:
             from ..tt.pipeline import DPTTTPipeline
@@ -273,26 +258,31 @@ def main():
         depth = None
 
         if use_tt and effective_dp > 1:
-            with ThreadPoolExecutor(max_workers=effective_dp) as executor:
-                # Force one warmup pass on every worker so both chips compile/capture trace.
-                warmup_pixels = [iter_pixel_values[i % len(iter_pixel_values)] for i in range(effective_dp)]
-                warmup_tt_inputs = None
-                if iter_tt_inputs is not None:
-                    warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(effective_dp)]
-                _ = _run_dp_batch(tt_pipelines, warmup_pixels, warmup_tt_inputs, executor)
+            requested_exec_mode = str(args.tt_execution_mode).lower()
+            if requested_exec_mode not in {"trace", "trace_2cq"}:
+                raise SystemExit("--dp > 1 currently requires --tt-execution-mode trace or trace_2cq")
+            if iter_tt_inputs is None:
+                raise RuntimeError("DP trace mode requires host TT inputs but none were prepared")
 
-                for _ in range(max(0, int(args.warmup))):
-                    _ = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
+            from .mesh_trace_dp import MeshTraceDPExecutor
 
-                reset_perf_counters()
+            # Capture a single mesh-level trace that runs each submesh replica once.
+            dp_executor = MeshTraceDPExecutor(mesh_device=mesh_device, tt_pipelines=tt_pipelines, execution_mode=requested_exec_mode)
+            warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(effective_dp)]
+            dp_executor.capture(warmup_tt_inputs)
 
-                for _ in range(max(1, int(args.repeat))):
-                    start = time.perf_counter()
-                    outs = _run_dp_batch(tt_pipelines, iter_pixel_values, iter_tt_inputs, executor)
-                    end = time.perf_counter()
-                    timings.append((end - start) * 1000.0)
-                    if len(outs) > 0:
-                        depth = outs[-1]
+            for _ in range(max(0, int(args.warmup))):
+                _ = dp_executor.run(iter_tt_inputs, normalize=True)
+
+            reset_perf_counters()
+
+            for _ in range(max(1, int(args.repeat))):
+                start = time.perf_counter()
+                outs = dp_executor.run(iter_tt_inputs, normalize=True)
+                end = time.perf_counter()
+                timings.append((end - start) * 1000.0)
+                if len(outs) > 0:
+                    depth = outs[-1]
         else:
             # Warmup around the selected pipeline only.
             for _ in range(max(0, int(args.warmup))):
@@ -435,6 +425,11 @@ def main():
             header_path.parent.mkdir(parents=True, exist_ok=True)
             header_path.write_text(json.dumps(header, indent=2))
     finally:
+        if dp_executor is not None and hasattr(dp_executor, "close"):
+            try:
+                dp_executor.close()
+            except Exception:
+                pass
         for pipeline in tt_pipelines:
             if pipeline is not None and hasattr(pipeline, "close"):
                 pipeline.close()

@@ -146,6 +146,27 @@ def _apply_attn_mask(attn_logits: torch.Tensor, attn_mask) -> torch.Tensor:
     return attn_logits + mask_torch
 
 
+def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_config, program_config):
+    """Call ttnn.linear with best-effort program_config plumbing across runtime versions."""
+    if program_config is None:
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
+    try:
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config, program_config=program_config)
+    except TypeError:
+        # Older ttnn builds may not expose program_config for this op.
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
+
+
+def _program_config_fuses_activation(program_config) -> bool:
+    if program_config is None:
+        return False
+    try:
+        return getattr(program_config, "fused_activation", None) is not None
+    except Exception:
+        # If we can't introspect, assume the provided program config is intentional.
+        return True
+
+
 class TTLinear:
     def __init__(
         self,
@@ -301,11 +322,21 @@ class TTLayerNorm:
                 "bias": self.bias_tt,
                 "epsilon": self.eps,
             }
-            cc = getattr(self.program_config, "ln_compute_config", None)
+            pc = self.program_config
+            ln_pc = getattr(pc, "ln_program_config", None) if pc is not None else None
+            if ln_pc is not None:
+                kwargs["program_config"] = ln_pc
+
+            cc = getattr(pc, "ln_compute_config", None) if pc is not None else None
             if cc is not None:
                 kwargs["compute_kernel_config"] = cc
-
-            return ttnn.layer_norm(x, **kwargs)
+            try:
+                return ttnn.layer_norm(x, **kwargs)
+            except TypeError:
+                # Backward compat for older runtimes without program_config / compute_kernel_config kwargs.
+                kwargs.pop("program_config", None)
+                kwargs.pop("compute_kernel_config", None)
+                return ttnn.layer_norm(x, **kwargs)
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTLayerNorm device path failed and CPU fallback is disabled") from exc
@@ -442,15 +473,18 @@ class TTAttention:
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
-            memcfg = getattr(self, "output_mem", None)
+            cfg = getattr(self, "program_config", None)
+            memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
-                memcfg = ttnn.DRAM_MEMORY_CONFIG
-            qkv4 = ttnn.linear(
-                x4,
-                self._wqkv_tt,
+                memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
+            qkv4 = _ttnn_linear_with_optional_program_config(
+                x=x4,
+                w=self._wqkv_tt,
                 bias=self._bqkv_tt,
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
+                program_config=qkv_pc,
             )
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
@@ -511,15 +545,18 @@ class TTAttention:
         if self._proj_w_tt is not None and self._proj_b_tt is not None:
             # Ensure TT and 4D shape [B, 1, N, C] for ttnn.linear
             ctx_tt4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
-            memcfg = getattr(self, "output_mem", None)
+            cfg = getattr(self, "program_config", None)
+            memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
-                memcfg = ttnn.DRAM_MEMORY_CONFIG
-            out_tt4 = ttnn.linear(
-                ctx_tt4,
-                self._proj_w_tt,
+                memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
+            out_tt4 = _ttnn_linear_with_optional_program_config(
+                x=ctx_tt4,
+                w=self._proj_w_tt,
                 bias=self._proj_b_tt,
                 dtype=ttnn.bfloat16,
                 memory_config=memcfg,
+                program_config=proj_pc,
             )
             # Back to [B, N, C]
             out = out_tt4
@@ -592,12 +629,31 @@ class TTMLP:
                 B, _, N, C = shape
             else:
                 raise ValueError(f"TTMLP expects 3D/4D TT tensor, got {shape}")
-            memcfg = getattr(self, "output_mem", None)
+            cfg = getattr(self, "program_config", None)
+            memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
             if memcfg is None:
-                memcfg = ttnn.DRAM_MEMORY_CONFIG
-            y1 = ttnn.linear(x4, self.w1_tt, bias=self.b1_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
-            y1 = ttnn.gelu(y1)
-            y2 = ttnn.linear(y1, self.w2_tt, bias=self.b2_tt, dtype=ttnn.bfloat16, memory_config=memcfg)
+                memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
+            ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
+            y1 = _ttnn_linear_with_optional_program_config(
+                x=x4,
+                w=self.w1_tt,
+                bias=self.b1_tt,
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
+                program_config=ff1_pc,
+            )
+            # If FF1 program config fuses GELU, skip the explicit GELU op.
+            if not _program_config_fuses_activation(ff1_pc):
+                y1 = ttnn.gelu(y1)
+            y2 = _ttnn_linear_with_optional_program_config(
+                x=y1,
+                w=self.w2_tt,
+                bias=self.b2_tt,
+                dtype=ttnn.bfloat16,
+                memory_config=memcfg,
+                program_config=ff2_pc,
+            )
             return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
         except Exception as exc:
             if not self.allow_cpu_fallback:
