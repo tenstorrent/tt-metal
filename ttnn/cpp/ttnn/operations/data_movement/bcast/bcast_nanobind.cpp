@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace nb = nanobind;
 
 void bind_bcast(nb::module_& mod) {
-    const std::string doc =
+    const char* doc =
         R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
