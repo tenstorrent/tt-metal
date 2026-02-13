@@ -47,6 +47,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
+#include <common/TracySystem.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -1696,6 +1697,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     // Start background receiver thread that polls all device sockets round-robin
     realtime_profiler_stop_.store(false);
     realtime_profiler_thread_ = std::thread([this]() {
+        tracy::SetThreadName("RealtimeProfiler");
         uint64_t pages_received = 0;
 
         log_info(
@@ -1711,6 +1713,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 return false;
             }
 
+            ZoneScopedN("ProcessPage");
             dev_state.socket->wait_for_pages(1);
             uint32_t* read_ptr = dev_state.socket->get_read_ptr();
 
@@ -1725,6 +1728,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             // (e.g. SET_NUM_WORKER_SEMS, SET_GO_SIGNAL_NOC_DATA) that have
             // no valid program and may contain stale end timestamps.
             if (start_id != 0) {
+                ZoneScopedN("InvokeCallbacks");
                 tt::ProgramRealtimeRecord record;
                 record.program_id = start_id;
                 record.start_timestamp = start_time;
@@ -1742,6 +1746,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         };
 
         while (!realtime_profiler_stop_.load()) {
+            ZoneScopedN("PollLoop");
             bool any_data = false;
 
             for (auto& dev_state : realtime_profiler_devices_) {
@@ -1759,6 +1764,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             }
 
             if (!any_data) {
+                ZoneScopedN("Idle");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
@@ -1767,38 +1773,41 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         // that arrived after the last poll iteration or while the thread was
         // sleeping. Keep draining until all sockets are empty for several
         // consecutive attempts to account for in-flight PCIe writes.
-        constexpr uint32_t kDrainQuietRounds = 10;
-        uint64_t drain_pages = 0;
-        uint32_t quiet_rounds = 0;
-        while (quiet_rounds < kDrainQuietRounds) {
-            bool any_data = false;
-            for (auto& dev_state : realtime_profiler_devices_) {
-                try {
-                    if (process_one_page(dev_state)) {
-                        any_data = true;
-                        drain_pages++;
+        {
+            ZoneScopedN("DrainShutdown");
+            constexpr uint32_t kDrainQuietRounds = 10;
+            uint64_t drain_pages = 0;
+            uint32_t quiet_rounds = 0;
+            while (quiet_rounds < kDrainQuietRounds) {
+                bool any_data = false;
+                for (auto& dev_state : realtime_profiler_devices_) {
+                    try {
+                        if (process_one_page(dev_state)) {
+                            any_data = true;
+                            drain_pages++;
+                        }
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[Real-time profiler] Exception draining device {}: {}",
+                            dev_state.chip_id,
+                            e.what());
                     }
-                } catch (const std::exception& e) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Exception draining device {}: {}",
-                        dev_state.chip_id,
-                        e.what());
+                }
+                if (any_data) {
+                    quiet_rounds = 0;
+                } else {
+                    quiet_rounds++;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
             }
-            if (any_data) {
-                quiet_rounds = 0;
-            } else {
-                quiet_rounds++;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        }
 
-        log_info(
-            tt::LogMetal,
-            "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown)",
-            pages_received,
-            drain_pages);
+            log_info(
+                tt::LogMetal,
+                "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown)",
+                pages_received,
+                drain_pages);
+        }
     });
 }
 
