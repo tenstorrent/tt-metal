@@ -30,6 +30,19 @@ void kernel_main() {
 
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
+    // Warmup: 5 untimed iterations to flush cold-cache effects
+    // It really helps reduce the slowest outliers
+    constexpr uint32_t WARMUP_ITERS = 5;
+    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+        socket_reserve_pages(sender_socket, 1);
+        uint64_t pcie_data_addr = pcie_base_addr + sender_socket.write_ptr;
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index, data_addr, pcie_xy_enc, pcie_data_addr, page_size, 1);
+        socket_push_pages(sender_socket, 1);
+        socket_notify_receiver(sender_socket);
+        socket_barrier(sender_socket);
+    }
+
     for (uint32_t i = 0; i < num_iterations; i++) {
         uint64_t start_timestamp = get_timestamp();
 
