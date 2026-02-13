@@ -151,6 +151,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     tt_mm_out_tensor_list = []
     tt_rs_out_tensor_list = []
 
+    # In separate mode, the matmul can use the full compute grid since RS runs independently.
+    # The RS parameters (mm_cores_y etc.) still use the original mm_core_grid for internal consistency.
+    matmul_config_separate = ttnn.MinimalMatmulConfig(
+        M_block_size=mm_block_m // TILE_SIZE,
+        K_block_size=mm_block_k // TILE_SIZE,
+        N_block_size=mm_block_n // TILE_SIZE,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+    )
+
     def run_op(i):
         if use_non_fused:
             # Non-fused reference: run matmul then reduce-scatter sequentially
@@ -158,7 +169,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
                 compute_kernel_config=compute_config,
-                config=matmul_config,
+                config=matmul_config_separate,
             )
             tt_rs_out_tensor = ttnn.experimental.strided_reduce_scatter_async(
                 tt_mm_out,
