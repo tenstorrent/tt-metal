@@ -64,6 +64,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
     using namespace tt::constants;
 
+    // std::cout << "TOPK MULTI CORE PROGRAM FACTORY" << std::endl;
+
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& input_indices_tensor = tensor_args.indices;
@@ -109,6 +111,8 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         index_tile_size);            // Index tile memory footprint
 
     constexpr bool select_cores_row_wise = false;
+
+    // std::cout << "num cores = " << num_cores << std::endl;
 
     // Configure local processing cores (handle width chunks)
     auto local_cores_range =

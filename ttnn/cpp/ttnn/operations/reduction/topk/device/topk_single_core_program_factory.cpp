@@ -19,6 +19,9 @@ namespace ttnn::prim {
 TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
     const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
     using namespace tt::constants;
+
+    // std::cout << "TOPK SINGLE CORE PROGRAM FACTORY" << std::endl;
+
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& value_tensor = std::get<0>(output_tensors);
@@ -64,6 +67,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
     const std::vector<CoreCoord>& cores = corerange_to_cores(core_range, total_number_of_cores, true);
+
+    // std::cout << "total_number_of_cores = " << total_number_of_cores << std::endl;
 
     // Number of tiles needed to store K top elements
     const uint32_t Ktiles = tt::div_up(args.k, tt::constants::TILE_WIDTH);

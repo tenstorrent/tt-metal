@@ -9,6 +9,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/fill.h"
+
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tensix.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -21,23 +25,23 @@
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
     // Configure data formats for transpose operation
-    // reconfig_data_format_srca(input_cb_index);
-    // transpose_wh_init_short(input_cb_index);
-    // pack_reconfig_data_format(input_cb_index);
+    reconfig_data_format_srca(input_cb_index);
+    transpose_wh_init_short(input_cb_index);
+    pack_reconfig_data_format(input_cb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
     cb_wait_front(input_cb_index, 2 * total_tiles);
     for (uint32_t i = 0; i < total_tiles; ++i) {
-        // acquire_dst();
+        acquire_dst();
         cb_reserve_back(dest_cb_index, 1);
 
-        // // Transpose tile from WH to HW format
-        // transpose_wh_tile(input_cb_index, i, 0);
+        // Transpose tile from WH to HW format
+        transpose_wh_tile(input_cb_index, i, 0);
 
-        // // Pack transposed tile to destination
-        // pack_tile(0, dest_cb_index);
+        // Pack transposed tile to destination
+        pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, 1);
-        // release_dst();
+        release_dst();
     }  // i loop
     cb_pop_front(input_cb_index, 2 * total_tiles);
 }
@@ -52,14 +56,14 @@ FORCE_INLINE void transpose_and_pack(
  */
 FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uint32_t base_offset) {
     // Pack first tile (values) to cb0
-    // pack_reconfig_data_format(cb0);
-    // pack_tile(base_offset, cb0);
+    pack_reconfig_data_format(cb0);
+    pack_tile(base_offset, cb0);
 
     // Pack second tile (indices) to cb1, reconfig only if different buffer
-    // if (cb0 != cb1) {
-    //     pack_reconfig_data_format(cb1);
-    // }
-    // pack_tile(base_offset + 1, cb1);
+    if (cb0 != cb1) {
+        pack_reconfig_data_format(cb1);
+    }
+    pack_tile(base_offset + 1, cb1);
 }
 
 /**
@@ -71,12 +75,12 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
  * @param get_two         Boolean flag: true to transpose two tiles (tiles 0,1 -> dest base_offset, base_offset+1),
  *                        false to transpose only one tile (tile 0 -> dest base_offset)
  */
-FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset, const bool get_two = true) {
-    // reconfig_data_format_srca(cb);
-    // transpose_wh_init_short(cb);
+FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
+    reconfig_data_format_srca(cb);
+    transpose_wh_init_short(cb);
 
     // Transpose first tile to destination register
-    // transpose_wh_tile(cb, 0, base_offset + 0);
+    transpose_wh_tile(cb, 0, base_offset);
     // if (get_two) {
     //     // Transpose second tile if processing two tiles at once (initial iteration)
     //     transpose_wh_tile(cb, 1, base_offset + 1);
@@ -107,10 +111,41 @@ FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) 
     cb_push_back(cb, count);
 }
 
-// template <typename To>
-// ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
-//     return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
-// }
+template <typename To>
+ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
+    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
+}
+
+FORCE_INLINE
+void print_cb_data(const uint32_t cb_index, uint32_t itile) {
+    const auto addr = get_tile_address(cb_index, itile);
+    // UNPACK(
+    //     DPRINT << "Compute: core_loop: "
+    //             << input_take << " , Addr: " << addr << ENDL());
+
+    volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(cb_index, itile);
+    for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
+        // Iterate through 16 rows within each subtile row
+        for (int local_row = 0; local_row < 16; local_row++) {
+            // Calculate the actual row in original matrix
+            int row = subtile_i * 16 + local_row;
+            // Iterate through 2x2 subtiles horizontally
+            for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+                // Iterate through 16 columns within each subtile
+                for (int local_col = 0; local_col < 16; local_col++) {
+                    // Calculate the actual column in original matrix
+                    int col = subtile_j * 16 + local_col;
+                    // Calculate index using only multiplication and addition
+                    auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+                    // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
+                    // /*element_offset=*/index);ptr
+                    UNPACK(DPRINT << BF16(ptr[index]) << ", ");
+                }
+            }
+            UNPACK(DPRINT << ENDL());
+        }
+    }  // subtile_i
+}
 
 void kernel_main() {
     // Runtime arguments
@@ -131,9 +166,12 @@ void kernel_main() {
     constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
-    // ckernel::topk_tile_init();
-    // transpose_wh_init(input_val_cb_index, output_val_cb_index);
-    // transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
+    ckernel::topk_tile_init();
+    transpose_wh_init(input_val_cb_index, output_val_cb_index);
+    transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
+
+    constexpr uint32_t DST_VAL = 0;
+    constexpr uint32_t DST_IND = 2;
 
     constexpr int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
@@ -144,47 +182,70 @@ void kernel_main() {
         for (uint32_t count = 1; count < Wt; count++) {
             // Read input tiles (2 on first iteration, 1 on subsequent) and transpose to HW format
             // Wait for input tiles to become available
-            cb_wait_front(input_val_cb_index, input_take);
+            // cb_wait_front(input_val_cb_index, input_take);
 
-            for (uint32_t i = 0; i < input_take; i++) {
-                const auto addr = get_tile_address(input_val_cb_index, i);
-                UNPACK(
-                    DPRINT << "Compute: core_loop: " << core_loop << ", count: " << count << ", input_take "
-                           << input_take << " , Addr: " << addr << ENDL());
+            // for (uint32_t i = 0; i < input_take; i++) {
+            //
+            // // cb_wait_front(input_ind_cb_index, input_take);
+            // // Reserve space in transposed buffers for processing
 
-                // volatile uint16_t* ptr = get_pointer_to_cb_data<uint16_t>(input_val_cb_index, i);
-                // for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
-                //     // Iterate through 16 rows within each subtile row
-                //     for (int local_row = 0; local_row < 16; local_row++) {
-                //         // Calculate the actual row in original matrix
-                //         int row = subtile_i * 16 + local_row;
-                //         // Iterate through 2x2 subtiles horizontally
-                //         for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
-                //             // Iterate through 16 columns within each subtile
-                //             for (int local_col = 0; local_col < 16; local_col++) {
-                //                 // Calculate the actual column in original matrix
-                //                 int col = subtile_j * 16 + local_col;
-                //                 // Calculate index using only multiplication and addition
-                //                 auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
-                //                 // const uint32_t message = read_tile_value(input_val_cb_index, /*tile_index=*/take,
-                //                 // /*element_offset=*/index);ptr
-                //                 UNPACK(DPRINT << ptr[index] << ", ");
-                //             }
-                //         }
-                //         UNPACK(DPRINT << ENDL());
-                //     }
-                // }  // subtile_i
-            }  // i
-            cb_wait_front(input_ind_cb_index, input_take);
-            // Reserve space in transposed buffers for processing
+            // Always reserve by the same amount of space
+            // This ensure that continuous tile indices in the reserved space
+            // do not 'wrap' around CB memory.
+            // For instance, if we had a CB of 2 tiles, and did
+            // 1. reserve(1)
+            // 2. push(1)
+            // 3. reserve(2)
+            // then, at step 3., then first tile would be at the end of the CB memory.
+            // whereas second tile would be at the start of the CB memory (wrapped around)
+            // However, most (all?) LLKs do not handle this, which can lead to wrong results.
+            constexpr uint32_t MAX_INPUT_TAKE = 2;
             cb_reserve_back(transposed_val_cb_index, input_take);
             cb_reserve_back(transposed_ind_cb_index, input_take);
 
             // acquire_dst();
 
             // // Transpose input tiles from WH to HW format and pack to intermediate buffers
-            // read_cb_and_transpose(input_val_cb_index, 0, (2 == input_take));  // Values: dest regs 0,1
-            // read_cb_and_transpose(input_ind_cb_index, 2, (2 == input_take));  // Indices: dest regs 2,3
+
+            for (uint32_t i = 0; i < input_take; i++) {
+                cb_wait_front(input_val_cb_index, 1);
+                cb_wait_front(input_ind_cb_index, 1);
+
+                tile_regs_acquire();
+
+                read_cb_and_transpose(input_val_cb_index, DST_VAL);  // Values: dest regs 0,1
+
+                pack_reconfig_data_format(transposed_val_cb_index);
+
+                uint32_t tile_addr = get_tile_address(input_val_cb_index, 0);
+
+                MATH(DPRINT << "COMPUTE: reading " << input_take << " tile at address: " << tile_addr << ENDL(););
+                // print_cb_data(input_val_cb_index, 0);
+                MATH(DPRINT << "COMPUTE: input val: " << ENDL(););
+                dprint_tensix_dest_reg(DST_VAL);
+
+                uint32_t transposed_val_addr = get_tile_address(transposed_val_cb_index, 0);
+                MATH(DPRINT << "COMPUTE: writing tile to address: " << transposed_val_addr << ENDL();)
+
+                read_cb_and_transpose(input_ind_cb_index, DST_IND);  // Indices: dest regs 2,3
+
+                tile_regs_commit();
+
+                tile_regs_wait();
+
+                // Pack transposed values
+                pack_reconfig_data_format(transposed_val_cb_index);
+                pack_tile(DST_VAL, transposed_val_cb_index);
+
+                // Pack transposed indices
+                pack_reconfig_data_format(transposed_ind_cb_index);
+                pack_tile(DST_IND, transposed_ind_cb_index);
+
+                tile_regs_release();
+
+                cb_pop_front(input_val_cb_index, 1);
+                cb_pop_front(input_ind_cb_index, 1);
+            }
 
             // // Pack transposed values
             // pack_reconfig_data_format(transposed_val_cb_index);
@@ -202,9 +263,7 @@ void kernel_main() {
 
             // release_dst();
 
-            // Remove processed tiles from input buffers
-            cb_pop_front(input_val_cb_index, input_take);
-            cb_pop_front(input_ind_cb_index, input_take);
+            MATH(DPRINT << "Input have been read and transpoed" << ENDL();)
 
             // Store transposed tiles for insertion sort processing
             cb_push_back(transposed_val_cb_index, input_take);
@@ -260,30 +319,44 @@ void kernel_main() {
                 cb_reserve_back(transposed_val_cb_index, 1);
                 cb_reserve_back(transposed_ind_cb_index, 1);
 
-                // acquire_dst();
+                acquire_dst();
 
-                // // Load tiles into destination registers for merging
-                // // Load existing sorted values into dest reg 0
-                // copy_tile_to_dst_init_short_with_dt(cb1, cb0);
-                // copy_tile(cb0, 0, 0);
+                uint32_t cb0_addr = get_tile_address(cb0, 0);
+                uint32_t cb1_addr = get_tile_address(cb1, 0);
+                MATH(DPRINT << "Merge and sort operation" << ENDL();
+                     DPRINT << "Read tiles from at addresses: " << cb0_addr << " and " << cb1_addr << ENDL();
+                     DPRINT << "Transposed offset: " << transposed_offset << ENDL(););
 
-                // // Load existing sorted indices into dest reg 2
-                // copy_tile_to_dst_init_short_with_dt(cb0, cb1);
-                // copy_tile(cb1, 0, 2);
+                reconfig_data_format(cb0, cb0);
+                pack_reconfig_data_format(result_prep_val_cb_index);
 
-                // // Load new input values into dest reg 1
-                // copy_tile_to_dst_init_short_with_dt(transposed_ind_cb_index, transposed_val_cb_index);
-                // copy_tile(transposed_val_cb_index, transposed_offset, 1);
+                // Load tiles into destination registers for merging
+                // Load existing sorted values into dest reg 0
+                copy_tile_to_dst_init_short_with_dt(cb1, cb0);
+                copy_tile(cb0, 0, DST_VAL);
+                dprint_tensix_dest_reg(0);
 
-                // // Load new input indices into dest reg 3
-                // copy_tile_to_dst_init_short_with_dt(transposed_val_cb_index, transposed_ind_cb_index);
-                // copy_tile(transposed_ind_cb_index, transposed_offset, 3);
+                // Load existing sorted indices into dest reg 2
+                copy_tile_to_dst_init_short_with_dt(cb0, cb1);
+                copy_tile(cb1, 0, DST_IND);
 
-                // // Perform merge and sort operation
-                // // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
-                // // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
-                // // largest flag determines ascending (0) vs descending (1) sort order
-                // ckernel::topk_local_sort(0, (int)!largest, end_phase);
+                // Load new input values into dest reg 1
+                copy_tile_to_dst_init_short_with_dt(transposed_ind_cb_index, transposed_val_cb_index);
+                copy_tile(transposed_val_cb_index, transposed_offset, 1);
+                dprint_tensix_dest_reg(1);
+
+                // Load new input indices into dest reg 3
+                copy_tile_to_dst_init_short_with_dt(transposed_val_cb_index, transposed_ind_cb_index);
+                copy_tile(transposed_ind_cb_index, transposed_offset, 3);
+
+                // Perform merge and sort operation
+                // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
+                // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
+                // largest flag determines ascending (0) vs descending (1) sort order
+                ckernel::topk_local_sort(0, (int)!largest, end_phase);
+
+                MATH(DPRINT << "Local sort output: " << ENDL(););
+                dprint_tensix_dest_reg(0);
 
                 // Store sorted results back to buffers
                 // Reserve space for storing the best K elements
@@ -291,8 +364,8 @@ void kernel_main() {
                 cb_reserve_back(result_prep_ind_cb_index, incr);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
-                // pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
-                // pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
+                pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
+                pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
 
                 // Clean up source buffers
                 cb_pop_front(cb0, in_cb_offset);
@@ -302,7 +375,7 @@ void kernel_main() {
                 cb_push_back(result_prep_val_cb_index, incr);
                 cb_push_back(result_prep_ind_cb_index, incr);
 
-                // release_dst();
+                release_dst();
                 // tile_regs_release();
 
                 // Clean up transposed buffers if we consumed from them
