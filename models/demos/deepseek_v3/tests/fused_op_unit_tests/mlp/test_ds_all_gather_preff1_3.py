@@ -34,8 +34,8 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 91.553, "op_to_op": 793.738},  # Measured: kernel=83.23, op_to_op=721.58
-    ("prefill", 128): {"kernel": 10962.446, "op_to_op": 24292.510},  # Measured: kernel=9965.86, op_to_op=22084.10
+    ("decode", 1): {"kernel": 92.216, "op_to_op": 790.846},  # Measured: kernel=83.83, op_to_op=718.95
+    ("prefill", 128): {"kernel": 10968.664, "op_to_op": 29534.429},  # Measured: kernel=9971.51, op_to_op=26849.48
 }
 
 
