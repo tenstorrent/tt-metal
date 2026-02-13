@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@ import math
 import time
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
 import ttnn
@@ -1052,7 +1051,7 @@ def test_combine():
             causal_multiplier = 1 + row.is_causal.astype(int)
             return 4 * L**2 * D * H * B / causal_multiplier
 
-        df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns → s, flop → Tflop
+        df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns -> s, flop -> Tflop
         print(df)
 
         # ------------------------------------------------------------------------------
@@ -1138,8 +1137,8 @@ def test_sdpa_benchmark_detailed():
     df = pd.read_csv(filename)
     df["is_causal"] = (
         df["ATTRIBUTES"]
-        .str.extract(r"'is_causal':\s*('true'|'false')", expand=False)  # → "true"/"false"/NaN
-        .map({"'true'": True, "'false'": False})  # → bool/NaN
+        .str.extract(r"'is_causal':\s*('true'|'false')", expand=False)  # -> "true"/"false"/NaN
+        .map({"'true'": True, "'false'": False})  # -> bool/NaN
     )
 
     # TODO: Drop rows with NaN in device kernel duration?
@@ -1176,17 +1175,17 @@ def test_sdpa_benchmark_detailed():
         causal_multiplier = 1 + row.is_causal.astype(int)
         return 4 * L**2 * D * H * B / causal_multiplier
 
-    df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns → s, flop → Tflop
+    df["tflops"] = flops(df) / df["min_kernel_duration_ns"] / 1e3  # ns -> s, flop -> Tflop
     print(df)
 
     # ------------------------------------------------------------------------------
-    # 2.  Plot (6 sub‑plots, 2 × 3 grid)
+    # 2.  Plot (6 sub-plots, 2 x 3 grid)
     # ------------------------------------------------------------------------------
     # Color map for different algorithms
     palette = {
         "TTNN": "#1f77b4",
-        "FlashAttention‑2": "#ff7f0e",
-        "FlashAttention‑3": "#9467bd",
+        "FlashAttention-2": "#ff7f0e",
+        "FlashAttention-3": "#9467bd",
         "Triton": "#2ca02c",
         "cuDNN": "#d62728",
     }
