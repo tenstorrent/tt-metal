@@ -97,6 +97,15 @@ def _env_dense_dtype() -> ttnn.DataType:
     raise ValueError(f"Invalid GLM4_MOE_LITE_DENSE_TT_DTYPE={override!r}")
 
 
+def _env_attn_dp() -> bool:
+    """When enabled, replicate attention projection weights (no TP sharding).
+
+    This removes the per-projection all_reduce calls for w_q_kv_a, w_q_a,
+    w_kv_a, w_q_b, and w_kv_b2. w_o remains row-parallel (still needs all_reduce).
+    """
+    return os.environ.get("GLM4_MOE_LITE_ATTN_DP", "").strip() == "1"
+
+
 def _env_dram_sharded_weights() -> bool:
     return os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS", "").strip() == "1"
 
@@ -417,6 +426,7 @@ def convert_decoder_layer_weights(
     # ---- Attention projections ----
     attn_row_mapper = None
     attn_variant = ""
+    attn_dp = _env_attn_dp()
     if tp_enabled and tp_size > 1:
         hidden = int(hparams.hidden_size)
         q_lora = int(hparams.q_lora_rank)
@@ -439,26 +449,32 @@ def convert_decoder_layer_weights(
         attn_variant = f"tp{tp_size}"
         attn_row_mapper = _tp_mesh_mapper(device, shard_dim=2)
 
+    # When ATTN_DP=1, replicate attention projection weights (w_q_a, w_q_b, w_kv_a,
+    # w_q_kv_a, w_kv_b2) so each device has the full weight. This removes per-projection
+    # all_reduce calls. w_o stays row-parallel (needs all_reduce for correctness).
+    attn_proj_mapper = None if attn_dp else attn_row_mapper
+    attn_proj_variant = f"{attn_variant}_attndp" if attn_dp and attn_variant else attn_variant
+
     w_q_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"],
-        cache_file=c("w_q_a", attn_variant),
+        cache_file=c("w_q_a", attn_proj_variant),
         dtype=dense_dtype,
-        mesh_mapper=attn_row_mapper,
+        mesh_mapper=attn_proj_mapper,
     )
     w_q_b = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.q_b_proj.weight"],
-        cache_file=c("w_q_b", attn_variant),
+        cache_file=c("w_q_b", attn_proj_variant),
         dtype=dense_dtype,
-        mesh_mapper=attn_row_mapper,
+        mesh_mapper=attn_proj_mapper,
     )
     w_kv_a = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"],
-        cache_file=c("w_kv_a", attn_variant),
+        cache_file=c("w_kv_a", attn_proj_variant),
         dtype=dense_dtype,
-        mesh_mapper=attn_row_mapper,
+        mesh_mapper=attn_proj_mapper,
     )
     w_q_kv_a: Optional[ttnn.Tensor] = None
     if _env_fuse_qkv_a():
@@ -473,13 +489,13 @@ def convert_decoder_layer_weights(
                 f"q_a and kv_a must share input dim; got q_a_in={int(q_a_torch.shape[1])} kv_a_in={int(kv_a_torch.shape[1])}"
             )
         fused_out_in = torch.cat([q_a_torch, kv_a_torch], dim=0)
-        fused_variant = f"fused_{attn_variant}_v1" if attn_variant else "fused_v1"
+        fused_base = f"fused_{attn_proj_variant}_v1" if attn_proj_variant else "fused_v1"
         w_q_kv_a = _linear_weight_tt(
             device=device,
             torch_weight_out_in=fused_out_in,
-            cache_file=c("w_q_kv_a", fused_variant),
+            cache_file=c("w_q_kv_a", fused_base),
             dtype=dense_dtype,
-            mesh_mapper=attn_row_mapper,
+            mesh_mapper=attn_proj_mapper,
         )
         if _env_dram_sharded_attn():
             w_q_kv_a = _maybe_dram_shard_linear_weight(w_q_kv_a, device)
@@ -493,6 +509,7 @@ def convert_decoder_layer_weights(
     # slice boundaries on tilized tensors. Some attention per-head dims (e.g., qk_nope=192)
     # are divisible by tp_size=8 but not by TILE_SIZE*tp_size, so row-parallel sharding
     # would fail at runtime. Fall back to replication for those weights.
+    # Note: w_kv_b1 is already replicated — don't touch it regardless of ATTN_DP.
     w_kv_b1_mapper = attn_row_mapper
     w_kv_b1_variant = attn_variant
     if tp_enabled and tp_size > 1:
@@ -508,14 +525,16 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=w_kv_b1_mapper,
     )
+    # w_kv_b2 uses attn_proj_mapper (replicated when ATTN_DP=1).
     w_kv_b2 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b2_torch,
-        cache_file=c("w_kv_b2", attn_variant),
+        cache_file=c("w_kv_b2", attn_proj_variant),
         dtype=dense_dtype,
-        mesh_mapper=attn_row_mapper,
+        mesh_mapper=attn_proj_mapper,
     )
 
+    # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],

@@ -386,7 +386,13 @@ class Glm4MoeLiteDenseOnlyTT:
         # The trace will be lazily re-captured on the next decode call
         # (via _decode_trace_sampling → _capture_decode_trace_sampling).
         # Trace INPUT tensors are preserved for fast re-capture.
-        if self._decode_trace_id_sampling is not None:
+        #
+        # When GLM4_MOE_LITE_PRESERVE_TRACE=1, skip the release to avoid the
+        # ~6s re-capture overhead after each prefill. If the prefill OOMs
+        # without the trace being released, we catch it, release the trace,
+        # and retry.
+        preserve_trace = os.environ.get("GLM4_MOE_LITE_PRESERVE_TRACE", "").strip() == "1"
+        if self._decode_trace_id_sampling is not None and not preserve_trace:
             ttnn.synchronize_device(self.device)
             ttnn.release_trace(self.device, self._decode_trace_id_sampling)
             self._decode_trace_id_sampling = None
@@ -410,10 +416,97 @@ class Glm4MoeLiteDenseOnlyTT:
         if len(prompt_lens) != int(batch):
             raise ValueError(f"prompt_lens length {len(prompt_lens)} != batch {int(batch)}")
 
+        return self._prefill_compute(
+            tokens=tokens,
+            prompt_lens=prompt_lens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            seq_pad_multiple=seq_pad_multiple,
+            preserve_trace=preserve_trace,
+        )
+
+    def _release_decode_trace(self) -> None:
+        """Release the decode trace and deallocate trace output tensors."""
+        if self._decode_trace_id_sampling is not None:
+            ttnn.synchronize_device(self.device)
+            ttnn.release_trace(self.device, self._decode_trace_id_sampling)
+            self._decode_trace_id_sampling = None
+            for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
+                if t is not None:
+                    try:
+                        ttnn.deallocate(t, force=True)
+                    except Exception:
+                        pass
+            self._trace_logits_tt = None
+            self._trace_top1_values_tt = None
+            self._trace_top1_indices_tt = None
+            ttnn.synchronize_device(self.device)
+
+    def _prefill_compute(
+        self,
+        *,
+        tokens: torch.Tensor,
+        prompt_lens: list[int],
+        page_table: torch.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        seq_pad_multiple: int,
+        preserve_trace: bool,
+    ) -> torch.Tensor:
+        """Inner prefill compute. Separated to allow OOM retry with trace release."""
+        try:
+            return self._prefill_compute_inner(
+                tokens=tokens,
+                prompt_lens=prompt_lens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                seq_pad_multiple=seq_pad_multiple,
+            )
+        except Exception as e:
+            if preserve_trace and self._decode_trace_id_sampling is not None:
+                err_str = str(e).lower()
+                if "out of memory" in err_str or "oom" in err_str or "allocation" in err_str:
+                    logger.warning(
+                        "Prefill OOM with preserved trace; releasing trace and retrying: {}", e
+                    )
+                    self._release_decode_trace()
+                    return self._prefill_compute_inner(
+                        tokens=tokens,
+                        prompt_lens=prompt_lens,
+                        page_table=page_table,
+                        kv_cache=kv_cache,
+                        seq_pad_multiple=seq_pad_multiple,
+                    )
+            raise
+
+    def _prefill_compute_inner(
+        self,
+        *,
+        tokens: torch.Tensor,
+        prompt_lens: list[int],
+        page_table: torch.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        seq_pad_multiple: int,
+    ) -> torch.Tensor:
+        batch, seq_total = tokens.shape
         vocab = int(self.hparams.vocab_size)
         hidden = int(self.hparams.hidden_size)
         rope_dim = int(self.hparams.qk_rope_head_dim)
         pad_multiple = max(1, int(seq_pad_multiple))
+
+        # Check if batched prefill is enabled and applicable.
+        batched_prefill = (
+            os.environ.get("GLM4_MOE_LITE_BATCHED_PREFILL", "").strip() == "1"
+            and int(batch) > 1
+            and all(int(pl) > 0 for pl in prompt_lens)
+        )
+        if batched_prefill:
+            return self._prefill_compute_inner_batched(
+                tokens=tokens,
+                prompt_lens=prompt_lens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                pad_multiple=pad_multiple,
+            )
 
         is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
         profile_on = _profile_enabled()
@@ -561,6 +654,175 @@ class Glm4MoeLiteDenseOnlyTT:
         # vLLM expects prefill logits as [B, 1, vocab] so it can slice the last
         # prompt position with `logits[:, -1, :]`. Each entry in out_logits is
         # [1, vocab], so stacking already yields [B, 1, vocab].
+        return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
+
+    def _prefill_compute_inner_batched(
+        self,
+        *,
+        tokens: torch.Tensor,
+        prompt_lens: list[int],
+        page_table: torch.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        pad_multiple: int,
+    ) -> torch.Tensor:
+        """Batched prefill: process all B requests through the decoder stack simultaneously.
+
+        All B requests are padded to a common S_max and concatenated along dim-2
+        as [1,1,B*S_max,hidden].  The decoder layer's existing batch>1 support
+        handles reshaping to [B,...] for RoPE, FlashMLA, and per-request KV cache fill.
+        """
+        batch = int(tokens.shape[0])
+        seq_total = int(tokens.shape[1])
+        vocab = int(self.hparams.vocab_size)
+        hidden = int(self.hparams.hidden_size)
+        rope_dim = int(self.hparams.qk_rope_head_dim)
+
+        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
+        profile_on = _profile_enabled()
+        profile_layer = _profile_layer_filter()
+        prefill_profile: dict[str, float] = {}
+        t_prefill0 = time.perf_counter() if profile_on else 0.0
+
+        # Compute per-request padded lengths and find the common S_max.
+        int_prompt_lens: list[int] = [int(pl) for pl in prompt_lens]
+        padded_lens: list[int] = []
+        for pl in int_prompt_lens:
+            if pl > seq_total:
+                raise ValueError(f"prompt_len={pl} > tokens.shape[1]={seq_total}")
+            padded = ((pl + pad_multiple - 1) // pad_multiple) * pad_multiple
+            if padded > int(self.max_seq_len):
+                raise ValueError(
+                    f"padded_len={padded} exceeds max_seq_len={int(self.max_seq_len)} "
+                    f"(prompt_len={pl}, seq_pad_multiple={pad_multiple})"
+                )
+            padded_lens.append(padded)
+
+        s_max = max(padded_lens)
+        profile_token_count = sum(int_prompt_lens)
+        logger.info(
+            "Batched prefill: B={}, S_max={}, prompt_lens={}",
+            batch, s_max, int_prompt_lens,
+        )
+
+        # Build concatenated token tensor [1, B*S_max] with per-request padding.
+        input_concat = torch.zeros((1, batch * s_max), dtype=torch.int32)
+        for i in range(batch):
+            pl = int_prompt_lens[i]
+            offset = i * s_max
+            input_concat[0, offset : offset + pl] = tokens[i, :pl].to(torch.int32).cpu()
+
+        # Build page table [B, W] on device.
+        page_table_all = page_table[:batch, :].to(torch.int32)
+        page_table_tt = ttnn.from_torch(
+            page_table_all,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
+        )
+
+        # Slice RoPE tables to S_max.
+        rope_slices_owned = True
+        if (
+            int(s_max) == int(self.rope["cos_matrix"].shape[2])
+            and int(rope_dim) == int(self.rope["cos_matrix"].shape[3])
+        ):
+            cos_matrix = self.rope["cos_matrix"]
+            sin_matrix = self.rope["sin_matrix"]
+            rope_slices_owned = False
+        else:
+            cos_matrix = ttnn.slice(self.rope["cos_matrix"], [0, 0, 0, 0], [1, 1, s_max, rope_dim])
+            sin_matrix = ttnn.slice(self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, s_max, rope_dim])
+
+        # Embedding: [1, B*S_max] -> [1, 1, B*S_max, hidden].
+        t0 = time.perf_counter() if profile_on else 0.0
+        x = run_tt_embedding(device=self.device, token_ids=input_concat, tt_weight=self.embed_w)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, (1, 1, batch * s_max, hidden))
+        if profile_on:
+            prefill_profile["embed_s"] = time.perf_counter() - t0
+
+        # Decoder stack (batched prefill).
+        for layer_idx in range(self.num_layers_to_run):
+            w = self._ensure_layer_weights(layer_idx)
+            layer_profile: dict[str, float] | None = None
+            if profile_on and (profile_layer < 0 or profile_layer == layer_idx):
+                layer_profile = {}
+            x_next = run_decoder_layer_prefill_update_cache_tt(
+                device=self.device,
+                x_embed=x,
+                page_table_tt=page_table_tt,
+                kvpe_cache=kv_cache[layer_idx],
+                cos_matrix=cos_matrix,
+                sin_matrix=sin_matrix,
+                trans_matrix=self.rope["trans_matrix"],
+                w=w,
+                hparams=self.hparams,
+                prompt_len=s_max,  # padded length (max across batch)
+                batch=batch,
+                prompt_lens=int_prompt_lens,
+                moe_runtime=self.moe_runtime,
+                profile=layer_profile,
+            )
+            if layer_profile is not None:
+                for key, value in layer_profile.items():
+                    stage_key = f"layer_{key}"
+                    prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
+            ttnn.deallocate(x, force=False)
+            x = x_next
+
+        # Extract per-request logits from the batched output [1,1,B*S_max,hidden].
+        # For each request i, the last real token is at offset i*S_max + prompt_lens[i]-1.
+        out_logits: list[torch.Tensor] = []
+        for i in range(batch):
+            offset = i * s_max
+            pos = offset + int_prompt_lens[i] - 1
+            x_last = ttnn.slice(x, [0, 0, pos, 0], [1, 1, pos + 1, hidden])
+
+            t0 = time.perf_counter() if profile_on else 0.0
+            x_last = self.final_norm(x_last, mode="decode")
+            logits_tt = ttnn.linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
+            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+                cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
+                logits_tt_full = ttnn.all_gather(
+                    logits_tt,
+                    dim=3,
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    cluster_axis=cluster_axis,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(logits_tt, force=False)
+                logits_tt = logits_tt_full
+            if profile_on:
+                prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+
+            logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+            logits_torch = logits_torch[..., :vocab]
+            logits_flat = logits_torch.reshape(-1, vocab)
+            logits_i = logits_flat.to(dtype=torch.float32).cpu()
+            out_logits.append(logits_i)
+
+            ttnn.deallocate(logits_tt, force=False)
+            ttnn.deallocate(x_last, force=False)
+
+        ttnn.deallocate(x, force=False)
+        if rope_slices_owned:
+            ttnn.deallocate(cos_matrix, force=False)
+            ttnn.deallocate(sin_matrix, force=False)
+        ttnn.deallocate(page_table_tt, force=False)
+
+        if profile_on and profile_token_count > 0:
+            prefill_profile["total_s"] = time.perf_counter() - t_prefill0
+            self._profile_record(
+                phase="prefill_batched",
+                stage_totals=prefill_profile,
+                token_count=profile_token_count,
+                layer_filter=profile_layer,
+            )
+
         return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
 
     @torch.no_grad()
