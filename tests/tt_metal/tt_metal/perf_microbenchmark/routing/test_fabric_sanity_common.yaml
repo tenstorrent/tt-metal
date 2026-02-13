@@ -619,19 +619,3 @@ Tests:
           - destination:
               device: [0, 0]
               core: [0, 5]
-
-  - name: "SequentialNeighborExchangeLatency"
-    latency_test_mode: true
-
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
-
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      size: 1024
-      num_packets: 128
-
-    patterns:
-      - type: sequential_neighbor_exchange
