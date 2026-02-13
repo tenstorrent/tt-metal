@@ -517,6 +517,16 @@ def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, me
     log_check_location(location, success, formatted_message)
 
 
+WARNING_CHECKS_LOCK = threading.Lock()
+WARNING_CHECKS: list[str] = []
+
+
+def log_warning(message: str) -> None:
+    global WARNING_CHECKS, WARNING_CHECKS_LOCK
+    with WARNING_CHECKS_LOCK:
+        WARNING_CHECKS.append(message)
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
@@ -524,10 +534,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         print()
         utils.INFO(f"{script.name}{execution_time}:")
 
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
+    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
         FAILURE_CHECKS = []
+    with WARNING_CHECKS_LOCK:
+        warnings = WARNING_CHECKS
+        WARNING_CHECKS = []
     if result is None:
         if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
@@ -542,6 +555,8 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
+            for warning in warnings:
+                utils.WARN(f"    {warning}")
         return
 
     for failure in failures:
