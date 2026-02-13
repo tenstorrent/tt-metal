@@ -75,7 +75,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     chunk_width_in_mm_blocks=None,
-    use_non_fused=False,
+    rs_mode="fused",
     use_barrier=True,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
@@ -194,35 +194,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     )
 
     def run_op(i):
-        if use_non_fused:
-            # Non-fused reference: run matmul then reduce-scatter sequentially
-            tt_mm_out = ttnn.experimental.minimal_matmul(
-                input_tensor_mesh_list[i],
-                weight_tensor_mesh_list[i],
-                compute_kernel_config=compute_config,
-                config=matmul_config_separate,
-            )
-            tt_rs_out_tensor = ttnn.experimental.strided_reduce_scatter_async(
-                tt_mm_out,
-                None,  # persistent_output_buffers
-                dim,
-                ccl_semaphore_handles[i],
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                num_links=num_links,
-                memory_config=mem_config_rs,
-                topology=topology,
-                cluster_axis=cluster_axis,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-                mm_cores_y=mm_core_grid.y,
-                mm_block_ht=mm_block_m // TILE_SIZE,
-                mm_block_wt=mm_block_n // TILE_SIZE,
-                mm_N_block_wt=N // TILE_SIZE // mm_core_grid.x,
-                chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
-            )
-            return tt_mm_out, tt_rs_out_tensor
-        else:
-            # Fused path
+        if rs_mode == "fused":
+            # Fused path: matmul and strided reduce-scatter run concurrently
             (
                 tt_mm_out,
                 tt_rs_intermediate,
@@ -246,6 +219,56 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
             )
             return tt_mm_out, tt_rs_out
+        else:
+            # Non-fused: run matmul to completion, then reduce-scatter sequentially.
+            tt_mm_out = ttnn.experimental.minimal_matmul(
+                input_tensor_mesh_list[i],
+                weight_tensor_mesh_list[i],
+                compute_kernel_config=compute_config,
+                config=matmul_config_separate,
+            )
+
+            if rs_mode == "separate_strided":
+                # Strided reduce-scatter on the materialized matmul output.
+                # Tests the strided access pattern independently from fusion.
+                tt_rs_out_tensor = ttnn.experimental.strided_reduce_scatter_async(
+                    tt_mm_out,
+                    None,  # persistent_output_buffers
+                    dim,
+                    ccl_semaphore_handles[i],
+                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                    num_links=num_links,
+                    memory_config=mem_config_rs,
+                    topology=topology,
+                    cluster_axis=cluster_axis,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
+                    mm_cores_y=mm_core_grid.y,
+                    mm_block_ht=mm_block_m // TILE_SIZE,
+                    mm_block_wt=mm_block_n // TILE_SIZE,
+                    mm_N_block_wt=N // TILE_SIZE // mm_core_grid.x,
+                    chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+                )
+            elif rs_mode == "separate":
+                # Standard (non-strided) reduce-scatter on the materialized matmul output.
+                # Baseline reference that doesn't depend on strided access at all.
+                tt_rs_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                    tt_mm_out,
+                    None,  # persistent_output_buffers
+                    dim,
+                    ccl_semaphore_handles[i],
+                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                    num_links=num_links,
+                    memory_config=mem_config_rs,
+                    topology=topology,
+                    cluster_axis=cluster_axis,
+                    num_workers_per_link=num_workers_per_link,
+                    num_buffers_per_channel=num_buffers_per_channel,
+                )
+            else:
+                raise ValueError(f"Unknown rs_mode: {rs_mode!r}. Expected 'fused', 'separate_strided', or 'separate'.")
+
+            return tt_mm_out, tt_rs_out_tensor
 
     if enable_trace:
         # Compile
@@ -439,12 +462,12 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "use_non_fused",
+    "rs_mode",
     [
-        True,
-        False,
+        "separate",
+        "separate_strided",
+        "fused",
     ],
-    ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
     "device_params, topology",
@@ -464,7 +487,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     enable_trace,
     topology,
     num_iters,
-    use_non_fused,
+    rs_mode,
 ):
     cfg = test_config
     TILE_SIZE = 32
@@ -498,5 +521,5 @@ def test_minimal_matmul_strided_reduce_scatter_async(
         subblock_w=cfg.subblock_w,
         mm_core_grid=cfg.mm_core_grid,
         chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
-        use_non_fused=use_non_fused,
+        rs_mode=rs_mode,
     )
