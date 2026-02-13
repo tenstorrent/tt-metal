@@ -567,12 +567,28 @@ class TTAttention:
                     pass
             if split_mem is not None:
                 sdpa_kwargs["memory_config"] = split_mem
+            # SDPA in some runtimes only supports interleaved operands; if our
+            # Q/K/V are sharded, convert them to interleaved for the SDPA op,
+            # then reshard the merged context back to match the encoder's sharded
+            # activation layout.
+            need_interleaved_sdpa = (
+                _ttnn_is_sharded_or_memory_config_sharded(q_tt)
+                or _ttnn_is_sharded_or_memory_config_sharded(k_tt)
+                or _ttnn_is_sharded_or_memory_config_sharded(v_tt)
+            )
+            q_sdpa, k_sdpa, v_sdpa = q_tt, k_tt, v_tt
+            if need_interleaved_sdpa:
+                sdpa_kwargs.pop("program_config", None)
+                sdpa_kwargs.pop("memory_config", None)
+                q_sdpa = ttnn.to_memory_config(q_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                k_sdpa = ttnn.to_memory_config(k_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                v_sdpa = ttnn.to_memory_config(v_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             try:
-                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
+                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **sdpa_kwargs)
             except TypeError:
                 # Older runtimes may not accept memory_config for this op.
                 sdpa_kwargs.pop("memory_config", None)
-                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
+                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **sdpa_kwargs)
             except Exception:
                 # Some runtimes accept program_config/memory_config but can fail for
                 # particular layouts (for example with an attention mask). Retry
@@ -582,24 +598,40 @@ class TTAttention:
                     inc_vit_program_config_retry()
                     retry_kwargs.pop("program_config", None)
                     try:
-                        ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **retry_kwargs)
+                        ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **retry_kwargs)
                     except Exception:
                         if "memory_config" in retry_kwargs:
                             retry_kwargs.pop("memory_config", None)
-                            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **retry_kwargs)
+                            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **retry_kwargs)
                         else:
                             raise
                 else:
                     raise
             # Merge heads back to [B, N, C]
-            concat_kwargs = {}
-            if memcfg is not None:
-                concat_kwargs["memory_config"] = memcfg
             try:
-                merged = ttnn.transformer.concatenate_heads(ctx_tt, **concat_kwargs)
+                merged = ttnn.transformer.concatenate_heads(ctx_tt)
             except TypeError:
                 merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
+            if need_interleaved_sdpa and _ttnn_is_sharded_or_memory_config_sharded(x4):
+                try:
+                    cfg = getattr(self, "program_config", None)
+                    grid = getattr(cfg, "grid", None) if cfg is not None else None
+                    if grid is not None:
+                        grid_x, grid_y = int(grid[0]), int(grid[1])
+                        core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
+                        ctx4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
+                        shape_for_shard = getattr(ctx4, "padded_shape", None) or [int(B), 1, int(N), int(C)]
+                        shard_mc = ttnn.create_sharded_memory_config(
+                            shape_for_shard,
+                            core_grid=core_grid,
+                            strategy=ttnn.ShardStrategy.BLOCK,
+                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        )
+                        ctx4 = ttnn.to_memory_config(ctx4, memory_config=shard_mc, dtype=ttnn.bfloat16)
+                        ctx = ctx4 if len(shape) == 4 else ttnn.reshape(ctx4, (B, N, C))
+                except Exception:
+                    pass
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
