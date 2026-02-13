@@ -476,15 +476,34 @@ class Model:
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batched_prefill=False,
     ):
-        """Prepare inputs for prefill mode"""
-        # Embed the tokens
-        if tokens.dim() == 2:
-            tokens = tokens.reshape(1, 1, 1, -1)
+        """Prepare inputs for prefill mode
 
+        Args:
+            batched_prefill: If True, tokens is [num_rows, seq_len] and will be
+                sharded across mesh rows. Each row processes a different user.
+        """
+        # Embed the tokens
         device = None if trace_enabled else self.mesh_device
 
-        tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if batched_prefill:
+            # Row-parallel batched prefill: tokens is [num_rows, seq_len]
+            # Shard across mesh rows so each row gets one user's tokens [1, seq_len]
+            num_rows = tokens.shape[0]
+            seq_len_per_user = tokens.shape[1]
+            tokens = tokens.reshape(num_rows, 1, 1, seq_len_per_user)
+            tokens = ttnn.from_torch(
+                tokens,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            )
+        else:
+            if tokens.dim() == 2:
+                tokens = tokens.reshape(1, 1, 1, -1)
+            tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
             tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -589,3 +608,27 @@ class Model:
         torch_output = ttnn.to_torch(tt_output_tensor)
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
+
+    def process_output_prefill_batched(self, tt_out, last_token_idxs):
+        """Process row-parallel batched prefill output.
+
+        Extracts logits from one device per row (first device of each row).
+
+        Args:
+            tt_out: Multi-device output tensor
+            last_token_idxs: List of last_token_idx per row user
+
+        Returns:
+            List of per-user logit tensors (one per row)
+        """
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(tt_out)
+        results = []
+        num_rows = self.mesh_device.shape[0]
+        for row in range(num_rows):
+            device_idx = row * num_cols  # First device of each row
+            torch_output = ttnn.to_torch(device_tensors[device_idx])
+            last_idx = last_token_idxs[row] if isinstance(last_token_idxs, list) else last_token_idxs
+            result = torch_output[..., last_idx, : self.vocab_size]
+            results.append(result)
+        return results
