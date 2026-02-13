@@ -67,7 +67,7 @@ FORCE_INLINE bool is_better_candidate(
            ((candidate_score == best_score) && (candidate_index < best_index));
 }
 
-FORCE_INLINE void reduce_local_values(
+FORCE_INLINE void phase1_reduce_local_values(
     volatile tt_l1_ptr uint16_t* scores_ptr,
     volatile tt_l1_ptr uint32_t* indices_ptr,
     uint32_t num_values,
@@ -84,7 +84,7 @@ FORCE_INLINE void reduce_local_values(
     }
 }
 
-FORCE_INLINE void send_local_winner_to_final(
+FORCE_INLINE void phase1_send_local_winner_to_final(
     uint32_t src_slot_addr,
     uint32_t dst_slot_addr,
     uint32_t final_noc_x,
@@ -105,7 +105,7 @@ FORCE_INLINE void wait_and_reset_semaphore(volatile tt_l1_ptr uint32_t* sem_ptr,
     noc_semaphore_set(sem_ptr, 0);
 }
 
-FORCE_INLINE void reduce_device_winners(
+FORCE_INLINE void phase2_reduce_intra_device_winners(
     uint32_t gather_addr,
     uint32_t num_senders,
     uint32_t winner_page_bytes,
@@ -125,7 +125,7 @@ FORCE_INLINE void reduce_device_winners(
     }
 }
 
-FORCE_INLINE void reduce_mesh_stage_slots(
+FORCE_INLINE void phase3_reduce_mesh_stage_slots(
     uint32_t scratch_addr,
     uint32_t stage_slot_base_offset,
     uint32_t stage_num_slots,
@@ -144,6 +144,58 @@ FORCE_INLINE void reduce_mesh_stage_slots(
             stage_best_index = candidate_index;
         }
     }
+}
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+struct BriscMeshSendMetadata {
+    uint32_t local_slot_offset;
+    uint32_t dst_mesh_id;
+    uint32_t dst_chip_id;
+    uint32_t dst_l1_addr;
+    uint32_t dst_sem_addr;
+};
+
+FORCE_INLINE BriscMeshSendMetadata load_mesh_send_metadata(size_t& arg_idx) {
+    BriscMeshSendMetadata metadata{};
+    metadata.local_slot_offset = get_arg_val<uint32_t>(arg_idx++);
+    metadata.dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    metadata.dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+    metadata.dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+    metadata.dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    return metadata;
+}
+
+FORCE_INLINE void send_mesh_winner_via_fabric_brisc(
+    uint32_t final_noc_x,
+    uint32_t final_noc_y,
+    uint32_t local_slot_addr,
+    const BriscMeshSendMetadata& metadata,
+    uint32_t winner_page_bytes,
+    size_t arg_idx) {
+    constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    auto route_id = PacketHeaderPool::allocate_header_n(1);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+    set_unicast_route(
+        packet_header,
+        static_cast<uint16_t>(metadata.dst_chip_id),
+        static_cast<uint16_t>(metadata.dst_mesh_id),
+        1);
+    packet_header->to_noc_fused_unicast_write_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+            get_noc_addr(final_noc_x, final_noc_y, metadata.dst_l1_addr),
+            get_noc_addr(final_noc_x, final_noc_y, metadata.dst_sem_addr),
+            1,
+            false},
+        winner_page_bytes);
+
+    auto fabric_sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    fabric_sender.open();
+    fabric_sender.wait_for_empty_write_slot();
+    fabric_sender.send_payload_without_header_non_blocking_from_address(local_slot_addr, winner_page_bytes);
+    fabric_sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+    fabric_sender.close();
+    noc_async_full_barrier();
 }
 #endif
 
@@ -189,31 +241,35 @@ void kernel_main() {
 
     invalidate_l1_cache();
 
+    // Phase 1: per-core local argmax and delivery to the final core.
     if constexpr (Core::is_active_core) {
         auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
         auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_addr);
         uint16_t best_score = NEG_INF_BFLOAT16;
         uint32_t best_index = 0xFFFFFFFF;
-        reduce_local_values(scores_ptr, indices_ptr, num_values, best_score, best_index);
+        phase1_reduce_local_values(scores_ptr, indices_ptr, num_values, best_score, best_index);
 
         if constexpr (Core::is_final_core) {
             write_winner_slot(gather_addr + slot_offset, best_score, best_index);
         } else {
             const uint32_t local_slot_addr = gather_addr + slot_offset;
             write_winner_slot(local_slot_addr, best_score, best_index);
-            send_local_winner_to_final(
+            phase1_send_local_winner_to_final(
                 local_slot_addr, gather_addr + slot_offset, final_noc_x, final_noc_y, semaphore_id, winner_page_bytes);
         }
     }
 
+    // Phase 2: final-core intra-device reduction across all active cores.
     if constexpr (Core::is_final_core) {
         auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore_id));
         wait_and_reset_semaphore(recv_sem_ptr, expected_remote_incs);
 
         uint16_t global_best_score = NEG_INF_BFLOAT16;
         uint32_t global_best_index = 0xFFFFFFFF;
-        reduce_device_winners(gather_addr, num_senders, winner_page_bytes, global_best_score, global_best_index);
+        phase2_reduce_intra_device_winners(
+            gather_addr, num_senders, winner_page_bytes, global_best_score, global_best_index);
 
+        // Phase 3: mesh-only inter-device reductions (stage-1 then stage-2).
         if constexpr (mesh_mode) {
             // Stage 1 receiver: combine local winner with remote winners from all non-target rows.
             if constexpr (stage1_receiver) {
@@ -222,7 +278,7 @@ void kernel_main() {
                 wait_and_reset_semaphore(global_sem_ptr, stage1_expected_remote_incs);
                 uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                 uint32_t stage1_best_index = 0xFFFFFFFF;
-                reduce_mesh_stage_slots(
+                phase3_reduce_mesh_stage_slots(
                     scratch_addr,
                     stage1_slot_base_offset,
                     stage1_num_slots,
@@ -252,7 +308,7 @@ void kernel_main() {
                 wait_and_reset_semaphore(global_stage2_sem_ptr, stage2_expected_remote_incs);
                 uint16_t stage2_best_score = NEG_INF_BFLOAT16;
                 uint32_t stage2_best_index = 0xFFFFFFFF;
-                reduce_mesh_stage_slots(
+                phase3_reduce_mesh_stage_slots(
                     scratch_addr,
                     stage2_slot_base_offset,
                     stage2_num_slots,
@@ -284,33 +340,9 @@ void kernel_main() {
 
         // Sender metadata and fabric connection args are appended by host.
         size_t arg_idx = 0;
-        const uint32_t local_slot_offset = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_l1_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t local_slot_addr = scratch_addr + local_slot_offset;
-
-        constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-        auto route_id = PacketHeaderPool::allocate_header_n(1);
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
-        set_unicast_route(packet_header, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
-        packet_header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                get_noc_addr(final_noc_x, final_noc_y, dst_l1_addr),
-                get_noc_addr(final_noc_x, final_noc_y, dst_sem_addr),
-                1,
-                false},
-            winner_page_bytes);
-        auto fabric_sender =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        fabric_sender.open();
-        fabric_sender.wait_for_empty_write_slot();
-        fabric_sender.send_payload_without_header_non_blocking_from_address(local_slot_addr, winner_page_bytes);
-        fabric_sender.send_payload_flush_blocking_from_address(
-            reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
-        fabric_sender.close();
-        noc_async_full_barrier();
+        const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
+        const uint32_t local_slot_addr = scratch_addr + metadata.local_slot_offset;
+        send_mesh_winner_via_fabric_brisc(final_noc_x, final_noc_y, local_slot_addr, metadata, winner_page_bytes, arg_idx);
     }
 
 #elif defined(COMPILE_FOR_TRISC)
