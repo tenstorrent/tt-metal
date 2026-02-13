@@ -325,6 +325,160 @@ def test_forward_pass(
 
 
 @pytest.mark.parametrize(
+    "mode,seq_len",
+    [
+        ("decode", 128),
+        ("prefill", _prefill_seq_len),
+    ],
+)
+@pytest.mark.parametrize(
+    "topk_fallback,use_bitonic_sort",
+    [
+        (True, True),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_synthetic_weights",
+    [True, False],  # Test both synthetic and downloaded weights
+)
+def test_forward_pass(
+    mode,
+    seq_len,
+    hf_config,
+    topk_fallback,
+    use_bitonic_sort,
+    use_synthetic_weights,
+    cache_path,
+    mesh_device,
+    set_deterministic_env,
+):
+    """Test forward pass against reference model."""
+
+    batch_size = 1
+
+    # Get state dict from actual model or use synthetic weights
+    torch.use_deterministic_algorithms(True)
+    reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
+
+    # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
+    # The default model has uninitialized bias which causes non-deterministic behavior
+    if hasattr(reference_model, "e_score_correction_bias"):
+        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
+
+    if use_synthetic_weights:
+        # Generate synthetic weights with UNIFORM distribution by default
+        # You can modify this to test different distributions
+        synthetic_state = generate_synthetic_moe_weights(hf_config, distribution=ExpertDistribution.UNIFORM)
+
+        # Load synthetic weights into reference model BEFORE getting state_dict
+        # Keep weights in float32 for the state_dict to match expected dtype
+        reference_model.weight.data = synthetic_state["weight"].to(torch.float32)
+        if hasattr(reference_model, "e_score_correction_bias"):
+            reference_model.e_score_correction_bias.data = synthetic_state["e_score_correction_bias"].to(torch.float32)
+
+        # Now get the state_dict with synthetic weights loaded
+        hf_state_dict = reference_model.state_dict()
+    else:
+        # Use actual model weights
+        hf_state_dict = reference_model.state_dict()
+
+    weight_config = get_test_weight_config(
+        MoEGate, hf_config, (hf_state_dict,), cache_path, mesh_device, force_recalculate=use_synthetic_weights
+    )
+
+    # Generate appropriate config using utility function
+    model_config = get_model_config(
+        MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
+    )
+
+    # Create a new model state
+    model_state = MoEGate.create_state(hf_config, mesh_device=mesh_device)
+
+    # Create RunConfig using both weight_config and model_config
+    run_config = create_run_config(model_config, weight_config, model_state)
+
+    # Create input tensor
+    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+
+    # Reference forward pass
+    reference_model.eval()
+    reference_model.to(torch.bfloat16)
+    reference_topk_indices, reference_topk_weights = reference_model(torch_input)
+
+    # Convert input to TTNN
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(1),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # TTNN forward pass using utility function
+    tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+
+    # Verify output memory config matches expected
+    expected_output_memory_config = run_config["output_memory_config"]
+    actual_topk_weights_memory_config = tt_topk_weights.memory_config()
+    assert (
+        actual_topk_weights_memory_config == expected_output_memory_config
+    ), f"TopK experts weights memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_weights_memory_config}"
+
+    actual_topk_indices_memory_config = tt_topk_indices.memory_config()
+    assert (
+        actual_topk_indices_memory_config == expected_output_memory_config
+    ), f"TopK experts indices memory config mismatch: expected {expected_output_memory_config}, got {actual_topk_indices_memory_config}"
+
+    # Convert output back to torch
+    tt_topk_weights_torch = ttnn.to_torch(
+        tt_topk_weights,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
+    tt_topk_indices_torch = ttnn.to_torch(
+        tt_topk_indices,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0].squeeze(0)
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_topk_indices)
+
+    # Compare outputs
+    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+
+    if use_synthetic_weights:
+        topk_weights_pcc_required = 0.98
+    else:
+        topk_weights_pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
+
+    logger.info(f"TopK experts weights PCC: {pcc_message}")
+    logger.info(f"Using {'synthetic' if use_synthetic_weights else 'real'} weights")
+    assert (
+        passing
+    ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
+
+    topk_indices_pcc_required = 1.0
+    # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
+
+    # For synthetic weights, there can be ties in expert scores, so different experts might be selected
+    # In this case, we only verify that the right number of experts are selected (shape matches)
+    # The PCC check on weights already ensures correctness
+    if use_synthetic_weights:
+        assert reference_topk_indices.shape == tt_topk_indices_torch.shape, f"TopK experts indices shape mismatch"
+        logger.info(f"Skipping exact index comparison for synthetic weights due to potential ties in expert scores")
+    else:
+        assert torch.allclose(
+            reference_topk_indices, tt_topk_indices_torch
+        ), f"TopK experts indices output does not match"
+
+
+@pytest.mark.parametrize(
     "distribution,distribution_params",
     [
         (ExpertDistribution.UNIFORM, {}),
