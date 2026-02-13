@@ -101,6 +101,12 @@ class TTSampling(LightweightModule):
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
 
+        # sampling_dp > 1 when multiple mesh rows each sample 32 users independently
+        # (e.g. GPT-OSS on [4,8] Galaxy: 4 rows × 32 users = 128 total users)
+        self._sampling_dp = getattr(args, "sampling_dp", 1)
+        # Row-shard k/p/temp across mesh rows; replicate within each row (across TP cols)
+        self._param_dims = (0, None) if self._sampling_dp > 1 else (None, None)
+
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
             max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
@@ -127,36 +133,38 @@ class TTSampling(LightweightModule):
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
         # When p=0, the sampling operation will select the token with highest probability (argmax)
+        total_param_size = self.max_batch_size * self._sampling_dp
         if k is None:
-            k = torch.ones(self.max_batch_size)
+            k = torch.ones(total_param_size)
         if p is None:
-            p = torch.zeros(self.max_batch_size)
+            p = torch.zeros(total_param_size)
         if temp is None:
-            temp = torch.ones(self.max_batch_size)
+            temp = torch.ones(total_param_size)
 
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
+        # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
         self.k_tensor = ttnn.from_torch(
             k,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
         self.p_tensor = ttnn.from_torch(
             p,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
         self.temp_tensor = ttnn.from_torch(
             temp,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
 
         # Create device offset indices for global indexing
@@ -263,23 +271,33 @@ class TTSampling(LightweightModule):
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             """Update sampling parameters (k, p, temperature) dynamically."""
+            # When _sampling_dp > 1, create multi-device host tensors so
+            # copy_host_to_device_tensor writes per-row shards correctly.
+            if self._sampling_dp > 1:
+                mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+            else:
+                mapper = None
+
             self.k_tensor_new = ttnn.from_torch(
                 torch.tensor(k),
                 device=None,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             self.p_tensor_new = ttnn.from_torch(
                 torch.tensor(p),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             self.temp_tensor_new = ttnn.from_torch(
                 torch.tensor(temp),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
 
             ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)

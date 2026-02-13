@@ -50,12 +50,13 @@ class SamplingParams:
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
-def _broadcast_formatted_sampling_params(formatted_sampling_params: SamplingParams, idx: int) -> SamplingParams:
+def _broadcast_formatted_sampling_params(
+    formatted_sampling_params: SamplingParams, idx: int, slot_len: int = 32
+) -> SamplingParams:
     """
-    Create a new SamplingParams where each list field is broadcast to a full (length-32) list,
-    taking the value from `idx`. Does not mutate the input.
+    Create a new SamplingParams where each list field is broadcast to a full list of length
+    `slot_len`, taking the value from `idx`. Does not mutate the input.
     """
-    slot_len = 32  # sampling only supports batch_size=32
     kwargs = {}
     for f in fields(SamplingParams):
         value = getattr(formatted_sampling_params, f.name)
@@ -141,11 +142,6 @@ class Generator:
     model_capabilities = {
         "supports_prefix_caching": True,
     }
-
-    def _chunk_sampling_param(self, values):
-        if isinstance(values, List):
-            return split_list(values, self.data_parallel)
-        return [values] * self.data_parallel
 
     def _set_sampling_trace_mode(self, enabled: bool):
         for model_instance in self.model:
@@ -418,14 +414,16 @@ class Generator:
 
             if sampling_enabled:
                 sampling_executed = True
+                sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
+                total_batch = 32 * sampling_dp
                 per_request_params = format_sampling_params(
-                    _broadcast_formatted_sampling_params(sampling_params, idx), 32
+                    _broadcast_formatted_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
                 )
                 assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
                 _apply_prefill_sampling_state(
                     self.model[model_id],
                     sampling_params=per_request_params,
-                    prompt_tokens=prefill_ids[:, :seq_len].repeat(32, 1),
+                    prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
                     empty_slots=[user_id % 32],
                 )
 
@@ -710,6 +708,14 @@ class Generator:
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         sampling_params_list = None
         if sampling_params is not None:
+            # sampling_dp may differ from data_parallel for models that internally
+            # shard users across mesh rows (users_row_sharded) — each row samples
+            # 32 users independently, so sampling params must be chunked by the
+            # number of rows even though data_parallel=1 for the forward pass.
+            sampling_dp = max(
+                self.data_parallel, *(getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel))
+            )
+
             # Fall back to dataclass defaults when optional fields are omitted
             chunked_fields = {}
             for field in SAMPLING_PARAM_FIELDS:
@@ -720,33 +726,66 @@ class Generator:
                         val = getattr(SamplingParams, field)
                     else:
                         raise
-                chunked_fields[field] = self._chunk_sampling_param(val)
+                if isinstance(val, list):
+                    chunked_fields[field] = split_list(val, sampling_dp)
+                else:
+                    chunked_fields[field] = [val] * sampling_dp
 
             prompt_chunks = (
-                torch.chunk(prompt_tokens, self.data_parallel, 0)
-                if prompt_tokens is not None
-                else [None] * self.data_parallel
+                torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
             )
             output_chunks = (
-                torch.chunk(output_tokens, self.data_parallel, 0)
-                if output_tokens is not None
-                else [None] * self.data_parallel
+                torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
             )
             sampling_params_list = [
                 SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
-                for i in range(self.data_parallel)
+                for i in range(sampling_dp)
             ]
             for i in range(self.data_parallel):
-                formatted_params = format_sampling_params(
-                    sampling_params_list[i], 32
-                )  # Sampling needs params padded to 32 regardless of batch_size
                 sampling_module = getattr(self.model[i], "sampling", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                sampling_module.reset_sampling_params(formatted_params)
+                # Number of sampling chunks handled by this model instance
+                chunks_per_model = sampling_dp // self.data_parallel
+                model_params = sampling_params_list[i * chunks_per_model : (i + 1) * chunks_per_model]
+                if chunks_per_model == 1:
+                    # Standard case: one set of 32 params per model
+                    formatted_params = format_sampling_params(model_params[0], 32)
+                    sampling_module.reset_sampling_params(formatted_params)
+                else:
+                    # Row-sharded case: concatenate all chunks then let TTSampling
+                    # shard them across mesh rows via dims=(0, None)
+                    def _merge_field(params, field):
+                        vals = []
+                        all_none = True
+                        for p in params:
+                            v = getattr(p, field)
+                            if v is None:
+                                continue
+                            all_none = False
+                            vals.extend(v if isinstance(v, list) else [v])
+                        return None if all_none else vals
+
+                    merged = SamplingParams(
+                        **{field: _merge_field(model_params, field) for field in SAMPLING_PARAM_FIELDS}
+                    )
+                    formatted_params = format_sampling_params(merged, 32 * chunks_per_model)
+                    sampling_module.reset_sampling_params(formatted_params)
                 sampling_module.seed_manager.get_new_values()
                 if reset_batch:
-                    sampling_module.reset_prompt_tokens(prompt_chunks[i])
-                    sampling_module.reset_output_state(output_chunks[i])
+                    start_chunk = i * chunks_per_model
+                    end_chunk = start_chunk + chunks_per_model
+                    model_prompt = (
+                        torch.cat([c for c in prompt_chunks[start_chunk:end_chunk] if c is not None], 0)
+                        if prompt_tokens is not None
+                        else None
+                    )
+                    model_output = (
+                        torch.cat([c for c in output_chunks[start_chunk:end_chunk] if c is not None], 0)
+                        if output_tokens is not None
+                        else None
+                    )
+                    sampling_module.reset_prompt_tokens(model_prompt)
+                    sampling_module.reset_output_state(model_output)
 
         decode_kwargs = {
             "current_pos": start_pos,

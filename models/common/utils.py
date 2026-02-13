@@ -81,14 +81,29 @@ class LogProbsCalculator:
         # TODO: Test this for 6U Galaxy
         # Enforce working on 8 devices instead of all 32 since logits are sharded across 8 devices
         num_devices_for_sharding = 8 if num_devices == 32 else num_devices
+        self.num_devices_for_sharding = num_devices_for_sharding
+
+        # Determine the cluster_axis for all-gather: gather across the TP dimension (8 devices)
+        if num_devices == 32:
+            # For 2D meshes, find the axis with 8 devices (TP dimension)
+            if self.cluster_shape[0] == num_devices_for_sharding:
+                self._all_gather_cluster_axis = 0
+            else:
+                self._all_gather_cluster_axis = 1
+        else:
+            self._all_gather_cluster_axis = None
 
         # Create mask tensor with shape (num_devices, batch_size)
         # Each row will have device_id starting from 0 to num_devices - 1
         mask_tensor = torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
 
         if self.mesh_device.get_num_devices() == 32:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
-            assert self.cluster_shape == [8, 4], "Cluster shape must be (8, 4) for 32 devices"
+            if self.cluster_shape == [8, 4]:
+                mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
+            elif self.cluster_shape == [4, 8]:
+                mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape)
+            else:
+                raise ValueError(f"Unsupported cluster shape {self.cluster_shape} for 32 devices")
         elif self.mesh_device.get_num_devices() == 8:
             mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         else:
@@ -127,7 +142,7 @@ class LogProbsCalculator:
                 dim=dim,
                 num_links=num_links,
                 memory_config=tensor.memory_config(),
-                cluster_axis=0,
+                cluster_axis=self._all_gather_cluster_axis,
                 buffer_key=buffer_key,
             )
         else:
@@ -136,7 +151,7 @@ class LogProbsCalculator:
                 dim=dim,
                 num_links=num_links,
                 memory_config=tensor.memory_config(),
-                cluster_axis=None,
+                cluster_axis=self._all_gather_cluster_axis,
                 topology=ttnn.Topology.Linear,
             )
 
@@ -173,13 +188,15 @@ class LogProbsCalculator:
         )
         # TODO: Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, 8, 32), **self.common_args)
+        D = self.num_devices_for_sharding
+        B = gathered_max_tensors.shape[2]
+        gathered_max_tensors = ttnn.reshape(gathered_max_tensors, (1, 1, D, B), **self.common_args)
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
         self.global_max = ttnn.max(gathered_max_tensors, dim=2, keepdim=True, **self.common_args)
 
         global_max_to_subtract = ttnn.to_layout(self.global_max, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        global_max_to_subtract = ttnn.reshape(global_max_to_subtract, (1, 1, 32, 1), **self.common_args)
+        global_max_to_subtract = ttnn.reshape(global_max_to_subtract, (1, 1, B, 1), **self.common_args)
         global_max_to_subtract = ttnn.to_layout(global_max_to_subtract, ttnn.TILE_LAYOUT, **self.common_args)
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
@@ -194,7 +211,8 @@ class LogProbsCalculator:
             buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
         )
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, 8, 32), **self.common_args)
+        B_sum = gathered_sum_exp_tensors.shape[2]
+        gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
@@ -232,7 +250,8 @@ class LogProbsCalculator:
         remainder_tensor = ttnn.typecast(remainder_tensor, ttnn.uint32, **self.common_args)
         # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        remainder_tensor = ttnn.reshape(remainder_tensor, (1, 1, 32, 1), **self.common_args)
+        batch_vol = remainder_tensor.shape[2] * remainder_tensor.shape[3]
+        remainder_tensor = ttnn.reshape(remainder_tensor, (1, 1, batch_vol, 1), **self.common_args)
         remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.TILE_LAYOUT, **self.common_args)
 
         # Get logits for each user on each chip based on local index
@@ -240,7 +259,8 @@ class LogProbsCalculator:
 
         # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, 32), **self.common_args)
+        batch_vol_s = selected_logits_tensor.shape[2] * selected_logits_tensor.shape[3]
+        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, batch_vol_s), **self.common_args)
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask, **self.common_args)
@@ -257,7 +277,9 @@ class LogProbsCalculator:
         )
 
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 8, 32), **self.common_args)
+        D_s = self.num_devices_for_sharding
+        B_g = selected_logits_tensor.shape[3]
+        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, D_s, B_g), **self.common_args)
         selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
 
         # Apply sum over device dimension to get logits for each user on all chips
