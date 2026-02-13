@@ -51,7 +51,7 @@ def test_moe_mm_performance(M, K, N, L, C, check_accuracy, dump_outputs):
     ), f"Performance {duration_us} us is greater than expected {SHAPE2TIME[(M, K, N, L, C)]} us"
 
 
-def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]) -> dict[str, float]:
+def post_process_ops_log(output_logs_subdir: str, float_columns: list[str]):
     filename = get_latest_ops_log_filename(output_logs_subdir)
 
     df = pd.read_csv(filename)

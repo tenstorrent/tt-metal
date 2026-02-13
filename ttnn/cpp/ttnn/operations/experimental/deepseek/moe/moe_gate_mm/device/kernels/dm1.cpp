@@ -226,7 +226,7 @@ void kernel_main() {
         // Send the data to the neighbor1
         noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr2);
 
-        // Signal neighbor1 that data is ready (increment their semaphore)
+        // Signal neighbor2 that data is ready (increment their semaphore)
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
             partial_semaphore_noc_addr2, /*val=*/1, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
         noc_inline_dw_write_with_state<
@@ -246,10 +246,10 @@ void kernel_main() {
         // Wait for the data2 to be ready
         cb_wait_front(cb_c2w_rdy, 1);
 
-        // Send the data to the neighbor2
+        // Send the data to the neighbor1
         noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr1);
 
-        // Signal neighbor2 that data is ready (increment their semaphore)
+        // Signal neighbor1 that data is ready (increment their semaphore)
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
             partial_semaphore_noc_addr1, /*val=*/1, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
         noc_inline_dw_write_with_state<
