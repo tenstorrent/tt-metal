@@ -25,7 +25,8 @@ ProfilerInitializer::ProfilerInitializer(
     profiler_state_manager_(profiler_state_manager) {}
 
 void ProfilerInitializer::init(
-    const std::vector<Device*>& devices, [[maybe_unused]] const std::unordered_set<InitializerKey>& init_done) {
+    [[maybe_unused]] const std::vector<Device*>& devices,
+    [[maybe_unused]] const std::unordered_set<InitializerKey>& init_done) {
 #if defined(TRACY_ENABLE)
     devices_ = devices;
 
