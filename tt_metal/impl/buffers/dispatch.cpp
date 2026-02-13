@@ -737,6 +737,9 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
     }
 
+    // Update total_pages_written to prevent redundant wait commands on subsequent cores
+    dispatch_params.total_pages_written += core_page_mapping.num_pages;
+
     // Helper lambda to emit a command pair
     auto emit_command_pair = [&]() {
         if (write_sub_cmds.empty() && relay_sub_cmds.empty()) {
@@ -1267,7 +1270,7 @@ bool write_to_device_buffer(
             }
         }
 
-        ShardedBufferWriteDispatchParams dispatch_params(
+    ShardedBufferWriteDispatchParams dispatch_params(
             &buffer,
             buffer.size() / buffer.page_size(),
             cq_id,
