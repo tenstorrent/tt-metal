@@ -19,23 +19,28 @@ void bind_distributed_mla(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Distributed multi-latent attention operation for sequence distributed SDPA.
-        This is a boilerplate implementation that determines device order numbers
-        along the specified cluster axis for multi-device SDPA computation.
+
+        Q is split along sequence across one axis of devices, K and V remain full sequence length.
+        The operation automatically generates causal mask and skips compute where possible.
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor to process.
-            cluster_axis (int, optional): The axis on the mesh device to use for distribution. Defaults to `None`.
+            q_tensor (ttnn.Tensor): Query tensor [B, NH_Q, S_Q, DH] (sharded per device).
+            k_tensor (ttnn.Tensor): Key tensor [B, NH_KV, S_KV, DH] (full sequence).
+            v_tensor (ttnn.Tensor): Value tensor [B, NH_KV, S_KV, DH] (full sequence).
 
         Keyword Args:
+            cluster_axis (int, optional): The axis on the mesh device to use for distribution. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            scale (float, optional): Scaling factor for attention scores. Defaults to 1/sqrt(head_dim).
 
         Returns:
-            ttnn.Tensor: Currently returns a copy of the input tensor. In the full implementation,
-                        this would return the distributed SDPA result.
+            ttnn.Tensor: Distributed attention output [B, NH_Q, S_Q, DH] (sharded per device).
 
         Example:
-            >>> input_tensor = ttnn.from_torch(torch.randn([1, 8, 128, 64]), dtype=ttnn.bfloat16, device=mesh_device)
-            >>> output = ttnn.transformer.sdpa_prefill.distributed_mla(input_tensor, cluster_axis=0)
+            >>> q = ttnn.from_torch(torch.randn([1, 8, 128, 64]), dtype=ttnn.bfloat16, device=mesh_device)
+            >>> k = ttnn.from_torch(torch.randn([1, 8, 256, 64]), dtype=ttnn.bfloat16, device=mesh_device)
+            >>> v = ttnn.from_torch(torch.randn([1, 8, 256, 64]), dtype=ttnn.bfloat16, device=mesh_device)
+            >>> output = ttnn.transformer.sdpa_prefill.distributed_mla(q, k, v, cluster_axis=0)
         )doc";
 
     using OperationType = decltype(ttnn::transformer::sdpa_prefill::distributed_mla);
@@ -45,15 +50,21 @@ void bind_distributed_mla(nb::module_& mod) {
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& q_tensor,
+               const ttnn::Tensor& k_tensor,
+               const ttnn::Tensor& v_tensor,
                const std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, cluster_axis, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               std::optional<float> scale) {
+                return self(q_tensor, k_tensor, v_tensor, cluster_axis, memory_config, scale);
             },
-            nb::arg("input_tensor").noconvert(),
+            nb::arg("q_tensor").noconvert(),
+            nb::arg("k_tensor").noconvert(),
+            nb::arg("v_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("scale") = nb::none()});
 }
 
 }  // namespace ttnn::operations::transformer::sdpa_prefill

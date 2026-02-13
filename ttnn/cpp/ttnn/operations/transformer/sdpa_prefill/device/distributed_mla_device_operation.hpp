@@ -7,14 +7,15 @@
 #include <variant>
 
 #include "distributed_mla_program_factory.hpp"
+#include "distributed_mla_device_operation_types.hpp"
 
 namespace ttnn::operations::transformer::sdpa_prefill {
 
 struct DistributedMLADeviceOperation {
-    using operation_attributes_t = DistributedMlaMeshWorkloadFactory::operation_attributes_t;
-    using tensor_args_t = DistributedMlaMeshWorkloadFactory::tensor_args_t;
-    using spec_return_value_t = DistributedMlaMeshWorkloadFactory::spec_return_value_t;
-    using tensor_return_value_t = DistributedMlaMeshWorkloadFactory::tensor_return_value_t;
+    using operation_attributes_t = DistributedMlaSDPAParams;
+    using tensor_args_t = DistributedMlaSDPAInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<DistributedMlaMeshWorkloadFactory>;
 

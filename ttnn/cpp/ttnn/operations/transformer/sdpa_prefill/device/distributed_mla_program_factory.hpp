@@ -9,6 +9,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "distributed_mla_device_operation_types.hpp"
 #include <tt-metalium/buffer_types.hpp>
 
 namespace ttnn::operations::transformer::sdpa_prefill {
@@ -18,15 +20,8 @@ struct DistributedMlaSharedVariables {
 };
 
 struct DistributedMlaMeshWorkloadFactory {
-    struct operation_attributes_t {
-        std::optional<uint32_t> cluster_axis;
-        tt::tt_metal::MemoryConfig memory_config;
-    };
-
-    struct tensor_args_t {
-        const Tensor input_tensor;
-    };
-
+    using operation_attributes_t = DistributedMlaSDPAParams;
+    using tensor_args_t = DistributedMlaSDPAInputs;
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using shared_variables_t = DistributedMlaSharedVariables;

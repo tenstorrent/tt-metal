@@ -13,16 +13,24 @@ namespace operations::transformer::sdpa_prefill {
 
 struct ExecuteDistributedMLA {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& q_tensor,
+        const ttnn::Tensor& k_tensor,
+        const ttnn::Tensor& v_tensor,  // Add missing V tensor
         std::optional<uint32_t> cluster_axis = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<float> scale = std::nullopt);
 };
 
 }  // namespace operations::transformer::sdpa_prefill
 
 namespace prim {
 ttnn::Tensor distributed_mla(
-    const ttnn::Tensor& input_tensor, std::optional<uint32_t> cluster_axis, const ttnn::MemoryConfig& memory_config);
+    const ttnn::Tensor& q_tensor,
+    const ttnn::Tensor& k_tensor,
+    const ttnn::Tensor& v_tensor,  // Add missing V tensor
+    std::optional<uint32_t> cluster_axis,
+    const ttnn::MemoryConfig& memory_config,
+    std::optional<float> scale);
 }  // namespace prim
 
 namespace transformer::sdpa_prefill {
