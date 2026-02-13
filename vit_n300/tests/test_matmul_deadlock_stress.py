@@ -143,8 +143,8 @@ def create_block_sharded_config(grid, M, K, N):
     return input_mem_config
 
 
-def run_single_matmul(device, name, cfg, weight_tensor):
-    """Run one block-sharded matmul with the given config."""
+def run_single_matmul(device, name, cfg, weight_tensor, bias_tensor=None):
+    """Run one block-sharded matmul (or linear with bias) with the given config."""
     M, K, N = cfg["M"], cfg["K"], cfg["N"]
     grid = cfg["grid"]
 
@@ -167,13 +167,24 @@ def run_single_matmul(device, name, cfg, weight_tensor):
         fused_activation=cfg["fused_activation"],
     )
 
-    output = ttnn.matmul(
-        tt_input,
-        weight_tensor,
-        program_config=program_config,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-    )
+    if bias_tensor is not None:
+        # Use ttnn.linear with bias — matches actual ViT model (FUSE_BIAS path)
+        output = ttnn.linear(
+            tt_input,
+            weight_tensor,
+            bias=bias_tensor,
+            program_config=program_config,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        output = ttnn.matmul(
+            tt_input,
+            weight_tensor,
+            program_config=program_config,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
 
     tt_input.deallocate()
     output.deallocate()
@@ -336,6 +347,105 @@ def test_matmul_deadlock_stress_wide(device, num_iterations):
         w.deallocate()
 
 
+def run_fast_bias_matmul(device, name, cfg, weight_tensor, bias_tensor, input_dram):
+    """Fast bias matmul: reshard DRAM input to L1 block-sharded, run linear, deallocate."""
+    grid = cfg["grid"]
+    input_mem_config = create_block_sharded_config(grid, cfg["M"], cfg["K"], cfg["N"])
+
+    # Reshard from DRAM to L1 block-sharded (much faster than from_torch each time)
+    tt_input = ttnn.to_memory_config(input_dram, input_mem_config)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=cfg["in0_block_w"],
+        out_subblock_h=cfg["out_subblock_h"],
+        out_subblock_w=cfg["out_subblock_w"],
+        per_core_M=cfg["per_core_M"],
+        per_core_N=cfg["per_core_N"],
+        transpose_mcast=False,
+        fused_activation=cfg["fused_activation"],
+    )
+
+    output = ttnn.linear(
+        tt_input,
+        weight_tensor,
+        bias=bias_tensor,
+        program_config=program_config,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+    )
+    tt_input.deallocate()
+    output.deallocate()
+
+
+@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "trace_region_size": 1753088}],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_iterations", [10000])
+def test_matmul_with_bias(device, num_iterations):
+    """
+    Fast stress test matching the ACTUAL ViT model: ttnn.linear with bias.
+    Pre-creates inputs in DRAM and reshards each iteration (avoids slow from_torch).
+    1000 iters × 4 configs = 4000 ops, should complete in ~30-40s.
+    With TT_METAL_OPERATION_TIMEOUT_SECONDS=10, hangs produce the fetch queue error.
+    """
+    import time
+
+    torch.manual_seed(0)
+    total_ops = num_iterations * len(VIT_MATMUL_CONFIGS)
+    print(f"[bias] {num_iterations} iters × {len(VIT_MATMUL_CONFIGS)} = {total_ops} ops (FUSE_BIAS)", flush=True)
+
+    # Pre-create weights, biases, AND inputs on device DRAM
+    weights, biases, inputs = {}, {}, {}
+    for name, cfg in VIT_MATMUL_CONFIGS.items():
+        weights[name] = ttnn.from_torch(
+            torch.randn(1, 1, cfg["K"], cfg["N"], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        biases[name] = ttnn.from_torch(
+            torch.randn(1, 1, 1, cfg["N"], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        inputs[name] = ttnn.from_torch(
+            torch.randn(1, 1, cfg["M"], cfg["K"], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    print(f"[bias] Starting iterations...", flush=True)
+    t0 = time.time()
+    for i in range(num_iterations):
+        for name, cfg in VIT_MATMUL_CONFIGS.items():
+            run_fast_bias_matmul(device, name, cfg, weights[name], biases[name], inputs[name])
+        if (i + 1) % 100 == 0:
+            ttnn.synchronize_device(device)
+            elapsed = time.time() - t0
+            ops_done = (i + 1) * len(VIT_MATMUL_CONFIGS)
+            print(
+                f"[bias] iter {i+1}/{num_iterations}  {ops_done} ops  {elapsed:.1f}s  ({ops_done/elapsed:.0f} ops/s)",
+                flush=True,
+            )
+
+    ttnn.synchronize_device(device)
+    elapsed = time.time() - t0
+    print(f"[bias] DONE — {total_ops} ops in {elapsed:.1f}s ({total_ops/elapsed:.0f} ops/s) — NO HANG", flush=True)
+
+    for d in [weights, biases, inputs]:
+        for t in d.values():
+            t.deallocate()
+
+
 COPIES_PER_ITERATION = 5  # Multiple copies per trace replay to increase NoC contention
 
 
@@ -360,12 +470,20 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
         f"= {total_matmuls} matmul ops + {total_copies} CQ1 copies"
     )
 
-    # Pre-create weight tensors
-    weights = {}
+    import time
+
+    # Pre-create weight AND bias tensors (FUSE_BIAS path - matches actual ViT)
+    weights, biases = {}, {}
     for name, cfg in VIT_MATMUL_CONFIGS.items():
-        torch_weight = torch.randn(1, 1, cfg["K"], cfg["N"], dtype=torch.bfloat16)
         weights[name] = ttnn.from_torch(
-            torch_weight,
+            torch.randn(1, 1, cfg["K"], cfg["N"], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        biases[name] = ttnn.from_torch(
+            torch.randn(1, 1, 1, cfg["N"], dtype=torch.bfloat16),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -383,19 +501,18 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
         copy_buffers_host.append(tt_host)
         copy_buffers_device.append(tt_dev)
 
-    # JIT compile all matmuls
+    # JIT compile all matmuls with bias
     for name, cfg in VIT_MATMUL_CONFIGS.items():
-        run_single_matmul(device, name, cfg, weights[name])
+        run_single_matmul(device, name, cfg, weights[name], biases[name])
     ttnn.synchronize_device(device)
 
-    # Capture trace of matmuls on CQ0
+    # Capture trace of matmuls with FUSE_BIAS on CQ0
     trace_inputs = {}
     for name, cfg in VIT_MATMUL_CONFIGS.items():
         M, K, N = cfg["M"], cfg["K"], cfg["N"]
         input_mem_config = create_block_sharded_config(cfg["grid"], M, K, N)
-        torch_input = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
         trace_inputs[name] = ttnn.from_torch(
-            torch_input,
+            torch.randn(1, 1, M, K, dtype=torch.bfloat16),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -414,23 +531,26 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
             transpose_mcast=False,
             fused_activation=cfg["fused_activation"],
         )
-        ttnn.matmul(
+        ttnn.linear(
             trace_inputs[name],
             weights[name],
+            bias=biases[name],
             program_config=program_config,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
-    # Main loop: CQ0 replays trace, CQ1 does MULTIPLE copies — heavier NoC contention
+    # Main loop: CQ0 replays trace (matmuls+bias), CQ1 does copies — heavier NoC contention
     cq0_event = ttnn.record_event(device, 0)
-    logger.info(
-        f"Running 2CQ stress loop: {num_iterations} trace replays " f"with {COPIES_PER_ITERATION} CQ1 copies each..."
+    print(
+        f"[2cq+bias] Running {num_iterations} trace replays " f"with {COPIES_PER_ITERATION} CQ1 copies each...",
+        flush=True,
     )
 
+    t0 = time.time()
     for i in range(num_iterations):
-        # CQ0: replay trace (matmuls)
+        # CQ0: replay trace (matmuls with bias)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
 
         # CQ1: multiple copies while CQ0 runs matmuls (heavier NoC contention)
@@ -441,12 +561,17 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
         ttnn.wait_for_event(0, cq1_event)
         cq0_event = ttnn.record_event(device, 0)
 
-        if (i + 1) % 1000 == 0:
+        if (i + 1) % 500 == 0:
             ttnn.synchronize_device(device)
-            logger.info(f"  ...completed {i + 1}/{num_iterations}")
+            elapsed = time.time() - t0
+            print(f"[2cq+bias] iter {i+1}/{num_iterations}  ({elapsed:.1f}s)", flush=True)
 
     ttnn.synchronize_device(device)
+    elapsed = time.time() - t0
+    print(f"[2cq+bias] DONE — {num_iterations} trace replays in {elapsed:.1f}s — NO HANG", flush=True)
     ttnn.release_trace(device, trace_id)
 
     for w in weights.values():
         w.deallocate()
+    for b in biases.values():
+        b.deallocate()

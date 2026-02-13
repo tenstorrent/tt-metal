@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
@@ -119,11 +118,6 @@ void kernel_main() {
                     // Atomic increment source core counter
                     noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
-                    // Event-driven CB monitor: only log when in1 data is NOT ready (contention)
-                    if (*in1_mcast_receiver_semaphore_addr_ptr == INVALID) {
-                        DPRINT << "BR:in1_WAIT blk=" << block << "/" << num_blocks_inner_dim << " bh=" << bh
-                               << " bw=" << bw << " b=" << b << ENDL();
-                    }
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
 
