@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/tilize.h"
 
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row

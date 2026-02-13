@@ -55,10 +55,10 @@ void bind_moe_compute(nb::module_& mod, const ccl_operation_t& operation, const 
             nb::arg("tilize_expert_mapping_tensor").noconvert(),
             nb::arg("matmul_w0_w1_tensor").noconvert(),
             nb::arg("matmul_w2_tensor").noconvert(),
+            nb::kw_only(),
             nb::arg("layer_id"),
             nb::arg("output_height_shard_dim"),
             nb::arg("output_width_shard_dim"),
-            nb::kw_only(),
             nb::arg("cluster_axis") = nb::none()});
 }
 

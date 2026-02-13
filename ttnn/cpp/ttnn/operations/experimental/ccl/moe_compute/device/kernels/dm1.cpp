@@ -163,7 +163,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
-        NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
     }
 
     // Tilize core we signal to that tilize cores can send another chunk of tiles
@@ -174,15 +174,15 @@ void kernel_main() {
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
-
-        const uint32_t active_tokens = per_expert_counts_ptr[expert_id];
-        const uint32_t height_blocks = detail::div_up(active_tokens, tile_height);
+        const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
+        const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
         const uint32_t max_tokens_per_height_shard = detail::div_up(active_tokens, height_shard_dim);
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for compute core to tell us that all mm01 data is ready
+
+            DPRINT << "WAIT FRONT 0. expert_id: " << expert_id << " chunk: " << chunk << "\n";
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
 
@@ -214,7 +214,7 @@ void kernel_main() {
                     // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
-                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[!(step & 1)];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
                     noc_async_write_one_packet_with_state</*posted=*/true>(
@@ -233,14 +233,15 @@ void kernel_main() {
                 }
             }
 
-            const uint32_t dest_height_shard_start = (hb * tile_height) / max_tokens_per_height_shard;
-            const uint32_t shard_row_start = (hb * tile_height) % max_tokens_per_height_shard;
+            const uint32_t dest_height_shard_start = (chunk * tile_height) / max_tokens_per_height_shard;
+            const uint32_t shard_row_start = (chunk * tile_height) % max_tokens_per_height_shard;
 
             uint32_t width_tiles_to_send = output_width_tiles_core;  // 18 or 19
             uint32_t width_tiles_sent = 0;
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
+            DPRINT << "WAIT FRONT 1. expert_id: " << expert_id << " chunk: " << chunk << "\n";
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
 
@@ -278,10 +279,6 @@ void kernel_main() {
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
-                    noc_async_posted_writes_flushed(1);
-
-                    noc_async_posted_atomic_barrier(1);
-
                     if (++shard_row == max_tokens_per_height_shard) {
                         ++dest_height_shard;
                         shard_row = 0;
@@ -291,7 +288,6 @@ void kernel_main() {
                 width_tiles_to_send -= width_transfer_tiles;
             }
             noc_async_posted_writes_flushed(1);
-            noc_async_posted_atomic_barrier(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
         }
     }

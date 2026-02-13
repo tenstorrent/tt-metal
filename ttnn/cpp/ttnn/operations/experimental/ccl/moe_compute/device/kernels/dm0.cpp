@@ -87,7 +87,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_A / 2;  // 32 * 3 = 96
+        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;  // 32 * 3 = 96
     // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
