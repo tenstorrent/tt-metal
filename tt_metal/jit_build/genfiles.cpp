@@ -249,7 +249,7 @@ template <std::ranges::range Range>
 void emit_formats_array(
     std::ostream& out, const std::string& array_type, const std::string& array_name, int array_size, const Range& arr) {
     fmt::format_to(
-        std::ostream_iterator<char>(out),
+        std::ostreambuf_iterator<char>(out),
         "{} {}[{}] = {{\n    {}\n}};\n",
         array_type,
         array_name,
