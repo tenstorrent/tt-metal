@@ -170,8 +170,7 @@ COPY --from=cba-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 
 # Copy pre-built mold from GHCR tool image
-COPY --from=mold-layer /install/bin/ /usr/local/bin/
-COPY --from=mold-layer /install/lib/ /usr/local/lib/
+COPY --from=mold-layer /install/bin/ /install/lib/ /usr/local/
 
 # Copy pre-built ci-build venv from tool image
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
@@ -266,12 +265,11 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     fi
 
 # Configure SSH for MPI multihost jobs readiness
-RUN adduser --uid 1001 --shell /bin/bash user
-RUN usermod -aG sudo user
-RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
-
-RUN mkdir -p /run/sshd
-RUN echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+RUN adduser --uid 1001 --shell /bin/bash user \
+    && usermod -aG sudo user \
+    && echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user \
+    && mkdir -p /run/sshd \
+    && echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
