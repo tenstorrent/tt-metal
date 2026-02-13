@@ -43,6 +43,7 @@ namespace {
 std::vector<CoreRange> collect_all_kernel_core_ranges(const ProgramDescriptor& desc) {
     std::vector<CoreRange> all_ranges;
     for (const auto& kernel : desc.kernels) {
+        all_ranges.reserve(all_ranges.size() + kernel.core_ranges.ranges().size());
         for (const auto& range : kernel.core_ranges.ranges()) {
             all_ranges.push_back(range);
         }

@@ -998,14 +998,15 @@ void detail::ProgramImpl::add_semaphore(
 }
 
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
-    std::vector<std::vector<CoreCoord>> cores_in_program;
-    std::vector<std::set<CoreCoord>> unique_cores;
+    std::vector<std::vector<CoreCoord>> cores_in_program(kernels_.size());
+    std::vector<std::set<CoreCoord>> unique_cores(kernels_.size());
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size();
          programmable_core_type_index++) {
         const auto& kernels = this->kernels_[programmable_core_type_index];
-        cores_in_program.push_back({});
-        unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
+            // Reserve space for cores to avoid reallocations. Even if there are duplicates, it should be cheaper to
+            // allocate at once with some overhead.
+            cores_in_program[programmable_core_type_index].reserve(kernel->logical_cores().size());
             for (auto core : kernel->logical_cores()) {
                 if (unique_cores[programmable_core_type_index].contains(core)) {
                     continue;
@@ -1115,10 +1116,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange& core_range : ranges) {
+            dst_noc_unicast_info.reserve(
+                dst_noc_unicast_info.size() + (core_range.end_coord.x - core_range.start_coord.x + 1) *
+                                                  (core_range.end_coord.y - core_range.start_coord.y + 1));
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
+                    dst_noc_unicast_info.emplace_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
                 }
             }
         }
@@ -1713,11 +1717,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     detail::DataflowBuffersGetter dataflow_buffers_getter =
         [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {

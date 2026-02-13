@@ -12,6 +12,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
     tt::stl::Span<const uint32_t> host_page_indices) {
     std::vector<BufferCorePageMapping::ContiguousHostPages> result;
+    result.reserve(host_page_indices.size());
 
     uint32_t start_host_page_idx = 0;
     bool is_processing_range = false;
@@ -19,7 +20,7 @@ std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
     auto add_page = [&](uint32_t end_host_page_idx) {
         uint32_t start_host_page = host_page_indices[start_host_page_idx];
         uint32_t end_host_page = host_page_indices[end_host_page_idx - 1];
-        result.push_back({
+        result.emplace_back(BufferCorePageMapping::ContiguousHostPages{
             .device_page_offset = start_host_page_idx,
             .host_page_start = start_host_page,
             .num_pages = end_host_page - start_host_page + 1,

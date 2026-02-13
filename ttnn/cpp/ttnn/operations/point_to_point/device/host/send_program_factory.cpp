@@ -48,7 +48,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_sender_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * aligned_input_page_size_bytes, {{sender_cb_id, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * aligned_input_page_size_bytes, {{sender_cb_id, input_dataformat}})
             .set_page_size(sender_cb_id, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_sender_config);
 
@@ -98,7 +99,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> sender_cores;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+    const auto& all_cores_from_corerange = corerange_to_cores(all_cores, std::nullopt);
+    sender_cores.reserve(all_cores_from_corerange.size());
+    for (auto c : all_cores_from_corerange) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_packets_per_core_group_1 * num_pages_per_packet;

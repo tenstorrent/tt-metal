@@ -23,7 +23,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
     TT_FATAL(page_size > 0, "Internal error: page size is 0");
 
     size_t packet_space_in_bytes_left = packet_size_bytes;
-    noc_transfer_burst_out.transfer_burst_groupings.push_back({});
+    noc_transfer_burst_out.transfer_burst_groupings.emplace_back();
     bool empty_last_group = false;
     for (size_t w = 0; w < tensor_slice.tensor_slice_shape.w; w++) {
         for (size_t z = 0; z < tensor_slice.tensor_slice_shape.z; z++) {
@@ -48,7 +48,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
                     uint64_t noc_addr_offset = (static_cast<uint64_t>(noc_yx.noc_y) << 48) |
                                                (static_cast<uint64_t>(noc_yx.noc_x) << 32) |
                                                static_cast<uint64_t>(byte_offset_in_shard);
-                    transfer_burst_grouping.transfer_infos.push_back(
+                    transfer_burst_grouping.transfer_infos.emplace_back(
                         ttnn::ccl::cmd::noc_transfer_info{noc_addr_offset, transfer_size_in_bytes});
 
                     if (packet_space_in_bytes_left < page_size) {
@@ -62,7 +62,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
                             "Internal error: Last x is out of bounds");
                         if (!(last_w && last_z && last_y && last_x)) {
                             empty_last_group = true;
-                            noc_transfer_burst_out.transfer_burst_groupings.push_back({});
+                            noc_transfer_burst_out.transfer_burst_groupings.emplace_back();
                         }
                     }
                 }

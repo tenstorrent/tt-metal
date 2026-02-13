@@ -25,7 +25,7 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->end_addrs_.push_back(base_addr + size);
 
     for (auto& entry : this->entries_) {
-        entry.push_back({0, 0});
+        entry.emplace_back(ConfigBufferEntry{0, 0});
     }
 
     // when free == alloc, buffer is empty
@@ -34,7 +34,7 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->free_index_.push_back(0);
     this->entries_[0].back().addr = base_addr;
 
-    this->reservation_.push_back({});
+    this->reservation_.emplace_back();
 }
 
 // First part of returned pair is true if reserving size bytes requires a sync on some core type

@@ -95,7 +95,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto link_idx = 0;  // for single link implementation
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> receiver_cores;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+    const auto& all_cores_from_corerange = corerange_to_cores(all_cores, std::nullopt);
+    receiver_cores.reserve(all_cores_from_corerange.size());
+    for (auto c : all_cores_from_corerange) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_packets_per_core_group_1 * num_pages_per_packet;

@@ -63,8 +63,7 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     return coordinates;
 }
 
-std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
-    std::vector<uint32_t> args;
+void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
@@ -86,6 +85,11 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
             core_range.start_coord.y <= core_range.end_coord.y, "end coordinates above of start coordinates in shard");
         TT_FATAL(core_range.end_coord.y <= 0xFF, "sharding coordinates out of range");
         if (shard_grid_transposed) {
+            args.reserve(
+                args.size() +
+                (core_range.end_coord.x - core_range.start_coord.x + 1) *
+                    (core_range.end_coord.y - core_range.start_coord.y + 1) / 2 +
+                1);
             for (uint32_t x_index = core_range.start_coord.x; x_index <= core_range.end_coord.x; x_index++) {
                 for (uint32_t y_index = core_range.start_coord.y; y_index <= core_range.end_coord.y; y_index++) {
                     CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
@@ -100,6 +104,11 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
                 }
             }
         } else {
+            args.reserve(
+                args.size() +
+                (core_range.end_coord.x - core_range.start_coord.x + 1) *
+                    (core_range.end_coord.y - core_range.start_coord.y + 1) / 2 +
+                1);
             for (uint32_t y_index = core_range.start_coord.y; y_index <= core_range.end_coord.y; y_index++) {
                 for (uint32_t x_index = core_range.start_coord.x; x_index <= core_range.end_coord.x; x_index++) {
                     CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
@@ -118,16 +127,16 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
     if (last) {
         args.push_back((held_value << 16));
     }
+}
+
+std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
+    std::vector<uint32_t> args;
+    extend_sharding_run_time_args(t, args);
     return args;
 }
 
-void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
-    const auto& new_args = generate_run_time_args(t);
-    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
-}
-
-std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) {
-    std::vector<uint32_t> args;
+void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+    args.reserve(7);
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
@@ -155,8 +164,8 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
                              : shard_addr_gen_consts::ContiguityType::L1_PADDING_IN_RIGHTMOST_SHARD;
     }
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout()));  // Memory layout
-    args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
-    args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
+    args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));         // The number of sharding cores
+    args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));    // The page size we offset each write to
     TT_FATAL(t.buffer()->aligned_page_size() > 0, "aligned page size is 0");
     TT_FATAL(buf_shard_spec.tensor2d_shape_in_pages[1] > 0, "the page is empty");
     args.push_back(static_cast<uint32_t>(
@@ -165,12 +174,12 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
     args.push_back(static_cast<uint32_t>(contiguity));  // This defines times when contiguous pages can't be calculated
     args.push_back(pages_per_shard_x);
     args.push_back(pages_per_shard_y);
-    return args;
 }
 
-void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
-    const auto& new_args = generate_compile_time_args(t);
-    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) {
+    std::vector<uint32_t> args;
+    extend_sharding_compile_time_args(t, args);
+    return args;
 }
 
 }  // namespace shard_builder
