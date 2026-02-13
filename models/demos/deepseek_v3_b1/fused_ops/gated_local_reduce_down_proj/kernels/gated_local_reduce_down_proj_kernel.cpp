@@ -251,7 +251,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
+        0,
     };
+    UNPACK(
+        ({ matmul_args.in1_addr = get_local_cb_interface(get_named_compile_time_arg_val("matmul_in1")).fifo_rd_ptr; }));
 
     // Output gather compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs og_args{};

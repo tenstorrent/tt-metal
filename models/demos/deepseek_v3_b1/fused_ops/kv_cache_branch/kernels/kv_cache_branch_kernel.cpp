@@ -117,7 +117,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+        0,
     };
+    UNPACK(({
+        dkv_matmul_args.in1_addr = get_local_cb_interface(get_named_compile_time_arg_val("dkv_matmul_in1")).fifo_rd_ptr;
+    }));
 
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs dkv_gather_args{};

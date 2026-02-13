@@ -411,7 +411,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_mm_in1"),
         get_named_compile_time_arg_val("gate_mm_out"),
         get_named_compile_time_arg_val("gate_mm_k_num_tiles"),
+        0,
     };
+    UNPACK(({
+        gate_mm_args.in1_addr = get_local_cb_interface(get_named_compile_time_arg_val("gate_mm_in1")).fifo_rd_ptr;
+    }));
 
     // ------------------------------------------------------------------------
     // Gather (no-op for TRISC)

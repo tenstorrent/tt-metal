@@ -413,6 +413,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_in1"),
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul_in1_addr"),
     };
 
     // Gather compute args (no-op for TRISC)
@@ -437,6 +438,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul2_in1_addr"),
     };
 
     // Mcast2 compute args (no-op for TRISC)
@@ -452,6 +454,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul3_in1"),
         get_named_compile_time_arg_val("matmul3_out"),
         get_named_compile_time_arg_val("matmul3_k_num_tiles"),
+        get_named_compile_time_arg_val("matmul3_in1_addr"),
     };
 
     // Qrope CTArgs type alias
@@ -483,6 +486,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_matmul_in1"),
         get_named_compile_time_arg_val("dkv_matmul_out"),
         get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+        get_named_compile_time_arg_val("dkv_matmul_in1_addr"),
     };
 
     // Gather compute args (no-op for TRISC)

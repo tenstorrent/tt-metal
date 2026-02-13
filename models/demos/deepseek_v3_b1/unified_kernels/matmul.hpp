@@ -75,12 +75,13 @@ struct Matmul {
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
 
-    // Compute args (TRISC): [in0, in1, out, num_tiles]
+    // Compute args (TRISC): [in0, in1, out, num_tiles, in1_addr]
     struct ComputeArgs {
         uint32_t in0;
         uint32_t in1;
         uint32_t out;
         uint32_t k_num_tiles;
+        uint32_t in1_addr;  // Actual L1 read addr for in1 (in fifo_rd_ptr units = bytes / L1_ALIGNMENT)
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -118,10 +119,12 @@ struct Matmul {
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
 
-            // Wait for all input tiles (both from sharded tensors in L1)
-            // in1 has num_tiles * out_w tiles (K tiles for each output column)
+            // Wait for in0 input tiles
             cb_wait_front(args.in0, args.k_num_tiles);
-            cb_wait_front(args.in1, args.k_num_tiles * out_w);
+
+            // Override in1 read pointer to pre-computed L1 address
+            // (sharded weight buffer already set up by NCRISC, no wait needed)
+            UNPACK(({ get_local_cb_interface(args.in1).fifo_rd_ptr = args.in1_addr; }));
 
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);

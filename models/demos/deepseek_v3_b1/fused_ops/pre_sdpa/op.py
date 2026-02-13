@@ -437,6 +437,7 @@ class PreSDPA:
         dkv_matmul_out_w = (
             dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
         )  # Per-core width in tiles
+        dkv_matmul_in1_addr = dkv_matmul_weights_sample.buffer_address() // L1_ALIGNMENT
 
         # ========================================================================
         # Mcast grid configuration (decoupled from matmul weights tensor)
@@ -601,6 +602,12 @@ class PreSDPA:
         merged_mm_offset_bytes = 0
         merged_mm2_offset_bytes = mm_tiles_per_core * merged_weights_tile_size  # 224 * 1088
 
+        # Compute actual L1 read addresses for compute (fifo_rd_ptr units = bytes / L1_ALIGNMENT)
+        L1_ALIGNMENT = 16
+        merged_buffer_addr = merged_weights_sample.buffer_address()
+        matmul_in1_addr = (merged_buffer_addr + merged_mm_offset_bytes) // L1_ALIGNMENT
+        matmul2_in1_addr = (merged_buffer_addr + merged_mm2_offset_bytes) // L1_ALIGNMENT
+
         # Matmul compile-time args (different per RISC, only pass what's used)
         # NCRISC: in1, num_tiles
         matmul_ncrisc_named_compile_time_args = [
@@ -615,13 +622,14 @@ class PreSDPA:
         matmul_brisc_named_compile_time_args = [
             ("matmul_out", matmul_output_cb),
         ]
-        # TRISC: in0, in1, out, num_tiles, out_w_per_core
+        # TRISC: in0, in1, out, num_tiles, out_w_per_core, in1_addr
         matmul_trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
             ("matmul_in1", merged_weights_cb),
             ("matmul_out", matmul_output_cb),
             ("matmul_k_num_tiles", matmul_num_tiles_k),
             ("matmul_out_w_per_core", matmul1_out_w),
+            ("matmul_in1_addr", matmul_in1_addr),
         ]
 
         # Matmul2 compile-time args (different per RISC)
@@ -639,13 +647,14 @@ class PreSDPA:
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_out_w_per_core", matmul2_out_w),
         ]
-        # TRISC: in0, in1, out, num_tiles, out_w_per_core
+        # TRISC: in0, in1, out, num_tiles, out_w_per_core, in1_addr
         matmul2_trisc_named_compile_time_args = [
             ("matmul2_in0", matmul2_input_cb),
             ("matmul2_in1", merged_weights_cb),
             ("matmul2_out", matmul2_output_cb),
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
+            ("matmul2_in1_addr", matmul2_in1_addr),
         ]
 
         # ========================================================================
@@ -660,6 +669,7 @@ class PreSDPA:
         matmul3_weights_shard_shape = matmul3_weights_memory_config.shard_spec.shape
         matmul3_weights_shard_width = matmul3_weights_shard_shape[1]  # Width dimension (512)
         matmul3_out_w = matmul3_weights_shard_width // matmul3_weights_tile.tile_shape[1]  # 512/32 = 16 tiles
+        matmul3_in1_addr = matmul3_weights_sample.buffer_address() // L1_ALIGNMENT
 
         # Matmul3 compile-time args (only on Qnope cores)
         # NCRISC: in1, num_tiles
@@ -676,13 +686,14 @@ class PreSDPA:
             ("matmul3_out", matmul3_output_cb),
             ("qrope_output_cb", qrope_output_cb),
         ]
-        # TRISC: in0, in1, out, num_tiles, out_w_per_core
+        # TRISC: in0, in1, out, num_tiles, out_w_per_core, in1_addr
         matmul3_trisc_named_compile_time_args = [
             ("matmul3_in0", matmul2_output_cb),  # Input from matmul2 output
             ("matmul3_in1", matmul3_weights_cb),
             ("matmul3_out", matmul3_output_cb),
             ("matmul3_k_num_tiles", matmul3_num_tiles_k),
             ("matmul3_out_w_per_core", matmul3_out_w),
+            ("matmul3_in1_addr", matmul3_in1_addr),
         ]
 
         # Qrope head configuration: each qrope core processes 2 heads, each head is 64 elements (2 1x32 tiles)
@@ -879,6 +890,7 @@ class PreSDPA:
             ("dkv_matmul_out", dkv_matmul_output_cb),
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
+            ("dkv_matmul_in1_addr", dkv_matmul_in1_addr),
         ]
 
         # KV Cache Branch: RMSNorm

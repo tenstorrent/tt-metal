@@ -67,7 +67,9 @@ void kernel_main() {
         .in1 = in1_cb,
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
+        .in1_addr = 0,
     };
+    UNPACK(({ matmul_args.in1_addr = get_local_cb_interface(in1_cb).fifo_rd_ptr; }));
 #endif
 
     // ========================================================================

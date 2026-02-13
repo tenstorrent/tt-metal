@@ -211,7 +211,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul1_in1"),
         get_named_compile_time_arg_val("matmul1_out"),
         get_named_compile_time_arg_val("matmul1_k_num_tiles"),
+        0,
     };
+    UNPACK(({
+        matmul1_args.in1_addr = get_local_cb_interface(get_named_compile_time_arg_val("matmul1_in1")).fifo_rd_ptr;
+    }));
 
     // Gather1 compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs gather1_args{};
@@ -228,7 +232,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul2_in1"),
         get_named_compile_time_arg_val("matmul2_out"),
         get_named_compile_time_arg_val("matmul2_k_num_tiles"),
+        0,
     };
+    UNPACK(({
+        matmul2_args.in1_addr = get_local_cb_interface(get_named_compile_time_arg_val("matmul2_in1")).fifo_rd_ptr;
+    }));
 
     // Gather2 compute args (no-op)
     deepseek_b1_ops::Gather::ComputeArgs gather2_args{};
