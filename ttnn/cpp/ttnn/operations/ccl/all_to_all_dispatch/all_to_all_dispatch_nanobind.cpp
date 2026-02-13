@@ -75,13 +75,13 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("output_concat_dim") = 1,
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensors") = nb::none(),
             nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none()));
+            nb::arg("topology") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("output_concat_dim") = 1));
 }
 
 }  // namespace ttnn::operations::ccl

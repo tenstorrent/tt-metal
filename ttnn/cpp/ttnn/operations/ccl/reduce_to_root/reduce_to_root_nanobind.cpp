@@ -74,12 +74,12 @@ void bind_reduce_to_root(nb::module_& mod) {
             nb::arg("root_coord"),
             nb::kw_only(),
             nb::arg("scale_fp32") = 1.0f,
+            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear),
             nb::arg("output_tensor_l") = nb::none(),
             nb::arg("output_tensor_s") = nb::none(),
             nb::arg("output_tensor_m") = nb::none(),
             nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("input_mux_cores") = nb::none(),
-            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear)));
+            nb::arg("input_mux_cores") = nb::none()));
 
     mod.def(
         "reduce_to_root_tensor_spec",

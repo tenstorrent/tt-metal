@@ -73,11 +73,11 @@ void bind_broadcast(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("sender_coord"),
             nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("subdevice_id") = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl
