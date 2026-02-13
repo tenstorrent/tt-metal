@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Device management utilities for TTNN modules and tensor device preparation (e.g. GR00T)."""
+import operator
 import time
+from functools import reduce
 
+import torch
 import ttnn
 from torch import nn
 
@@ -162,3 +165,33 @@ def assimilate_to_device(tensor, device):
         torch_t = torch_t.real
 
     return ttnn.from_torch(torch_t.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+
+def prepare_args_for_torch_dispatch(func_name, func_args, func_kwargs):
+    """
+    Apply pre-dispatch transformations to func_args/func_kwargs.
+    E.g. for aten::view with padded tensors, trim to target_numel so reshape succeeds.
+    Returns (func_args, func_kwargs), possibly modified.
+    """
+    if func_name != "aten::view" or len(func_args) < 2:
+        return func_args, func_kwargs
+
+    t = func_args[0]
+    shape = func_args[1]
+    if not isinstance(t, torch.Tensor) or not isinstance(shape, (list, tuple)) or len(shape) == 0:
+        return func_args, func_kwargs
+
+    target_numel = reduce(operator.mul, shape, 1)
+    if t.numel() <= target_numel or target_numel <= 0:
+        return func_args, func_kwargs
+
+    # Padded buffer: trim to logical size so reshape in handle_view succeeds
+    func_args = list(func_args)
+    func_args[0] = t.flatten()[:target_numel].clone()
+    return tuple(func_args), func_kwargs
+
+
+def handle_view(func, args, kwargs):
+    """Handle view operation: prepare args (e.g. trim padded tensors) then reshape."""
+    args, kwargs = prepare_args_for_torch_dispatch("aten::view", args, kwargs)
+    return args[0].reshape(args[1])

@@ -241,20 +241,6 @@ class DispatchManager:
         with no_dispatch():
             func_args = tree_map(unwrap_to_torch(func), torch_args)
             func_kwargs = tree_map(unwrap_to_torch(func), torch_kwargs)
-            # For aten::view: when tensor has padded numel (e.g. after im2col) but view expects logical
-            # shape, trim to target_numel so reshape in torch_dispatcher.handle_view succeeds.
-            if func.name() == "aten::view" and len(func_args) >= 2:
-                from functools import reduce
-                import operator
-
-                t = func_args[0]
-                shape = func_args[1]
-                if isinstance(t, torch.Tensor) and isinstance(shape, (list, tuple)) and len(shape) > 0:
-                    target_numel = reduce(operator.mul, shape, 1)
-                    if t.numel() > target_numel and target_numel > 0:
-                        func_args = list(func_args)
-                        func_args[0] = t.flatten()[:target_numel].clone()
-                        func_args = tuple(func_args)
             begin = time.time()
             if can_dispatch_to_torch(func.name(), func_args, func_kwargs):
                 func_res = dispatch_to_torch(func.name(), func_args, func_kwargs)
