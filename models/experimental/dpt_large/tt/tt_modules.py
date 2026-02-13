@@ -680,6 +680,12 @@ class TTMLP:
                         memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
                     except Exception:
                         reshardened = False
+            if reshardened:
+                # Some runtimes reject the tuned sharded MLP program configs due to
+                # L1 circular buffer pressure. Keep the sharded activations but let
+                # the runtime pick a safe matmul program.
+                ff1_pc = None
+                ff2_pc = None
             if ff1_pc is not None and not _ttnn_is_sharded(x4):
                 ff1_pc = None
             if ff2_pc is not None and not _ttnn_is_sharded(x4):
