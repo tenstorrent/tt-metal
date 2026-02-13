@@ -54,6 +54,9 @@ class TTLayerConfig:
     use_default_attention_programs: bool = False
     ln_program_config: Optional[object] = None
     ln_compute_config: Optional[object] = None
+    # Optional override core grid for the MLP path. Useful when tokens are
+    # interleaved but we want to reshard only for the MLP matmuls.
+    mlp_core_grid: Optional[Tuple[int, int]] = None
 
     def memcfg(self):
         """Preferred activation memory config.
@@ -276,6 +279,15 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         math = "hi-fi3"
 
     prog_cfgs = _build_perf_program_configs(config, grid)
+    # MLP dominates ViT-Large runtime. In practice, attention SDPA op constraints
+    # vary across runtimes; keep attention operands interleaved for stability,
+    # but compute separate MLP program configs for a simple 1-row core grid so
+    # we can optionally reshard only for FC1/FC2.
+    mlp_grid = None
+    mlp_prog_cfgs = {}
+    if config.device.endswith("n300"):
+        mlp_grid = (8, 1)
+        mlp_prog_cfgs = _build_perf_program_configs(config, mlp_grid)
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
     # Disable custom attention configs if forced or if sharding would exceed grid width.
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
@@ -301,18 +313,25 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         sdpa_grid=grid,
         qkv_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
         proj_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
-        mlp_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        # When MLP resharding is enabled in tt_modules.py, we run FC1/FC2 with
+        # block-sharded activations for better matmul utilization (N300).
+        mlp_memcfg=(
+            getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None)
+            if mlp_grid is not None
+            else getattr(ttnn, "L1_MEMORY_CONFIG", None)
+        ),
         split_heads_memcfg=split_mem,
         qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
         qk_program_config=qk_pc,
         softmax_program_config=softmax_pc,
         av_program_config=av_pc,
         proj_program_config=prog_cfgs.get("self_output_matmul_program_config"),
-        ff1_program_config=prog_cfgs.get("ff1_matmul_program_config"),
-        ff2_program_config=prog_cfgs.get("ff2_matmul_program_config"),
+        ff1_program_config=(mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config")),
+        ff2_program_config=(mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")),
         ln_program_config=prog_cfgs.get("layernorm_before_program_config"),
         ln_compute_config=prog_cfgs.get("ln_compute_config"),
         use_default_attention_programs=disable_attn_pc,
+        mlp_core_grid=mlp_grid,
     )
 
 

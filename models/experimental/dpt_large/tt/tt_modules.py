@@ -500,6 +500,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
+            if qkv_pc is not None and not _ttnn_is_sharded(x4):
+                qkv_pc = None
             qkv4 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self._wqkv_tt,
@@ -572,6 +574,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
+            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
+                proj_pc = None
             out_tt4 = _ttnn_linear_with_optional_program_config(
                 x=ctx_tt4,
                 w=self._proj_w_tt,
@@ -657,6 +661,29 @@ class TTMLP:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
+            reshardened = False
+            if cfg is not None and not _ttnn_is_sharded(x4):
+                mlp_grid = getattr(cfg, "mlp_core_grid", None)
+                if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
+                    try:
+                        grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
+                        core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                        shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)
+                        shard_mc = ttnn.create_sharded_memory_config(
+                            shape_for_shard,
+                            core_grid=core_grid,
+                            strategy=ttnn.ShardStrategy.BLOCK,
+                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        )
+                        x4 = ttnn.to_memory_config(x4, memory_config=shard_mc, dtype=ttnn.bfloat16)
+                        reshardened = True
+                        memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
+                    except Exception:
+                        reshardened = False
+            if ff1_pc is not None and not _ttnn_is_sharded(x4):
+                ff1_pc = None
+            if ff2_pc is not None and not _ttnn_is_sharded(x4):
+                ff2_pc = None
             y1 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self.w1_tt,
@@ -676,6 +703,12 @@ class TTMLP:
                 memory_config=memcfg,
                 program_config=ff2_pc,
             )
+            if reshardened and _ttnn_is_sharded(y2):
+                # Return interleaved so residual adds in the transformer block remain stable.
+                try:
+                    y2 = ttnn.to_memory_config(y2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                except Exception:
+                    pass
             return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
         except Exception as exc:
             if not self.allow_cpu_fallback:
