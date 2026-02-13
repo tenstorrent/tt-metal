@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
 from pathlib import Path
 
 import pytest
@@ -29,13 +28,12 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 REFERENCE_OUTPUT_CACHE_FILENAME = "deepseek_v3_model_reference_outputs.pt"
-PROBE_PCC_REQUIRED_PREFILL = 0.97
-PROBE_PCC_REQUIRED_DECODE = 0.97
+PCC_REQUIRED_PREFILL = 0.97
+PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
-MAX_FULL_COMPARE_LOGITS_ELEMENTS = 2_000_000_000_000
 
 
-def _default_probe_cache_path(cache_path: Path) -> Path:
+def _default_reference_cache_path(cache_path: Path) -> Path:
     return cache_path / "tests_cache" / REFERENCE_OUTPUT_CACHE_FILENAME
 
 
@@ -62,61 +60,41 @@ def _extract_tt_logits_full(
     tt_output_shape = tuple(tt_output.shape)
     if len(tt_output_shape) != 4:
         raise ValueError(f"Expected 4D TT output tensor, got shape {tt_output_shape}")
-    local_token_count = tt_output_shape[2]
 
-    all_token_rows: list[torch.Tensor] = []
-    for local_pos in range(local_token_count):
-        tt_slice = ttnn.slice(
-            tt_output,
-            [0, 0, local_pos, 0],
-            [tt_output_shape[0], tt_output_shape[1], local_pos + 1, tt_output_shape[3]],
-        )
-        probe_torch = ttnn.to_torch(
-            tt_slice,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-        )
-        ttnn.deallocate(tt_slice)
-        probe_rows = probe_torch.reshape(-1, probe_torch.shape[-2], probe_torch.shape[-1])[0]
-        all_token_rows.append(probe_rows.cpu().float())
-
-    # [local_token_count, mesh_rows, vocab] -> [1, global_token_count, vocab]
-    stacked = torch.stack(all_token_rows, dim=1)
-    return stacked.reshape(1, -1, stacked.shape[-1])
+    full_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+    )
+    full_torch = full_torch.cpu().float()
+    vocab = full_torch.shape[-1]
+    return full_torch.reshape(1, -1, vocab)
 
 
-def _load_probe_cache(path: Path) -> dict:
+def _load_reference_cache(path: Path) -> dict:
     if not path.is_file():
         return {"version": 1, "cases": {}}
-    payload = torch.load(path, weights_only=False)
+
+    try:
+        payload = torch.load(path, weights_only=True)
+    except TypeError:
+        payload = torch.load(path)
+
     if not isinstance(payload, dict):
-        raise ValueError(f"Invalid probe cache format in {path}: expected dict, got {type(payload)}")
+        raise ValueError(f"Invalid cache format in {path}: expected dict, got {type(payload)}")
     payload.setdefault("version", 1)
     payload.setdefault("cases", {})
     if not isinstance(payload["cases"], dict):
-        raise ValueError(f"Invalid probe cache format in {path}: 'cases' must be a dict")
+        raise ValueError(f"Invalid cache format in {path}: 'cases' must be a dict")
     return payload
 
 
-def _save_probe_cache(path: Path, payload: dict) -> None:
+def _save_reference_cache(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, path)
 
 
 def _expected_reference_output_shape(token_count: int, hf_config: PretrainedConfig) -> tuple[int, int, int]:
     return (1, token_count, hf_config.vocab_size)
-
-
-def _validate_full_compare_size(token_count: int, hf_config: PretrainedConfig, mode: str) -> None:
-    logits_elements = token_count * hf_config.vocab_size
-    if logits_elements <= MAX_FULL_COMPARE_LOGITS_ELEMENTS:
-        return
-    estimated_fp32_gib = (logits_elements * 4) / (1024**3)
-    pytest.fail(
-        "Full-output reference comparison is too large for this case "
-        f"(mode={mode}, token_count={token_count}, vocab={hf_config.vocab_size}, "
-        f"elements={logits_elements}, ~{estimated_fp32_gib:.2f} GiB fp32). "
-        "This is why sparse probes were used previously."
-    )
 
 
 def _generate_reference_case_entry(
@@ -129,9 +107,7 @@ def _generate_reference_case_entry(
     position_ids: torch.Tensor | None,
     torch_input: torch.Tensor,
 ) -> dict:
-    logger.info(
-        "Generating missing reference output entry " f"(mode={mode}, seq_len={seq_len}, batch_size={batch_size})"
-    )
+    logger.info(f"Generating missing reference output (mode={mode}, seq_len={seq_len}, batch_size={batch_size})")
     with torch.device("meta"):
         reference_model = DeepseekV3ForCausalLM(hf_config).eval()
     reference_model = reference_model.to_empty(device=torch.device("cpu"))
@@ -140,7 +116,6 @@ def _generate_reference_case_entry(
 
     decode_input_caches = None
     if mode == "decode":
-        # Match original semantics: for non-zero decode positions, build past cache from a reference prefill.
         prefill_len = int(position_ids.max().item()) if position_ids is not None else 0
         cache_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
         if prefill_len > 0:
@@ -173,7 +148,7 @@ def _generate_reference_case_entry(
                 use_cache=True,
                 past_key_values=transformers_cache_from_torch(decode_input_caches),
             )
-        reference_output = model_output.logits.transpose(1, 0).float().cpu()  # [1, batch, vocab]
+        reference_output = model_output.logits.transpose(1, 0).float().cpu()
     else:
         position_ids_or_seq_lens = torch.full((batch_size,), seq_len, dtype=torch.long)
         hidden_states, _, _ = run_reference_with_attention(
@@ -187,7 +162,7 @@ def _generate_reference_case_entry(
         "entry_version": REFERENCE_ENTRY_VERSION,
         "source": "reference",
         "reference_output": reference_output,
-        "decode_input_caches": decode_input_caches if mode == "decode" else None,
+        "decode_input_caches": list(decode_input_caches) if mode == "decode" else None,
     }
 
 
@@ -198,7 +173,6 @@ def generate_io_without_reference(
     hf_config: PretrainedConfig,
     decode_position_id: int | None = None,
 ) -> tuple[torch.Tensor | None, torch.Tensor]:
-    # Deterministic fixture seeds torch RNG, so this remains reproducible.
     torch_input = torch.randint(0, hf_config.vocab_size - 1, (batch_size, seq_len), dtype=torch.long)
     position_ids = None
     if mode == "decode":
@@ -212,7 +186,7 @@ def generate_io_without_reference(
                     f"decode_position_id must be in [0, {hf_config.max_seq_len - 1}], got {decode_position_id}"
                 )
             position_ids = torch.full((batch_size,), decode_position_id, dtype=torch.long)
-        torch_input = torch_input.transpose(1, 0)  # [seq_len, batch_size]
+        torch_input = torch_input.transpose(1, 0)
     return position_ids, torch_input
 
 
@@ -228,7 +202,6 @@ def run_test_forward_pass_dpmodel(
     state_dict,
     decode_position_ids: int | None = None,
 ):
-    # Check params
     if mode == "prefill":
         assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
         batch_size = batch_size_per_row
@@ -236,7 +209,6 @@ def run_test_forward_pass_dpmodel(
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
-    # Keep loaded state dict bounded to layers exercised by this test.
     state_dict = sub_state_dict(state_dict, "", hf_config_short.num_hidden_layers)
 
     case_key = _build_case_key(
@@ -255,14 +227,13 @@ def run_test_forward_pass_dpmodel(
     expected_global_token_count = seq_len if mode == "prefill" else batch_size
     expected_local_token_count = expected_global_token_count // mesh_device.shape[0]
     expected_reference_output_shape = _expected_reference_output_shape(expected_global_token_count, hf_config_short)
-    _validate_full_compare_size(expected_global_token_count, hf_config_short, mode)
 
-    probe_cache_path = _default_probe_cache_path(cache_path)
-    probe_cache_payload = _load_probe_cache(probe_cache_path)
-    cached_case = probe_cache_payload["cases"].get(case_key)
+    cache_file = _default_reference_cache_path(cache_path)
+    cache_payload = _load_reference_cache(cache_file)
+    cached_case = cache_payload["cases"].get(case_key)
     cached_reference_output = cached_case.get("reference_output") if cached_case is not None else None
     cached_shape = tuple(cached_reference_output.shape) if isinstance(cached_reference_output, torch.Tensor) else None
-    needs_probe_regen = (
+    needs_regen = (
         cached_case is None
         or cached_case.get("entry_version") != REFERENCE_ENTRY_VERSION
         or cached_case.get("source") != "reference"
@@ -270,12 +241,8 @@ def run_test_forward_pass_dpmodel(
         or cached_shape != expected_reference_output_shape
         or (mode == "decode" and cached_case.get("decode_input_caches") is None)
     )
-    if needs_probe_regen:
-        logger.warning(
-            f"Reference-output cache miss for case '{case_key}'. This will trigger reference model run "
-            f"(may take several minutes). Reason: "
-            f"{'missing' if cached_case is None else 'version mismatch' if cached_case.get('entry_version') != REFERENCE_ENTRY_VERSION else 'source mismatch' if cached_case.get('source') != 'reference' else 'missing/invalid reference_output'}"
-        )
+    if needs_regen:
+        logger.warning(f"Reference cache miss for case '{case_key}'. Generating reference output.")
         cached_case = _generate_reference_case_entry(
             mode=mode,
             seq_len=seq_len,
@@ -285,25 +252,33 @@ def run_test_forward_pass_dpmodel(
             position_ids=position_ids,
             torch_input=torch_input,
         )
-        probe_cache_payload["cases"][case_key] = cached_case
-        _save_probe_cache(probe_cache_path, probe_cache_payload)
-        logger.info(f"Wrote full reference output baseline for case '{case_key}' to {probe_cache_path}")
+        cache_payload["cases"][case_key] = cached_case
+        _save_reference_cache(cache_file, cache_payload)
+        logger.info(f"Wrote reference baseline for case '{case_key}' to {cache_file}")
     else:
-        logger.info(f"Using cached full reference output for case '{case_key}' from {probe_cache_path}")
+        logger.info(f"Using cached reference baseline for case '{case_key}' from {cache_file}")
 
-    # Set up page config
     logger.info("Setting up model configs")
     mesh_rows, dp_factor = mesh_device.shape
     user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW, ()).item()
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, dp_factor)
-    decode_input_caches = cached_case.get("decode_input_caches") if mode == "decode" else None
+
     if mode == "decode":
+        decode_input_caches = cached_case.get("decode_input_caches")
         if decode_input_caches is None:
-            pytest.fail(f"Missing decode_input_caches in reference probe baseline for case '{case_key}'")
+            pytest.fail(f"Missing decode_input_caches in reference baseline for case '{case_key}'")
         if not isinstance(decode_input_caches, tuple):
             decode_input_caches = tuple(decode_input_caches)
-        batches_per_device = batch_size // (mesh_rows * dp_factor)
+
+        denom = mesh_rows * dp_factor
+        assert batch_size % denom == 0, f"batch_size={batch_size} not divisible by mesh_rows*dp_factor={denom}"
+        batches_per_device = batch_size // denom
+
+        assert (
+            paged_config.max_num_blocks % batches_per_device == 0
+        ), f"max_num_blocks={paged_config.max_num_blocks} not divisible by batches_per_device={batches_per_device}"
         blocks_per_batch = paged_config.max_num_blocks // batches_per_device
+
         mapping = torch.arange(batches_per_device * blocks_per_batch, dtype=torch.long).reshape(
             batches_per_device, blocks_per_batch
         )
@@ -319,9 +294,17 @@ def run_test_forward_pass_dpmodel(
         paged_input_caches = None
         total_global_users = mesh_rows * USERS_PER_ROW
         num_devices = mesh_rows * dp_factor
+
+        assert (
+            total_global_users % num_devices == 0
+        ), f"total_global_users={total_global_users} not divisible by num_devices={num_devices}"
         batches_per_device = total_global_users // num_devices
+
+        assert (
+            paged_config.max_num_blocks % batches_per_device == 0
+        ), f"max_num_blocks={paged_config.max_num_blocks} not divisible by batches_per_device={batches_per_device}"
         blocks_per_batch = paged_config.max_num_blocks // batches_per_device
-        # Match the page-table geometry used by the old paged_caches_from_torch path.
+
         torch_page_table = torch.arange(paged_config.max_num_blocks, dtype=torch.int32).reshape(
             batches_per_device, blocks_per_batch
         )
@@ -330,7 +313,6 @@ def run_test_forward_pass_dpmodel(
             for _ in range(hf_config_short.num_hidden_layers)
         )
 
-    # Set up model config
     weight_config = get_test_weight_config(
         RowBatchedModel, hf_config_short, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
@@ -339,9 +321,7 @@ def run_test_forward_pass_dpmodel(
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
-    # Set up ttnn inputs
     logger.info("Setting up model inputs")
-
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
         device=mesh_device,
@@ -364,7 +344,6 @@ def run_test_forward_pass_dpmodel(
 
     rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
 
-    # Forward pass
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
         tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
@@ -384,6 +363,7 @@ def run_test_forward_pass_dpmodel(
     assert (
         local_token_count == expected_local_token_count
     ), f"Unexpected local token count: got {local_token_count}, expected {expected_local_token_count}"
+
     tt_output_torch = _extract_tt_logits_full(tt_output, mesh_device)
     assert (
         tuple(tt_output_torch.shape) == expected_reference_output_shape
@@ -398,8 +378,9 @@ def run_test_forward_pass_dpmodel(
         f"Unexpected cached reference output shape: got {tuple(expected_output.shape)}, "
         f"expected {expected_reference_output_shape}"
     )
-    probe_pcc_required = PROBE_PCC_REQUIRED_DECODE if mode == "decode" else PROBE_PCC_REQUIRED_PREFILL
-    assert_hidden_dim_pcc(tt_output_torch, expected_output, pcc_required=probe_pcc_required)
+
+    pcc_required = PCC_REQUIRED_DECODE if mode == "decode" else PCC_REQUIRED_PREFILL
+    assert_hidden_dim_pcc(tt_output_torch, expected_output, pcc_required=pcc_required)
     logger.info(f"TT full-output check passed against reference baseline for case '{case_key}'")
 
     ttnn.deallocate(tt_output)
@@ -407,7 +388,7 @@ def run_test_forward_pass_dpmodel(
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     USERS_PER_ROW,
-    DEFAULT_PREFILL_SEQ_LEN,  # default prefill sequence length to test
+    DEFAULT_PREFILL_SEQ_LEN,
 )
 
 
@@ -437,10 +418,8 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Set fewer number oflayers to speed test and avoid OOM
     hf_config_short.num_hidden_layers = 5
 
-    # Only use decode_position_ids for decode mode
     if mode != "decode":
         decode_position_ids = None
 
