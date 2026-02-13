@@ -11,12 +11,12 @@ Options:
     --all-cores                      Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 Description:
-    Aggregates callstacks by (Kernel Id, normalized PC, Op Id) and shows:
+    Aggregates callstacks by (Kernel Id, normalized PC, RISC Name) and shows:
       - Kernel Id / Kernel Name
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
       - # of Cores
-      - RISC Names
+      - RISC Name
       - Locations or device visualizations (if --device-visualization)
     This significantly reduces the number of rows vs raw dump_callstacks.
 
@@ -59,13 +59,12 @@ BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
 
 def _render_device_for_bucket(
     device: Device,
-    hits_for_device: dict[tuple[int, int], set[str]],
+    hits_for_device: set[tuple[int, int]],
 ) -> str:
     """Render a compact device grid showing which cores are active."""
 
     header = f"Device {device.id}:"
 
-    # Find all functional workers and determine max dimensions
     functional_workers = set()
     max_x, max_y = 0, 0
     locs_to_check = device.get_block_locations("functional_workers")
@@ -103,28 +102,28 @@ class AggregatedCallstackRow:
     op_id: int | str | None = triage_field("Op Id")  # host_assigned_id from dispatcher, or "N/A (read error)"
     callstack: KernelCallstackWithMessage = triage_field("Kernel Callstack", format_callstack_with_message)
     core_count: int = triage_field("# of Cores")
-    risc_names: list[str] = triage_field("RISC Names", collection_serializer(", "))
-    locations: list[str] = triage_field("Locations", collection_serializer("\n\n"))
+    risc_name: str = triage_field("RISC Name")
+    locations: str = triage_field("Locations")
 
 
 class AggregationBucket:
     """Helper class that accumulates per-group data for aggregation."""
 
-    def __init__(self, first: CallstacksData):
+    def __init__(self, first: CallstacksData, risc_name: str):
         d = first.dispatcher_core_data
         self.kernel_id = d.watcher_kernel_id
         self.kernel_name = d.kernel_name
         self.op_id = d.host_assigned_id
         self.callstack = first.kernel_callstack_with_message
+        self.risc_name = risc_name
 
         # Existing aggregation for plain text mode
         self.core_locations: set[str] = set()
-        self.riscs: set[str] = set()
 
         # Helper for device visualization mode
-        self.per_core_hits: dict[int, dict[tuple[int, int], set[str]]] = defaultdict(lambda: defaultdict(set))
+        self.per_core_hits: dict[int, set[tuple[int, int]]] = defaultdict(set)
 
-    def add_core(self, location: OnChipCoordinate, risc_name: str, device_label: str | None):
+    def add_core(self, location: OnChipCoordinate, device_label: str | None):
         """Add a core to this aggregation bucket."""
 
         coord_str = location.to_str("noc0")
@@ -133,11 +132,9 @@ class AggregationBucket:
         else:
             self.core_locations.add(coord_str)
 
-        self.riscs.add(risc_name)
-
         dev_id = location._device.id
         x, y = location._noc0_coord
-        self.per_core_hits[dev_id][(x, y)].add(risc_name)
+        self.per_core_hits[dev_id].add((x, y))
 
     def to_row(self, visualize_devices: bool, context: Context) -> AggregatedCallstackRow:
         """Convert the bucket to an immutable row for display."""
@@ -150,11 +147,11 @@ class AggregationBucket:
                 device: Device = context.find_device_by_id(dev_id)
                 hits_for_device = self.per_core_hits[dev_id]
                 vis = _render_device_for_bucket(device, hits_for_device)
-                device_blocks.append(vis)
+                device_blocks.append(vis + "\n")
 
-            locations_list = [vis + "\n" for vis in device_blocks] if device_blocks else []
+            locations_str = "\n\n".join(device_blocks) if device_blocks else ""
         else:
-            locations_list = sorted(self.core_locations)
+            locations_str = ", ".join(sorted(self.core_locations))
 
         return AggregatedCallstackRow(
             kernel_id=self.kernel_id,
@@ -162,8 +159,8 @@ class AggregationBucket:
             op_id=self.op_id,
             callstack=self.callstack,
             core_count=len(self.core_locations),
-            risc_names=sorted(self.riscs),
-            locations=locations_list,
+            risc_name=self.risc_name,
+            locations=locations_str,
         )
 
 
@@ -184,7 +181,7 @@ def _collect_aggregated(
                 if d.go_message == "DONE":
                     return None
 
-            return callstack_provider.get_callstacks(location, risc_name)
+            return callstack_provider.get_cached_callstacks(location, risc_name)
         except TimeoutDeviceRegisterError:
             raise
         except Exception as e:
@@ -204,8 +201,8 @@ def _collect_aggregated(
     if not results:
         return None
 
-    # Aggregate by (kernel_id, normalized_pc)
-    buckets: dict[tuple[int | None, int | None], AggregationBucket] = {}
+    # Aggregate by (kernel_id, normalized_pc, risc_name)
+    buckets: dict[tuple[int | None, int | None, str], AggregationBucket] = {}
 
     for check_result in results:
         if check_result.result is None:
@@ -216,22 +213,18 @@ def _collect_aggregated(
         pc = cs_data.pc
 
         # Normalize PC into kernel space when kernel_offset is available
-        if d.kernel_offset is not None and pc is not None:
-            normalized_pc = pc - d.kernel_offset
-        else:
-            normalized_pc = pc
+        normalized_pc = pc - d.kernel_offset if d.kernel_offset is not None and pc is not None else pc
 
-        key = (d.watcher_kernel_id, normalized_pc)
+        key = (d.watcher_kernel_id, normalized_pc, check_result.risc_name)
         bucket = buckets.get(key)
         if bucket is None:
-            bucket = AggregationBucket(cs_data)
+            bucket = AggregationBucket(cs_data, check_result.risc_name)
             buckets[key] = bucket
 
         # Get device label from device description
         device_label = device_description_serializer(check_result.device_description)
         bucket.add_core(
             location=check_result.location,
-            risc_name=check_result.risc_name,
             device_label=device_label,
         )
 

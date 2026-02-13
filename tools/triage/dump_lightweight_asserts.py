@@ -157,7 +157,7 @@ def dump_lightweight_asserts(
         elif current_instruction != ebreak_instruction:
             return None
 
-        callstack_data = callstack_provider.get_callstacks(
+        callstack_data = callstack_provider.get_cached_callstacks(
             location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None

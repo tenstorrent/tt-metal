@@ -392,16 +392,16 @@ class TestTriage:
                         # Validate expected RISC names if present
                         if expected_risc_names:
                             for risc in expected_risc_names:
-                                if risc not in row.risc_names:
-                                    print(f"Warning: Expected RISC '{risc}' not in {row.risc_names}")
+                                assert risc in row.risc_names, f"Expected RISC '{risc}' not found in {row.risc_names}"
 
                         # Validate callstack if expected
                         if expected_file and row.callstack:
                             callstack = row.callstack.callstack
-                            if len(callstack) > 0:
-                                matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
-                                if len(matching_entries) == 0:
-                                    print(f"Warning: Expected file '{expected_file}' not found in callstack")
+                            assert len(callstack) > 0, "Expected non-empty callstack in aggregated row"
+                            matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
+                            assert (
+                                len(matching_entries) > 0
+                            ), f"Expected file '{expected_file}' not found in aggregated callstack. Callstack files: {[e.file for e in callstack]}"
 
         finally:
             os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)

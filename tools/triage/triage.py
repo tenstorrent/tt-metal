@@ -448,12 +448,21 @@ def parse_arguments(
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
+    # Deduplicate options if some scripts define the same option
+    seen_options: set[str | None] = set()
+    unique_options: list[Option] = []
+    for opt in combined_options:
+        key = opt.long or opt.short
+        if key not in seen_options:
+            seen_options.add(key)
+            unique_options.append(opt)
+
     if argv is None:
         argv = sys.argv[1:]
-    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(unique_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
-        ao.children = list(set(combined_options) - pattern_options)
+        ao.children = list(set(unique_options) - pattern_options)
     matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if only_triage_script_args or (matched and left == []):
         arguments = ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
