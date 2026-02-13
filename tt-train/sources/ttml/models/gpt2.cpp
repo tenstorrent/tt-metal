@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,10 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
-#include "models/common/transformer_common.hpp"
-#include "modules/embedding_module.hpp"
-#include "modules/gpt_block.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
+
 namespace {
 
 static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {

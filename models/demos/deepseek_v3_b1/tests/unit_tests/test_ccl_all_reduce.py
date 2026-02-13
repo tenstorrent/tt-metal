@@ -16,9 +16,11 @@ This test validates all-reduce on a 1D mesh (2 devices) where:
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def create_fabric_router_config(max_payload_size):
@@ -42,14 +44,15 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("use_persistent", [True])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -64,8 +67,9 @@ def test_ccl_all_reduce(
     layout,
     input_dtype,
     cluster_axis,
-    use_persistent,
     fuse_residual_add,
+    num_warmup_iter,
+    num_iter,
 ):
     # Validate mesh size
     if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
@@ -76,15 +80,6 @@ def test_ccl_all_reduce(
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Set up sharded memory config
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -176,11 +171,6 @@ def test_ccl_all_reduce(
     else:
         torch_expected = DeepseekMinimalAllReduce.golden(device_tensors)
 
-    if use_persistent:
-        persistent_output_tensor = output_tensor
-    else:
-        persistent_output_tensor = None
-
     # semaphores
     num_cores = compute_grid_size.x * compute_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
@@ -190,15 +180,70 @@ def test_ccl_all_reduce(
 
     # Run all-reduce operation
     logger.info(f"Running CCL all-reduce: num_devices={num_devices}")
+
+    profiler = BenchmarkProfiler()
+
+    # Compile Run
+    logger.info("Compiling model")
     ttnn_result = DeepseekMinimalAllReduce.op(
         input_tensor_mesh,
         intermediate_tensor,
         cluster_axis=cluster_axis,
-        persistent_output_tensor=persistent_output_tensor,
+        persistent_output_tensor=output_tensor,
         residual_tensor_mesh=residual_tensor_mesh,
         semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
+
+    # Capture warmup trace
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_warmup_iter):
+        ttnn_result = DeepseekMinimalAllReduce.op(
+            input_tensor_mesh,
+            intermediate_tensor,
+            cluster_axis=cluster_axis,
+            persistent_output_tensor=output_tensor,
+            residual_tensor_mesh=residual_tensor_mesh,
+            semaphores=semaphores,
+        )
+    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Capture main trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_iter):
+        ttnn_result = DeepseekMinimalAllReduce.op(
+            input_tensor_mesh,
+            intermediate_tensor,
+            cluster_axis=cluster_axis,
+            persistent_output_tensor=output_tensor,
+            residual_tensor_mesh=residual_tensor_mesh,
+            semaphores=semaphores,
+        )
+    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace...")
+    profiler.start("deepseek-all-reduce-warmup")
+    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh, trace_id_warmup)
+    ttnn.synchronize_device(submesh)
+    profiler.end("deepseek-all-reduce-warmup")
+
+    # Execute main trace with signposts for profiling
+    logger.info("Starting Trace perf test...")
+    signpost("start")
+    profiler.start("deepseek-all-reduce-trace")
+
+    ttnn.execute_trace(submesh, trace_id, blocking=False)
+    ttnn.release_trace(submesh, trace_id)
+    ttnn.synchronize_device(submesh)
+
+    profiler.end("deepseek-all-reduce-trace")
+    signpost("stop")
 
     # Verify output
     logger.info("Verifying all-reduce results...")
@@ -222,10 +267,6 @@ def test_ccl_all_reduce(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct all-reduced data"
     logger.info("CCL all-reduce test passed!")

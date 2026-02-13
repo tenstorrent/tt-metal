@@ -113,6 +113,15 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
     api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
 )
 target_sources(
     tt_metal
@@ -151,6 +160,7 @@ file(
     GLOB_RECURSE TT_LLK_HEADERS
     third_party/tt_llk/tt_llk_wormhole_b0/**/*.h
     third_party/tt_llk/tt_llk_blackhole/**/*.h
+    third_party/tt_llk/tt_llk_quasar/**/*.h
 )
 
 target_sources(
@@ -254,7 +264,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        dfb
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
@@ -306,7 +315,6 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
 add_subdirectory(experimental/udm)
-add_subdirectory(experimental/dataflow_buffer)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()

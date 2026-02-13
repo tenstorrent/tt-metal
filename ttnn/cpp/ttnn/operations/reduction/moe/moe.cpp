@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
 
-namespace ttnn::operations::reduction::moe {
+namespace ttnn {
 
-Tensor ExecuteMoe::invoke(
+Tensor moe(
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
     const Tensor& topk_mask_tensor,
@@ -18,4 +18,4 @@ Tensor ExecuteMoe::invoke(
     return ttnn::prim::moe(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, output_tensor);
 }
 
-}  // namespace ttnn::operations::reduction::moe
+}  // namespace ttnn

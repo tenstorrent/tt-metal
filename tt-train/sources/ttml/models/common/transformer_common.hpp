@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <optional>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -47,7 +49,7 @@ autograd::TensorPtr memory_efficient_runner(
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
+    autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again
@@ -75,7 +77,10 @@ autograd::TensorPtr memory_efficient_runner(
 void initialize_weights_gpt2(ttml::modules::ModuleBase& model);
 void initialize_weights_he_kaiming_normal(ttml::modules::ModuleBase& model);
 
+RunnerType read_runner_type(const std::string& s);
 RunnerType read_runner_type(const YAML::Node& config);
+
+WeightTyingType read_weight_tying_type(const std::string& s);
 WeightTyingType read_weight_tying_type(const YAML::Node& config);
 
 /**

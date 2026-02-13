@@ -348,7 +348,7 @@ def main():
         "galaxy-demo-tests.yaml",
         "galaxy-e2e-tests.yaml",
         "galaxy-frequent-tests.yaml",
-        "galaxy-model-perf-tests.yaml",
+        "galaxy-perf-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
         "galaxy-profiler-tests.yaml",
         "galaxy-quick.yaml",
@@ -357,8 +357,6 @@ def main():
         "tg-op-perf-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",
-        "blackhole-multi-card-demo-tests.yaml",
-        "blackhole-multi-card-unit-tests.yaml",
         "blackhole-nightly-tests.yaml",
         "blackhole-post-commit.yaml",
     ]

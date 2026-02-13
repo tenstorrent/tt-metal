@@ -22,14 +22,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_sender"),
         get_named_compile_time_arg_val("core_noc_x"),
         get_named_compile_time_arg_val("core_noc_y"),
-        get_named_compile_time_arg_val("is_secondary_sender"),
-        get_named_compile_time_arg_val("is_active_broadcaster")>;
+        get_named_compile_time_arg_val("is_secondary_sender")>;
 
     // Runtime args:
     Broadcast::ReaderArgs bcast_args{
-        get_arg_val<uint32_t>(0),  // tensor_address0
-        get_arg_val<uint32_t>(1),  // tile_id_start
-        get_arg_val<uint32_t>(2),  // tile_id_end
+        get_common_arg_val<uint32_t>(0),  // tensor_address0
+        get_common_arg_val<uint32_t>(1),  // tile_id_start
+        get_common_arg_val<uint32_t>(2),  // tile_id_end
     };
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -45,30 +44,28 @@ void kernel_main() {
         get_named_compile_time_arg_val("core_noc_y"),
         get_named_compile_time_arg_val("is_secondary_sender"),
         get_named_compile_time_arg_val("has_secondary_target"),
-        get_named_compile_time_arg_val("has_reverse_secondary_connection"),
         get_named_compile_time_arg_val("start_distance_in_hops_forward"),
         get_named_compile_time_arg_val("range_hops_forward"),
         get_named_compile_time_arg_val("start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("range_hops_backward"),
-        get_named_compile_time_arg_val("using_persistent_buffers")>;
+        get_named_compile_time_arg_val("range_hops_backward")>;
 
     // Writer runtime args
     Broadcast::WriterArgs bcast_args{
-        get_arg_val<uint32_t>(0),   // tensor_address0
-        get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-        get_arg_val<uint32_t>(2),   // tile_id_start
-        get_arg_val<uint32_t>(3),   // tile_id_end
-        get_arg_val<uint32_t>(4),   // wait_output_semaphore
-        get_arg_val<uint32_t>(5),   // reset_global_semaphore
-        get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-        get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-        get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-        get_arg_val<uint32_t>(9),   // barrier_sem
-        get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-        get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-        get_arg_val<uint32_t>(12),  // ring_index
-        get_arg_val<uint32_t>(13),  // secondary_sync_sem
-        get_arg_val<uint32_t>(14),  // num_connections
+        get_common_arg_val<uint32_t>(0),   // tensor_address0
+        get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+        get_common_arg_val<uint32_t>(2),   // tile_id_start
+        get_common_arg_val<uint32_t>(3),   // tile_id_end
+        get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+        get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+        get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+        get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+        get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+        get_common_arg_val<uint32_t>(9),   // barrier_sem
+        get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+        get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+        get_common_arg_val<uint32_t>(12),  // ring_index
+        get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+        get_common_arg_val<uint32_t>(14),  // num_connections
     };
 
 #elif defined(COMPILE_FOR_TRISC)

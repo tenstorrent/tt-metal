@@ -10,6 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 

@@ -72,6 +72,19 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+# Reuse the ttml precompiled header for test compilation.
+# Force -fPIC to match ttml's compile flags (executables default to -fPIE,
+# which is incompatible with library PCH in Clang).
+set_target_properties(
+    ttml_tests
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            TRUE
+)
+target_compile_options(ttml_tests PRIVATE -fPIC)
+target_precompile_headers(ttml_tests REUSE_FROM ttml)
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location
