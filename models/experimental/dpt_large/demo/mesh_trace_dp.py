@@ -61,6 +61,13 @@ class MeshTraceDPExecutor:
             submesh_dev = getattr(getattr(pipe, "backbone", None), "tt_device", None)
             if submesh_dev is None:
                 raise RuntimeError("Pipeline has no TT device; cannot run mesh-trace DP")
+            # Some ttnn ops consult the process-wide default device; keep it aligned
+            # with the pipeline's submesh before compiling/capturing.
+            try:
+                if hasattr(ttnn, "SetDefaultDevice"):
+                    ttnn.SetDefaultDevice(submesh_dev)
+            except Exception:
+                pass
             # Stable device address for trace replay.
             in_dev = host_in.to(submesh_dev)
             self._persistent_inputs.append(in_dev)
@@ -72,6 +79,12 @@ class MeshTraceDPExecutor:
         try:
             outs = []
             for pipe, in_dev in zip(self.tt_pipelines, self._persistent_inputs):
+                try:
+                    submesh_dev = getattr(getattr(pipe, "backbone", None), "tt_device", None)
+                    if submesh_dev is not None and hasattr(ttnn, "SetDefaultDevice"):
+                        ttnn.SetDefaultDevice(submesh_dev)
+                except Exception:
+                    pass
                 outs.append(pipe._tt_forward_core(in_dev))
         finally:
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
