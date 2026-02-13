@@ -113,7 +113,7 @@ def create_test_inputs(config: PI0ModelConfig, device, batch_size: int = 1):
     [
         {
             "l1_small_size": 16384,
-            "trace_region_size": 35000000,
+            "trace_region_size": 40000000,
             "num_command_queues": 2,
         }
     ],
