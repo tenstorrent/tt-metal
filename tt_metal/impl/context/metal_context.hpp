@@ -30,6 +30,7 @@ namespace inspector {
 class Data;
 }
 
+class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
 class Hal;
@@ -71,6 +72,9 @@ public:
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
+
+    std::shared_ptr<ContextDescriptor> create_context_descriptor(
+        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) const;
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
@@ -156,6 +160,7 @@ private:
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
+    void teardown_dispatch_state();
     void initialize_base_objects();
 
     void reset_cores(ChipId device_id);
