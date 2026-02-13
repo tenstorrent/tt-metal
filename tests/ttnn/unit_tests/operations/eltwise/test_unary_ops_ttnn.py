@@ -711,7 +711,11 @@ def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
 
     cq_id = 0
     ttnn.sigmoid(
-        input_tensor, vector_mode=4, fast_and_approximate_mode=approx_mode, output_tensor=output_tensor, queue_id=cq_id
+        input_tensor,
+        vector_mode=4,
+        mode=ttnn.SigmoidMode.FastApproximate if approx_mode else ttnn.SigmoidMode.Accurate,
+        output_tensor=output_tensor,
+        queue_id=cq_id,
     )
     golden_tensor = torch.sigmoid(in_data)
 
