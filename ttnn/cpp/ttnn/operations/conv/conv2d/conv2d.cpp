@@ -30,6 +30,11 @@
 
 namespace ttnn::operations::conv::conv2d {
 
+using ttnn::Conv2dResult;
+using ttnn::Conv2dResultWithOptions;
+using Result = Conv2dResult;
+using ResultWithOptions = Conv2dResultWithOptions;
+
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
@@ -852,7 +857,11 @@ Result conv2d_DRAM(
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
-ResultWithOptions Conv2dOperation::invoke(
+}  // namespace ttnn::operations::conv::conv2d
+
+namespace ttnn {
+
+Conv2dResultWithOptions conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -874,6 +883,9 @@ ResultWithOptions Conv2dOperation::invoke(
     const std::optional<const Conv2dSliceConfig>& slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    using namespace operations::conv::conv2d;
+    using operations::conv::Conv2dExecutionPath;
+    using operations::conv::determine_conv2d_execution_path;
     // Determine execution path based on configuration and input properties
     Conv2dExecutionPath path = determine_conv2d_execution_path(input_tensor, slice_config_);
 
@@ -930,6 +942,10 @@ ResultWithOptions Conv2dOperation::invoke(
         return_output_dim,
         return_weights_and_bias);
 }
+
+}  // namespace ttnn
+
+namespace ttnn::operations::conv::conv2d {
 
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,
