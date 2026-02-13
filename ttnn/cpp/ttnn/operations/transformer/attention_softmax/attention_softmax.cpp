@@ -8,8 +8,6 @@
 #include "ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
 
-namespace ttnn::operations::transformer {}  // namespace ttnn::operations::transformer
-
 namespace ttnn::transformer {
 
 ttnn::Tensor attention_softmax(
