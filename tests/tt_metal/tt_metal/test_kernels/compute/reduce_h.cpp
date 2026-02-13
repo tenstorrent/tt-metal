@@ -30,7 +30,7 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb0.wait_front(onetile);
 #if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
+                UNPACK((llk_unpack_AB_reduce(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile_math(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
