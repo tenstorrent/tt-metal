@@ -64,6 +64,14 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
+void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
+    std::error_code ec;
+    std::filesystem::create_hard_link(target, link, ec);
+    if (ec) {
+        std::filesystem::copy_file(target, link);
+    }
+}
+
 }  // namespace
 
 std::string get_default_root_path() {
@@ -350,11 +358,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
-        // Lop off the right side from the last "."
-        string stub = src.substr(0, src.find_last_of('.'));
-        // Lop off the leading path
-        stub = stub.substr(stub.find_last_of('/') + 1, stub.length());
-        this->objs_.push_back(stub + ".o");
+        fs::path obj_path = fs::path(src).filename().replace_extension(".o");
+        this->objs_.push_back(obj_path.string());
+        this->temp_objs_.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj_path));
     }
 
     // Prepend root path to srcs, but not to outputs (objs) due to device dependency
@@ -375,12 +381,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
 }
 
-void JitBuildState::compile_one(
-    const string& out_dir,
-    const JitBuildSettings* settings,
-    const string& src,
-    const string& obj,
-    const string& obj_temp_path) const {
+void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -430,16 +431,16 @@ void JitBuildState::compile_one(
     }
 
     // Append common args provided by the build state
-    std::string obj_path = out_dir + obj;
-    fs::path temp_d_path = obj_temp_path;
-    temp_d_path.replace_extension("d");
+    std::string obj_path = out_dir + this->objs_[src_index];
+    std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
+    std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
     cmd += this->cflags_;
     cmd += this->includes_;
     // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, this->srcs_[src_index], temp_d_path);
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -457,8 +458,7 @@ void JitBuildState::compile_one(
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -467,17 +467,12 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
+size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
-            launch_build_step(
-                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
-                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
-                },
-                events);
+            launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
         }
@@ -609,22 +604,44 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+    size_t num_objs = this->objs_.size();
+    std::vector<bool> compiled(num_objs, true);
 
     fs::create_directories(out_dir);
-    {
-        // object files will be created at unique names and renamed after linking
-        std::vector<std::string> obj_paths;
-        obj_paths.reserve(this->objs_.size());
-        for (const auto& obj : this->objs_) {
-            obj_paths.push_back(out_dir + obj);
+    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
+        std::string link_objs = this->extra_link_objs_ + " ";
+        for (size_t i = 0; i < num_objs; ++i) {
+            auto temp_obj = out_dir + this->temp_objs_[i];
+            if (!fs::exists(temp_obj)) {
+                // If reusing up-to-date .o files, we should give them temporary names for linking because:
+                // 1. There is no guarantee that another process will not rename its compiled object to this .o during
+                //    our linking.
+                // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
+                // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
+                //    getting confused.
+                hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                compiled[i] = false;
+            }
+            link_objs += temp_obj;
+            link_objs += " ";
         }
-        jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
-
-        if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
-            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
-            link(out_dir, settings, link_objs);
-            if (this->is_fw_) {
-                weaken(out_dir);
+        link(out_dir, settings, link_objs);
+        if (this->is_fw_) {
+            weaken(out_dir);
+        }
+        // Rename the temporary .o and .dephash files after linking is done.
+        fs::path src_path = out_dir;
+        fs::path dst_path = out_dir;
+        for (size_t i = 0; i < num_objs; ++i) {
+            src_path.replace_filename(this->temp_objs_[i]);
+            dst_path.replace_filename(this->objs_[i]);
+            if (compiled[i]) {
+                fs::rename(src_path, dst_path);
+                src_path += ".dephash";
+                dst_path += ".dephash";
+                fs::rename(src_path, dst_path);
+            } else {
+                fs::remove(src_path);
             }
         }
     }
