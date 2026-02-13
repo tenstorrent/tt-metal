@@ -13,6 +13,7 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 // #include "fw_debug.h"
+#include "llk_defs.h"
 #include "t6_debug_map.h"
 #include "tensix.h"
 
