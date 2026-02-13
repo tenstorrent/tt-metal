@@ -377,6 +377,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 seq_len = int(padded_len)
 
         tokens_tt = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
+        # Keep [B,1,N,C] through encoder blocks (this matches the reference sharded ViT demo).
+        tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
         # In perf-encoder mode, run encoder blocks on a block-sharded tokens tensor
         # so sharded program configs (LN/QKV/FFN) can be enabled.
         if pad_seq:
@@ -388,13 +390,13 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     grid = self.tt_device.compute_with_storage_grid_size()
                     grid_x, grid_y = (int(getattr(grid, "x", 8)), int(getattr(grid, "y", 8)))
                 core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
+                shape_for_shard = getattr(tokens_tt, "padded_shape", None) or [int(B), 1, int(seq_len), int(C)]
                 shard_mc = ttnn.create_sharded_memory_config(
-                    [int(B), int(seq_len), int(C)],
+                    shape_for_shard,
                     core_grid=core_grid,
                     strategy=ttnn.ShardStrategy.BLOCK,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 )
-                # Keep 3D [B, N, C] in sharded form, matching the reference sharded ViT encoder.
                 tokens_tt = ttnn.to_memory_config(tokens_tt, memory_config=shard_mc, dtype=ttnn.bfloat16)
             except Exception:
                 inc_vit_backbone_fallback()
@@ -402,9 +404,6 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                     raise
                 # Fall back to interleaved execution.
                 tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
-        else:
-            # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
-            tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
         if pad_seq and orig_len < seq_len:

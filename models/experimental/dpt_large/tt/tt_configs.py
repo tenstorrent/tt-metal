@@ -160,7 +160,10 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         TILE = 32
         patch_count = config.image_size // config.patch_size
         seq_len = patch_count * patch_count + 1  # include CLS
-        seq_len_padded = math.ceil(seq_len / TILE) * TILE
+        # Keep in sync with vit_backbone encoder padding: we pad to a wider
+        # multiple (64) to make SDPA chunking friendlier when masking is used,
+        # while still remaining tile-aligned (32).
+        seq_len_padded = math.ceil(seq_len / 64) * 64
         seqL_t = seq_len_padded // TILE
         dim_t = config.hidden_size // TILE
 
