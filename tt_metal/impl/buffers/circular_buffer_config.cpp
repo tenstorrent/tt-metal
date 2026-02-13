@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt {
@@ -39,6 +40,22 @@ CircularBufferConfig::CircularBufferConfig(
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
     if (descriptor.buffer) {
         this->set_globally_allocated_address(*descriptor.buffer);
+        if (descriptor.address_offset != 0) {
+            uint32_t l1_alignment = hal::get_l1_alignment();
+            TT_FATAL(
+                descriptor.address_offset % l1_alignment == 0,
+                "address_offset ({}) must be aligned to L1 alignment ({})",
+                descriptor.address_offset,
+                l1_alignment);
+            this->globally_allocated_address_ = this->globally_allocated_address_.value() + descriptor.address_offset;
+            this->max_size_ -= descriptor.address_offset;
+            TT_FATAL(
+                this->total_size_ <= this->max_size_,
+                "address_offset ({}) + total_size ({}) exceeds buffer bank size ({})",
+                descriptor.address_offset,
+                this->total_size_,
+                this->max_size_ + descriptor.address_offset);
+        }
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {

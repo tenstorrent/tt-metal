@@ -161,6 +161,7 @@ class PreSDPA:
         dkv_rmsnorm_gamma_tensor,
         output_tensor,
         sender_coord,
+        kv_cache_tensor,
         semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=1,
@@ -221,6 +222,7 @@ class PreSDPA:
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         dkv_matmul_weights_tensors_per_device = ttnn.get_device_tensors(dkv_matmul_weights_tensor)
         dkv_rmsnorm_gamma_tensors_per_device = ttnn.get_device_tensors(dkv_rmsnorm_gamma_tensor)
+        kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -1058,6 +1060,7 @@ class PreSDPA:
                 dkv_rmsnorm_gamma_tensor_device = dkv_rmsnorm_gamma_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
+                kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
 
                 # Get worker core from per-device input tensor shard grid
                 device_local = input_tensor_device.device()
@@ -1206,18 +1209,22 @@ class PreSDPA:
                     format_descriptors=[gather_reduce_half1_scratch_cb_format],
                 )
 
-                # CB: RMSNorm output buffer (dynamically created)
-                rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=rmsnorm_output_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-                rmsnorm_output_cb_descriptor = ttnn.CBDescriptor(
+                # CB: RMSNorm output buffer — overlap with kv_cache L1 buffer
+                # at offset 14336 B. This CB is consumed before SDPA runs.
+                rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm_output_cb,
+                    kv_cache_tensor_device,
+                    address_offset=14336,
                     total_size=num_tiles * cb_page_size,
-                    core_ranges=rmsnorm_core_grid,
-                    format_descriptors=[rmsnorm_output_cb_format],
                 )
+                rmsnorm_output_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=rmsnorm_output_cb,
+                        data_format=data_format,
+                        page_size=cb_page_size,
+                        tile=tile_descriptor,
+                    )
+                ]
 
                 # CB: Matmul weights (created from sharded tensor)
                 matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1236,19 +1243,22 @@ class PreSDPA:
                 # Note: TILE_1x32, matmul_input_page_size, and matmul_input_total_size
                 # were already calculated above for mcast page count calculation
                 matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-                matmul_input_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=matmul_input_cb,
-                    data_format=data_format,
-                    page_size=matmul_input_page_size,
-                    tile=matmul_input_tile_descriptor,
-                )
-                matmul_input_cb_core_ranges = matmul_weights_core_grid.merge(rmsnorm_core_grid)
-                matmul_input_cb_core_ranges = matmul_input_cb_core_ranges.merge(dkv_matmul_weights_core_grid)
-                matmul_input_cb_descriptor = ttnn.CBDescriptor(
+                # CB: Matmul input — overlap with kv_cache L1 buffer
+                # at offset 28672 B. This CB is consumed before SDPA runs.
+                matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    matmul_input_cb,
+                    kv_cache_tensor_device,
+                    address_offset=28672,
                     total_size=matmul_input_total_size,
-                    core_ranges=matmul_input_cb_core_ranges,
-                    format_descriptors=[matmul_input_cb_format],
                 )
+                matmul_input_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=matmul_input_cb,
+                        data_format=data_format,
+                        page_size=matmul_input_page_size,
+                        tile=matmul_input_tile_descriptor,
+                    )
+                ]
 
                 # CB: Matmul output buffer (single tile, on matmul cores only)
                 matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -1806,24 +1816,27 @@ class PreSDPA:
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
+        io_tensors = [
+            input_tensor_mesh,
+            intermediate_tensor_mesh,
+            gamma_tensor,
+            matmul_weights_tensor,
+            rmsnorm2_gamma_tensor,
+            matmul2_weights_tensor,
+            matmul3_weights_tensor,
+            qrope_sin_tensor,
+            qrope_cos_tensor,
+            trans_mat_tensor,
+            krope_cos_tensor,
+            krope_sin_tensor,
+            dkv_matmul_weights_tensor,
+            dkv_rmsnorm_gamma_tensor,
+            kv_cache_tensor,
+            output_tensor,
+        ]
+
         result = ttnn.generic_op(
-            [
-                input_tensor_mesh,
-                intermediate_tensor_mesh,
-                gamma_tensor,
-                matmul_weights_tensor,
-                rmsnorm2_gamma_tensor,
-                matmul2_weights_tensor,
-                matmul3_weights_tensor,
-                qrope_sin_tensor,
-                qrope_cos_tensor,
-                trans_mat_tensor,
-                krope_cos_tensor,
-                krope_sin_tensor,
-                dkv_matmul_weights_tensor,
-                dkv_rmsnorm_gamma_tensor,
-                output_tensor,
-            ],
+            io_tensors,
             mesh_program_descriptor,
         )
 

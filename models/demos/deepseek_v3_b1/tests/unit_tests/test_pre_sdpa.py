@@ -111,6 +111,42 @@ def test_pre_sdpa(
     matmul2_grid_x = min(TOTAL_COLS, device_grid_size.x)  # Must be exactly 12 for correct sharding
     matmul2_grid_y = 8
 
+    # SDPA KV Cache tensor declared here to overlap with pre-SDPA CBs.
+    # Matches flash_mla's double-buffered KV CB sizing: shard = (2 * k_chunk_size, kvpe_dim)
+    # = (256, 576) per core, giving 156,672 bytes/core — same as flash_mla's cb_k_in.
+    # Total height = shard_height * num_cores must be divisible by tile height (32).
+    kvpe_dim = KNOPE_DIM + KROPE_DIM  # 576
+    kv_cache_num_cores_x = device_grid_size.x
+    kv_cache_num_cores_y = device_grid_size.y
+    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
+    kv_cache_shard_height = 256  # 2 * k_chunk_size (128), matching flash_mla double-buffer
+    kv_cache_total_height = kv_cache_shard_height * kv_cache_num_cores
+
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1),
+                )
+            }
+        ),
+        (kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    kv_cache_tensor = ttnn.from_torch(
+        torch.randn((1, 1, kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            kv_cache_shard_spec,
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
     # Matmul2 output width (interleaved Qnope/Qrope)
     matmul2_width = NUM_QNOPE_HEADS * QNOPE_HEAD_DIM + NUM_QROPE_HEADS * QROPE_HEAD_DIM  # 8192 + 4096 = 12288
     matmul2_weights_shape = (1536, matmul2_width)
@@ -589,6 +625,7 @@ def test_pre_sdpa(
             ttnn_dkv_rmsnorm_gamma,
             ttnn_sdpa_input_output,
             sender_coord,
+            kv_cache_tensor=kv_cache_tensor,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
