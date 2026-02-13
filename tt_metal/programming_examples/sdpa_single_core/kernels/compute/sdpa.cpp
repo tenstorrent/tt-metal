@@ -285,6 +285,9 @@ void exp_tile_first_column(uint32_t idst) {
 
 // #define SDPA_PROFILING_SET_1
 // #define SDPA_PROFILING_SET_2
+// #define SDPA_PROFILING_SET_3
+// #define SDPA_PROFILING_SET_4
+// #define SDPA_PROFILING_SET_5
 
 #ifdef SDPA_PROFILING_SET_1
 #define SDPA_DeviceZoneScopedN_1(name) DeviceZoneScopedN(name)
@@ -296,6 +299,24 @@ void exp_tile_first_column(uint32_t idst) {
 #define SDPA_DeviceZoneScopedN_2(name) DeviceZoneScopedN(name)
 #else
 #define SDPA_DeviceZoneScopedN_2(name)
+#endif
+
+#ifdef SDPA_PROFILING_SET_3
+#define SDPA_DeviceZoneScopedN_3(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN_3(name)
+#endif
+
+#ifdef SDPA_PROFILING_SET_4
+#define SDPA_DeviceZoneScopedN_4(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN_4(name)
+#endif
+
+#ifdef SDPA_PROFILING_SET_5
+#define SDPA_DeviceZoneScopedN_5(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_DeviceZoneScopedN_5(name)
 #endif
 
 /**
@@ -452,6 +473,91 @@ void mul_block_bcast_cols_acc_no_push(uint32_t in0_cb, uint32_t in1_cb, uint32_t
             pack_tile<true>(dst_index++, out_cb, out_tile_index);  // Pack to original position in out_cb
         }
     }
+    tile_regs_release();
+    PACK((llk_pack_reconfig_l1_acc(false)));
+}
+
+/**
+ * Fused SALAD rescale: single DST pass for both sum and output rescaling.
+ *
+ * Computes:
+ *   cur_sum  += prev_sum * exp_max_diff  (col-broadcast)
+ *   cur_out  += prev_out * exp_max_diff  (col-broadcast)
+ *
+ * Both multiplications share the same exp_max_diff bcast operand and data format,
+ * so a single mul_bcast_cols_init_short suffices. By doing all muls in one DST
+ * session we eliminate 1 acquire/commit/wait/release cycle per SALAD row.
+ *
+ * Also removes the dead pack-back to prev_sum (its updated value is never read).
+ *
+ * Writes: pack_tile<true> to cur_sum_cb and cur_out_cb with L1 accumulation.
+ * Push:   None — caller manages push.
+ *
+ * @tparam SBH  Subblock height (tiles per row)
+ * @tparam SBW  Output width in tiles (head_dim_t)
+ */
+template <uint32_t SBH, uint32_t SBW>
+void salad_rescale_fused(
+    uint32_t prev_sum_cb,
+    uint32_t prev_out_cb,
+    uint32_t bcast_cb,
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t q_subblock) {
+    // DST needs: SBH tiles for sum + SBH*SBW tiles for out
+    constexpr uint32_t total_dst_tiles = SBH + SBH * SBW;
+    static_assert(total_dst_tiles <= 8, "Fused SALAD must fit in DST (max 8 tiles)");
+
+    const uint32_t global_row_base = q_subblock * SBH;
+
+    // Single init covers both muls (same bcast type, same data format)
+    mul_bcast_cols_init_short(prev_sum_cb, bcast_cb);
+
+    // Wait for all inputs
+    cb_wait_front(prev_sum_cb, (q_subblock + 1) * SBH);
+    cb_wait_front(prev_out_cb, (q_subblock + 1) * SBH * SBW);
+    cb_wait_front(bcast_cb, (q_subblock + 1) * SBH);
+
+    // === Single DST pass: all muls ===
+    tile_regs_acquire();
+
+    // Phase 1: prev_sum * exp_max_diff -> DST[0 .. SBH-1]
+    uint32_t dst_index = 0;
+    for (uint32_t i = 0; i < SBH; i++) {
+        uint32_t src_tile_index = global_row_base + i;
+        mul_tiles_bcast_cols(prev_sum_cb, bcast_cb, src_tile_index, src_tile_index, dst_index++);
+    }
+
+    // Phase 2: prev_out * exp_max_diff -> DST[SBH .. SBH + SBH*SBW - 1]
+    // Uses different src0 CB but same bcast CB and same data format — no reinit needed.
+    for (uint32_t i = 0; i < SBH; i++) {
+        for (uint32_t j = 0; j < SBW; j++) {
+            uint32_t in0_tile_index = (global_row_base + i) * SBW + j;
+            mul_tiles_bcast_cols(prev_out_cb, bcast_cb, in0_tile_index, global_row_base + i, dst_index++);
+        }
+    }
+
+    tile_regs_commit();
+
+    // === Single pack pass: all L1-acc packs ===
+    tile_regs_wait();
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    // Pack sum results: DST[0..SBH-1] -> cur_sum (L1 accumulate)
+    // No pack-back to prev_sum — that value is never read again.
+    dst_index = 0;
+    for (uint32_t i = 0; i < SBH; i++) {
+        pack_tile<true>(dst_index++, cur_sum_cb, global_row_base + i);
+    }
+
+    // Pack out results: DST[SBH..] -> cur_out (L1 accumulate)
+    for (uint32_t i = 0; i < SBH; i++) {
+        for (uint32_t j = 0; j < SBW; j++) {
+            uint32_t out_tile_index = (global_row_base + i) * SBW + j;
+            pack_tile<true>(dst_index++, cur_out_cb, out_tile_index);
+        }
+    }
+
     tile_regs_release();
     PACK((llk_pack_reconfig_l1_acc(false)));
 }
@@ -646,32 +752,28 @@ void reduce_c_row_group_no_push(
     reduce_block_max_row_uninit(in0_cb);
 
     tile_regs_commit();
+    PACK((llk_pack_mop_config<false, false, false>(out_cb, 1)));
     tile_regs_wait();
 
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t dst_idx = i;
-        pack_tile<true>(dst_idx, out_cb, row_start + i);
+    {
+        SDPA_DeviceZoneScopedN_3("Pack tiles");
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            const uint32_t dst_idx = i;
+            pack_tile<true>(dst_idx, out_cb, row_start + i);
+        }
     }
 
+    {
+        SDPA_DeviceZoneScopedN_3("Reconfig back to 8");
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, 8)));
+    }
     tile_regs_release();
 }
 
 /**
- * Initializes matmul HW, performs a blocked matmul of a subblock, and packs the result tiles to an output CB.
- *
- * Init: configures unpacker/math for the matmul dimensions (always called to ensure correct HW state).
- * Matmul phase: accumulates in0[row] @ in1[col] over the inner dimension into DST.
- * Pack phase: writes DST tiles to out_cb at row-major positions.
- *
- * Writes: pack_tile<true> to out_cb at positions [(r + q_subblock*SUBBLOCK_H)*OUT_NUM_COLS + out_col_offset + c].
- * Push:   None — caller is responsible for pushing tiles after all subblocks are packed.
- *
- * @tparam TRANSPOSE   Whether to transpose in1 tiles during matmul
- * @tparam SUBBLOCK_W  Output subblock width in tiles (columns per subblock)
- * @tparam SUBBLOCK_H  Output subblock height in tiles (rows per subblock)
- * @tparam INNER_DIM   Inner (accumulation) dimension in tiles
- * @tparam IN1_STRIDE  Stride for in1 index per inner-dim step
- * @tparam OUT_NUM_COLS Total columns in the output matrix (for row offset calculation)
+ * 1x8 blocked matmul: init hoisted to caller, packs 1 tile per row (MOP-based 8-wide packing).
+ * Used for Q@KT with qkt_subblock_w=8.
+ * Push: None.
  */
 template <
     bool TRANSPOSE,
@@ -680,7 +782,7 @@ template <
     uint32_t INNER_DIM,
     uint32_t IN1_STRIDE,
     uint32_t OUT_NUM_COLS>
-void blocked_matmul_and_pack_no_push(
+void blocked_1x8_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
     uint32_t out_cb,
@@ -688,9 +790,49 @@ void blocked_matmul_and_pack_no_push(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset) {
-    // --- Init: ensure HW is configured for this matmul ---
-    mm_block_init_short(in0_cb, in1_cb, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+    // --- Matmul phase ---
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    uint32_t in0_index = in0_index_start;
+    uint32_t in1_index = in1_index_start;
+    for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        in0_index++;
+        in1_index += IN1_STRIDE;
+    }
+    tile_regs_commit();
 
+    // --- Pack phase ---
+    tile_regs_wait();
+    uint32_t dst_idx = 0;
+    for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+        uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
+        dst_idx += SUBBLOCK_W;
+    }
+    tile_regs_release();
+}
+
+/**
+ * 1x4 blocked matmul: init hoisted to caller, packs all tiles individually.
+ * Used for QKT@V with qktv_subblock_w=4.
+ * Push: None.
+ */
+template <
+    bool TRANSPOSE,
+    uint32_t SUBBLOCK_W,
+    uint32_t SUBBLOCK_H,
+    uint32_t INNER_DIM,
+    uint32_t IN1_STRIDE,
+    uint32_t OUT_NUM_COLS>
+void blocked_1x4_matmul_and_pack(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t in1_index_start,
+    uint32_t q_subblock,
+    uint32_t out_col_offset) {
     // --- Matmul phase ---
     tile_regs_acquire();
     uint32_t dst_index = 0;
@@ -712,6 +854,49 @@ void blocked_matmul_and_pack_no_push(
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
             dst_idx++;
         }
+    }
+    tile_regs_release();
+}
+
+/**
+ * 1x4 blocked matmul (faster): init hoisted to caller, packs 1 tile per row (MOP-based 4-wide packing).
+ * Used for QKT@V non-overlap path.
+ * Push: None.
+ */
+template <
+    bool TRANSPOSE,
+    uint32_t SUBBLOCK_W,
+    uint32_t SUBBLOCK_H,
+    uint32_t INNER_DIM,
+    uint32_t IN1_STRIDE,
+    uint32_t OUT_NUM_COLS>
+void blocked_1x4_matmul_and_pack_faster(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t in1_index_start,
+    uint32_t q_subblock,
+    uint32_t out_col_offset) {
+    // --- Matmul phase ---
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    uint32_t in0_index = in0_index_start;
+    uint32_t in1_index = in1_index_start;
+    for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, INNER_DIM);
+        in0_index++;
+        in1_index += IN1_STRIDE;
+    }
+    tile_regs_commit();
+
+    // --- Pack phase ---
+    tile_regs_wait();
+    uint32_t dst_idx = 0;
+    for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
+        uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
+        dst_idx += SUBBLOCK_W;
     }
     tile_regs_release();
 }
@@ -773,15 +958,16 @@ void sdpa_inner_loop(
         exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
         // Configure packer ReLU to clamp negative artifacts from approximate exp
 
-        pack_reconfig_data_format(cb_qkt_im);
-        reconfig_data_format(cb_kt_in, cb_q_in);
+        // pack_reconfig_data_format(cb_qkt_im);
+        // reconfig_data_format(cb_kt_in, cb_q_in);
         cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
 
         cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
         cb_reserve_back(alias_cur_sum, Sq_chunk_t);
         cb_reserve_back(alias_cur_max, Sq_chunk_t);
+        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
         for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-            DeviceZoneScopedN("Softmax(Q@KT)");
+            // DeviceZoneScopedN("Softmax(Q@KT)");
             cb_wait_front(cb_q_in, q_wait_tiles);
             kt_index_offset = 0;
 
@@ -789,13 +975,18 @@ void sdpa_inner_loop(
                 if (q_subblock > 0) {
                     uint32_t prev_q_subblock = q_subblock - 1;
                     MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
+                    // SDPA_DeviceZoneScopedN_5("SUB EXP");
                     sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
                         alias_cur_max, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
                 }
 
                 {
                     SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
-                    blocked_matmul_and_pack_no_push<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
+                    // SDPA_DeviceZoneScopedN_5("Q@KT MM+Pack");
+                    if (q_subblock > 0 || q_subblock == 0 && kt_subblock == 0) {
+                        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, sbh, in0_block_w);
+                    }
+                    blocked_1x8_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t>(
                         cb_q_in,
                         cb_kt_in,
                         cb_qkt_im,
@@ -806,8 +997,6 @@ void sdpa_inner_loop(
                 }
                 kt_index_offset += qkt_subblock_w;
             }
-            // cb_qkt_im: matmul packed sbh*Sk_chunk_t tiles at row-major positions for this q_subblock.
-            // Held push — signals UNPACK but keeps wr_ptr at CB base for next q_subblock's pack_tile<true>.
             cb_push_back_hold_wr_ptr(cb_qkt_im, sbh * Sk_chunk_t);
 
             // Max reduce
@@ -829,7 +1018,7 @@ void sdpa_inner_loop(
             q_index_offset += sbh * in0_block_w;
             q_wait_tiles += q_subblock_num_tiles;
         }
-        // cb_push_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
+        PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 
         cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
         cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
@@ -868,25 +1057,31 @@ void sdpa_inner_loop(
             // ===== q_subblock 0: drain overlap + matmul, NO SALAD, NO push =====
             {
                 MATH(DPRINT << "QKT@V: Processing Q_subblock 0" << ENDL());
-                DeviceZoneScopedN("Softmax(Q@KT)@V");
+                // DeviceZoneScopedN("Softmax(Q@KT)@V");
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
 #ifdef OVERLAP_DRAIN_WITH_MATMUL
                 {
-                    constexpr uint32_t half_inner = qktv_in0_block_w / 2;
+                    SDPA_DeviceZoneScopedN_5("DRAIN OVERLAP");
+                    constexpr uint32_t half_inner = qktv_in0_block_w >> 2;
                     static_assert(kt_num_subblocks == 2, "Overlap drain requires kt_num_subblocks==2");
 
                     // 1. sub_exp drain pass 1 (kt=0): SUB on FPU, then EXP on SFPU
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
-                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
-                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
+                    {
+                        SDPA_DeviceZoneScopedN_5("SUB EXP");
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                            alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
+                    }
 
                     // 2. matmul first half — FPU overlaps with EXP(kt=0) on SFPU
                     {
                         uint32_t v_index_offset = 0;
+                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H1");
-                            blocked_matmul_and_pack_no_push<
+                            SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack H1");
+                            blocked_1x4_matmul_and_pack<
                                 false,
                                 qktv_subblock_w,
                                 qktv_subblock_h,
@@ -906,8 +1101,11 @@ void sdpa_inner_loop(
 
                     // 3. sub_exp drain pass 2 (kt=1): SUB on FPU, then EXP on SFPU
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
-                    sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
-                        alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
+                    {
+                        SDPA_DeviceZoneScopedN_5("SUB EXP");
+                        sub_exp_block_bcast_cols_no_push<cb_qkt_im, scale_fp32, sbh, qkt_subblock_w, true>(
+                            alias_cur_max, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
+                    }
                     // alias_cur_sum: full-CB push (Sq_chunk_t tiles on Sq_chunk_t-tile CB).
                     // Regular push — wr_ptr wraps naturally to CB base. No hold needed.
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
@@ -916,9 +1114,11 @@ void sdpa_inner_loop(
                     PACK((llk_pack_reconfig_l1_acc(1)));
                     {
                         uint32_t v_index_offset = 0;
+                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, half_inner);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack H2");
-                            blocked_matmul_and_pack_no_push<
+                            SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack H2");
+                            blocked_1x4_matmul_and_pack<
                                 false,
                                 qktv_subblock_w,
                                 qktv_subblock_h,
@@ -950,9 +1150,10 @@ void sdpa_inner_loop(
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
 
                     uint32_t v_index_offset = 0;
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
-                        blocked_matmul_and_pack_no_push<
+                        blocked_1x4_matmul_and_pack_faster<
                             false,
                             qktv_subblock_w,
                             qktv_subblock_h,
@@ -987,6 +1188,7 @@ void sdpa_inner_loop(
                 // 1. Compute exp_max_diff for PREVIOUS row — SFPU EXP will overlap with matmul
                 {
                     MATH(DPRINT << "SUB_EXP_m for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_5("SLOW EXP");
                     sub_exp_first_col_blocks_no_push<scale_fp32, sbh>(
                         alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                     // cb_exp_max_diff: sub_exp packed sbh tiles for salad_row.
@@ -996,10 +1198,12 @@ void sdpa_inner_loop(
 
                 // 2. Full matmul for CURRENT row — FPU overlaps with SFPU EXP above
                 {
+                    SDPA_DeviceZoneScopedN_5("QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, qktv_in0_block_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         SDPA_DeviceZoneScopedN_2("QKT@V MM+Pack");
-                        blocked_matmul_and_pack_no_push<
+                        blocked_1x4_matmul_and_pack<
                             false,
                             qktv_subblock_w,
                             qktv_subblock_h,
@@ -1017,26 +1221,16 @@ void sdpa_inner_loop(
                     }
                 }
 
-                // 3. Rest of SALAD for PREVIOUS row
+                // 3. Rest of SALAD for PREVIOUS row — fused single DST pass
                 {
-                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_TILES");
-                    mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
-                }
-                {
-                    MATH(DPRINT << "Add tiles inplace for Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_ADD_TILES");
-                    add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
-                }
-                {
-                    MATH(DPRINT << "Element-wise mul of Q[" << salad_row << "]" << ENDL());
-                    SDPA_DeviceZoneScopedN_2("S_MUL_BLOCK");
-                    mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
-                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+                    SDPA_DeviceZoneScopedN_5("SALAD");
+                    MATH(DPRINT << "Fused SALAD rescale for Q[" << salad_row << "]" << ENDL());
+                    salad_rescale_fused<sbh, head_dim_t>(
+                        alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
                 }
 
                 // 4. Push completed row for PREVIOUS subblock.
-                // alias_cur_out: matmul + mul_block_bcast_cols_acc_no_push packed tiles for salad_row.
+                // alias_cur_out: matmul + salad_rescale packed tiles for salad_row.
                 // Held push — signals UNPACK but keeps wr_ptr at CB base for next q_subblock's pack_tile<true>.
                 MATH(
                     DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to alias_cur_out for Q_subblock "
@@ -1056,10 +1250,8 @@ void sdpa_inner_loop(
                 sub_exp_first_col_blocks_no_push<scale_fp32, sbh>(
                     alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                 cb_push_back_hold_wr_ptr(cb_exp_max_diff, sbh);
-                mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
-                add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
-                mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
-                    alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
+                salad_rescale_fused<sbh, head_dim_t>(
+                    alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
 
                 // alias_cur_out: SALAD drain packed tiles for last row.
                 // Held push — signals UNPACK but keeps wr_ptr at CB base (same as SALAD loop pushes).
