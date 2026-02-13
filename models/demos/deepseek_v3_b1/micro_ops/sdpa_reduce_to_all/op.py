@@ -606,6 +606,9 @@ class SdpaReduceToAll:
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
                 bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
+                print("fabric_node_id:", fabric_node_id)
+                print("fwd_fabric_node_id:", fwd_fabric_node_id)
+                print("bwd_fabric_node_id:", bwd_fabric_node_id)
 
                 # Split shard cores per link
                 cores_per_link = num_shard_cores // num_links
