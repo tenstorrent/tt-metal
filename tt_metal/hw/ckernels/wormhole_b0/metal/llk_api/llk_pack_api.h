@@ -272,9 +272,11 @@ inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t input_id = get_output_id(input_operand);
     const std::uint8_t output_id = get_output_id(pack_output);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+
     const uint32_t use_32bit_dest =
         pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -296,10 +298,11 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
     const std::uint8_t output_id = get_output_id(output);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
 
-    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units);
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units, num_faces);
 }
 
 /*************************************************************************
