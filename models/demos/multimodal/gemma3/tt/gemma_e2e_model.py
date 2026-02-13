@@ -96,17 +96,17 @@ class TtGemmaModel(Transformer):
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         # Slice the rot mats to the prefill seqlen
         assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
+            self.rope_setup.cos_matrix_prefill.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.cos_matrix_prefill[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.sin_matrix_prefill[:, :, start_pos : start_pos + S, :],
         ]
 
         tt_rot_mats_prefill_local = [
-            self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.cos_matrix_prefill[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.sin_matrix_prefill[:, :, start_pos : start_pos + S, :],
         ]
 
         if page_table is not None:
