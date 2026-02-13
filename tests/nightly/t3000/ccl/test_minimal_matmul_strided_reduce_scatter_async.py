@@ -442,6 +442,54 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             ),
             id="xlarge_4k_y6_Nwt16_cwimb2",
         ),
+        # Same shape as above but with explicit RS worker counts to explore
+        # the MM/RS core budget tradeoff in the fused case.
+        # RS cores = 2 + 2*num_workers_per_link (mux + workers, 1 link).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=3072,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 6),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=1,  # 4 RS cores, 52 total
+            ),
+            id="xlarge_4k_y6_Nwt16_cwimb2_rs1",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=3072,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 6),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=4,  # 10 RS cores, 58 total
+            ),
+            id="xlarge_4k_y6_Nwt16_cwimb2_rs4",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=3072,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 6),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=6,  # 14 RS cores, 62 total
+            ),
+            id="xlarge_4k_y6_Nwt16_cwimb2_rs6",
+        ),
     ],
 )
 @pytest.mark.parametrize(
