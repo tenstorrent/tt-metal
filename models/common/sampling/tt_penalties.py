@@ -84,7 +84,7 @@ class TTPenalties(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.cluster_shape = mesh_device.shape
-        self.max_batch_size = 32  # max_batch_size -- penalties and sampling only run for padded batch size
+        self.max_batch_size = getattr(args, "max_batch_size", 32)
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size

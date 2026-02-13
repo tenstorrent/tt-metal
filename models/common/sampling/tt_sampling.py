@@ -9,7 +9,8 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utils import LogProbsCalculator
+from models.common.sampling._utils import is_default_value
+from models.common.sampling.tt_log_probs import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -45,20 +46,17 @@ class TTSampling(LightweightModule):
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
 
-    def _is_default_val(self, values, default):
-        if values is None:
-            return True
-        if isinstance(values, (int, float)):
-            return values == default
-        return all(value == default for value in values)
-
     def _is_force_argmax_sampling(self, k, p, temp):
         return (
             self._allow_force_argmax_sampling
-            and self._is_default_val(k, 1)
-            and self._is_default_val(p, 1.0)
-            and self._is_default_val(temp, 1.0)
+            and is_default_value(k, 1)
+            and is_default_value(p, 1.0)
+            and is_default_value(temp, 1.0)
         )
+
+    @property
+    def force_argmax_sampling(self) -> bool:
+        return self._force_argmax_sampling
 
     def __init__(
         self,
@@ -92,7 +90,7 @@ class TTSampling(LightweightModule):
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
-        self.max_batch_size = 32
+        self.max_batch_size = getattr(args, "max_batch_size", 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
@@ -171,17 +169,19 @@ class TTSampling(LightweightModule):
         self._create_indices_tensors()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
-        self.log_probs_calculator = LogProbsCalculator(self.mesh_device, self.sub_core_grids, self.tt_ccl)
+        self.log_probs_calculator = LogProbsCalculator(
+            self.mesh_device, self.sub_core_grids, self.tt_ccl, batch_size=self.max_batch_size
+        )
 
         self.seeds_tt_tensor = ttnn.as_tensor(
-            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            torch.arange(self.max_batch_size).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.user_ids_tt_tensor = ttnn.as_tensor(
-            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            torch.arange(self.max_batch_size).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
@@ -267,10 +267,9 @@ class TTSampling(LightweightModule):
         )
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        # Force argmax sampling
+        """Update sampling parameters (k, p, temperature) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
-            """Update sampling parameters (k, p, temperature) dynamically."""
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
             if self._sampling_dp > 1:
@@ -497,11 +496,3 @@ class TTSampling(LightweightModule):
         self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
 
         return tt_out_tok, self.tt_log_probs
-
-
-def clamp(value, min_value, max_value):
-    if value < min_value:
-        return min_value
-    elif value > max_value:
-        return max_value
-    return value
