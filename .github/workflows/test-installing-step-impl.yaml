@@ -73,7 +73,7 @@ jobs:
           # Download under tt_dnn-models/Falcon so once workspace is mounted at /mnt/MLPerf,
           # model_location_generator finds /mnt/MLPerf/tt_dnn-models/Falcon/tiiuae/falcon-7b-instruct
           mkdir -p tt_dnn-models/Falcon
-          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P tt_dnn-models/Falcon "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P tt_dnn-models/Falcon "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
       - name: Patch tt-metalium-models to mount workspace volume
         shell: bash
         run: |
