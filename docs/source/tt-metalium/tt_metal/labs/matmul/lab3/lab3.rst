@@ -654,24 +654,36 @@ Perform the following steps to complete the exercise:
       TT_METAL_WATCHER=10 ./build/ttnn/examples/example_lab_multicast
 
    Once program starts, watcher should activate once every 10 seconds and log the state of the device into
-   a log file. After several watcher messages, terminate the program (using ``Ctrl + C``) and inspect
+   its log file. A major difference from the previous hang is that in this case the Watcher does not report an error.
+   This is because the program has not performed any invalid operations; the hang occurs because the program logic
+   is broken, which is not something that the Watcher can detect.
+   After several watcher messages, terminate the program (using ``Ctrl + C``) and inspect
    the log file in ``generated/watcher/watcher.log``.
 
    First, review the legend in the log file to understand the meaning of the subsequent lines.
    Key takeaways:
 
    * Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
-     RISC-V 0 through RISC-V 4 in Tensix Core figure in Lab 1.
-     BRISC is considered to be the primary processor, and the other RISC-V processors are considered
-     to be subordinate processors.
+     RISC-V 0 through RISC-V 4 in the Tensix Core figure in Lab 1.
+     BRISC is referred to as the primary processor, and the other RISC-V processors are referred
+     to as subordinate processors.
    * State of each RISC-V processor is indicated either through a single-character code
      (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code,
      (e.g., ``NRW`` = "NOC Read Wait", ``NSW`` = "NOC Semaphore Wait").
-   * ``smsg`` shows if subordinate processors are in Go (G) or Done (D) state.
-   * ``k_ids`` maps to kernel source files listed at the end of each dump section
+     If you're unusure what some of the codes mean, you can `grep` for the corresponding
+     waypoint string in the source code. For example:
 
-   Next, examine a single line of the log file to understand how to interpret the information.
-   Consider this example line:
+     .. code-block:: bash
+
+        grep -rn "." --include=\*.{cpp,h,hpp} -e 'WAYPOINT("CWFW")'
+        ./tt_metal/hw/inc/api/dataflow/dataflow_api.h:476:    WAYPOINT("CWFW");
+
+     Then you can examine the code around line ``476`` to understand what the ``CWFW`` waypoint is.
+
+   * ``smsg`` shows if subordinate processors are in initialization (``I``), runing/go (``G``) or done (``D``) state.
+   * ``k_ids`` are numbers used to identify kernels running on different cores.
+
+   Let us examine an example line of the log file to better understand how to interpret the information:
 
    .. code-block:: text
 
@@ -679,31 +691,31 @@ Perform the following steps to complete the exercise:
 
    Breaking this apart:
 
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | Field                    | Value                   | Meaning                                                  |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                               |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                  |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `NSW`                    | BRISC status            | **N**OC **S**emaphore **W**ait                           |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `CWFW`                   | NCRISC status           | **C**B **W**ait **F**or **W**rite                        |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `K`                      | TRISC0 status           | In **K**ernel                                            |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `MWDD`                   | TRISC1 status           | **M**ath **W**ait **D**ata **D**ependency                |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `K`                      | TRISC2 status           | In **K**ernel                                            |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `rmsg:D0G\|BNT`          | Run message             | Dispatch, NOC 0, Go state; BRISC/NCRISC/TRISC enabled    |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**o state (running) |
-   +--------------------------+-------------------------+----------------------------------------------------------+
-   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                          |
-   +--------------------------+-------------------------+----------------------------------------------------------+
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | Field                    | Value                   | Meaning                                                    |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                                 |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                    |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `NSW`                    | BRISC status            | **N**\ OC **S**\ emaphore **W**\ ait                       |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `CWFW`                   | NCRISC status           | **C**\ B **W**\ ait **F**\ or **W**\ rite                  |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `K`                      | TRISC0 status           | In **K**\ ernel                                            |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `MWDD`                   | TRISC1 status           | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency          |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `K`                      | TRISC2 status           | In **K**\ ernel                                            |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `rmsg:D0G\|BNT`          | Run message             | Dispatch, NOC 0, Go state; BRISC/NCRISC/TRISC enabled      |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running) |
+   +--------------------------+-------------------------+------------------------------------------------------------+
+   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                            |
+   +--------------------------+-------------------------+------------------------------------------------------------+
 
-   Kernels are identified through their IDs, and mapping between kernel IDs and source file names is listed
+   Kernels running on different cores are identified through their IDs, and mapping between kernel IDs and source file names is listed
    at the end of each dump section.
    Idle cores where the program hasn't created any kernels can easily be identified by their ``k_ids`` fields all set to 0.
 
@@ -881,18 +893,21 @@ slabs of tiles of ``A`` and ``B`` differently depending on their role:
   These cores never read slabs of ``A`` or ``B`` directly from DRAM, but always receive them via multicast.
 
 * **Left column A-source cores** (red background) with coordinates ``(0, y)``, where ``y > 0``:
-  Each of these cores reads slabs of ``A`` it needs for its own computation from DRAM and multicasts them across their row ``y``.
-  They receive slabs of ``B`` from the topmost core in their column via multicast.
+  Each of these cores:
+  * Reads slabs of ``A`` it needs for its own computation from DRAM and multicasts them across their row ``y``.
+  * Receives slabs of ``B`` from the topmost core in its column via multicast.
 
 
 * **Top row B-source cores** (blue background) with coordinates ``(x, 0)``, where ``x > 0``:
-  Each of these cores reads slabs of ``B`` it needs for its own computation from DRAM and multicasts them down their column ``x``.
-  They receive slabs of ``A`` from the leftmost core in their row via multicast.
+  Each of these cores:
+  * Reads slabs of ``B`` it needs for its own computation from DRAM and multicasts them down their column ``x``.
+  * Receives slabs of ``A`` from the leftmost core in its row via multicast.
 
 
 * **Top-left core** (purple background) with coordinates ``(0, 0)``:
-  This core reads slabs of both ``A`` and ``B`` it needs for its own computation from DRAM
-  It multicasts slabs of ``A`` to all the other cores in row 0, and multicasts slabs of ``B`` to all the other cores in column 0.
+  This core reads slabs of both ``A`` and ``B`` it needs for its own computation from DRAM.
+  It also multicasts slabs of ``A`` it read from DRAM to all the other cores in row ``0``,
+  and slabs of ``B`` to all the other cores in column ``0``.
 
 What this translates to is that matrix multiplication implementation with multicast will require
 four different types of reader kernels, corresponding to the four different roles identified above.
