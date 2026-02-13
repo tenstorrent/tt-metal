@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -34,6 +34,124 @@ binary_fns = {
     "mul",
     "bias_gelu",
 }
+
+
+def test_binary_ng_typecast_lt(device):
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.float32
+
+    x_torch = torch.tensor(
+        [
+            [
+                0.98828125,
+            ]
+        ],
+        dtype=torch_dtype,
+    )
+    y_torch = torch.tensor(
+        [
+            [
+                0.99000000953674316,
+            ]
+        ],
+        dtype=torch_dtype,
+    )
+
+    z_torch = torch.lt(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.lt(x_tt, y_tt, dtype=ttnn.DataType.BFLOAT16)
+
+    ops_chain = [
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SUB_UNARY_SFPU, 0.99000000953674316),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.LTZ),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.BFLOAT16.value),
+    ]
+    z_tt_u = ttnn.unary_chain(x_tt, ops_chain)
+    tt_out = ttnn.to_torch(z_tt)
+    tt_out_u = ttnn.to_torch(z_tt_u)
+    assert torch.equal(z_torch, tt_out)
+    assert torch.equal(z_torch, tt_out_u)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (
+            torch.Size([1, 1, 1, 1]),
+            torch.Size([5, 3, 32, 32]),
+        ),
+        (
+            torch.Size([5, 1, 64, 1]),
+            torch.Size([1, 3, 1, 128]),
+        ),
+        (
+            torch.Size([5, 1, 1, 64]),
+            torch.Size([1, 3, 128, 1]),
+        ),
+        (
+            torch.Size([5, 1, 1]),
+            torch.Size([1, 32, 128]),
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "ge",
+        "gt",
+        "le",
+        "lt",
+        "eq",
+        "ne",
+        "add",
+        "sub",
+    ],
+)
+@pytest.mark.parametrize(
+    "in_dtype",
+    ([ttnn.float32]),
+)
+@pytest.mark.parametrize(
+    "out_dtype",
+    (
+        [
+            "bfloat16",
+        ]
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT]),
+)
+# Applies Post activation Typecast Operation on the output with dtype provided
+def test_binary_w_typecast(input_shapes, in_dtype, out_dtype, layout, ttnn_fn, device):
+    torch.manual_seed(0)
+    a_shape, b_shape = input_shapes
+    ttnn_op = getattr(ttnn, ttnn_fn)
+
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-50, high=50, dtype=torch.float32), in_dtype
+    )(a_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-50, high=50, dtype=torch.float32), in_dtype
+    )(b_shape)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, dtype=in_dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, dtype=in_dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_tt = ttnn_op(input_tensor_a, input_tensor_b, dtype=getattr(ttnn, out_dtype), use_legacy=False)
+
+    output_tensor = ttnn.to_torch(out_tt)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b).to(getattr(torch, out_dtype))
+
+    assert_with_ulp(torch_output_tensor, output_tensor, 0)
 
 
 @pytest.mark.parametrize(
