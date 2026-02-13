@@ -316,11 +316,6 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len, batch_size_per_row, decode_position_ids",
-    TEST_CASES,
-    ids=TEST_IDS,
-)
-@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -328,6 +323,11 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, seq_len, batch_size_per_row, decode_position_ids",
+    TEST_CASES,
+    ids=TEST_IDS,
 )
 @pytest.mark.parametrize(
     "module_path",
