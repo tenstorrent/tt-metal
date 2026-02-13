@@ -71,7 +71,7 @@ inline void fast_approx_exp(uint32_t dst_index) {
 // TODO: Try and integrate with calculate_exponential_polynomial instead for perf
 template <bool exp_approx_mode, uint16_t scale_bf16>
 inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_index) {
-    // TODO: Could just use sum offset, and index dst_reg with the difference
+    // TODO: Can get rid of this
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, corr_exp_index + get_dest_buffer_base());
     // Prev - Max
     TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
@@ -97,7 +97,7 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     // Store Exp - 1 Values
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 4);
-
+    // TODO: Can get rid of this
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, curr_sum_index + get_dest_buffer_base());
     // Load Curr Sum Values
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
@@ -114,9 +114,8 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
 // Could potentially also skip loading prev sum if we manage lregs properly
 // TODO: Try and integrate with calculate_exponential_polynomial instead for perf
 template <bool exp_approx_mode, uint16_t scale_bf16>
-inline void recip_sum(uint32_t curr_sum_index) {
+inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
     // Last op should already be sum offset
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, curr_sum_index + get_dest_buffer_base());
     sfpi::vFloat sum_top_4 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     // Init after to avoid trampling cached registers before we use them
@@ -130,6 +129,8 @@ inline void recip_sum(uint32_t curr_sum_index) {
     sfpi::l_reg[sfpi::LRegs::LReg2] = recip_bottom_4;
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG0, 2);  // SFPMAD_MOD1_NEGATE_VC
     TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG2, 2);  // SFPMAD_MOD1_NEGATE_VC
+    // TODO: Can get rid of this
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, recip_dst_index + get_dest_buffer_base());
     // Store Result
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 4);
@@ -230,12 +231,12 @@ void compute_sdpa_chunk(
 }
 
 template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16>
-void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t mm2_dst_offset) {
-    PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset)));
+void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_dst_offset, uint32_t mm2_dst_offset) {
+    PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
     PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
     sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
     MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
-    sdpa_bcast_col_srca_srcb_reuse_preamble(sum_dst_offset);
+    sdpa_bcast_col_srca_srcb_reuse_preamble(recip_dst_offset);
     sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true>(mm2_dst_offset);
     MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
 }

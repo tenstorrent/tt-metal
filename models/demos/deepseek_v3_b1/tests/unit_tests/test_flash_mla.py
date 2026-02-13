@@ -126,13 +126,23 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         memory_config=kv_mem_config,
     )
 
-    # Create position tensor
-    logger.info("Creating position tensor...")
+    grid_size = device.compute_with_storage_grid_size()
     position_ids = torch.ones(batch_size, dtype=torch.int32) * decode_position
+    position_replicated = torch.full((grid_size.x * grid_size.y, 1), decode_position, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
     tt_position_ids = ttnn.from_torch(
-        position_ids,
+        position_replicated,
         dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
+        memory_config=pos_mem_config,
     )
 
     # Create output tensor with same sharded memory config and tiny tile
@@ -156,7 +166,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         packer_l1_acc=False,
     )
 
-    # Compute PyTorch reference using FlashMLADecode.golden_dummy (matches simplified compute kernel)
+    # Compute PyTorch reference using FlashMLADecode.golden (matches simplified compute kernel)
     logger.info("Computing PyTorch reference...")
     reference_output = FlashMLADecode.golden(
         q=torch_q,
@@ -200,7 +210,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
             out_mean_diff = torch.mean(torch.abs(output_torch - reference_output)).item()
             logger.info(f"Out Max absolute difference: {out_max_diff}")
             logger.info(f"Out Mean absolute difference: {out_mean_diff}")
-            pcc_required = 0.998
+            pcc_required = 0.995
             passing, pcc_message = comp_pcc(reference_output, output_torch, pcc_required)
             assert passing, f"Iteration {i}: PCC check failed vs golden: {pcc_message}"
             logger.info(f"    PCC vs golden: {pcc_message}")

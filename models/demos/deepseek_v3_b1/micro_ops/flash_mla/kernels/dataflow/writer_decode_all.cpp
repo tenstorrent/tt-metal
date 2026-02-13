@@ -47,14 +47,14 @@ void kernel_main() {
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(11);
     constexpr uint32_t num_tree_reduction_steps = get_compile_time_arg_val(12);
     constexpr uint32_t receiver_ready_semaphore_id = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_out_in = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_ms_in = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_out_o = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_out_ms = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_out_in = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_ms_in = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_out_o = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_out_ms = get_compile_time_arg_val(18);
 
     uint32_t arg_idx = 0;
+    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);  // Position is height-sharded in L1
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const bool is_mcast_sender = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -67,14 +67,9 @@ void kernel_main() {
     tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_tree_reduction_steps * 4;
 
-    // Get cur_pos from position tensor (MLA decode is always causal)
-    uint32_t cur_pos;
-    {
-        cb_wait_front(cb_index_id, 1);
-        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-        cur_pos = index_ptr[0];  // Single batch, position at index 0
-    }
+    // Get cur_pos from height-sharded position tensor (directly from local L1)
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    uint32_t cur_pos = pos_ptr[0];
 
     // Sequence length assignment
     auto [k_num_chunks, k_chunk_start, k_chunk_end] =
@@ -111,7 +106,7 @@ void kernel_main() {
 
         constexpr uint8_t MCAST_NOC = 0;
         const uint64_t mcast_noc_addr =
-            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0, MCAST_NOC);
         const uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
 
         noc_semaphore_set(mcast_semaphore_ptr, 1);

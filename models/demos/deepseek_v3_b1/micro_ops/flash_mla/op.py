@@ -535,12 +535,12 @@ class FlashMLADecode:
         cb_k_in = 1  # K/V cache input
         cb_ms_in = 2  # m/s stats input (from sender in tree reduction)
         cb_out_in = 3  # output input for tree reduction
-        cb_index_id = 4  # cur_pos tensor
-        cb_out_o = 5  # output O from compute
-        cb_out_ms = 6  # output m/s stats from compute
-        cb_interm_out = 7  # intermediate output for tree reduction
-        cb_interm_ms = 8  # intermediate m/s stats for tree reduction
-        cb_out_final = 9  # final sharded output
+        # cb_index_id removed - position is now read directly from sharded L1
+        cb_out_o = 4  # output O from compute
+        cb_out_ms = 5  # output m/s stats from compute
+        cb_interm_out = 6  # intermediate output for tree reduction
+        cb_interm_ms = 7  # intermediate m/s stats for tree reduction
+        cb_out_final = 8  # final sharded output
 
         # Intermediate output tiles for tree reduction
         # With tree reduction, senders can complete their steps out of order (e.g., S5 may send
@@ -559,9 +559,8 @@ class FlashMLADecode:
         k_page_size, k_num_pages = get_max_page_size_and_num_pages(noc_max_page_size, k_chunk_tiles, k_tile_size)
 
         # KV cache is always ND sharded (validated above) - page-level pipelining enabled
-        # Index stick size for position tensor (C++ lines 429-445)
-        index_stick_size = B * 4  # int32 = 4 bytes per element
-        index_stick_size = ((index_stick_size + 31) // 32) * 32  # Align to 32 bytes
+        # Position tensor is now height-sharded with value replicated on every core
+        # Each core reads position directly from its local L1 shard (no CB needed)
 
         # =========================================================================
         # Create output core lists (matching C++ lines 671-721)
@@ -612,15 +611,11 @@ class FlashMLADecode:
             k_num_pages,  # 9: pages per K chunk
             ncrisc_brisc_sync_semaphore_id,  # 10: ncrisc_brisc_sync_semaphore_id
             receiver_ready_semaphore_id,  # 11: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_index_id,  # 12: cur_pos tensor CB index
-            cb_q_in,  # 13: Q input CB index
-            cb_k_in,  # 14: K input CB index
+            cb_q_in,  # 12: Q input CB index
+            cb_k_in,  # 13: K input CB index
         ]
-        # TensorAccessorArgs for K (KV cache) and pos tensor
+        # TensorAccessorArgs for K (KV cache) only - position is read directly from sharded L1
         reader_compile_time_args.extend(get_tensor_accessor_args(kv_cache_tensor))  # K
-        reader_compile_time_args.extend(
-            get_interleaved_tensor_accessor_args(cur_pos_tensor)
-        )  # pos (always DRAM interleaved)
 
         # Writer compile time args (simplified)
         writer_compile_time_args = [
@@ -638,12 +633,11 @@ class FlashMLADecode:
             k_num_pages,  # 11: pages per K chunk
             grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
             receiver_ready_semaphore_id,  # 13: receiver_ready_semaphore_id (for double-buffer sync)
-            cb_index_id,  # 14: cur_pos tensor CB index
-            cb_k_in,  # 15: K input CB index
-            cb_out_in,  # 16: output input CB index
-            cb_ms_in,  # 17: m/s stats input CB index
-            cb_out_o,  # 18: output O CB index
-            cb_out_ms,  # 19: output m/s stats CB index
+            cb_k_in,  # 14: K input CB index
+            cb_out_in,  # 15: output input CB index
+            cb_ms_in,  # 16: m/s stats input CB index
+            cb_out_o,  # 17: output O CB index
+            cb_out_ms,  # 18: output m/s stats CB index
         ]
 
         # Compute compile time args (keep existing interface for compute kernel)
@@ -662,16 +656,15 @@ class FlashMLADecode:
             float_to_uint32(scale),  # 11: scale_fp32
             grid.NUM_TREE_REDUCTION_STEPS,  # 12: tree reduction steps (3)
             dst_size,  # 13: dst size
-            cb_index_id,  # 14: cur_pos tensor CB index
-            cb_q_in,  # 15: Q input CB index
-            cb_k_in,  # 16: K input CB index
-            cb_interm_out,  # 17: intermediate output CB index
-            cb_interm_ms,  # 18: intermediate m/s stats CB index
-            cb_out_in,  # 19: output input CB index
-            cb_ms_in,  # 20: m/s stats input CB index
-            cb_out_o,  # 21: output O CB index
-            cb_out_ms,  # 22: output m/s stats CB index
-            cb_out_final,  # 23: final sharded output CB index
+            cb_q_in,  # 14: Q input CB index
+            cb_k_in,  # 15: K input CB index
+            cb_interm_out,  # 16: intermediate output CB index
+            cb_interm_ms,  # 17: intermediate m/s stats CB index
+            cb_out_in,  # 18: output input CB index
+            cb_ms_in,  # 19: m/s stats input CB index
+            cb_out_o,  # 20: output O CB index
+            cb_out_ms,  # 21: output m/s stats CB index
+            cb_out_final,  # 22: final sharded output CB index
         ]
 
         # No compute defines needed for simplified kernel (no softmax)
@@ -724,14 +717,7 @@ class FlashMLADecode:
                 )
             )
 
-        # cb_index_id: cur_pos input
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=index_stick_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(cb_index_id, ttnn.int32, index_stick_size)],
-            )
-        )
+        # Position tensor is now height-sharded - no CB needed, read directly from L1
 
         # cb_out_o/cb_interm_out: output O (tiny tile)
         cb_descriptors.append(
@@ -843,7 +829,9 @@ class FlashMLADecode:
             tree_reduction_info = grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
             # Writer runtime args (simplified)
+            # pos_addr is the L1 shard address - same for all cores in height-sharded tensor
             writer_runtime_args = [
+                pos_addr,
                 cur_batch,
                 core_num_in_reduce,
                 is_mcast_sender,
@@ -859,8 +847,9 @@ class FlashMLADecode:
             # Is this core a sender after receiving? (intermediate node)
             is_sender_after_reduce = 1 if (do_reduce and grid.is_tree_reduction_sender(s_block_idx)) else 0
 
-            # Compute runtime args (unchanged interface)
+            # Compute runtime args (updated to include position address)
             compute_runtime_args = [
+                pos_addr,
                 do_reduce,
                 is_output_core,
                 0,  # cur_head (always 0, num_heads_per_core=1)

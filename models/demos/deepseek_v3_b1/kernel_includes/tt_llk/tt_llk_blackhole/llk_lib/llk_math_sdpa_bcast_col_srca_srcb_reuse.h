@@ -97,22 +97,22 @@ inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_(uint dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
 
-    // if constexpr (!fused_signalling) {
-    for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
-        ckernel_template::run();
-        if constexpr (!skip_signalling) {
-            t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
+    if constexpr (!fused_signalling) {
+        for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num++) {
+            ckernel_template::run();
+            if constexpr (!skip_signalling) {
+                t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
+            }
+        }
+    } else {
+        for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num += 2) {
+            ckernel_template::run();
+            ckernel_template::run();
+            if constexpr (!skip_signalling) {
+                t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
+            }
         }
     }
-    // } else {
-    //     for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num+=2) {
-    //         ckernel_template::run();
-    //         ckernel_template::run();
-    //         if constexpr (!skip_signalling) {
-    //             t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
-    //         }
-    //     }
-    // }
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 

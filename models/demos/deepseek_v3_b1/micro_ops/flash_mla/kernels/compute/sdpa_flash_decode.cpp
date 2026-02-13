@@ -41,23 +41,25 @@ void kernel_main() {
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(11);
     constexpr uint32_t num_tree_reduction_steps = get_compile_time_arg_val(12);
     constexpr uint32_t dst_size = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_q_in = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_interm_out = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_interm_ms = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_out_in = get_compile_time_arg_val(19);
-    constexpr uint32_t cb_ms_in = get_compile_time_arg_val(20);
-    constexpr uint32_t cb_out_o = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_out_ms = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_out_final = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_interm_out = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_interm_ms = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_out_in = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_ms_in = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_out_o = get_compile_time_arg_val(20);
+    constexpr uint32_t cb_out_ms = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_out_final = get_compile_time_arg_val(22);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
 
+    static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
+
     // Runtime arguments
     uint32_t arg_idx = 0;
+    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);  // Position is height-sharded in L1
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
@@ -80,13 +82,9 @@ void kernel_main() {
     PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
     sdpa_custom_mm_block_init<transpose_k>(cb_q_in, cb_k_in, cb_out_o, Sk_chunk_t);
 
-    // Get cur_pos from position tensor (MLA decode is always causal)
-    uint32_t cur_pos;
-    {
-        cb_wait_front(cb_index_id, 1);
-        cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
-        cb_pop_front(cb_index_id, 1);
-    }
+    // Get cur_pos from height-sharded position tensor (directly from local L1)
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    uint32_t cur_pos = pos_ptr[0];
 
     // Get the sequence length assignment
     auto [k_num_chunks, k_chunk_start, k_chunk_end] =
@@ -170,7 +168,11 @@ void kernel_main() {
         pack_tile(max_dst_tile_offset, sdpa_ms_cb);
         cb_push_back(sdpa_ms_cb, Sq_chunk_t);
     } else {
-        compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(cb_q_in, sum_dst_offset, mm2_dst_offset);
+        compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16>(
+            cb_q_in,
+            sum_dst_offset,
+            corr_exp_dst_offset,
+            mm2_dst_offset);  // Use corr_exp_dst_offset as recip_dst_offset
     }
     // Sem is incremented once per 2 tiles since sem can only go up to 15
     for (uint32_t i = 0; i < out_chunk_tiles; i += 2) {

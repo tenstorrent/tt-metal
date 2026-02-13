@@ -14,7 +14,6 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(3);
     constexpr uint32_t num_tiles_k = get_compile_time_arg_val(4);
 
-    riscv_wait(4000);
     cb_reserve_back(cb_q, num_tiles_k);
     cb_push_back(cb_q, num_tiles_k);
     for (uint32_t i = 0; i < num_chunks; i++) {
