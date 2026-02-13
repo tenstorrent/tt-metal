@@ -95,7 +95,7 @@ inline void llk_unpack_tilizeA_B_init(
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     LLK_ASSERT(
-        are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[get_operand_id(operandB)],
@@ -103,7 +103,7 @@ inline void llk_unpack_tilizeA_B_init(
             unpA_face_r_dim,
             unpB_face_r_dim,
             num_faces,
-            get_operand_num_faces(get_operand_id(operandB))),
+            get_operand_num_faces(get_operand_id(operandB)))),
         "");
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
@@ -140,7 +140,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     LLK_ASSERT(
-        are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
+        (are_unpacker_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[operandB_id],
@@ -148,7 +148,7 @@ inline void llk_unpack_tilizeA_B(
             face_r_dim,
             get_operand_face_r_dim(operandB_id),
             num_faces,
-            get_operand_num_faces(operandB_id)),
+            get_operand_num_faces(operandB_id))),
         "");
 
     WAYPOINT("UPTW");
