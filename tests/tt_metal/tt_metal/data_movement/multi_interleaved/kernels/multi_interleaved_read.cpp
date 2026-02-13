@@ -2,16 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 #include "api/tensor/tensor_accessor.h"
+#include "barrier_sync.hpp"
 
 // DRAM to L1 read
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_write_addr = get_arg_val<uint32_t>(1);
+    uint32_t page_offset = get_arg_val<uint32_t>(2);
+    // Barrier synchronization args
+    uint32_t barrier_sem_id = get_arg_val<uint32_t>(3);
+    uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);
+    uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
+    uint32_t num_cores = get_arg_val<uint32_t>(6);
+    uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);  // Local scratch space for polling
 
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
     constexpr uint32_t num_pages = get_compile_time_arg_val(1);
@@ -30,6 +37,9 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
+    // Wait for all cores to reach this point before starting data movement
+    barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);
+
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
@@ -37,7 +47,7 @@ void kernel_main() {
                 if constexpr (sync) {
                     cb_reserve_back(cb_id_in0, 1);
                 }
-                uint64_t noc_addr = s.get_noc_addr(p);
+                uint64_t noc_addr = s.get_noc_addr(page_offset + p);
                 noc_async_read(noc_addr, l1_write_addr + p * page_size_bytes, page_size_bytes);
                 if constexpr (sync) {
                     noc_async_read_barrier();

@@ -139,7 +139,7 @@ void kernel_main() {
 #endif  // FUSE_BIAS
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
@@ -148,7 +148,12 @@ void kernel_main() {
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
     constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+    constexpr uint32_t in1_KtNt_per_batch = get_compile_time_arg_val(after_bias_offset);        // K*N tiles per batch
+    constexpr uint32_t in1_batches_per_bank = get_compile_time_arg_val(after_bias_offset + 1);  // batches per DRAM bank
+#endif  // IN1_DRAM_HEIGHT_SHARDED
 
 #ifdef FUSE_BIAS
 #ifndef BIAS_SHARDED
@@ -211,13 +216,25 @@ void kernel_main() {
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
 
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+    constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
+#endif  // IN1_DRAM_HEIGHT_SHARDED
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
+
+#ifdef IN1_DRAM_HEIGHT_SHARDED
+        // Compute DRAM bank and offset for this batch
+        uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
+        uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
+        uint64_t in1_dram_base_addr = get_noc_addr_from_bank_id<true>(in1_dram_bank_id, in1_tensor_addr);
+        uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
+#endif  // IN1_DRAM_HEIGHT_SHARDED
 
         if constexpr (batchB > 0) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
@@ -233,9 +250,6 @@ void kernel_main() {
                 }
             }
 
-#ifdef IN1_DRAM_SHARDED
-            uint32_t l1_read_addr_in1_offset = 0;
-#endif  // IN1_DRAM_SHARDED
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -246,14 +260,20 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
+#ifdef IN1_DRAM_WIDTH_SHARDED
+                    // Reset DRAM read offset for each bh block — the inner dim loop
+                    // advances through K, and each output row block re-reads the same
+                    // in1 columns from K=0. (bw is always 1 for DRAM-sharded senders.)
+                    uint32_t l1_read_addr_in1_offset = 0;
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         if constexpr (fuse_op_all_gather) {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
-#ifdef IN1_DRAM_SHARDED
-                        // Operand 1
+#if defined(IN1_DRAM_WIDTH_SHARDED)
+                        // Operand 1 - DRAM width sharded
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                         uint64_t in1_start_address =
@@ -295,9 +315,41 @@ void kernel_main() {
                         }
                         l1_read_addr_in1_offset += in1_dram_block_size_bytes;
                         noc_async_read_barrier();
-#else
-#ifndef IN1_SHARDED
-                        // Operand 1
+#elif defined(IN1_DRAM_HEIGHT_SHARDED)
+                        // Operand 1 - DRAM height sharded (batched)
+                        // Each DRAM bank holds batches_per_bank complete [K, N] matrices
+                        // Bank and offset computed at start of batch loop
+                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+
+                        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                        uint64_t in1_start_address =
+                            l1_write_addr_in1;  // copy start address of block, to be used for mcasting
+
+                        // Read in1 block from the correct DRAM bank
+                        // Tile layout within a batch: row-major [K, N], same strides as interleaved
+                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
+                        for (uint32_t h = 0; h < in1_block_h; ++h) {
+                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                            for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                    uint32_t tile_byte_offset =
+                                        in1_dram_batch_offset + in1_tensor_tile_id * in1_single_tile_size_bytes;
+                                    noc_async_read(
+                                        in1_dram_base_addr + tile_byte_offset,
+                                        l1_write_addr_in1,
+                                        in1_single_tile_size_bytes);
+                                }
+                                l1_write_addr_in1 += in1_single_tile_size_bytes;
+                                in1_tensor_tile_id += in1_tensor_stride_w;
+                            }
+                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                        }
+                        in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
+
+                        // Barrier! make sure the reads are done
+                        noc_async_read_barrier();
+#elif !defined(IN1_SHARDED)
+                        // Operand 1 - interleaved
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 #ifdef INTERMEDIATE_CB_READ
                         constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
@@ -334,8 +386,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif  // IN1_SHARDED
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
@@ -395,7 +446,7 @@ void kernel_main() {
                             l1_write_addr_in3;              // copy start address of block, to be used for mcasting
                         uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
-#ifdef IN1_DRAM_SHARDED
+#ifdef IN1_DRAM_WIDTH_SHARDED
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
@@ -440,7 +491,7 @@ void kernel_main() {
                         }
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif  // IN1_DRAM_SHARDED
+#endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifndef SKIP_MCAST
 
@@ -560,7 +611,11 @@ void kernel_main() {
             in1_batch_tile_id += KtNt;
         }
         if constexpr (bcast_B == 0) {
+#ifndef IN1_DRAM_HEIGHT_SHARDED
+            // For height-sharded DRAM, tile IDs are relative within a batch;
+            // batch offset is handled by switching DRAM banks
             in1_tensor_start_tile_id += KtNt;
+#endif
         }
 
         if (fuse_op_reduce_scatter) {
