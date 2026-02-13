@@ -33,7 +33,6 @@ public:
 
     void initialize(
         const std::vector<ChipId>& device_ids,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap,
         bool init_profiler,
         bool initialize_fabric_and_dispatch_fw,
         std::shared_ptr<ContextDescriptor> descriptor);

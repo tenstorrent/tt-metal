@@ -179,7 +179,6 @@ namespace tt_metal {
 
 void DeviceManager::initialize(
     const std::vector<ChipId>& device_ids,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw,
     std::shared_ptr<ContextDescriptor> descriptor) {
@@ -198,7 +197,7 @@ void DeviceManager::initialize(
     worker_thread_to_cpu_core_map_ =
         device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs_, completion_queue_reader_to_cpu_core_map_);
 
-    l1_bank_remap_.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    l1_bank_remap_.assign(descriptor->l1_bank_remap().begin(), descriptor->l1_bank_remap().end());
 
     open_devices(device_ids);
     is_initialized_ = true;

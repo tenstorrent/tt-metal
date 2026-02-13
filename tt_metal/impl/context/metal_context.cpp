@@ -139,7 +139,6 @@ void MetalContext::initialize_device_manager(
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_->initialize(
         device_ids,
-        l1_bank_remap,
         init_profiler,
         initialize_fabric_and_dispatch_fw,
         create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size));
@@ -905,14 +904,19 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
         *hal_,
         *cluster_,
         rtoptions_,
-        rtoptions_.get_mock_cluster_desc_path(),
         fabric_config_,
+        fabric_reliability_mode_,
         fabric_tensix_config_,
+        fabric_udm_mode_,
         fabric_manager_,
+        fabric_router_config_,
         num_hw_cqs,
         l1_small_size,
         trace_region_size,
-        worker_l1_size);
+        worker_l1_size,
+        dispatch_core_config_,
+        l1_bank_remap_,
+        rtoptions_.get_mock_cluster_desc_path());
 }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {

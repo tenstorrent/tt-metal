@@ -10,6 +10,7 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <experimental/fabric/fabric_types.hpp>
+#include "context/metal_context.hpp"
 
 namespace tt {
 class Cluster;
@@ -21,23 +22,58 @@ class RunTimeOptions;
 
 namespace tt::tt_metal {
 
-class Context;
 class Hal;
+class MetalContext;
+class DeviceManager;
 
 class ContextDescriptor {
 public:
     ContextDescriptor(
-        const Hal& hal,
-        Cluster& cluster,
-        const llrt::RunTimeOptions& rtoptions,
-        std::string_view mock_cluster_desc_path,
         tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode,
         tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt::tt_fabric::FabricUDMMode fabric_udm_mode,
         tt::tt_fabric::FabricManagerMode fabric_manager,
+        tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{},
         int num_cqs = 1,
         int l1_small_size = 0,
         int trace_region_size = 0,
-        int worker_l1_size = 0) :
+        int worker_l1_size = 0,
+        const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        std::string_view mock_cluster_desc_path = "") :
+        num_cqs_(num_cqs),
+        l1_small_size_(l1_small_size),
+        trace_region_size_(trace_region_size),
+        worker_l1_size_(worker_l1_size),
+        dispatch_core_config_(dispatch_core_config),
+        l1_bank_remap_(l1_bank_remap),
+        mock_cluster_desc_path_(mock_cluster_desc_path),
+        fabric_config_(fabric_config),
+        reliability_mode_(reliability_mode),
+        fabric_tensix_config_(fabric_tensix_config),
+        fabric_udm_mode_(fabric_udm_mode),
+        fabric_manager_(fabric_manager),
+        router_config_(router_config) {}
+
+    // Intended for internal use by MetalContext to pass in HAL/Cluster/RuntimeOptions dependencies for init
+    ContextDescriptor(
+        const Hal& hal,
+        Cluster& cluster,
+        const llrt::RunTimeOptions& rtoptions,
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt::tt_fabric::FabricUDMMode fabric_udm_mode,
+        tt::tt_fabric::FabricManagerMode fabric_manager,
+        tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{},
+        int num_cqs = 1,
+        int l1_small_size = 0,
+        int trace_region_size = 0,
+        int worker_l1_size = 0,
+        const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        std::string_view mock_cluster_desc_path = "") :
         hal_(&hal),
         cluster_(&cluster),
         rtoptions_(&rtoptions),
@@ -45,14 +81,18 @@ public:
         l1_small_size_(l1_small_size),
         trace_region_size_(trace_region_size),
         worker_l1_size_(worker_l1_size),
+        dispatch_core_config_(dispatch_core_config),
+        l1_bank_remap_(l1_bank_remap),
         mock_cluster_desc_path_(mock_cluster_desc_path),
         fabric_config_(fabric_config),
+        reliability_mode_(reliability_mode),
         fabric_tensix_config_(fabric_tensix_config),
-        fabric_manager_(fabric_manager) {}
+        fabric_udm_mode_(fabric_udm_mode),
+        fabric_manager_(fabric_manager),
+        router_config_(router_config) {}
 
     ContextDescriptor() = default;
 
-    // Service accessors
     const Hal& hal() const { return *hal_; }
     Cluster& cluster() const { return *cluster_; }
     const llrt::RunTimeOptions& rtoptions() const { return *rtoptions_; }
@@ -64,6 +104,7 @@ public:
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
     bool is_mock_device() const { return !mock_cluster_desc_path_.empty(); }
     std::string_view mock_cluster_desc_path() const { return mock_cluster_desc_path_; }
+    const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
 
     tt::tt_fabric::FabricConfig fabric_config() const { return fabric_config_; }
     tt::tt_fabric::FabricReliabilityMode reliability_mode() const { return reliability_mode_; }
@@ -74,7 +115,8 @@ public:
     const tt::tt_fabric::FabricRouterConfig& router_config() const { return router_config_; }
 
 private:
-    friend class Context;
+    friend class MetalContext;
+    friend class DeviceManager;
 
     // Dependencies
     const Hal* hal_ = nullptr;
@@ -87,7 +129,7 @@ private:
     int trace_region_size_ = 0;
     int worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
-    bool is_mock_device_ = false;
+    tt::stl::Span<const std::uint32_t> l1_bank_remap_;
     std::string_view mock_cluster_desc_path_;
 
     // Fabric
