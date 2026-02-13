@@ -7,9 +7,9 @@
 #include "device/host/point_to_point_device_op.hpp"
 #include "point_to_point.hpp"
 
-namespace ttnn::operations::point_to_point {
+namespace ttnn {
 
-ttnn::Tensor ExecutePointToPoint::invoke(
+ttnn::Tensor point_to_point(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
@@ -27,6 +27,8 @@ ttnn::Tensor ExecutePointToPoint::invoke(
         .at(1);
 }
 
+namespace operations::point_to_point {
+
 ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
@@ -38,4 +40,6 @@ ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
     return PointToPointOp::compute_output_specs(attrs, tensors).at(0);
 }
 
-}  // namespace ttnn::operations::point_to_point
+}  // namespace operations::point_to_point
+
+}  // namespace ttnn

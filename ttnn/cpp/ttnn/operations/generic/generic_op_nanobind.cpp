@@ -10,7 +10,7 @@
 #include <nanobind/stl/string.h>
 
 #include "generic_op.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::generic {
 
@@ -37,27 +37,21 @@ void bind_generic_operation(nb::module_& mod) {
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
         )doc";
 
-    // Use concrete type for self
-    using registered_operation_t = std::decay_t<decltype(ttnn::generic_op)>;
+    // Overload for MeshProgramDescriptor (explicit mesh control)
+    auto mesh_program_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(&ttnn::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_descriptor"));
 
-    auto mesh_program_invoke = [](const registered_operation_t& self,
-                                  const std::vector<Tensor>& io_tensors,
-                                  const tt::tt_metal::experimental::MeshProgramDescriptor& desc) {
-        return self(io_tensors, desc);
-    };
+    // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
+    auto program_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
+            &ttnn::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("program_descriptor"));
 
-    auto program_invoke = [](const registered_operation_t& self,
-                             const std::vector<Tensor>& io_tensors,
-                             const tt::tt_metal::ProgramDescriptor& desc) { return self(io_tensors, desc); };
-
-    bind_registered_operation(
-        mod,
-        ttnn::generic_op,
-        doc,
-        // Overload for MeshProgramDescriptor (explicit mesh control)
-        ttnn::nanobind_overload_t{mesh_program_invoke, nb::arg("io_tensors"), nb::arg("mesh_program_descriptor")},
-        // Overload for ProgramDescriptor (SPMD mode - broadcasts to all devices)
-        ttnn::nanobind_overload_t{program_invoke, nb::arg("io_tensors"), nb::arg("program_descriptor")});
+    ttnn::bind_function<"generic_op">(mod, doc, mesh_program_overload, program_overload);
 }
 
 }  // namespace ttnn::operations::generic
