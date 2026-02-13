@@ -12,17 +12,20 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <iostream>
 #include <ostream>
 #include <fstream>
+#include <ranges>
 #include <regex>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/unreachable.hpp>
 #include "build.hpp"
@@ -242,23 +245,26 @@ void jit_build_genfiles_triscs_src(
 
 namespace {
 
-std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
-    std::string formats_string;
-    for (const auto& format : formats) {
-        formats_string += to_string((int)format) + ",";
-    }
-    return formats_string;
+template <std::ranges::range Range>
+void emit_formats_array(
+    std::ostream& out, const std::string& array_type, const std::string& array_name, int array_size, const Range& arr) {
+    fmt::format_to(
+        std::ostream_iterator<char>(out),
+        "{} {}[{}] = {{\n    {}\n}};\n",
+        array_type,
+        array_name,
+        array_size,
+        fmt::join(arr, ","));
 }
 
-std::string create_formats_array_string(
-    const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
-    stringstream str_stream;
-
-    str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
-    str_stream << "    " << array_data << endl;
-    str_stream << "};" << endl;
-
-    return str_stream.str();
+void emit_formats_array(
+    std::ostream& out,
+    const std::string& array_type,
+    const std::string& array_name,
+    int array_size,
+    const std::vector<DataFormat>& formats) {
+    auto as_int = [](DataFormat f) { return static_cast<int>(f); };
+    emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data_formats(
@@ -279,20 +285,13 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
 }
 
 void emit_unpack_data_formats(
-    const std::string& unpack_data_format_descs,
-    const std::vector<DataFormat>& src_formats_all_cbs,
-    const std::vector<DataFormat>& dst_formats_all_cbs,
+    std::ostream& out,
+    const std::vector<DataFormat>& src_formats,
+    const std::vector<DataFormat>& dst_formats,
     uint32_t max_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    jit_build::utils::FileRenamer tmp(unpack_data_format_descs);
-    ofstream file_stream;
-    file_stream.open(tmp.path());
-    file_stream << "#pragma once\n\n";
-    file_stream << create_formats_array_string(
-        "constexpr std::int32_t", "unpack_src_format", max_cbs, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string(
-        "constexpr std::int32_t", "unpack_dst_format", max_cbs, data_format_vec_to_string(dst_formats_all_cbs));
-    file_stream.close();
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats);
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -320,25 +319,12 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
 }
 
 void emit_pack_data_formats(
-    const std::string& pack_data_format_descs,
-    const std::vector<DataFormat>& src_formats_all_cbs,
-    const std::vector<DataFormat>& dst_formats_all_cbs,
+    std::ostream& out,
+    const std::vector<DataFormat>& src_formats,
+    const std::vector<DataFormat>& dst_formats,
     uint32_t max_cbs) {
-    jit_build::utils::FileRenamer tmp(pack_data_format_descs);
-    ofstream file_stream;
-    file_stream.open(tmp.path());
-    file_stream << "#pragma once\n\n";
-    file_stream << create_formats_array_string(
-        "constexpr unsigned char", "pack_src_format", max_cbs, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string(
-        "constexpr unsigned char", "pack_dst_format", max_cbs, data_format_vec_to_string(dst_formats_all_cbs));
-
-    // budabackend-style format array
-    // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,
-    // data_format_vec_to_string(src_formats)); file_stream << create_formats_array_string("const std::int32_t",
-    // "pack_dst_format", 16, data_format_vec_to_string(dst_formats));
-
-    file_stream.close();
+    emit_formats_array(out, "constexpr unsigned char", "pack_src_format", max_cbs, src_formats);
+    emit_formats_array(out, "constexpr unsigned char", "pack_dst_format", max_cbs, dst_formats);
 }
 
 void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
@@ -370,25 +356,56 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
-void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH arch, uint32_t max_cbs) {
-    string out_file_name_base = "chlkc_";
-    string out_file_name_suffix = "_data_format.h";
-    string unpack_data_format_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
-    string pack_data_format_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
+void emit_unpack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cbs) {
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
+}
 
-    // assuming all cores within a op have the same desc
+void emit_pack_tile_dims(std::ostream& out, tt_hlk_desc& desc, uint32_t max_cbs) {
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_partial_face", max_cbs, desc.buf_partial_face_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, desc.buf_face_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_narrow_tile", max_cbs, desc.buf_narrow_tile_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_r_dim", max_cbs, desc.buf_tile_r_dim_arr);
+    emit_formats_array(out, "constexpr uint8_t", "pack_tile_c_dim", max_cbs, desc.buf_tile_c_dim_arr);
+    emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
+}
+
+void emit_scalar_descriptors(std::ostream& out, JitBuildOptions& options, tt_hlk_desc& desc) {
+    fmt::format_to(
+        std::ostreambuf_iterator<char>(out),
+        "constexpr bool DST_ACCUM_MODE = {};\n"
+        "#define DST_SYNC_MODE DstSync::Sync{}\n"
+        "#include \"llk_defs.h\"\n\n"
+        "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
+        "constexpr bool APPROX = {};\n",
+        options.fp32_dest_acc_en,
+        options.dst_full_sync_en ? "Full" : "Half",
+        static_cast<std::uint32_t>(desc.get_hlk_math_fidelity()),
+        desc.get_hlk_math_approx_mode());
+}
+
+void generate_all_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
+    const uint32_t max_cbs = env.get_max_cbs();
+    const tt::ARCH arch = env.get_arch();
     tt_hlk_desc& desc = options.hlk_desc;
 
     // Determine dst format under ambiguous conditions (either or both l1 input & output formats are Float32)
     ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
-    DataFormat unpack_conditional_dst_format = (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
+    DataFormat unpack_conditional_dst_format =
+        (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
 
-    if (options.fp32_dest_acc_en && (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
+    if (options.fp32_dest_acc_en &&
+        (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
-    tt::check_valid_formats_in_out_data_formats(
-        desc.buf_dataformat_arr);
+    tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
     tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(
@@ -407,141 +424,24 @@ void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH a
     // propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
     equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 
-    emit_unpack_data_formats(unpack_data_format_descs, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs, max_cbs);
-    emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs, max_cbs);
-}
-
-std::string array_to_string(std::span<const uint32_t> arr) {
-    std::string formats_string;
-    for (const auto& value : arr) {
-        formats_string += std::to_string(value) + ",";
-    }
-    return formats_string;
-}
-
-void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc, uint32_t max_cbs) {
-    jit_build::utils::FileRenamer tmp(unpack_tile_dims_descs);
-    ofstream file_stream;
-    file_stream.open(tmp.path());
-    file_stream << "#pragma once\n\n";
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, array_to_string(desc.buf_num_faces_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_partial_face", max_cbs, array_to_string(desc.buf_partial_face_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_tile_face_r_dim", max_cbs, array_to_string(desc.buf_face_r_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_narrow_tile", max_cbs, array_to_string(desc.buf_narrow_tile_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_tile_r_dim", max_cbs, array_to_string(desc.buf_tile_r_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "unpack_tile_c_dim", max_cbs, array_to_string(desc.buf_tile_c_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint16_t", "unpack_tile_size", max_cbs, array_to_string(desc.buf_tile_size_arr));
-    file_stream.close();
-}
-
-void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc, uint32_t max_cbs) {
-    jit_build::utils::FileRenamer tmp(pack_tile_dims_descs);
-    ofstream file_stream;
-    file_stream.open(tmp.path());
-    file_stream << "#pragma once\n\n";
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_tile_num_faces", max_cbs, array_to_string(desc.buf_num_faces_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_partial_face", max_cbs, array_to_string(desc.buf_partial_face_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_tile_face_r_dim", max_cbs, array_to_string(desc.buf_face_r_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_narrow_tile", max_cbs, array_to_string(desc.buf_narrow_tile_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_tile_r_dim", max_cbs, array_to_string(desc.buf_tile_r_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint8_t", "pack_tile_c_dim", max_cbs, array_to_string(desc.buf_tile_c_dim_arr));
-    file_stream << create_formats_array_string(
-        "constexpr uint16_t", "pack_tile_size", max_cbs, array_to_string(desc.buf_tile_size_arr));
-    file_stream.close();
-}
-
-void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH /*arch*/, uint32_t max_cbs) {
-    string out_file_name_base = "chlkc_";
-    string out_file_name_suffix = "_tile_dims.h";
-    string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
-    string pack_tile_dims_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
-
-    // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = options.hlk_desc;
-
-    emit_unpack_tile_dims(unpack_tile_dims_descs, desc, max_cbs);
-    emit_pack_tile_dims(pack_tile_dims_descs, desc, max_cbs);
-}
-
-void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
-    string dst_accum_format_descriptor = options.path + "chlkc_dst_accum_mode.h";
-
-    jit_build::utils::FileRenamer tmp(dst_accum_format_descriptor);
-    ofstream file_stream;
-
-    file_stream.open(tmp.path());
-
-    if (options.fp32_dest_acc_en == 0) {
-        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
-    } else {
-        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;
+    const string descriptors_path = options.path + "chlkc_descriptors.h";
+    jit_build::utils::FileRenamer tmp(descriptors_path);
+    ofstream out(tmp.path());
+    if (!out) {
+        throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
 
-    file_stream.close();
-}
+    out << "#pragma once\n\n";
 
-void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
-    string dst_sync_mode_descriptor = options.path + "chlkc_dst_sync_mode.h";
+    emit_unpack_data_formats(out, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs, max_cbs);
+    emit_pack_data_formats(out, pack_src_formats_all_cbs, pack_dst_formats_all_cbs, max_cbs);
+    emit_unpack_tile_dims(out, desc, max_cbs);
+    emit_pack_tile_dims(out, desc, max_cbs);
+    emit_scalar_descriptors(out, options, desc);
 
-    jit_build::utils::FileRenamer tmp(dst_sync_mode_descriptor);
-    ofstream file_stream;
-
-    file_stream.open(tmp.path());
-
-    if (options.dst_full_sync_en) {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << endl;
-    } else {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << endl;
+    if (!out) {
+        throw std::runtime_error("Failed to write file: " + descriptors_path);
     }
-
-    file_stream.close();
-}
-
-void generate_math_fidelity_descriptor(JitBuildOptions& options) {
-    string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
-    // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = options.hlk_desc;
-
-    jit_build::utils::FileRenamer tmp(math_fidelity_descriptor);
-    ofstream file_stream;
-
-    file_stream.open(tmp.path());
-
-    MathFidelity fidelity = desc.get_hlk_math_fidelity();
-
-    // Add the necessary include
-    file_stream << "#include \"llk_defs.h\"\n\n";
-
-    file_stream << "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>("
-                << static_cast<std::uint32_t>(fidelity) << ");" << endl;
-    file_stream.close();
-}
-
-void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
-    string approx_descriptor = options.path + "chlkc_math_approx_mode.h";
-
-    // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = options.hlk_desc;
-
-    jit_build::utils::FileRenamer tmp(approx_descriptor);
-    ofstream file_stream;
-
-    file_stream.open(tmp.path());
-    file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";" << endl;
-    file_stream.close();
 }
 
 }  // namespace
@@ -552,22 +452,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
     fs::create_directories(options.path);
-    try {
-        std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch(), env.get_max_cbs()); } );
-        std::thread tt( [&]() { generate_tile_dims_descriptors(options, env.get_arch(), env.get_max_cbs()); } );
-        std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
-        std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
-        std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
-        std::thread ts( [&]() { generate_dst_sync_mode_descriptor(options); } );
-        td.join();
-        tt.join();
-        tm.join();
-        ta.join();
-        tf.join();
-        ts.join();
-    } catch (std::runtime_error& ex) {
-        std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
-    }
+    generate_all_descriptors(env, options);
 }
 // clang-format on
 
