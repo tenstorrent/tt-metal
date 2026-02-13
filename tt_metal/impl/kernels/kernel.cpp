@@ -767,9 +767,10 @@ bool ComputeKernel::configure(
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+    int32_t dm_count = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         llrt::write_binary_to_address(
-            *binaries[trisc_id], device_id, worker_core, base_address + offsets[2 + trisc_id]);
+            *binaries[trisc_id], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
     }
 
     return pass;

@@ -37,6 +37,7 @@ on:
       - "All post-commit tests"
       - "PR - All post-commit tests"
       - "apc nightly debug run"
+      - "apc nightly debug run with watcher"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"

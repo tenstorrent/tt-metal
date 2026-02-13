@@ -8,12 +8,8 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.deepseek_v3.tests.pytest_utils import (
-    build_expanded_test_ids,
-    expand_test_cases_with_position_ids_ranges,
-)
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -246,29 +242,13 @@ def run_test_forward_pass_dpmodel(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.97)
 
 
-# Base test cases - ranges will be expanded into individual test cases
-# see documentation for expand_test_cases_with_position_ids_ranges for more details
-BASE_TEST_CASES = [
-    # mode, seq_len, batch_size_per_row, decode_position_ids
-    ("decode", 1, USERS_PER_ROW, None),
-] + [
-    ("prefill", seq_len, 1, None)
-    if seq_len == 128
-    else pytest.param(
-        "prefill",
-        seq_len,
-        1,
-        None,
-        marks=pytest.mark.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        ),
-    )
-    for seq_len in PREFILL_SEQ_LENS
-]
-EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
-EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+TEST_CASES, TEST_IDS = build_test_cases_and_ids(
+    USERS_PER_ROW,
+    DEFAULT_PREFILL_SEQ_LEN,  # default prefill sequence length to test
+)
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -282,8 +262,8 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size_per_row, decode_position_ids",
-    EXPANDED_TEST_CASES,
-    ids=EXPANDED_TEST_IDS,
+    TEST_CASES,
+    ids=TEST_IDS,
 )
 def test_forward_pass(
     use_real_weights,

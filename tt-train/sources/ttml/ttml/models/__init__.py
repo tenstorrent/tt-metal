@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,15 @@
 
 This package provides Python implementations of models using ttml operations.
 """
+
+import sys
+
+# Import C++ bindings
+from .. import _ttml
+from .._recursive_import import _recursive_import_from_ttml
+
+if hasattr(_ttml, "models"):
+    _recursive_import_from_ttml(_ttml.models, sys.modules[__name__])
 
 # Import Python implementations
 from .linear_regression import LinearRegression, create_linear_regression_model
