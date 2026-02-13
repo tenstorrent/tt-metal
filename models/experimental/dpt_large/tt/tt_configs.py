@@ -294,7 +294,7 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     if config.device.endswith("n300"):
         # Use a 2-row grid to split sequence tiles across y and avoid large
         # per-core output buffers that can clash with static circular buffers in L1.
-        mlp_grid = (8, 2)
+        mlp_grid = (8, 4)
         mlp_prog_cfgs = _build_perf_program_configs(config, mlp_grid)
         # `_build_perf_program_configs` defaults `per_core_M` to the full padded
         # sequence tile count. For block-sharded MLP activations across (x,y),
