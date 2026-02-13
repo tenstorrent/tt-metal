@@ -24,27 +24,19 @@ static const float FRAC_1_PI = 0.31830987f;
 static const float PI_2_HI = 0x1.921fb4p+0f;
 static const float PI_2_LO = 0x1.4442d2p-24f;
 
-static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
-    const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
-    const vFloat y =
-        ((((((((((((2.1457846f * r + 2.815174f) * r - 3.9035487f) * r - 5.2096696f) * r + 3.658698f) * r + 4.9457364f) *
-                   r -
-               0.7137798f) *
-                  r -
-              1.0665413f) *
-                 r +
-             1.1057009f) *
-                r +
-            1.462757f) *
-               r +
-           1.4643353f) *
-              r +
-          1.8716435f) *
-             r +
-         2.514385f) *
-            r +
-        3.0097759f;
-    return setsgn(y, x);
+static sfpi_inline vFloat _tan_(vFloat s) {
+    vFloat r;
+
+    r = 4.38117981e-3f;          // 0x1.1f2000p-8
+    r = r * s + 8.94600598e-5f;  // 0x1.773902p-14
+    r = r * s + 1.08341556e-2f;  // 0x1.63037cp-7
+    r = r * s + 2.12811474e-2f;  // 0x1.5cab9ap-6
+    r = r * s + 5.40602170e-2f;  // 0x1.badc7ep-5
+    r = r * s + 1.33326918e-1f;  // 0x1.110db4p-3
+    r = r * s + 3.33333433e-1f;  // 0x1.110db4p-3
+    r = r * s;
+
+    return r;
 }
 
 template <bool APPROXIMATION_MODE>
@@ -52,30 +44,23 @@ static vFloat sfpu_tan(vFloat x);
 
 template <>
 sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
-    const vFloat xx = x * x;
-
-    v_if(sfpi::abs(x) <= 1.0f) {
-        x *= (((0.07407404f * xx - 0.0031158808f) * xx + 0.1559396f) * xx + 0.33035427) * xx + 1.0000609f;
-    }
-    v_else { x = sfpu_tan_large(x); }
-    v_endif;
-
     return x;
 }
 
 template <>
 sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
-    const vFloat xx = x * x;
+    const vFloat s = x * x;
 
-    v_if(sfpi::abs(x) <= 1.0f) {
-        x *= ((((((0.010222361f * xx - 0.015764693f) * xx + 0.02789032f) * xx + 0.012122508f) * xx + 0.05659461f) * xx +
-               0.1329926f) *
-                  xx +
-              0.33334994f) *
-                 xx +
-             0.9999999f;
+    vFloat t = _tan_(s);
+    vFloat r = t * x + x;
+    v_if(i & 1) {
+        s = x - r;
+        s = t * x + s;
+        t = sfpi::approx_recip(-r);
+        r = r * t + sfpi::vConst1;
+        r = s * t + r;
+        r = r * t + t;
     }
-    v_else { x = sfpu_tan_large(x); }
     v_endif;
 
     return x;
