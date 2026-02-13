@@ -37,7 +37,13 @@ def _get_element_size_bytes(dtype):
 class SdpaReduceToAll:
     @staticmethod
     def golden(
-        l_data_per_device, s_data_per_device, m_data_per_device, num_cores=8, scale_value=1.0, position_mask=None
+        l_data_per_device,
+        s_data_per_device,
+        m_data_per_device,
+        num_cores=8,
+        scale_value=1.0,
+        position_mask=None,
+        final_reduction=True,
     ):
         """
         PyTorch reference implementation for SDPA reduce-to-all.
@@ -49,7 +55,7 @@ class SdpaReduceToAll:
             position_mask: optional tensor [num_devices] with 1.0 for valid devices, 0.0 for masked devices
         """
 
-        def compute_reduction(l1, s1, m1, l2, s2, m2, scale, valid1, valid2, normalize=False):
+        def compute_reduction(l1, s1, m1, l2, s2, m2, scale, valid1, valid2):
             """Conditional reduction based on validity flags.
 
             Args:
@@ -75,11 +81,6 @@ class SdpaReduceToAll:
                 s_out = s1 * exp_m1 + s2 * exp_m2
                 l_out = l1 * exp_m1 + l2 * exp_m2
                 m_out = m_new
-
-            # Normalize if requested
-            if normalize:
-                l_out = l_out / s_out.expand(-1, l_out.shape[1])
-
             return l_out, s_out, m_out
 
         num_devices = len(l_data_per_device)
@@ -106,10 +107,6 @@ class SdpaReduceToAll:
             s_dev = [s_data_per_device[d][:, core_idx : core_idx + 1] for d in range(num_devices)]
             m_dev = [m_data_per_device[d][:, core_idx : core_idx + 1] for d in range(num_devices)]
 
-            # Count total valid devices
-            num_valid_devices = int(sum(position_mask > 0.5))
-
-            # Round 1: reduce (0,1) and (2,3) WITHOUT normalization
             l_r1_01, s_r1_01, m_r1_01 = compute_reduction(
                 l_dev[0],
                 s_dev[0],
@@ -120,7 +117,6 @@ class SdpaReduceToAll:
                 scale_value,
                 position_mask[0].item() > 0.5,
                 position_mask[1].item() > 0.5,
-                normalize=False,  # R1 doesn't normalize
             )
             l_r1_23, s_r1_23, m_r1_23 = compute_reduction(
                 l_dev[2],
@@ -132,7 +128,6 @@ class SdpaReduceToAll:
                 scale_value,
                 position_mask[2].item() > 0.5,
                 position_mask[3].item() > 0.5,
-                normalize=False,  # R1 doesn't normalize
             )
 
             r1_01_valid = (position_mask[0].item() > 0.5) or (position_mask[1].item() > 0.5)
@@ -149,10 +144,11 @@ class SdpaReduceToAll:
                 scale_value,
                 r1_01_valid,
                 r1_23_valid,
-                normalize=True,  # Always normalize at the end
             )
 
-            # Output is normalized if >1 device had data
+            print("final_reduction:", final_reduction)
+            if final_reduction:
+                l_final = l_final / s_final.expand(-1, l_final.shape[1])
             l_final_cores.append(l_final)
             s_final_cores.append(s_final)
             m_final_cores.append(m_final)
@@ -174,6 +170,7 @@ class SdpaReduceToAll:
         scatter_dest_tensor_mesh=None,
         scatter_dest_grid=None,
         position_tensor_mesh=None,
+        final_reduction=True,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
@@ -388,7 +385,7 @@ class SdpaReduceToAll:
                     num_l_chunks,
                     cb_position,  # Position CB index
                     1 if position_enabled else 0,  # Enable/disable conditional reduction
-                    num_devices,  # Total number of devices (for position array indexing)
+                    final_reduction,
                 ]
 
                 forwarder_ct_args = [slots_per_round, slot_size, r2_buffer_offset]
@@ -653,40 +650,6 @@ class SdpaReduceToAll:
 
                     for worker_idx, core in enumerate(cores_for_link):
                         is_type_a = ((row + worker_idx) % 2) == 0
-
-                        # Add position device indices to reader runtime args
-                        if position_enabled:
-                            if is_type_a:
-                                r1_neighbor_device_idx = fwd_device_idx
-                                r2_neighbor_device_idx = bwd_device_idx
-                            else:
-                                r1_neighbor_device_idx = bwd_device_idx
-                                r2_neighbor_device_idx = fwd_device_idx
-
-                            # Compute R2 neighbor's R1 neighbor based on R2 neighbor's type
-                            # R2 neighbor's worker_idx at the same core position
-                            r2_neighbor_worker_idx = worker_idx  # Same relative position in the link
-                            r2_neighbor_row = r2_neighbor_device_idx // mesh_cols
-                            r2_neighbor_is_type_a = ((r2_neighbor_row + r2_neighbor_worker_idx) % 2) == 0
-
-                            # R2 neighbor's R1 direction
-                            if r2_neighbor_is_type_a:
-                                # R2 neighbor is Type A → its R1 is forward
-                                r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx + 1) % num_devices
-                            else:
-                                # R2 neighbor is Type B → its R1 is backward
-                                r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx - 1 + num_devices) % num_devices
-
-                            # Append device indices to reader args
-                            reader_rt_args[core.x][core.y].extend(
-                                [
-                                    device_idx,
-                                    r1_neighbor_device_idx,
-                                    r2_neighbor_device_idx,
-                                    r2_neighbor_r1_neighbor_idx,
-                                ]
-                            )
-
                         r1_cfg = fwd_cfg if is_type_a else bwd_cfg
                         r2_cfg = bwd_cfg if is_type_a else fwd_cfg
 
@@ -754,6 +717,14 @@ class SdpaReduceToAll:
                                 r2_neighbor_device_idx,
                                 r2_neighbor_r1_neighbor_idx,
                             ]
+
+                            reader_rt_args[core.x][core.y].extend(
+                                [
+                                    device_idx,
+                                    r2_neighbor_device_idx,
+                                    r2_neighbor_r1_neighbor_idx,
+                                ]
+                            )
                         # If position is disabled, no runtime args needed (compute kernel uses defaults)
 
                         # Append scatter runtime args (only when scatter is enabled)
