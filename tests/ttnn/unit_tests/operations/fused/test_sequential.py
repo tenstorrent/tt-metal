@@ -1782,6 +1782,168 @@ class TestMatmulDescriptor:
         print(f"Matmul large core range (8 cores) PCC: {pcc}")
         assert passing, f"PCC check failed: {pcc}"
 
+    def test_matmul_2d_grid_offset(self, device):
+        """Test matmul on a 2D grid offset from origin: (2,1)-(4,2) = 3x2 = 6 cores."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+
+        # A [1,1,192,64] @ B [1,1,64,128] -> C [1,1,192,128]
+        # M=6, N=4, K=2 tile blocks
+        torch_a = torch.randn(1, 1, 192, 64, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # 3x2 grid at offset (2,1)
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(4, 2))})
+
+        # 6 output blocks = M/per_core_M = 6/1 = 6, one per core
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(3, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+        )
+
+        desc = matmul_desc(tt_a, tt_b, core_range_set=cores, program_config=program_config)
+
+        # Verify kernel core ranges are within the requested range
+        for kernel in desc.descriptor.kernels:
+            for cr in kernel.core_ranges.ranges():
+                assert cr.start.x >= 2 and cr.start.y >= 1, f"Core range starts before requested: {cr}"
+                assert cr.end.x <= 4 and cr.end.y <= 2, f"Core range extends beyond requested: {cr}"
+
+        outputs = composite.launch([desc])
+        torch_output = ttnn.to_torch(outputs[0][0])
+        torch_golden = torch_a @ torch_b
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul 2D grid offset (3x2 at (2,1)) PCC: {pcc}")
+        assert passing, f"PCC check failed: {pcc}"
+
+    def test_matmul_column_offset_grid(self, device):
+        """Test matmul on a column-oriented grid offset from origin: (5,0)-(5,3) = 1x4 = 4 cores."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+
+        # A [1,1,128,64] @ B [1,1,64,128] -> C [1,1,128,128]
+        # M=4, N=4, K=2 tile blocks
+        torch_a = torch.randn(1, 1, 128, 64, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # 1x4 column at x=5
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 3))})
+
+        # 4 output blocks = M/per_core_M = 4/1 = 4, one per core
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 4),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+        )
+
+        desc = matmul_desc(tt_a, tt_b, core_range_set=cores, program_config=program_config)
+
+        # Verify kernel core ranges are within the requested range
+        for kernel in desc.descriptor.kernels:
+            for cr in kernel.core_ranges.ranges():
+                assert cr.start.x == 5 and cr.end.x == 5, f"Core range not on column 5: {cr}"
+                assert cr.start.y >= 0 and cr.end.y <= 3, f"Core range extends beyond rows 0-3: {cr}"
+
+        outputs = composite.launch([desc])
+        torch_output = ttnn.to_torch(outputs[0][0])
+        torch_golden = torch_a @ torch_b
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul column offset (1x4 at x=5) PCC: {pcc}")
+        assert passing, f"PCC check failed: {pcc}"
+
+    def test_matmul_2d_offset_composite_with_fused_chain(self, device, test_tensors):
+        """Multi-core 2D offset matmul + fused LN->RMS chain in parallel via composite."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on 3x2 grid at (2,1)-(4,2) = 6 cores
+        torch_a = torch.randn(1, 1, 192, 64, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(4, 2))})
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(3, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        mm = matmul_desc(tt_a, tt_b, core_range_set=mm_cores, program_config=program_config)
+
+        # Fused LN->RMS on (0,0)-(1,0) = 2 cores (non-overlapping with matmul)
+        chain_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        ln = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused = chain_descriptors([ln, rms], device)
+
+        outputs = composite.launch([mm, fused])
+        assert len(outputs) == 2
+
+        # Verify matmul
+        golden_mm = torch_a @ torch_b
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        # Verify chain
+        golden_chain = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_chain, pcc_chain = comp_pcc(golden_chain, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_chain, f"Chain PCC: {pcc_chain}"
+
+        print(f"2D matmul (6c) + fused chain (2c): mm={pcc_mm:.6f}, chain={pcc_chain:.6f}")
+
 
 # =============================================================================
 # Stress Tests
@@ -2785,6 +2947,261 @@ class TestStressInfrastructure:
             passing, pcc = comp_pcc(golden, out, pcc=0.98)
             assert passing, f"Multi-core chain {i} PCC: {pcc}"
             print(f"Multi-core chain {i} PCC: {pcc:.6f}")
+
+    def test_multicore_2d_matmul_plus_fused_chain(self, device, test_tensors):
+        """Multi-core 2D offset matmul (6 cores) + fused LN->RMS chain (2 cores) in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on 3x2 grid at (2,1)-(4,2) = 6 cores
+        torch_a = torch.randn(1, 1, 192, 64, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(4, 2))})
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(3, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        mm = matmul_desc(tt_a, tt_b, core_range_set=mm_cores, program_config=program_config)
+
+        # Fused LN->RMS on (0,0)-(1,0) = 2 cores (non-overlapping with matmul)
+        chain_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        ln = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused = chain_descriptors([ln, rms], device)
+
+        outputs = composite.launch([mm, fused])
+        assert len(outputs) == 2
+
+        golden_mm = torch_a @ torch_b
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        golden_chain = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_chain, pcc_chain = comp_pcc(golden_chain, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_chain, f"Chain PCC: {pcc_chain}"
+
+        print(f"2D matmul (6c) + fused chain (2c): mm={pcc_mm:.6f}, chain={pcc_chain:.6f}")
+
+    def test_multicore_2d_matmul_plus_multiple_chains(self, device, test_tensors):
+        """Multi-core 2D offset matmul (6 cores) + 2 fused chains (2c each) + 1 single LN in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on 2x3 grid at (3,2)-(4,4) = 6 cores
+        torch_a = torch.randn(1, 1, 192, 64, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 4))})
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 3),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        mm = matmul_desc(tt_a, tt_b, core_range_set=mm_cores, program_config=program_config)
+
+        # Chain A on (0,0)-(1,0) = 2 cores: LN->RMS
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        ln_a = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms_a = rms_norm.rms_norm(
+            ln_a.output_tensors[0],
+            core_range_set=cores_a,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused_a = chain_descriptors([ln_a, rms_a], device)
+
+        # Chain B on (0,1)-(1,1) = 2 cores: RMS->LN
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))})
+        torch_input_b = torch.randn_like(test_tensors["torch_input"])
+        tt_input_b = ttnn.from_torch(
+            torch_input_b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        rms_b = rms_norm.rms_norm(
+            tt_input_b,
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln_b = layer_norm.layer_norm(
+            rms_b.output_tensors[0],
+            core_range_set=cores_b,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+        fused_b = chain_descriptors([rms_b, ln_b], device)
+
+        # Single LN on (2,0)
+        cores_c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
+        torch_input_c = torch.randn_like(test_tensors["torch_input"])
+        tt_input_c = ttnn.from_torch(
+            torch_input_c,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ln_c = layer_norm.layer_norm(
+            tt_input_c,
+            core_range_set=cores_c,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+
+        # Launch all 4 in parallel: matmul(6c) + chain A(2c) + chain B(2c) + LN(1c) = 11 cores
+        outputs = composite.launch([mm, fused_a, fused_b, ln_c])
+        assert len(outputs) == 4
+
+        golden_mm = torch_a @ torch_b
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        golden_a = torch_rms_norm(
+            torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_a, f"Chain A PCC: {pcc_a}"
+
+        golden_b = torch_layer_norm(
+            torch_rms_norm(torch_input_b, test_tensors["torch_weight1"]), test_tensors["torch_weight2"]
+        )
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[2][0]), pcc=0.98)
+        assert passing_b, f"Chain B PCC: {pcc_b}"
+
+        golden_c = torch_layer_norm(torch_input_c, test_tensors["torch_weight3"], test_tensors["torch_bias1"])
+        passing_c, pcc_c = comp_pcc(golden_c, ttnn.to_torch(outputs[3][0]), pcc=0.99)
+        assert passing_c, f"Single LN PCC: {pcc_c}"
+
+        print(
+            f"2D mm(6c) + chainA(2c) + chainB(2c) + LN(1c): "
+            f"mm={pcc_mm:.6f}, a={pcc_a:.6f}, b={pcc_b:.6f}, c={pcc_c:.6f}"
+        )
+
+    def test_large_2d_matmul_plus_multicore_three_phase_chain(self, device, test_tensors):
+        """Large 2D matmul (8 cores) + multi-core 3-phase fused chain (4 cores) in parallel."""
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        # Matmul on 4x2 grid at (4,0)-(7,1) = 8 cores
+        torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 1))})
+        # M=8, N=8, K=8; 8 output blocks -> 1 per core
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=8,
+        )
+        mm = matmul_desc(tt_a, tt_b, core_range_set=mm_cores, program_config=program_config)
+
+        # 3-phase LN->RMS->LN chain on (0,0)-(3,0) = 4 cores
+        chain_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms1.output_tensors[0],
+            core_range_set=chain_cores,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+        fused = chain_descriptors([ln1, rms1, ln2], device)
+
+        outputs = composite.launch([mm, fused])
+        assert len(outputs) == 2
+
+        golden_mm = torch_a @ torch_b
+        passing_mm, pcc_mm = comp_pcc(golden_mm, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing_mm, f"Matmul PCC: {pcc_mm}"
+
+        temp = torch_layer_norm(test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"])
+        temp = torch_rms_norm(temp, test_tensors["torch_weight2"])
+        golden_chain = torch_layer_norm(temp, test_tensors["torch_weight3"], test_tensors["torch_bias2"])
+        passing_chain, pcc_chain = comp_pcc(golden_chain, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_chain, f"Chain PCC: {pcc_chain}"
+
+        print(f"Large 2D matmul (8c) + 3-phase chain (4c): mm={pcc_mm:.6f}, chain={pcc_chain:.6f}")
 
 
 # =============================================================================
