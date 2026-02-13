@@ -24,7 +24,7 @@ struct DevicePrintHeader {
             uint8_t is_kernel : 1;          // 0 = firmware, 1 = kernel
             uint8_t risc_id : 5;            // 0-31 risc id (supporting quasar)
             uint16_t message_payload : 10;  // Message payload size (<1024 bytes)
-            uint16_t info_id : 16;          // Index into .dprint_strings_info (max 65536 entries)
+            uint16_t info_id : 16;          // Index into .device_print_strings_info (max 65536 entries)
         } __attribute__((packed));
         uint32_t value;
     };
