@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -119,23 +119,11 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
         )doc";
 
-    using OperationType = decltype(ttnn::sampling);
-    bind_registered_operation(
+    ttnn::bind_function<"sampling">(
         mod,
-        ttnn::sampling,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_values_tensor,
-               const Tensor& input_indices_tensor,
-               const Tensor& k,
-               const Tensor& p,
-               const Tensor& temp,
-               const std::optional<uint32_t>& seed,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::sampling,
             nb::arg("input_values_tensor").noconvert(),
             nb::arg("input_indices_tensor").noconvert(),
             nb::arg("k").noconvert(),
@@ -144,7 +132,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("seed") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail
