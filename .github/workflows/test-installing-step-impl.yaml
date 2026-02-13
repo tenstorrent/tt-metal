@@ -120,6 +120,27 @@ jobs:
             --reboot-option=never \
             --mode-non-interactive
 
+      - name: Download Llama 70B weights from LFC
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
+          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
+          mkdir -p huggingface/tt_cache
+          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/"
+
+      - name: Patch tt-metalium-models to mount workspace volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          SCRIPT=$(which tt-metalium-models)
+          if ! grep -q '$(pwd):/mnt/MLPerf' "$SCRIPT" 2>/dev/null; then
+            sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
+          fi
+
       - name: Run T3K Llama 70B Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 90
