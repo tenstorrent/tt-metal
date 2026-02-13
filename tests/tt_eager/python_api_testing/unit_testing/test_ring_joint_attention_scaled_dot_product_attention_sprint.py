@@ -9,7 +9,7 @@ This test suite evaluates Ring Joint Attention Scaled Dot Product Attention (SDP
 and accuracy across different multi-chip architectures. Ring Joint Attention extends standard
 ring attention by supporting both:
 1. Distributed sequences (Q, K, V) - sharded across devices in a ring
-2. Joint sequences (joint_Q, joint_K, joint_V) - replicated on all devices
+2. Joint sequences (joint_Q, joint_K, joint_V) - dummy/empty tensors (wan2.2 compatible)
 
 === FLEXIBLE MULTI-CHIP ARCHITECTURE SUPPORT ===
 The test dynamically adapts to available hardware while maintaining consistent per-device workloads:
@@ -19,7 +19,7 @@ The test dynamically adapts to available hardware while maintaining consistent p
 - Heads per device: 10 heads
 
 **Architecture Configurations:**
-1. **Galaxy (32 devices)**: 8x4 mesh = 4 rings of 8 devices each
+1. **Galaxy (32 devices)**: 4x8 mesh = 4 rings of 8 devices each (wan2.2 compatible)
    - SP=8 (sequence parallel), TP=4 (tensor parallel)
    - Total heads: 40 (10 heads × 4 TP devices - shared across TP)
    - Total sequence: 75,776 or 18,944 tokens (per-device × 8)
@@ -76,11 +76,11 @@ def is_watcher_enabled():
 
 def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, num_devices):
     """
-    PyTorch reference implementation for ring joint attention.
+    PyTorch reference implementation for ring joint attention with dummy joint tensors.
 
-    Simulates the ring joint attention computation:
+    Simulates the ring joint attention computation (wan2.2 compatible):
     1. Each device processes local Q attending to all K/V (via ring rotation)
-    2. Joint Q attends to both distributed K/V and joint K/V
+    2. Joint tensors are dummy/empty (seq_len=0) like wan2.2
     """
     scale = k.size(-1) ** -0.5
     full_seq_len = k.size(2)  # This is now seq_len * ring_size
@@ -125,10 +125,10 @@ def calculate_mesh_config(num_devices):
         tp_size: Tensor parallel size (number of rings)
         arch_type: Architecture type string
     """
-    if num_devices == 32:  # Galaxy case: 8x4 mesh = 4 rings of 8 devices each
+    if num_devices == 32:  # Galaxy case: 4x8 mesh = 4 rings of 8 devices each
         sp_size = 8  # devices per ring
         tp_size = 4  # number of rings (TP dimension)
-        arch_type = "galaxy_8x4"
+        arch_type = "galaxy_4x8"  # wan2.2 compatible
     elif num_devices >= 2:  # Single ring case
         sp_size = num_devices  # all devices in one ring
         tp_size = 1  # single ring
@@ -168,7 +168,7 @@ def generate_input_shapes():
 
         shape = [1, total_heads, total_seq_len, 128]
         shapes.append(shape)
-        shape_ids.append(f"{arch_type}_{seq_len_per_device}x{sp_size}_h{total_heads}")
+        shape_ids.append(f"wan2_2_compat_{seq_len_per_device}x{sp_size}_h{total_heads}")
 
     return shapes, shape_ids
 
@@ -244,9 +244,9 @@ def run_ring_joint_sdpa(
 
     # Mesh axis configuration based on architecture
     if arch_type.startswith("galaxy"):
-        # Galaxy: 8x4 mesh (SP=8, TP=4)
-        sp_axis = 0  # Row axis for sequence parallel (ring axis)
-        tp_axis = 1  # Column axis for tensor parallel (head axis)
+        # Galaxy: 4x8 mesh (SP=8, TP=4) - wan2.2 compatible
+        sp_axis = 1  # Column axis for sequence parallel (ring axis)
+        tp_axis = 0  # Row axis for tensor parallel (head axis)
     else:
         # Single ring: maintain original working configuration for compatibility
         # Original working pattern: rp_axis = 1, up_axis = 0 for 1xN mesh
@@ -255,9 +255,11 @@ def run_ring_joint_sdpa(
 
     # Each SP device processes sq // sp_size local tokens + joint tokens
     local_seq_len = sq // sp_size  # Sequence length per SP device
-    joint_seq_len = local_seq_len  # Use non-zero joint sequence
+    joint_seq_len = 0  # Use empty joint sequence like wan2.2 (dummy joint tensors)
 
-    logger.info(f"Total sequence: {sq}, Local per SP device: {local_seq_len}, Joint: {joint_seq_len}")
+    logger.info(
+        f"Total sequence: {sq}, Local per SP device: {local_seq_len}, Joint: {joint_seq_len} (dummy like wan2.2)"
+    )
     if tp_size > 1:
         logger.info(f"Total heads: {nh} (shared across {tp_size} TP devices), SP devices: {sp_size}")
         logger.info(f"Configuration: {tp_size} rings of {sp_size} devices each")
@@ -276,12 +278,26 @@ def run_ring_joint_sdpa(
         else:
             # Multi-device mesh case
             if arch_type.startswith("galaxy"):
-                mesh_shape = ttnn.MeshShape(sp_size, tp_size)  # 8x4 mesh for Galaxy
+                mesh_shape = ttnn.MeshShape(tp_size, sp_size)  # 4x8 mesh for Galaxy (wan2.2 compatible)
             elif arch_type.startswith("single_ring"):
                 mesh_shape = ttnn.MeshShape(1, sp_size)  # 1xN mesh for single ring
 
             mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
             logger.info(f"Mesh device opened with shape {mesh_shape}")
+
+            # Auto-detect num_links based on hardware and column allocation capacity
+            full_compute_grid = mesh_device.compute_with_storage_grid_size()
+            max_possible_links = full_compute_grid.y // 2  # Each link uses 2 cores, using full column height
+
+            if arch_type.startswith("galaxy") and num_devices == 32:
+                # Galaxy (32 devices): can use more links with column allocation
+                num_links = min(4, max_possible_links)  # Use up to 4 links or column height limit
+            else:
+                # QuietBox and smaller systems: use up to 2 links with column allocation
+                num_links = min(2, max_possible_links)  # Can use 2 links now with column allocation
+
+            logger.info(f"CCL links: {num_links} (max possible: {max_possible_links} based on column height)")
+
     except Exception as e:
         logger.warning(f"Mesh device opening failed: {e}, falling back to single device")
         mesh_device = ttnn.open_device(device_id=0)
@@ -289,6 +305,7 @@ def run_ring_joint_sdpa(
         tp_size = 1
         ring_size = 1
         arch_type = "single_device_fallback"
+        num_links = 1  # Single device fallback
 
     try:
         # Validate constraints for ring joint attention
@@ -311,10 +328,24 @@ def run_ring_joint_sdpa(
         # On Blackhole, dispatch cores use columns, so we need to avoid the actual dispatch column
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
 
-        # Use column (full_compute_grid.x - 2) for CCL to avoid dispatch cores in the last column
-        ccl_column = full_compute_grid.x - 2  # Use second-to-last column instead of last column
+        # Use the last column for CCL (more efficient: SDPA gets more cores, CCL gets full column)
+        ccl_column = full_compute_grid.x - 1  # Use last column for CCL operations
         sdpa_compute_grid = (ccl_column, full_compute_grid.y)  # SDPA gets columns 0 to (ccl_column-1)
-        print("SDPA compute grid:", sdpa_compute_grid)
+
+        print("=" * 60)
+        print("IMPROVED CORE ALLOCATION DEBUG:")
+        print(f"Full compute grid: {full_compute_grid} (cols x rows)")
+        print(f"CCL column: {ccl_column} (LAST column reserved for CCL operations)")
+        print(f"SDPA compute grid: {sdpa_compute_grid} (columns 0 to {ccl_column-1} for attention)")
+        print(f"CCL core grid offset: ({ccl_column}, 0)")
+        print()
+        print("IMPROVED CORE ALLOCATION BREAKDOWN:")
+        print(f"  SDPA cores: Columns 0-{ccl_column-1}, Rows 0-{full_compute_grid.y-1}")
+        print(f"  Total SDPA cores: {ccl_column} × {full_compute_grid.y} = {ccl_column * full_compute_grid.y}")
+        print(f"  CCL cores: ENTIRE Column {ccl_column} (up to {full_compute_grid.y} cores available)")
+        print(f"  Max num_links possible: {full_compute_grid.y // 2} (since each link uses 2 cores)")
+        print("=" * 60)
+
         ccl_core_grid_offset = ttnn.CoreCoord(ccl_column, 0)  # Point to CCL column
 
         # Create sub-device for CCL operations - Must include ALL cores that operations will use
@@ -354,10 +385,10 @@ def run_ring_joint_sdpa(
         else:
             Q, K, V = Q_base, K_base, V_base
 
-        # Joint tensors
-        joint_Q = fa_rand(b, nh, joint_seq_len, d)
-        joint_K = fa_rand(b, nh, joint_seq_len, d)
-        joint_V = fa_rand(b, nh, joint_seq_len, d)
+        # Joint tensors - Use dummy tensors like wan2.2 (empty sequence, zero-filled)
+        joint_Q = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)  # Empty joint tensor like wan2.2
+        joint_K = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)  # Empty joint tensor like wan2.2
+        joint_V = torch.zeros((b, nh, joint_seq_len, d), dtype=torch.bfloat16)  # Empty joint tensor like wan2.2
 
         # Create persistent output buffers
         kv_shard_dims = [None, None]
@@ -433,8 +464,9 @@ def run_ring_joint_sdpa(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
+        # Create TT joint tensors - These are dummy/empty tensors (seq_len=0) like wan2.2
         tt_joint_Q = ttnn.from_torch(
-            joint_Q,
+            joint_Q,  # Empty tensor with seq_len=0, zero-filled like wan2.2
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -481,7 +513,7 @@ def run_ring_joint_sdpa(
             compute_kernel_config=compute_kernel_config,
             dim=2,  # Ring dimension (sequence dimension)
             multi_device_global_semaphore=ccl_semaphore_handles,
-            num_links=1,  # Dual link topology
+            num_links=num_links,  # Auto-detected link count (wan2.2 compatible)
             cluster_axis=sp_axis,  # Ring axis (SP axis for multi-device configurations)
             mesh_device=mesh_device,
             topology=Topology.Linear,
@@ -489,6 +521,20 @@ def run_ring_joint_sdpa(
             ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
         )
         logger.info("Ring joint attention completed successfully!")
+
+        print("=" * 60)
+        print("IMPROVED FINAL CORE ALLOCATION SUMMARY:")
+        print(f"✓ SDPA cores used: Columns 0-{ccl_column-1}, All rows → {ccl_column * full_compute_grid.y} cores")
+        print(f"✓ CCL cores used: {num_links * 2} cores in COLUMN {ccl_column} (column-major allocation)")
+        print(f"✓ CCL allocation pattern: Column {ccl_column}, rows 0-{(num_links * 2 - 1) % full_compute_grid.y}")
+        print(
+            f"✓ Total cores used: {ccl_column * full_compute_grid.y + num_links * 2} / {full_compute_grid.x * full_compute_grid.y}"
+        )
+        print(
+            f"✓ IMPROVEMENT: SDPA now gets {ccl_column * full_compute_grid.y} cores (vs {(ccl_column-1) * full_compute_grid.y} before)"
+        )
+        print(f"✓ IMPROVEMENT: Max possible num_links = {full_compute_grid.y // 2} (limited by column height)")
+        print("=" * 60)
 
         # Convert outputs to torch tensors with appropriate mesh composer
         if arch_type.startswith("galaxy"):
@@ -552,17 +598,25 @@ def run_ring_joint_sdpa(
         rmse_main = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
         logger.info(f"Main output - PCC: {out_pcc_main}, RMSE: {rmse_main:.6f}")
 
-        # Verify accuracy for joint output
-        out_pass_joint, out_pcc_joint = comp_pcc(gt_joint, tt_joint_out_torch, pcc_threshold)
-        rmse_joint = torch.sqrt(((gt_joint - tt_joint_out_torch) ** 2).mean()).item()
-        logger.info(f"Joint output - PCC: {out_pcc_joint}, RMSE: {rmse_joint:.6f}")
+        # Verify accuracy for joint output (only if joint_seq_len > 0)
+        if joint_seq_len > 0:
+            out_pass_joint, out_pcc_joint = comp_pcc(gt_joint, tt_joint_out_torch, pcc_threshold)
+            rmse_joint = torch.sqrt(((gt_joint - tt_joint_out_torch) ** 2).mean()).item()
+            logger.info(f"Joint output - PCC: {out_pcc_joint}, RMSE: {rmse_joint:.6f}")
+        else:
+            # Joint tensors are empty (wan2.2 compatible) - skip joint accuracy check
+            logger.info("Joint output - Dummy tensors (seq_len=0), skipping accuracy check (wan2.2 compatible)")
+            out_pass_joint = True  # Pass by default for empty joint tensors
+            rmse_joint = 0.0
 
         if rmse_threshold is not None:
             assert rmse_main < rmse_threshold, f"Main RMSE {rmse_main:.6f} exceeds threshold {rmse_threshold}"
-            assert rmse_joint < rmse_threshold, f"Joint RMSE {rmse_joint:.6f} exceeds threshold {rmse_threshold}"
+            if joint_seq_len > 0:
+                assert rmse_joint < rmse_threshold, f"Joint RMSE {rmse_joint:.6f} exceeds threshold {rmse_threshold}"
 
         assert out_pass_main, f"Main PCC {out_pcc_main} below threshold {pcc_threshold}"
-        assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
+        if joint_seq_len > 0:
+            assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
 
     finally:
         # Clean up device based on what was opened
@@ -613,7 +667,7 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, s, d, q_chunk_size, k_
 
     FEATURES:
     - Auto-detects available devices and creates mesh
-    - Uses joint attention with small joint sequences
+    - Uses dummy joint tensors (empty sequences) like wan2.2
     - Works with any topology (Galaxy, etc.)
     - Skips test if fewer than 2 devices available
 
@@ -690,10 +744,10 @@ def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chun
     - Validate reproducibility for debugging and testing
 
     DETERMINISM IN RING JOINT ATTENTION:
-    Joint attention determinism is more challenging due to:
+    Ring attention determinism with dummy joint tensors (wan2.2 style) involves:
     1. Multi-device mesh coordination
     2. CCL operations with persistent buffers
-    3. Joint token computation overlapping with main attention
+    3. Empty joint tensor handling (no actual joint computation)
 
     This test runs multiple iterations and verifies output consistency.
     """

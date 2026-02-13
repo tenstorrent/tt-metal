@@ -335,13 +335,31 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
     auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+
+    // DEBUG: Print hardware grid information
+    auto compute_grid = device->compute_with_storage_grid_size();
+    std::cout << "=== CCL CHOOSE_WORKER_CORES DEBUG ===" << std::endl;
+    std::cout << "num_links: " << num_links << std::endl;
+    std::cout << "num_workers_per_link: " << num_workers_per_link << std::endl;
+    std::cout << "num_workers_preferred: " << num_workers_preferred << std::endl;
+    std::cout << "allocation_strategy: "
+              << (strategy == CoreAllocationStrategy::COLUMN_MAJOR ? "COLUMN_MAJOR" : "ROW_MAJOR") << std::endl;
+    std::cout << "compute_grid_size: (" << compute_grid.x << ", " << compute_grid.y << ")" << std::endl;
+    std::cout << "available_cores.num_cores(): " << available_cores.num_cores() << std::endl;
+    std::cout << "available_cores ranges:" << std::endl;
+    for (const auto& cr : available_cores.ranges()) {
+        std::cout << "  Range: (" << cr.start_coord.x << ", " << cr.start_coord.y << ") to (" << cr.end_coord.x << ", "
+                  << cr.end_coord.y << ")" << std::endl;
+    }
+    std::cout << "=====================================" << std::endl;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -359,24 +377,57 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     for (const auto& cr : available_cores.ranges()) {
         auto start = cr.start_coord;
         auto end = cr.end_coord;
-        for (size_t y = start.y; y <= end.y; y++) {
+
+        if (strategy == CoreAllocationStrategy::COLUMN_MAJOR) {
+            // Column-major allocation: fill columns first (outer loop x, inner loop y)
             for (size_t x = start.x; x <= end.x; x++) {
-                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                for (size_t y = start.y; y <= end.y; y++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
             }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
+        } else {
+            // Row-major allocation: fill rows first (outer loop y, inner loop x) - original behavior
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
             }
         }
+
         if (sender_worker_core_range.num_cores() == num_workers_preferred) {
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // DEBUG: Print final allocated cores
+    auto allocated_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
+    std::cout << "=== FINAL ALLOCATED CORES ===" << std::endl;
+    std::cout << "sender_worker_core_range.num_cores(): " << sender_worker_core_range.num_cores() << std::endl;
+    std::cout << "allocated_cores.size(): " << allocated_cores.size() << std::endl;
+    std::cout << "Final allocated cores:" << std::endl;
+    for (size_t i = 0; i < allocated_cores.size(); i++) {
+        const auto& core = allocated_cores[i];
+        std::cout << "  Final Core[" << i << "]: (" << core.x << ", " << core.y << ")" << std::endl;
+    }
+    std::cout << "=============================" << std::endl;
+
+    return {sender_worker_core_range, allocated_cores};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(

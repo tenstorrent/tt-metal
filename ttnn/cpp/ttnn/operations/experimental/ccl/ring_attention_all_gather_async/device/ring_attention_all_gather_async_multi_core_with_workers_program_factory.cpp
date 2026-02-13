@@ -194,8 +194,29 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)
     uint32_t num_senders_per_link = 2;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
+    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        num_links,
+        num_senders_per_link,
+        mesh_device,
+        sub_device_id,
+        core_grid_offset,
+        std::nullopt,
+        ttnn::ccl::CoreAllocationStrategy::COLUMN_MAJOR);
+
+    // DEBUG: Print core allocation information
+    uint32_t total_cores_used = num_links * num_senders_per_link;
+    std::cout << "=== RING JOINT SDPA CCL CORE ALLOCATION DEBUG ===" << std::endl;
+    std::cout << "num_links: " << num_links << std::endl;
+    std::cout << "num_senders_per_link: " << num_senders_per_link << std::endl;
+    std::cout << "total_cores_used: " << total_cores_used << std::endl;
+    std::cout << "sender_worker_cores.size(): " << sender_worker_cores.size() << std::endl;
+    std::cout << "Allocated cores:" << std::endl;
+    for (size_t i = 0; i < sender_worker_cores.size(); i++) {
+        const auto& core = sender_worker_cores[i];
+        std::cout << "  Core[" << i << "]: (" << core.x << ", " << core.y << ") - "
+                  << (i % 2 == 1 ? "forward" : "backward") << std::endl;
+    }
+    std::cout << "=================================================" << std::endl;
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
