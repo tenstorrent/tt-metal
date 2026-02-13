@@ -288,15 +288,10 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Pick an encoder grid that keeps the shard height tile-aligned for the
-        # padded sequence length.
-        base = vit_block_config(config)
-        grid_x, max_grid_y = (int(base.grid[0]), int(base.grid[1]))
-        patch_count = int(config.image_size) // int(config.patch_size)
-        seq_len = patch_count * patch_count + 1
-        seq_len_padded = math.ceil(seq_len / 64) * 64
-        grid_y = _choose_tile_aligned_grid_y(seq_len_padded=seq_len_padded, max_grid_y=max_grid_y, tile=32)
-        grid = (int(grid_x), int(grid_y))
+        # DPT perf runs use per-chip microbatch=1 (dp=2/batch=2 -> each chip sees B=1).
+        # The reference sharded ViT encoder expects batch-size == grid_y for QKV head creation,
+        # so keep grid_y=1 and shard only across width (grid_x).
+        grid = (8, 1)
         math_fidelity = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
