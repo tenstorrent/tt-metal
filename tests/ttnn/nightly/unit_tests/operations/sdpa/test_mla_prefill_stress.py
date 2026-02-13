@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_prefill import (
+from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     run_flash_mla_prefill_impl,
 )
 
