@@ -187,6 +187,13 @@ def test_full_nd_sharded(
         ),
         (
             ttnn.TILE_LAYOUT,
+            [2, 2, 256, 512],
+            [32, 32],
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        (
+            ttnn.TILE_LAYOUT,
             [64, 64, 64],
             [16, 16, 16],
             ttnn.BufferType.DRAM,
