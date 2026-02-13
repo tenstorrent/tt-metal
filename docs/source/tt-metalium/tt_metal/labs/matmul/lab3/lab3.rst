@@ -1166,6 +1166,7 @@ The meaning of the fields is as follows:
   for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e., there
   is a kernel running on it), while lowercase letters mean it is disabled (i.e., there is no kernel running on it).
   For example, ``BNT`` means that BRISC, NCRISC, and TRISCs are all enabled, whereas ``Bnt`` means that only BRISC is enabled.
+* The ``h_id`` field shows the internal program ID assigned by the host that is used for profiling.
 * The ``smsg`` field shows the run state of the subordinate processors, using the same ``I/G/D`` codes mentioned above.
 * The ``k_ids`` field shows the ID of the kernel (by ID) loaded on each of the five processors on this core.
   The five values correspond to BRISC, NCRISC, TRISC0, TRISC1, and TRISC2, respectively.
