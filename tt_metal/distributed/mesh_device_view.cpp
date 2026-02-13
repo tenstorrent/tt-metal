@@ -92,6 +92,7 @@ MeshDeviceViewImpl::MeshDeviceViewImpl(
 
 std::vector<IDevice*> MeshDeviceViewImpl::get_devices(const MeshCoordinateRange& range) const {
     std::vector<IDevice*> devices_in_region;
+    devices_in_region.reserve(range.shape().mesh_size());
     for (const auto& coord : range) {
         devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
     }
@@ -257,6 +258,7 @@ std::vector<MeshCoordinate> MeshDeviceViewImpl::get_line_coordinates(
     // Lambda to get valid neighbors (not checking visited - that's done in DFS)
     auto get_neighbors = [&](const MeshCoordinate& coord) -> std::vector<MeshCoordinate> {
         std::vector<MeshCoordinate> neighbors;
+        neighbors.reserve(4);
         const size_t row = coord[0];
         const size_t col = coord[1];
 
