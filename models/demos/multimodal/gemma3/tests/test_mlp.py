@@ -13,6 +13,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
 
 
@@ -37,7 +38,7 @@ from models.tt_transformers.tt.mlp import MLP
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
+    mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
 
@@ -81,18 +82,12 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+            mesh_device,
+            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
-        memory_config=(
-            (
-                tt_model.model_config["MLP_ACT_MEMCFG"]
-                if model_args.is_galaxy
-                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-            )
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG
-        ),
+        memory_config=model_args.get_mlp_input_mem_config(mode),
         layout=ttnn.TILE_LAYOUT,
     )
 

@@ -7,6 +7,10 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
+###############################################################################
+# Infrastructure unit tests (quad galaxy only)
+###############################################################################
+
 run_quad_galaxy_unit_tests() {
   fail=0
 
@@ -39,11 +43,15 @@ run_quad_galaxy_unit_tests() {
   fi
 }
 
-# Common setup for dual galaxy tests on quad galaxy
+###############################################################################
+# Environment setup helpers
+###############################################################################
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
@@ -62,173 +70,286 @@ setup_dual_galaxy_env() {
     export MESH_DEVICE="DUAL"
 }
 
-# Run deepseek v3 module tests (models/demos/deepseek_v3/tests)
-run_quad_galaxy_deepseekv3_module_tests() {
-    fail=0
-    setup_dual_galaxy_env
+setup_quad_galaxy_env() {
+    export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+    export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    export RANKFILE=/etc/mpirun/rankfile
+    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export TCP_INTERFACE="cnx1"
+    mkdir -p logs
+    mkdir -p generated/artifacts
 
-    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
-    # DEEPSEEK_ and MESH_ env vars are passed through by tt-run
-    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "$MPI_ARGS" \
-        pytest -svvv models/demos/deepseek_v3/tests ; fail+=$?
-
-    if [[ $fail -ne 0 ]]; then
+    if ! test -f "$RANKFILE"; then
+        echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-}
-
-# Run teacher forced accuracy test and save metrics to artifacts
-run_quad_galaxy_teacher_forced_test() {
-    fail=0
-    setup_dual_galaxy_env
-
-    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
-    # DEEPSEEK_ and MESH_ env vars are passed through by tt-run
-    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "$MPI_ARGS" \
-        bash -c "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/teacher_forced_output.log" ; fail+=$?
-
-    # Extract accuracy metrics from logs and save to artifact file
-    if [[ -f generated/artifacts/teacher_forced_output.log ]]; then
-        echo "Extracting accuracy metrics from test output..."
-        grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/teacher_forced_output.log > generated/artifacts/teacher_forced_accuracy.txt || true
-        echo "Accuracy metrics saved to generated/artifacts/teacher_forced_accuracy.txt"
-    fi
-
-    if [[ $fail -ne 0 ]]; then
+    if ! test -f "$RANK_BINDING_YAML"; then
+        echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
-}
-
-# Run dual demo test (256 prompts, 1 batch) - full_demo variant
-run_quad_galaxy_dual_demo_test() {
-    fail=0
-    setup_dual_galaxy_env
-
-    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
-    # DEEPSEEK_ and MESH_ env vars are passed through by tt-run
-    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "$MPI_ARGS" \
-        bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
-}
-
-# Run stress dual demo test (56 prompts, 20 batches) - stress_demo variant
-run_quad_galaxy_dual_demo_stress_test() {
-    fail=0
-    setup_dual_galaxy_env
-
-    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
-    # DEEPSEEK_ and MESH_ env vars are passed through by tt-run
-    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "$MPI_ARGS" \
-        bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
-
-    if [[ $fail -ne 0 ]]; then
-        exit 1
-    fi
-}
-
-# Legacy function that runs all dual galaxy tests on quad galaxy
-run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
-    run_quad_galaxy_deepseekv3_module_tests
-    run_quad_galaxy_teacher_forced_test
-    run_quad_galaxy_dual_demo_test
-    run_quad_galaxy_dual_demo_stress_test
-}
-
-run_quad_galaxy_deepseekv3_unit_tests() {
-    fail=0
-
-    local RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
-    local MPI_ARGS_BASE="--map-by rankfile:file=/etc/mpirun/rankfile"
-    local MPI_ARGS="--host g05glx04,g05glx03,g05glx02,g05glx01 ${MPI_ARGS_BASE}"
-    local TCP_INTERFACE="cnx1"
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
     export DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     export MESH_DEVICE="QUAD"
+}
 
-    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
-    # DEEPSEEK_ and MESH_ env vars are passed through by tt-run
+# Helper: run a test command via tt-run using the current environment
+_run_deepseekv3_tt() {
     tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
-        pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+        "$1"
+}
+
+###############################################################################
+# DeepSeek V3 unit tests (models/demos/deepseek_v3/tests/unit)
+###############################################################################
+
+run_dual_deepseekv3_unit_tests() {
+    fail=0
+    setup_dual_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests/unit" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
     fi
 }
 
-run_quad_galaxy_tests() {
-  run_quad_galaxy_unit_tests
-  run_quad_galaxy_deepseekv3_unit_tests
-  run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
+run_quad_deepseekv3_unit_tests() {
+    fail=0
+    setup_quad_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests/unit" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
 }
 
+###############################################################################
+# DeepSeek V3 module tests (models/demos/deepseek_v3/tests)
+###############################################################################
+
+run_dual_deepseekv3_module_tests() {
+    fail=0
+    setup_dual_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_deepseekv3_module_tests() {
+    fail=0
+    setup_quad_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
+# Teacher forced accuracy tests
+###############################################################################
+
+run_dual_teacher_forced_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+
+    # Extract accuracy metrics from logs and save to artifact file
+    if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
+        echo "Extracting accuracy metrics from test output..."
+        grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/dual_teacher_forced_output.log > generated/artifacts/dual_teacher_forced_accuracy.txt || true
+        echo "Accuracy metrics saved to generated/artifacts/dual_teacher_forced_accuracy.txt"
+    fi
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_teacher_forced_test() {
+    fail=0
+    setup_quad_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+
+    # Extract accuracy metrics from logs and save to artifact file
+    if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
+        echo "Extracting accuracy metrics from test output..."
+        grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/quad_teacher_forced_output.log > generated/artifacts/quad_teacher_forced_accuracy.txt || true
+        echo "Accuracy metrics saved to generated/artifacts/quad_teacher_forced_accuracy.txt"
+    fi
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
+# Demo tests (full)
+###############################################################################
+
+run_dual_demo_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_demo_test() {
+    fail=0
+    setup_quad_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
+# Demo stress tests
+###############################################################################
+
+run_dual_demo_stress_test() {
+    fail=0
+    setup_dual_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_demo_stress_test() {
+    fail=0
+    setup_quad_galaxy_env
+
+    _run_deepseekv3_tt "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
+# Composite runners
+###############################################################################
+
+# All dual galaxy deepseek v3 integration tests
+run_dual_deepseekv3_integration_tests() {
+    run_dual_deepseekv3_module_tests
+    run_dual_teacher_forced_test
+    run_dual_demo_test
+    run_dual_demo_stress_test
+}
+
+# All quad galaxy deepseek v3 integration tests
+run_quad_deepseekv3_integration_tests() {
+    run_quad_deepseekv3_module_tests
+    run_quad_teacher_forced_test
+    run_quad_demo_test
+    run_quad_demo_stress_test
+}
+
+# Run everything
+run_quad_galaxy_tests() {
+    run_quad_galaxy_unit_tests
+    run_dual_deepseekv3_unit_tests
+    run_quad_deepseekv3_unit_tests
+    run_dual_deepseekv3_integration_tests
+    run_quad_deepseekv3_integration_tests
+}
+
+###############################################################################
+# Main dispatcher
+###############################################################################
+
 main() {
-  # For CI pipeline - source func commands but don't execute tests if not invoked directly
-  if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    echo "Script is being sourced, not executing main function"
-    return 0
-  fi
+    # For CI pipeline - source func commands but don't execute tests if not invoked directly
+    if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+        echo "Script is being sourced, not executing main function"
+        return 0
+    fi
 
-  if [[ -z "$TT_METAL_HOME" ]]; then
-    echo "Must provide TT_METAL_HOME in environment" 1>&2
-    exit 1
-  fi
+    if [[ -z "$TT_METAL_HOME" ]]; then
+        echo "Must provide TT_METAL_HOME in environment" 1>&2
+        exit 1
+    fi
 
-  if [[ -z "$ARCH_NAME" ]]; then
-    echo "Must provide ARCH_NAME in environment" 1>&2
-    exit 1
-  fi
+    if [[ -z "$ARCH_NAME" ]]; then
+        echo "Must provide ARCH_NAME in environment" 1>&2
+        exit 1
+    fi
 
-  # Run tests
-  cd $TT_METAL_HOME
-  export PYTHONPATH=$TT_METAL_HOME
+    # Run tests
+    cd $TT_METAL_HOME
+    export PYTHONPATH=$TT_METAL_HOME
 
-  # Support running specific test function via argument
-  local test_function="${1:-all}"
+    # Support running specific test function via argument
+    local test_function="${1:-all}"
 
-  case "$test_function" in
-    "unit_tests")
-      run_quad_galaxy_unit_tests
-      ;;
-    "deepseekv3_unit_tests")
-      run_quad_galaxy_deepseekv3_unit_tests
-      ;;
-    "deepseekv3_module_tests")
-      run_quad_galaxy_deepseekv3_module_tests
-      ;;
-    "teacher_forced")
-      run_quad_galaxy_teacher_forced_test
-      ;;
-    "dual_demo")
-      run_quad_galaxy_dual_demo_test
-      ;;
-    "dual_demo_stress")
-      run_quad_galaxy_dual_demo_stress_test
-      ;;
-    "deepseekv3_integration_tests")
-      run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
-      ;;
-    "all")
-      run_quad_galaxy_tests
-      ;;
-    *)
-      echo "Unknown test function: $test_function" 1>&2
-      echo "Available options: unit_tests, deepseekv3_unit_tests, deepseekv3_module_tests, teacher_forced, dual_demo, dual_demo_stress, deepseekv3_integration_tests, all" 1>&2
-      exit 1
-      ;;
-  esac
+    case "$test_function" in
+        "unit_tests")
+            run_quad_galaxy_unit_tests
+            ;;
+        "dual_deepseekv3_unit_tests")
+            run_dual_deepseekv3_unit_tests
+            ;;
+        "quad_deepseekv3_unit_tests")
+            run_quad_deepseekv3_unit_tests
+            ;;
+        "dual_deepseekv3_module_tests")
+            run_dual_deepseekv3_module_tests
+            ;;
+        "quad_deepseekv3_module_tests")
+            run_quad_deepseekv3_module_tests
+            ;;
+        "dual_teacher_forced")
+            run_dual_teacher_forced_test
+            ;;
+        "quad_teacher_forced")
+            run_quad_teacher_forced_test
+            ;;
+        "dual_demo")
+            run_dual_demo_test
+            ;;
+        "quad_demo")
+            run_quad_demo_test
+            ;;
+        "dual_demo_stress")
+            run_dual_demo_stress_test
+            ;;
+        "quad_demo_stress")
+            run_quad_demo_stress_test
+            ;;
+        "dual_deepseekv3_integration_tests")
+            run_dual_deepseekv3_integration_tests
+            ;;
+        "quad_deepseekv3_integration_tests")
+            run_quad_deepseekv3_integration_tests
+            ;;
+        "all")
+            run_quad_galaxy_tests
+            ;;
+        *)
+            echo "Unknown test function: $test_function" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

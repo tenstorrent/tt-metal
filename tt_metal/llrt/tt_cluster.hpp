@@ -69,7 +69,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -97,6 +97,9 @@ public:
         TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
         return driver_;
     }
+
+    // Sets the HAL to be used for this Cluster
+    void set_hal(const tt_metal::Hal* hal);
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
@@ -136,7 +139,7 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
-    bool verify_eth_fw_capability() const;
+    std::optional<tt::umd::semver_t> get_ethernet_firmware_version() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start = true) const;
@@ -461,11 +464,13 @@ private:
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+    uint32_t retrain_count_addr_ = 0;
+    uint8_t num_nocs_ = 0;
 
     // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
     // keep a local reference for init.
     const llrt::RunTimeOptions& rtoptions_;
-    const tt_metal::Hal& hal_;
+    const tt_metal::Hal* hal_ = nullptr;
 };
 
 }  // namespace tt

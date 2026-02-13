@@ -674,6 +674,7 @@ run_t3000_tttv2_fast_unit_tests() {
   pytest models/common/tests/modules/mlp/test_mlp_1d.py \
     -m "not slow" \
     --tb=short \
+    --durations=10 \
     --cov=models.common.modules.mlp.mlp_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
@@ -684,7 +685,18 @@ run_t3000_tttv2_fast_unit_tests() {
   pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
     -m "not slow" \
     --tb=short \
+    --durations=10 \
     --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run Attention1D tests
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
+  pytest models/common/tests/modules/attention/test_attention_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --durations=10 \
+    --cov=models.common.modules.attention.attention_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
