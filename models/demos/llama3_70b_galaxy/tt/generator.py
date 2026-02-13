@@ -25,7 +25,7 @@ from models.common.llama_models import (
 
 from models.common.sampling.generator import format_sampling_params
 from models.common.sampling.sampling_params import SamplingParams
-from models.common.warmup import DecodeWarmupMixin
+from models.common.warmup import WarmupForwardMixin
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -42,7 +42,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
-class Generator(DecodeWarmupMixin):
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -856,22 +856,24 @@ class Generator(DecodeWarmupMixin):
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(
-        self, kv_cache, enable_trace, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size
-    ) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
-        self.warmup_prefill_traces(
-            tokens=None,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            prompt_lens=None,
-            enable_trace=enable_trace,
-            sampling_params=None,
-            empty_slots=None,
-            tt_out_logits_all_users=None,
+        sampling_params = self._create_sampling_params(
+            can_sample_on_device, non_greedy_decoding_on_device, None, mode="prefill"
         )
+        for sampling_param in sampling_params:
+            self.warmup_prefill_traces(
+                tokens=None,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=None,
+                enable_trace=enable_trace,
+                sampling_params=sampling_param,
+                empty_slots=None,
+                tt_out_logits_all_users=None,
+            )
 
     ## Destructor (used to delete ttnn trace if exists)
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,23 +10,25 @@ from loguru import logger
 from models.common.sampling.sampling_params import SamplingParams
 
 
-class DecodeWarmupMixin:
+class WarmupForwardMixin:
     """
+    This class is used by vLLM.
+
     Mixin class that provides decode warmup functionality for generator classes.
 
     This class should be inherited by any generator class that needs to warm up
     the decode forward pass. It requires the following to be defined in the
     inheriting class:
-    - self.decode_forward_text(): method to perform decode forward pass
+    - self.decode_forward(): method to perform decode forward pass
     """
 
-    def _create_sampling_params(self, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size, mode):
-        assert mode in ["prefill", "decode"], "Mode should be either 'prefill' or 'decode'"
-
-        if mode == "decode" and not sample_on_device_mode:
-            return [None]
-
-        if mode == "prefill" and sample_on_device_mode != "all":
+    def _create_sampling_params(self, can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode):
+        """
+        non_greedy_decoding_on_device: when True, device supports non-greedy sampling (temperature,
+        top_k, top_p, presence/frequency/repetition penalties, log_probs); warmup then includes
+        those configs. When False, only greedy decoding is warmed up (temperature=0.0, top_k=1, top_p=1.0).
+        """
+        if not can_sample_on_device:
             return [None]
 
         sampling_configs = []
@@ -82,11 +84,14 @@ class DecodeWarmupMixin:
         enable_trace,
         max_batch_size,
         num_gpu_blocks,
-        sample_on_device_mode=None,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device,
+        non_greedy_decoding_on_device,
     ):
+        """
+        This function is called by vLLM
+        """
         sampling_params = self._create_sampling_params(
-            sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size, mode="decode"
+            can_sample_on_device, non_greedy_decoding_on_device, max_batch_size, mode="decode"
         )
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_gpu_blocks)
@@ -98,7 +103,7 @@ class DecodeWarmupMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            self.decode_forward_text(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,

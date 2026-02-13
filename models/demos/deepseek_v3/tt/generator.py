@@ -13,7 +13,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
-from models.common.warmup import DecodeWarmupMixin
+from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
@@ -41,7 +41,7 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
     return out
 
 
-class DeepseekGenerator(DecodeWarmupMixin):
+class DeepseekGenerator(WarmupForwardMixin):
     """
     Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
 
@@ -676,7 +676,7 @@ class DeepseekGenerator(DecodeWarmupMixin):
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
-                    logits = self.decode_forward(
+                    logits = self.decode_forward_text(
                         tokens=next_tokens,
                         positions=positions,
                         batch_size_per_row=self.batch_size_per_row,
@@ -909,25 +909,27 @@ class DeepseekGenerator(DecodeWarmupMixin):
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
-    def decode_forward(
+    def decode_forward_text(
         self,
         tokens: torch.Tensor,
-        positions: torch.Tensor,
+        start_pos: torch.Tensor,
         batch_size_per_row: int,
         gen_idx: int = 0,
         profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
-        page_tables: torch.Tensor | None = None,
+        page_table: torch.Tensor | None = None,
+        read_from_device: bool = False,
+        sampling_params: SamplingParams | None = None,
     ) -> torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
         if not enable_trace:
-            return self._decode_step(tokens, positions, batch_size_per_row, page_tables).squeeze(0).squeeze(0)
+            return self._decode_step(tokens, start_pos, batch_size_per_row, page_table).squeeze(0).squeeze(0)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, positions, batch_size_per_row, page_tables)
+                self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
@@ -963,7 +965,7 @@ class DeepseekGenerator(DecodeWarmupMixin):
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
 
             host_positions = ttnn.from_torch(
-                positions,
+                start_pos,
                 device=None,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.int32,
@@ -971,11 +973,11 @@ class DeepseekGenerator(DecodeWarmupMixin):
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
 
-            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+            host_rot_idxs = self.rope_setup.get_rot_idxs(start_pos, on_host=True)
             ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
 
-            if page_tables is not None:
-                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_tables, device=None)
+            if page_table is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table, device=None)
                 for i, page_table in enumerate(page_tables_to_use):
                     ttnn.copy_host_to_device_tensor(page_table, self._trace_page_tables_to_use[i])
 
@@ -999,9 +1001,7 @@ class DeepseekGenerator(DecodeWarmupMixin):
                 signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
-    def warmup_model_prefill(
-        self, kv_cache, enable_trace, sample_on_device_mode, non_greedy_decoding_on_device, max_batch_size
-    ) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
@@ -1058,8 +1058,8 @@ class DeepseekGenerator(DecodeWarmupMixin):
         enable_trace,
         max_batch_size,
         num_gpu_blocks,
-        sample_on_device_mode=None,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device,
+        non_greedy_decoding_on_device,
     ):
         logger.warning("decode_forward_text is not implemented for DeepseekGenerator")
 

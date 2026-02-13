@@ -1,7 +1,7 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .decode_warmup import DecodeWarmupMixin
+from .warmup_utils import WarmupForwardMixin
 
-__all__ = ["DecodeWarmupMixin"]
+__all__ = ["WarmupForwardMixin"]
