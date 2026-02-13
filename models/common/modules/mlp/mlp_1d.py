@@ -351,8 +351,10 @@ class MLP1D(LightweightModule):
 
         return w2_out_reduced
 
-    def forward(self, x: ttnn.Tensor | LazyWeight, mode: str) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor | LazyWeight, mode: str | Mode) -> ttnn.Tensor:
         """Dispatch to the appropriate forward method based on mode."""
+        if isinstance(mode, Mode):
+            mode = mode.value
         if mode == "decode":
             return self.decode_forward(x)
         else:
