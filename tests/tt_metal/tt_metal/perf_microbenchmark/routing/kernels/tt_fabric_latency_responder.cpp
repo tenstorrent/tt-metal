@@ -104,7 +104,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
     }
-    volatile uint32_t* responder_receive_ptr = reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address);
+    volatile uint32_t* responder_receive_ptr =
+        reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address + payload_size_bytes - sizeof(uint32_t));
     *responder_receive_ptr = 0;
     // Warmup: respond to flush packet
     {

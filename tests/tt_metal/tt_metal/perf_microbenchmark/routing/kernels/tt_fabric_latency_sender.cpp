@@ -128,8 +128,11 @@ void kernel_main() {
 
     // Main latency measurement loop
     // Use separate send and receive buffers to avoid race conditions
-    volatile uint32_t* send_buffer_ptr = reinterpret_cast<volatile uint32_t*>(send_buffer_address);
-    volatile uint32_t* receive_buffer_ptr = reinterpret_cast<volatile uint32_t*>(receive_buffer_address);
+    // Leave a word at the end
+    volatile uint32_t* send_buffer_ptr =
+        reinterpret_cast<volatile uint32_t*>(send_buffer_address + payload_size_bytes - sizeof(uint32_t));
+    volatile uint32_t* receive_buffer_ptr =
+        reinterpret_cast<volatile uint32_t*>(receive_buffer_address + payload_size_bytes - sizeof(uint32_t));
 
     // Initialize receive buffer to 0
     *receive_buffer_ptr = 0;
