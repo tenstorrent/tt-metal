@@ -381,8 +381,13 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         # so sharded program configs (LN/QKV/FFN) can be enabled.
         if pad_seq:
             try:
-                grid = self.tt_device.compute_with_storage_grid_size()
-                core_grid = ttnn.CoreGrid(y=int(getattr(grid, "y", 8)), x=int(getattr(grid, "x", 8)))
+                # Use the encoder grid chosen by tt_configs (tile-aligned sharding for this seq length).
+                if self.tt_layer_cfg is not None and hasattr(self.tt_layer_cfg, "grid"):
+                    grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
+                else:
+                    grid = self.tt_device.compute_with_storage_grid_size()
+                    grid_x, grid_y = (int(getattr(grid, "x", 8)), int(getattr(grid, "y", 8)))
+                core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
                 shard_mc = ttnn.create_sharded_memory_config(
                     [int(B), int(seq_len), int(C)],
                     core_grid=core_grid,

@@ -265,9 +265,20 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Koyeb N300 (and many dev setups) expose a full 8x8 compute grid.
-        # Using 8x8 also matches the reference sharded ViT demo program configs.
-        grid = (8, 8)
+        # Pick an encoder grid that keeps the fused (B*seq) shard height tile-aligned.
+        # For DPT-Large 384: seq_len_padded=640. On an 8x8 device grid, block-sharding
+        # would yield shard height 80 which is not tile-aligned (32). Use 8x5 -> 128.
+        grid_x = 8
+        try:
+            TILE = 32
+            patch_count = config.image_size // config.patch_size
+            seq_len = patch_count * patch_count + 1
+            seq_len_padded = math.ceil(seq_len / 64) * 64
+            candidates = [y for y in range(8, 0, -1) if (seq_len_padded % y) == 0 and ((seq_len_padded // y) % TILE) == 0]
+            grid_y = candidates[0] if candidates else 8
+        except Exception:
+            grid_y = 8
+        grid = (grid_x, grid_y)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
