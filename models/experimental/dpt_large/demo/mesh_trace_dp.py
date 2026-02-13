@@ -111,13 +111,9 @@ class MeshTraceDPExecutor:
         # Read from persistent output buffers after trace execution completes.
         outs = []
         for pipe, out_dev in zip(self.tt_pipelines, self._persistent_outputs):
-            out_host = out_dev.cpu()
-            try:
-                if hasattr(out_host, "layout") and out_host.layout == ttnn.TILE_LAYOUT:
-                    out_host = out_host.to(ttnn.ROW_MAJOR_LAYOUT)
-            except Exception:
-                pass
-            out_torch = out_host.to_torch()
+            # Match the single-device traced path: avoid forcing layout conversions
+            # here because it can trigger additional device-side ops on the mesh.
+            out_torch = out_dev.cpu().to_torch()
             depth_t = torch.as_tensor(out_torch)
             if depth_t.dim() == 3:
                 depth_t = depth_t.unsqueeze(1)
@@ -127,4 +123,3 @@ class MeshTraceDPExecutor:
                 depth_t = depth_t.float()
             outs.append(depth_t.cpu().numpy())
         return outs
-
