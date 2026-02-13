@@ -103,7 +103,7 @@ class Generator(WarmupForwardMixin):
         read_from_device=True,
         sampling_params=None,
     ):
-        return self._ttt_generator.decode_forward_text(
+        return self._ttt_generator.decode_forward(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
