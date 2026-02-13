@@ -135,7 +135,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         std::vector<uint32_t> read_cores_noc_y;
         std::vector<uint32_t> read_stick_offset;
 
-        uint32_t num_sticks_per_core = shard_height;
+        const uint32_t num_sticks_per_core = shard_height;
+        read_cores_indices.reserve(num_sticks_per_core);
+        read_cores_noc_x.reserve(num_sticks_per_core);
+        read_cores_noc_y.reserve(num_sticks_per_core);
+        read_stick_offset.reserve(num_sticks_per_core);
 
         std::vector<uint32_t> stick_ids_per_core;
         stick_ids_per_core.reserve(num_sticks_per_core);
@@ -186,6 +190,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         std::vector<uint32_t> non_repeat_noc_y_values;
 
         uint32_t num_sticks_per_shard_core_reader = 0, num_sticks_per_shard_core_writer = 0;
+        // Reserve after num_non_repeat_cores is finalized in each branch below
         uint32_t writer_read_stick_offset = 0, writer_write_stick_offset = 0;
         uint32_t num_C_blocks_per_core_reader = num_C_blocks_per_core, num_C_blocks_per_core_writer = 0;
 
@@ -211,6 +216,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
                 writer_write_stick_offset = writer_read_stick_offset * num_non_repeat_cores;
             }
 
+            non_repeat_stick_offset_values.reserve(num_non_repeat_cores);
+            non_repeat_noc_x_values.reserve(num_non_repeat_cores);
+            non_repeat_noc_y_values.reserve(num_non_repeat_cores);
             for (uint32_t k = 0; k < num_non_repeat_cores; ++k) {
                 non_repeat_stick_offset_values.push_back(read_stick_offset[k]);
                 non_repeat_noc_x_values.push_back(read_cores_noc_x[k]);
@@ -242,6 +250,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
                     num_C_blocks_per_core_reader * num_non_repeat_cores * num_sticks_per_shard_core * stick_size_bytes;
             }
 
+            non_repeat_stick_offset_values.reserve(num_non_repeat_cores);
+            non_repeat_noc_x_values.reserve(num_non_repeat_cores);
+            non_repeat_noc_y_values.reserve(num_non_repeat_cores);
             for (uint32_t k = 0; k < num_non_repeat_cores; ++k) {
                 non_repeat_stick_offset_values.push_back(read_stick_offset[k * num_sticks_per_shard_core]);
                 non_repeat_noc_x_values.push_back(read_cores_noc_x[k * num_sticks_per_shard_core]);
