@@ -391,8 +391,9 @@ class TestTriage:
 
                         # Validate expected RISC names if present
                         if expected_risc_names:
-                            for risc in expected_risc_names:
-                                assert risc in row.risc_names, f"Expected RISC '{risc}' not found in {row.risc_names}"
+                            assert (
+                                row.risc_name in expected_risc_names
+                            ), f"Expected RISC '{row.risc_name}' not found in {expected_risc_names}"
 
                         # Validate callstack if expected
                         if expected_file and row.callstack:
