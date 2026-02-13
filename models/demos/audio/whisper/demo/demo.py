@@ -108,9 +108,7 @@ def load_conditional_generation_ref_model(model_repo, language, task):
     )
 
 
-def init_conditional_generation_tt_model(
-    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=WHISPER_BATCH_SIZE, max_seq_len=512
-):
+def init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper, max_seq_len=512):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
     ttnn_linear_weight = ttnn.from_torch(
@@ -126,11 +124,11 @@ def init_conditional_generation_tt_model(
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache, cross_attn_cache = init_kv_cache(
-        config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
+    kv_cache_per_batch_size, cross_attn_cache_per_batch_size = init_kv_cache(
+        config, mesh_device, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
-    return parameters, ttnn_linear_weight, kv_cache, cross_attn_cache
+    return parameters, ttnn_linear_weight, kv_cache_per_batch_size, cross_attn_cache_per_batch_size
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
@@ -164,9 +162,12 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
         model_repo, language, task
     )
-    parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
-    )
+    (
+        parameters,
+        ttnn_linear_weight,
+        kv_cache_per_batch_size,
+        cross_attn_cache_per_batch_size,
+    ) = init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper)
 
     # Create WhisperGenerator instance with persistent trace support
     generator = WhisperGenerator(
@@ -180,8 +181,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         input_mesh_mapper=input_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
         weights_mesh_mapper=weights_mesh_mapper,
-        kv_cache=kv_cache,
-        cross_attn_cache=cross_attn_cache,
+        kv_cache_per_batch_size=kv_cache_per_batch_size,
+        cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
     )
 
