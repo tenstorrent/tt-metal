@@ -3,8 +3,10 @@
 
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -181,6 +183,62 @@ class Model:
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
+        # Initialize on-device sampling (supported when per-device vocab fits in 64K)
+        sampling_splits = mesh_device.shape[1]
+        self._supports_on_device_sampling = self.vocab_size // sampling_splits <= 64 * 1024
+        self._prefill_sampling_active = False
+        # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
+        self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
+        if self._supports_on_device_sampling:
+            # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
+            self.sampling = SamplingGenerator(
+                args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
+                mesh_device=mesh_device,
+                tt_ccl=None,
+                enable_internal_trace=False,
+            )
+            # Hook reset_sampling_params to set prefill flag — Generator calls this
+            # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
+            _orig_reset = self.sampling.reset_sampling_params
+
+            def _reset_with_flag(params, _orig=_orig_reset):
+                _orig(params)
+                self._prefill_sampling_active = True
+
+            self.sampling.reset_sampling_params = _reset_with_flag
+            logger.info(f"On-device sampling initialized (vocab_size={self.vocab_size}, splits={sampling_splits})")
+        else:
+            self.sampling = None
+
+    def _make_sampling_args(self, hf_config, mesh_device):
+        """Create a minimal args object for SamplingGenerator/TTSampling."""
+
+        class _SamplingArgs:
+            pass
+
+        args = _SamplingArgs()
+        args.vocab_size = hf_config.vocab_size
+        num_tp = mesh_device.shape[1]
+        # padded_vocab_size: per-device vocab must be tile-aligned (multiple of 32)
+        # for TTPenalties scatter operations
+        per_device_vocab = ((args.vocab_size + num_tp - 1) // num_tp + 31) // 32 * 32
+        args.padded_vocab_size = per_device_vocab * num_tp
+        self._sampling_vocab_pad = per_device_vocab - (args.vocab_size + num_tp - 1) // num_tp
+        args.cluster_shape = tuple(mesh_device.shape)
+        args.sampling_all_gather_axis = 1
+        args.num_devices = mesh_device.get_num_devices()
+        args.is_galaxy = mesh_device.shape[0] > 1
+        args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
+        # sampling_dp: number of independent sampling groups (one per mesh row)
+        # Only use row-sharded sampling when users_row_sharded is active
+        args.sampling_dp = self.sampling_dp
+        return args
+
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        """On-device position increment for traced decode loops with sampling."""
+        ttnn.plus_one(current_pos, skip_negative_entries=True)
+        ttnn.plus_one(rot_mat_idxs)
+
     @classmethod
     def create_transformer_compatible(
         cls,
@@ -234,7 +292,16 @@ class Model:
         return None
 
     def _forward_layers_and_head(
-        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
+        self,
+        hidden_states,
+        rope_mats,
+        current_pos,
+        page_table,
+        kv_cache,
+        get_last_token=-1,
+        is_decode=True,
+        user_id=0,
+        sampling_on_device=False,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -280,14 +347,19 @@ class Model:
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
-        # TP all-gather if using tensor parallelism
+        # Skip TP all-gather when sampling is active — TTSampling handles its own all-gather
+        skip_gather = sampling_on_device or self._prefill_sampling_active
+        self._prefill_sampling_active = False
         config = self.mesh_config.get_config(mode)
-        if config.tp > 1:
+        if config.tp > 1 and not skip_gather:
             logits_gathered = self.mesh_config.allgather(
                 logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
             )
             logits.deallocate(True)
             logits = logits_gathered
+        elif skip_gather and getattr(self, "_sampling_vocab_pad", 0) > 0:
+            # Pad per-device logits to tile-aligned vocab size for TTPenalties
+            logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 0), (0, self._sampling_vocab_pad)], value=0.0)
 
         return logits
 
@@ -305,8 +377,15 @@ class Model:
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
-        # Embed tokens
-        input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
+        actual_batch = current_pos.shape[-1]
+        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
+            tokens_for_embed = tokens[:, :, :, :actual_batch]
+        else:
+            tokens_for_embed = tokens
+        input_embeds = ttnn.embedding(
+            tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+        )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
@@ -319,9 +398,20 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=True,
+            sampling_on_device=sampling_on_device,
         )
-        # Return logits and None for log-probs for compatibility with generator interface
-        # TODO: Add log-probs return value once sampling_on_device is supported
+
+        if sampling_on_device and self.sampling is not None:
+            # Pad logits batch to 32 (TTSampling requirement) before split-trace or sampling
+            batch_dim = out.shape[-2]
+            if batch_dim < 32:
+                out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if capture_sampling_trace:
+                return out
+            tt_toks, tt_log_probs = self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
+            return tt_toks, tt_log_probs
+
         return out, None
 
     def ttnn_prefill_forward(
@@ -426,7 +516,9 @@ class Model:
             current_pos = current_pos.unsqueeze(0)
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
-        # Convert tokens to TTNN format
+        # Pad token buffer to 32 for non-row-sharded b<32 (TTSampling requirement)
+        if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
+            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), "constant", 0)
         if self.users_row_sharded:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         else:
@@ -478,6 +570,7 @@ class Model:
         global_user_id=None,
     ):
         """Prepare inputs for prefill mode"""
+        assert global_user_id is not None, "global_user_id is required for row-sharded prefill"
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -563,11 +656,12 @@ class Model:
             tt_chunk_page_table,
         )
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Process decode output and convert to torch tensors"""
         concat_out = self.concat_device_output(tt_out)
-        if is_tokens:
-            return concat_out[:B, 0]  # [batch_size]
+        if is_tokens or is_log_probs:
+            # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
+            return concat_out.reshape(-1)[:B]
 
         torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
         # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong

@@ -34,15 +34,10 @@ from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    get_padded_prefill_len,
-    preprocess_inputs_prefill,
-    sample_host,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
 
 # Import specific utilities from tt_transformers
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
 
 
@@ -410,6 +405,15 @@ def test_gpt_oss_demo(
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 
+    # Create on-device sampling params (TTSampling always expects batch=32)
+    SAMPLING_BATCH_SIZE = 32
+    greedy = sampling_params["temperature"] == 0
+    device_sampling_params = SamplingParams(
+        temperature=[sampling_params["temperature"]] * SAMPLING_BATCH_SIZE,
+        top_k=[1] * SAMPLING_BATCH_SIZE if greedy else [40] * SAMPLING_BATCH_SIZE,
+        top_p=[1.0] * SAMPLING_BATCH_SIZE if greedy else [sampling_params["top_p"]] * SAMPLING_BATCH_SIZE,
+    )
+
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -572,7 +576,7 @@ def test_gpt_oss_demo(
             logger.info(f"Prefill finished for {num_real_users} real users")
             logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
         else:
-            # Standard batch prefill (matching tt_transformers)
+            # Standard batch prefill with on-device sampling
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             generator.prefill_forward_text(
@@ -582,21 +586,27 @@ def test_gpt_oss_demo(
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
                 warmup_prefill=False,
+                sampling_params=device_sampling_params,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)
-            logits = generator.prefill_forward_text(
+            result = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=enable_prefill_trace,
-                warmup_prefill=False,  # we can warmup prefill ourselves above if we want to
+                warmup_prefill=False,
+                sampling_params=device_sampling_params,
             )
-            prefilled_token = torch.argmax(logits, dim=-1)
+            # On-device sampling returns (tokens, log_probs) tuple
+            if isinstance(result, tuple):
+                prefilled_token = result[0]
+            else:
+                prefilled_token = torch.argmax(result, dim=-1)
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
             logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
@@ -632,21 +642,14 @@ def test_gpt_oss_demo(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Decode forward (matching tt_transformers call)
-            logits, _ = generator.decode_forward_text(
+            # Decode forward with on-device sampling
+            out_tok, _ = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_decode_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-            )
-
-            # Sample next token (reusing tt_transformers sampling)
-            _, out_tok = sample_host(
-                logits,
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                on_host=True,
+                sampling_params=device_sampling_params,
             )
 
             if iteration == 0:
