@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import time
-from typing import Optional
 
 import requests
 
@@ -341,10 +340,15 @@ def build_cancelled_block() -> list[dict]:
     ]
 
 
-def build_superset_link_block(run_id: Optional[int]) -> dict:
-    """Build the Superset dashboard link block."""
-    if run_id:
-        url = f"{SUPERSET_BASE_URL}?run_id={run_id}"
+def build_superset_link_block() -> dict:
+    """Build the Superset dashboard link block.
+
+    Uses gh_run_number (GITHUB_RUN_ID) since it's available immediately,
+    whereas run_id (database PK) requires Airflow ingestion first.
+    """
+    if GITHUB_RUN_ID:
+        # Use GitHub run ID - works immediately, dashboard shows data after ingestion
+        url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_ID}"
         text = f"<{url}|View in Superset>"
     else:
         text = f"<{GITHUB_ACTIONS_URL}|View in GitHub Actions>"
@@ -419,7 +423,7 @@ def build_slack_message(results: dict, conclusion: str) -> dict:
 
     # Superset link
     blocks.append({"type": "divider"})
-    blocks.append(build_superset_link_block(results.get("run_id")))
+    blocks.append(build_superset_link_block())
 
     return {"blocks": blocks}
 
