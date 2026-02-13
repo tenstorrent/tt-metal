@@ -6,6 +6,7 @@
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#define MAX_TREE_REDUCTION_ROUNDS 6
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
@@ -61,6 +62,7 @@ void kernel_main() {
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
+    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -109,6 +111,20 @@ void kernel_main() {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
+    // Tree reduction runtime arguments
+    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
+    const bool has_parent = parent_core_in_group != UINT32_MAX;
+
+    // Read children_per_round array
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
     // Idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
     // an idle_core
@@ -143,21 +159,44 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Get the sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
-        cur_pos,
-        cur_batch,
-        core_num_in_reduce,
-        num_cores_per_head,
-        k_chunk_size_dynamic,
-        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
-    if (k_chunk_start == k_chunk_end) {
-        return;  // early exit because no computes needs to be done
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
+        get_workload_for_core(
+            cur_pos,
+            cur_batch,
+            core_num_in_reduce,
+            num_cores_per_head,
+            k_chunk_size_dynamic,
+            sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
+
+    // Check if this core has local data to process
+    const bool has_local_data = (k_chunk_start != k_chunk_end);
+
+    // Cores without data don't participate in tree reduction at all
+    // They just exit early - no sending, no receiving
+    if (!has_local_data) {
+        return;
     }
 
-    // Get number of worker cores to wait for
-    uint32_t num_cores_to_wait = num_cores_per_head - 1;
-    if (num_cores_per_head > k_num_chunks) {
-        num_cores_to_wait = k_num_chunks - 1;
+    // Determine which children actually participate in reduction (based on chunk allocation)
+    // A child at core_num is active or has data if core_num < k_num_chunks
+    // E.g. k_num_chunks = 2, num_cores_per_head = 4
+    // | core 0 | core 1 | core 2 | core 3 |
+    //   chunk 0  chunk 1   NA       NA
+    // core 0 would have core 1 and core 2 as children, but only core 1 is active to perform reduction with
+    uint32_t num_active_children = 0;
+    uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    uint32_t num_active_rounds = 0;
+
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        uint32_t child_id = children_per_round[r];
+        if (child_id != UINT32_MAX && child_id < k_num_chunks) {
+            // This child has data
+            active_children_per_round[r] = child_id;
+            num_active_children++;
+            num_active_rounds = r + 1;
+        } else {
+            active_children_per_round[r] = UINT32_MAX;
+        }
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
@@ -184,7 +223,6 @@ void kernel_main() {
     const uint32_t qk_in1_num_subblocks_dynamic = 1;
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t out_num_blocks_dynamic = 1;
-
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
 #else
     constexpr uint32_t qk_subblock_h_dynamic = qk_subblock_h;
@@ -193,11 +231,9 @@ void kernel_main() {
     constexpr uint32_t qk_in1_num_subblocks_dynamic = qk_in1_num_subblocks;
     constexpr uint32_t out_in0_block_w_dynamic = out_in0_block_w;
     constexpr uint32_t out_num_blocks_dynamic = out_num_blocks;
-
     constexpr uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t;
 #endif
 
-    // TODO: Used for legacy sfpu functions
     // - VectorMode::RC is equivalent to 32x32 tiles
     // - VectorMode::R is equivalent to 16x32 tiles
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
@@ -211,6 +247,12 @@ void kernel_main() {
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
+        // Reset ping-pong buffer assignments at the start of each head iteration
+        cb_cur_max = cb_max_1;
+        cb_prev_max = cb_max_2;
+        cb_cur_sum = cb_sum_1;
+        cb_prev_sum = cb_sum_2;
+
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
          ******************************************************************************/
@@ -262,16 +304,15 @@ void kernel_main() {
          * @param out_chunk_tiles - Number of output chunk tiles
          */
         /* START OF FLASH ATTENTION LOOP */
-        {
-            uint32_t cb_out_mm = cb_out_accumulate_im;
+        uint32_t cb_out_mm = cb_out_accumulate_im;
 
-            // Loop through all K chunks
-            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-                // Reconfig register DF
-                reconfig_data_format(cb_q_in, cb_k_in);
-                pack_reconfig_data_format(cb_qk_im);
+        // Loop through all K chunks
+        for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+            // Reconfig register DF
+            reconfig_data_format(cb_q_in, cb_k_in);
+            pack_reconfig_data_format(cb_qk_im);
 
-                // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
+            // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
                 bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
                 bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
@@ -399,7 +440,6 @@ void kernel_main() {
                     cb_out_mm = cb_out_im;
                 } else {
                     // When there is more than 1 chunk, we perform Lazy Softmax
-
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);
                     pack_reconfig_data_format(cb_exp_max_diff);
@@ -428,8 +468,10 @@ void kernel_main() {
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
-                if (k_chunk < k_chunk_end - 1 || do_reduce) {
-                    // Move intermediate sum and max values to appropriate ping pong buffers
+                // Move intermediate sum and max values to appropriate ping pong buffers
+                // Always move to prev buffers during FA loop - we'll handle final output later
+                if (k_chunk < k_chunk_end - 1) {
+                    // More local chunks to process - move to ping-pong buffers
                     reconfig_data_format(cb_cur_max, cb_cur_max);
                     pack_reconfig_data_format(cb_prev_max);
 
@@ -438,28 +480,53 @@ void kernel_main() {
 
                     // PREV_SUM <- CUR_SUM
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
-                } else {
-                    // Write results OUT_ACC, CUR_MAX, CUR_SUM to designated
-                    // Write o, m, l into cb_out
-                    move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
-                    move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
                 }
-            }
         }
+
+        // After FA loop completes, prepare buffers for tree reduction or output
+        // Results are in: cb_out_accumulate_im (O), cb_cur_max (M), cb_cur_sum (L)
+        if (num_active_children > 0 || has_parent) {
+            // Tree reduction will happen - move cur to prev buffers
+            reconfig_data_format(cb_cur_max, cb_cur_max);
+            pack_reconfig_data_format(cb_prev_max);
+            move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+            move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+        }
+        // If root with no children, keep in cur buffers for finalization
+
         /* END OF FLASH ATTENTION LOOP */
-        // Perform reduction across intermediates from other cores if this is the reduction core
-        if (do_reduce) {
-            // cb_out_accumulate_im should contain o_1 (output from FA of itself's core)
-            // cb_prev_max and cb_prev_sum should contain m_1 and l_1 (max and sum of logits of itself's core)
 
-            if (k_chunk_end - k_chunk_start < k_num_chunks) {
-                // This indicates that there are computes done by other workers.
-                // We need to wait for them and send to reducer's compute
-                // Iterate through each worker
-                for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+        /******************************************************************************
+         *                      TREE REDUCTION LOGIC                                  *
+         ******************************************************************************/
+        /**
+         * Tree reduction reduces the online softmax results in O(log n) rounds.
+         *
+         * For each round r (0 to my_active_rounds-1):
+         *   - If children_per_round[r] != UINT32_MAX, receive from that child
+         *   - Combine received data with local accumulator using softmax correction
+         *
+         * After all receives:
+         *   - If is_tree_root: finalize (1/sum normalization) and output
+         *   - Else: output intermediate results for writer to send to parent
+         */
+        // Tree reduction: receive from children and combine
+        // Buffer state entering tree reduction:
+        //   - cb_out_accumulate_im: local O (output accumulator)
+        //   - cb_prev_max: local M (max of logits)
+        //   - cb_prev_sum: local L (sum of exp)
+        // Only receive from children that actually have data
+        if (num_active_children > 0) {
+            // Iterate through each round and receive from child if one exists AND has data
+            for (uint32_t round = 0; round < num_active_rounds; ++round) {
+                uint32_t child_id = active_children_per_round[round];
+                if (child_id != UINT32_MAX) {
+                    // Writer kernel handles the semaphore wait and data transfer to cb_m_in, cb_l_in, cb_out_o
+                    // Data arrives in order: l, m, o
+
+                    // Combine child with existing local/accumulated data
+                    // Move child's L to cb_prev_sum_2 for correction
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -468,10 +535,9 @@ void kernel_main() {
                     // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    // */
                     correction_block<scale_fp32, vector_mode>(
-                        cb_m_in,        // cb worker max
-                        cb_prev_sum_2,  // cb worker sum
+                        cb_m_in,        // cb child max
+                        cb_prev_sum_2,  // cb child sum
                         cb_cur_max,
                         cb_prev_max,
                         cb_cur_sum,
@@ -480,17 +546,18 @@ void kernel_main() {
                         cb_exp_max_diff_2,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- WORKER_OUT
+                    // OUT_ACC_2 <- CHILD_OUT
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
-                    // OUT_ACC_2 *= EXP_MAX_DIFF
-                    // OUT_ACC *= EXP_MAX_DIFF_2
+                    // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
+                    // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
                     mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
                     mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
 
+                    // Update prev buffers for next round
                     // PREV_MAX <- CUR_MAX
                     // PREV_SUM <- CUR_SUM
                     cb_pop_front(cb_prev_max, Sq_chunk_t);
@@ -499,44 +566,77 @@ void kernel_main() {
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
+        }
 
-            /* CUR_SUM = 1.0 / CUR_SUM */
-            cb_push_back(cb_cur_sum, Sq_chunk_t);
-            reconfig_data_format(cb_cur_sum, cb_cur_sum);
-            pack_reconfig_data_format(cb_cur_sum);
+        // Finalize output based on tree role
+        if (is_tree_root) {
+            // Root node: perform final normalization and output
+            // Determine which sum/max buffer to use based on whether we did tree reduction
+            // If we had children with data, results are in cb_prev_sum/cb_prev_max after tree reduction
+            // If single core (no children with data), results are in cb_cur_sum/cb_cur_max from FA loop
+
+            // Select the correct sum buffer based on whether tree reduction happened
+            // If tree reduction happened, sum is in cb_prev_sum; otherwise it's in cb_cur_sum
+            uint32_t sum_cb = (num_active_children > 0) ? cb_prev_sum : cb_cur_sum;
+
+            /* SUM = 1.0 / SUM */
+            reconfig_data_format(sum_cb, sum_cb);
+            pack_reconfig_data_format(sum_cb);
 
             // Handle attention sink here
             if constexpr (use_attention_sink) {
+                // Use appropriate max buffer based on tree reduction
+                uint32_t max_cb_for_sink = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
+
                 // m_new
-                max_block<vector_mode>(cb_attention_sink, cb_prev_max, cb_cur_max, Sq_chunk_t);
+                max_block<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(max_cb_for_sink, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
-                mul_block_inplace(cb_cur_sum, cb_exp_max_diff, Sq_chunk_t);
+                mul_block_inplace(sum_cb, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
                 sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                 cb_pop_front(cb_cur_max, Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
-                add_block_inplace<true>(cb_cur_sum, cb_exp_max_diff_2, Sq_chunk_t);
+                add_block_inplace<true>(sum_cb, cb_exp_max_diff_2, Sq_chunk_t);
 
                 // O -> O * exp(m - m_new)
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
             }
 
-            reconfig_data_format(cb_cur_sum, cb_cur_sum);
-            pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
+            reconfig_data_format(sum_cb, sum_cb);
+            pack_reconfig_data_format(sum_cb);
+            recip_block_inplace(sum_cb, Sq_chunk_t);
 
-            /* OUT_ACC *= CUR_SUM */
-            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
+            /* OUT_ACC *= 1/SUM */
+            reconfig_data_format(cb_out_accumulate_im, sum_cb);
             pack_reconfig_data_format(cb_out_accumulate_im);
 
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_cur_sum);
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, sum_cb);
             pack_reconfig_data_format(cb_out_final);
+
+            // Note: sum_cb was already consumed (popped) by mul_block_bcast_cols_inplace above,
+            // so we don't need to pop it again here.
+
+            // Pop the max buffer that still has data
+            if constexpr (use_attention_sink) {
+                // In attention sink path:
+                // - If num_active_children > 0: max_cb_for_sink = cb_prev_max, cb_cur_max was popped
+                //   So we need to pop cb_prev_max
+                // - If num_active_children == 0: max_cb_for_sink = cb_cur_max, cb_cur_max was popped
+                //   Nothing left to pop
+                if (num_active_children > 0) {
+                    cb_pop_front(cb_prev_max, Sq_chunk_t);
+                }
+            } else {
+                // No attention sink: the max buffer was never popped
+                uint32_t max_cb = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
+                cb_pop_front(max_cb, Sq_chunk_t);
+            }
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
@@ -564,9 +664,21 @@ void kernel_main() {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
-            // Free up cb_prev_max after K chunks
-            cb_pop_front(cb_prev_max, Sq_chunk_t);
-            cb_pop_front(cb_prev_sum, Sq_chunk_t);
+
+        } else if (has_parent) {
+            // Non-root node with parent: send intermediate results
+            // We have data (checked at function start), so send it
+            // After tree reduction (if any), results are in:
+            //   - cb_out_accumulate_im: O
+            //   - cb_prev_sum: L
+            //   - cb_prev_max: M
+
+            // Move O to output CB
+            move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+            // Move M to output CB
+            move_block<true>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            // Move L to output CB
+            move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
 

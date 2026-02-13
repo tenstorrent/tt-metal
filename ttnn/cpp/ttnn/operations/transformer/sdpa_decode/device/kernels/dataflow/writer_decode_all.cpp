@@ -10,6 +10,8 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
+#define MAX_TREE_REDUCTION_ROUNDS 6
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
@@ -37,8 +39,8 @@ void kernel_main() {
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
-
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
+    constexpr auto out_args = TensorAccessorArgs<27>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -51,6 +53,34 @@ void kernel_main() {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+
+    // Tree reduction parameters
+    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t reduction_group_base_idx = get_arg_val<uint32_t>(arg_idx++);
+
+    // Semaphore encoding: each round uses a 4-bit field (nibble) in the semaphore value
+    // Round 0: bits 0-3, Round 1: bits 4-7, Round 2: bits 8-11, etc.
+    // step_semaphore_inc[r] = 1 << (r * 4) is the value to add to increment round r's counter
+    constexpr uint32_t step_semaphore_inc[6] = {1, 16, 256, 4096, 65536, 1048576};
+    // step_semaphore_shift[r] = r * 4 is the bit position to read round r's counter
+    constexpr uint32_t step_semaphore_shift[6] = {0, 4, 8, 12, 16, 20};
+
+    // Read children_per_round array
+
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    // Read reduction group physical core coordinates
+    tt_l1_ptr uint32_t* reduction_group_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_per_head;
+    tt_l1_ptr uint32_t* reduction_group_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores_per_head;
 
     // idle core
     if (out_addr == 0) {
@@ -82,17 +112,43 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
-        cur_pos,
-        cur_batch,
-        core_num_in_reduce,
-        num_cores_per_head,
-        k_chunk_size_dynamic,
-        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
+        get_workload_for_core(
+            cur_pos,
+            cur_batch,
+            core_num_in_reduce,
+            num_cores_per_head,
+            k_chunk_size_dynamic,
+            sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
-    if (k_chunk_start == k_chunk_end) {
-        return;  // early exit because no computes needs to be done
+    // Check if this core has local data to process
+    bool has_local_data = (k_chunk_start != k_chunk_end);
+
+    // Cores without data don't participate in tree reduction at all
+    if (!has_local_data) {
+        return;
     }
+
+    // Determine which children actually participate in reduction (based on chunk allocation)
+    // A child at core_num has data if core_num < k_num_chunks
+    uint32_t num_active_children = 0;
+    uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    uint32_t num_active_rounds = 0;
+
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        uint32_t child_id = children_per_round[r];
+        if (child_id != UINT32_MAX && child_id < k_num_chunks) {
+            // This child has data
+            active_children_per_round[r] = child_id;
+            num_active_children++;
+            num_active_rounds = r + 1;
+        } else {
+            active_children_per_round[r] = UINT32_MAX;
+        }
+    }
+
+    // We send if we have a parent (and we have data, which we do if we reach here)
+    const bool should_send_to_parent = (parent_core_in_group != UINT32_MAX);
 
     tt_l1_ptr uint32_t* all_reducer_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_reducer_cores;
@@ -139,28 +195,30 @@ void kernel_main() {
     generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
-    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+    // Generate sliding window mask only if we have local data and need it
+    if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here
         generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
             k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
     }
 
-    if (is_worker) {
-        ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
-                                          // should not be more than one head per core
-        worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
-            in0_sender_semaphore_noc_addr, worker_id_for_reduce, reduce_core_noc_x, reduce_core_noc_y);
-        noc_async_atomic_barrier();
-        return;
+    // generate and send mask to compute if causal (only if we have local data to process)
+    if constexpr (is_causal) {
+        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+        generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
-    // *** Reducer Compute Below ***
+    // *** Tree Reduction Logic ***
+    // Each core participates in tree reduction by:
+    // 1. Computing its local attention (done in compute kernel)
+    // 2. For each round it receives: wait for child, receive data, combine with local (done in compute kernel)
+    // 3. If not root: send combined result to parent
+    // 4. If root: write final output
+
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
-
-    uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out));
 
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
@@ -168,64 +226,116 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    // generate and send mask to compute if causal
-
-    if constexpr (is_causal) {
-        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-        generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
-    }
-
     noc_async_write_barrier();  // #19201 BH hang workaround
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
-        if (k_chunk_end - k_chunk_start < k_num_chunks) {
-            ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
-                                              // should not be more than one head per core
-            // This indicates that there are computes done by other workers. Needs to wait for them and send to
-            // reducer's compute Wait for compute to deliver output chunk, and write to compute again for reduction data
-            // in cb_intermed_out is arranged as [o,m,l,o,m,l,...] with size (out_chunk_tiles +
-            // 2*PNHt)*num_cores_to_wait wait on in0 semaphore value to become VALID (set by sender)
-            noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, num_cores_to_wait);
-            // noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
+        // Tree reduction: receive from children at each round
+        // Each round, we wait for one child (if any), read remote_sum, remote_max, remote_output, and push to CBs
+        // The compute kernel processes each child's data before we move to the next round
+        // Only receive from children that actually have data
+        if (num_active_children > 0) {
+            // If there are workers, then head must be split across workers
+            ASSERT(num_heads_per_core == 1);
 
-            // cb_wait_front(cb_intermed_out, num_tiles_to_wait);
-            constexpr uint32_t q_read_size = out_chunk_tiles * tile_bytes_intermed;
-            constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
-            for (uint32_t block = 0; block < num_cores_to_wait; ++block) {
-                cb_reserve_back(cb_out_o, out_chunk_tiles);
-                cb_reserve_back(cb_m_in, PNHt);
-                cb_reserve_back(cb_l_in, PNHt);
+            for (uint32_t round = 0; round < num_active_rounds; ++round) {
+                uint32_t child_id = active_children_per_round[round];
 
-                uint32_t m_write_ptr = get_read_ptr(cb_m_in);
-                noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
-                intermed_l1_read_addr += ml_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_m_in, PNHt);
+                if (child_id != UINT32_MAX) {
+                    // Wait for this specific child to send its results
+                    // Poll until round-specific nibble is >= 1
+                    // Each round uses a 4-bit field: round 0 = bits 0-3, round 1 = bits 4-7, etc.
+                    while (true) {
+                        invalidate_l1_cache();
+                        uint32_t sem_val = *in0_receiver_semaphore_addr_ptr;
+                        uint8_t step_sem = (sem_val >> step_semaphore_shift[round]) & 0x0F;
+                        if (step_sem >= 1) {
+                            break;
+                        }
+                    }
 
-                uint32_t l_write_ptr = get_read_ptr(cb_l_in);
-                noc_async_read(intermed_l1_read_addr, l_write_ptr, ml_read_size);
-                intermed_l1_read_addr += ml_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_l_in, PNHt);
+                    // Now read the data from the intermediate buffer
+                    constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
+                    constexpr uint32_t o_read_size = out_chunk_tiles * tile_bytes_intermed;
+                    constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
 
-                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
-                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
-                intermed_l1_read_addr += q_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
+                    // Calculate offset based on round (child writes at round offset)
+                    uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_intermed;
+                    uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out)) + block_offset;
+
+                    // Reserve space in CBs and read data
+                    // Order: l, m, o (same as sender writes)
+                    cb_reserve_back(cb_l_in, PNHt);
+                    uint32_t l_write_ptr = get_write_ptr(cb_l_in);
+                    noc_async_read(intermed_l1_read_addr, l_write_ptr, ml_read_size);
+                    intermed_l1_read_addr += ml_read_size;
+                    noc_async_read_barrier();
+                    cb_push_back(cb_l_in, PNHt);
+
+                    cb_reserve_back(cb_m_in, PNHt);
+                    uint32_t m_write_ptr = get_write_ptr(cb_m_in);
+                    noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
+                    intermed_l1_read_addr += ml_read_size;
+                    noc_async_read_barrier();
+                    cb_push_back(cb_m_in, PNHt);
+
+                    cb_reserve_back(cb_out_o, out_chunk_tiles);
+                    uint32_t o_write_ptr = get_write_ptr(cb_out_o);
+                    noc_async_read(intermed_l1_read_addr, o_write_ptr, o_read_size);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_out_o, out_chunk_tiles);
+                }
             }
         }
-        // Offset for current batch
-        const uint32_t out_batch_offset = cur_batch * out_chunk_tiles;
 
-        // Write entire out into its corresponding batch
-        uint32_t out_tile_id = out_batch_offset;
-        {
-            if constexpr (num_kv_heads > 1 || !is_out_sharded) {
-                cb_wait_front(cb_out, out_chunk_tiles);
-            }
+        // SENDER: send intermediates to parent (only need to do this ONCE, once you send you are done)
+        // We have data (checked at function start), so send it
+        if (!is_tree_root && should_send_to_parent) {
+            // Wait for compute to finish writing to cb_out_worker, cb_out_m, cb_out_l
+            cb_wait_front(cb_out_worker, out_chunk_tiles);
+            cb_wait_front(cb_out_m, PNHt);
+            cb_wait_front(cb_out_l, PNHt);
+
+            constexpr uint32_t tile_bytes = get_tile_size(cb_out_worker);
+            uint32_t block_offset = send_at_round * (out_chunk_tiles + 2 * PNHt) * tile_bytes;
+            constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes;
+            constexpr uint32_t ml_write_size = PNHt * tile_bytes;
+
+            // Get parent's NOC address
+            uint32_t parent_noc_x = reduction_group_core_xs[parent_core_in_group];
+            uint32_t parent_noc_y = reduction_group_core_ys[parent_core_in_group];
+            uint64_t output_write_addr =
+                get_noc_addr(parent_noc_x, parent_noc_y, get_write_ptr(cb_intermed_out)) + block_offset;
+
+            // Send l, m, o to parent (same order as original worker_compute)
+            noc_async_write(get_read_ptr(cb_out_l), output_write_addr, ml_write_size);
+            output_write_addr += ml_write_size;
+            noc_async_write(get_read_ptr(cb_out_m), output_write_addr, ml_write_size);
+            output_write_addr += ml_write_size;
+            noc_async_write(get_read_ptr(cb_out_worker), output_write_addr, o_write_size);
+            noc_async_write_barrier();
+            uint64_t parent_semaphore_noc_addr = get_noc_addr(parent_noc_x, parent_noc_y, reducer_semaphore_addr);
+            noc_semaphore_inc(parent_semaphore_noc_addr, step_semaphore_inc[send_at_round]);
+
+            // pop front
+            cb_pop_front(cb_out_worker, out_chunk_tiles);
+            cb_pop_front(cb_out_m, PNHt);
+            cb_pop_front(cb_out_l, PNHt);
+            noc_async_atomic_barrier();
+            // Senders can return, dont need to participate
+            return;
+        }
+
+        if (!is_tree_root) {
+            return;
+        }
+
+        // ROOT CORE REMAINING WRITER WORK
+        // Offset for current batch
+        uint32_t out_tile_id = cur_batch * out_chunk_tiles;
+        if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+            cb_wait_front(cb_out, out_chunk_tiles);
         }
         noc_async_writes_flushed();
 
@@ -234,7 +344,6 @@ void kernel_main() {
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write
             // partial across phase
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
-
             if (!is_out_sharded) {
                 barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
                     out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
@@ -299,7 +408,8 @@ void kernel_main() {
                 noc_semaphore_inc(output_core_semaphore_noc_addr, 1);
             }
         } else {
-            // if mqa, we don't need to gather outputs for other heads so we can just write entire tiles to memory
+            // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire
+            // tiles to memory
             if (!is_out_sharded) {
                 barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
                     out_tile_id, out_writer, barrier_count);
