@@ -90,6 +90,7 @@ class TTSampling(LightweightModule):
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
+        self.vocab_size = args.vocab_size
         self.max_batch_size = getattr(args, "max_batch_size", 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
@@ -208,11 +209,14 @@ class TTSampling(LightweightModule):
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
-        per_device_vocab_size = self.padded_vocab_size // num_devices_in_mesh
+        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
+        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        # actual_per_device: unpadded vocab per device (for correct global token ID offsets)
+        actual_per_device = (self.vocab_size + num_devices_in_mesh - 1) // num_devices_in_mesh
 
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * per_device_vocab_size
+                device_id * actual_per_device
             )
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
@@ -223,9 +227,9 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Create local indices tensor for top-k operations
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
-        for i in range(per_device_vocab_size):
+        # Create local indices tensor for top-k operations (must match logit width)
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
+        for i in range(padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
