@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -124,6 +125,10 @@ constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 // Note: due to the current method of release pages, up to 1 block of pages
 // may be unavailable to the prefetcher at any time
 constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb_blocks;
+
+// Pointer to real-time profiler config in mailbox (for setting terminate flag)
+volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
@@ -1157,7 +1162,9 @@ re_run_command:
             // "
             //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
             //        ENDL();
+            // DeviceZoneScopedN("CQ-DISPATCH");
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
+            program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id);
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
             ASSERT(offset_count <= std::size(write_offset));
@@ -1199,7 +1206,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
-    DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
+    // DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT << "dispatch_h write_linear_h\n";

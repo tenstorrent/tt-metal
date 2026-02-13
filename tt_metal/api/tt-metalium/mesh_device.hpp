@@ -62,6 +62,7 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
+class D2HSocket;
 
 namespace multihost {
 class DistributedContext;
@@ -161,6 +162,10 @@ public:
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
+    // Initialize D2H socket for real-time profiler streaming from device to host
+    void init_realtime_profiler_socket();
+    // Get the real-time profiler socket (returns nullptr if not initialized)
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;

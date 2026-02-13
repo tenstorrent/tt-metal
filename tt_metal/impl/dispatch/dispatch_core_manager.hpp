@@ -150,6 +150,11 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Finds the closest available dispatch core to PCIe cores for real-time profiler
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the closest available dispatch core to PCIe, or empty if none available
+    std::optional<tt_cxy_pair> get_closest_available_dispatch_core_to_pcie(ChipId device_id);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specfies the core type for dispatch kernels

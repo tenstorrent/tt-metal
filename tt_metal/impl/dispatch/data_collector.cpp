@@ -6,6 +6,9 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
+#include <filesystem>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 
@@ -125,6 +128,70 @@ void DataCollector::RecordKernelGroup(
 
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
+void DataCollector::RecordKernelSourceMap(ProgramImpl& program) {
+    uint64_t runtime_id = program.get_runtime_id();
+    // Only record once per runtime_id
+    if (runtime_id_to_kernel_sources.count(runtime_id)) {
+        return;
+    }
+    auto& hal = MetalContext::instance().hal();
+    std::vector<std::string> sources;
+    for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
+        for (const auto& [handle, kernel] : program.get_kernels(i)) {
+            sources.push_back(kernel->kernel_source().source_);
+        }
+    }
+    runtime_id_to_kernel_sources[runtime_id] = std::move(sources);
+}
+
+std::string DataCollector::GetKernelSourcesForRuntimeId(uint64_t runtime_id) const {
+    auto it = runtime_id_to_kernel_sources.find(runtime_id);
+    if (it == runtime_id_to_kernel_sources.end()) {
+        return "";
+    }
+    std::string result;
+    for (size_t i = 0; i < it->second.size(); i++) {
+        if (i > 0) {
+            result += ",\n";
+        }
+        result += it->second[i];
+    }
+    return result;
+}
+
+std::vector<std::string> DataCollector::GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) const {
+    auto it = runtime_id_to_kernel_sources.find(runtime_id);
+    if (it == runtime_id_to_kernel_sources.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
+    tt::ProgramRealtimeProfilerCallback callback) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    auto handle = next_callback_handle_++;
+    program_realtime_profiler_callbacks_.emplace_back(handle, std::move(callback));
+    return handle;
+}
+
+void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    program_realtime_profiler_callbacks_.erase(
+        std::remove_if(
+            program_realtime_profiler_callbacks_.begin(),
+            program_realtime_profiler_callbacks_.end(),
+            [handle](const auto& entry) { return entry.first == handle; }),
+        program_realtime_profiler_callbacks_.end());
+}
+
+void DataCollector::InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record) {
+    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    for (const auto& [handle, callback] : program_realtime_profiler_callbacks_) {
+        callback(record);
+    }
+}
+
 void DataCollector::DumpData() {
     if (program_id_to_dispatch_data.empty() && program_id_to_kernel_groups.empty() &&
         program_id_to_call_count.empty()) {
@@ -173,7 +240,9 @@ void DataCollector::DumpData() {
     for (const auto& type_data : cross_program_data) {
         type_data.DumpStats(outfile);
     }
+
     outfile.close();
+    log_info(tt::LogMetal, "Dispatch data dumped to {}", std::filesystem::absolute("dispatch_data.txt").string());
 }
 
 }  // namespace tt::tt_metal

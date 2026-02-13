@@ -530,11 +530,11 @@ struct profileScope {
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-            if constexpr (dispatch == DoingDispatch::DISPATCH) {
-                if (wIndex >= (PROFILER_L1_VECTOR_SIZE - DISPATCH_HEADROOM_SIZE)) {
-                    quick_push();
-                }
+            // if constexpr (dispatch == DoingDispatch::DISPATCH) {
+            if (wIndex >= (PROFILER_L1_VECTOR_SIZE - DISPATCH_HEADROOM_SIZE)) {
+                quick_push();
             }
+            //}
         }
     }
 };

@@ -11,7 +11,6 @@
 #include "internal/risc_attribs.h"
 #include "hostdev/socket.h"
 #include "api/alignment.h"
-#include "utils/utils.h"
 #include "debug/dprint.h"
 
 #ifndef COMPILE_FOR_TRISC

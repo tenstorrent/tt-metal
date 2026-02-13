@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,6 +24,8 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -56,6 +60,7 @@ class FabricNodeId;
 }
 namespace tt::tt_metal {
 
+class RealtimeProfilerTracyHandler;
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
@@ -136,6 +141,27 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+
+    // Per-device real-time profiler state (one entry per device in the mesh)
+    struct RealtimeProfilerDeviceState {
+        IDevice* device = nullptr;                      // Physical device pointer
+        uint32_t chip_id = 0;                           // Physical device ID
+        MeshCoordinate mesh_coord = MeshCoordinate(0);  // Position in the mesh
+        CoreCoord realtime_profiler_core;               // Core running real-time profiler kernel
+        std::unique_ptr<D2HSocket> socket;              // D2H socket for this device
+        uint64_t first_timestamp = 0;                   // First device timestamp (for normalization)
+        int64_t sync_host_start = 0;                    // Host time when sync started
+        double sync_frequency = 0.0;                    // Device clock frequency in GHz
+        uint32_t sync_request_addr = 0;                 // Mailbox address for sync request
+        uint32_t sync_host_ts_addr = 0;                 // Mailbox address for sync host timestamp
+    };
+    std::vector<RealtimeProfilerDeviceState> realtime_profiler_devices_;
+
+    // Background thread for scrubbing real-time profiler data from all devices
+    std::thread realtime_profiler_thread_;
+    std::atomic<bool> realtime_profiler_stop_{false};
+    // Tracy handler for real-time profiler (manages per-device contexts and callback)
+    std::unique_ptr<RealtimeProfilerTracyHandler> realtime_profiler_tracy_handler_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -255,6 +281,12 @@ public:
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
+    // Initialize D2H socket for real-time profiler streaming from device to host
+    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    // Run host-device sync for real-time profiler timestamp calibration on a single device
+    void run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples);
+    // Get the real-time profiler socket (returns nullptr if not initialized)
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

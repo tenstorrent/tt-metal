@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <list>
+#include <optional>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -210,6 +211,104 @@ void dispatch_core_manager::add_dispatch_core_to_device_locked(ChipId device_id,
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(ChipId device_id) {
     return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+}
+
+std::optional<tt_cxy_pair> dispatch_core_manager::get_closest_available_dispatch_core_to_pcie(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+
+    // Get all allocated dispatch cores for this device
+    std::vector<CoreCoord> all_allocated_cores = this->get_all_logical_dispatch_cores(device_id);
+    if (all_allocated_cores.empty()) {
+        return std::nullopt;
+    }
+
+    // Get all cores that are currently assigned to dispatch kernels
+    std::vector<CoreCoord> assigned_cores;
+    if (this->dispatch_core_assignments.contains(device_id)) {
+        const auto& device_assignments = this->dispatch_core_assignments.at(device_id);
+        for (const auto& [channel, channel_assignments] : device_assignments) {
+            for (const auto& [cq_id, assignment] : channel_assignments) {
+                if (assignment.dispatcher.has_value()) {
+                    assigned_cores.push_back(CoreCoord(assignment.dispatcher->x, assignment.dispatcher->y));
+                }
+                if (assignment.dispatcher_d.has_value()) {
+                    assigned_cores.push_back(CoreCoord(assignment.dispatcher_d->x, assignment.dispatcher_d->y));
+                }
+                if (assignment.dispatcher_s.has_value()) {
+                    assigned_cores.push_back(CoreCoord(assignment.dispatcher_s->x, assignment.dispatcher_s->y));
+                }
+                if (assignment.prefetcher.has_value()) {
+                    assigned_cores.push_back(CoreCoord(assignment.prefetcher->x, assignment.prefetcher->y));
+                }
+                if (assignment.prefetcher_d.has_value()) {
+                    assigned_cores.push_back(CoreCoord(assignment.prefetcher_d->x, assignment.prefetcher_d->y));
+                }
+                if (assignment.completion_queue_writer.has_value()) {
+                    assigned_cores.push_back(
+                        CoreCoord(assignment.completion_queue_writer->x, assignment.completion_queue_writer->y));
+                }
+                for (const auto& [tunnel, fabric_mux] : assignment.fabric_mux) {
+                    assigned_cores.push_back(CoreCoord(fabric_mux.x, fabric_mux.y));
+                }
+            }
+        }
+    }
+
+    // Find unused cores (allocated but not assigned)
+    std::vector<CoreCoord> unused_cores;
+    for (const CoreCoord& core : all_allocated_cores) {
+        bool is_assigned = false;
+        for (const CoreCoord& assigned : assigned_cores) {
+            if (assigned.x == core.x && assigned.y == core.y) {
+                is_assigned = true;
+                break;
+            }
+        }
+        if (!is_assigned) {
+            unused_cores.push_back(core);
+        }
+    }
+
+    if (unused_cores.empty()) {
+        return std::nullopt;
+    }
+
+    // Get PCIe cores and convert to logical coordinates to match dispatch cores
+    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& pcie_cores_noc0 = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    if (pcie_cores_noc0.empty()) {
+        return std::nullopt;
+    }
+
+    // Convert PCIe cores from NOC0 to logical coordinates for distance calculation
+    std::vector<CoreCoord> pcie_cores_logical;
+    for (const auto& pcie_noc0 : pcie_cores_noc0) {
+        // Convert umd::CoreCoord to tt_xy_pair and translate to logical coordinates
+        tt_xy_pair pcie_noc0_xy = {pcie_noc0.x, pcie_noc0.y};
+        auto pcie_logical_umd = soc.translate_coord_to(pcie_noc0_xy, CoordSystem::NOC0, CoordSystem::LOGICAL);
+        CoreCoord pcie_logical(pcie_logical_umd.x, pcie_logical_umd.y);
+        pcie_cores_logical.push_back(pcie_logical);
+    }
+
+    // Calculate distance from each unused core to each PCIe core and find the closest
+    CoreCoord closest_core = unused_cores[0];
+    uint32_t min_distance_squared = UINT32_MAX;
+
+    for (const CoreCoord& unused_core : unused_cores) {
+        for (const CoreCoord& pcie_core : pcie_cores_logical) {
+            // Calculate Euclidean distance squared
+            int32_t dx = static_cast<int32_t>(unused_core.x) - static_cast<int32_t>(pcie_core.x);
+            int32_t dy = static_cast<int32_t>(unused_core.y) - static_cast<int32_t>(pcie_core.y);
+            uint32_t distance_squared = static_cast<uint32_t>(dx * dx + dy * dy);
+
+            if (distance_squared < min_distance_squared) {
+                min_distance_squared = distance_squared;
+                closest_core = unused_core;
+            }
+        }
+    }
+
+    return tt_cxy_pair(device_id, closest_core.x, closest_core.y);
 }
 
 // private methods

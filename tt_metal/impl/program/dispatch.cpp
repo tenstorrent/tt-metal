@@ -2280,6 +2280,10 @@ void update_program_dispatch_commands(
     uint16_t runtime_id = program.get_runtime_id();
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
+
+    // Record the runtime_id -> kernel source paths mapping for real-time profiler correlation.
+    tt::RecordKernelSourceMap(program);
+
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,

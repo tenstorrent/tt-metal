@@ -79,6 +79,44 @@ struct profiler_msg_t {
     profiler_msg_buffer_t buffer[PROCESSOR_COUNT];
 };
 
+// Real-time profiler state enum for D2H socket streaming kernel (ping-pong buffering)
+enum RealtimeProfilerState : uint32_t {
+    REALTIME_PROFILER_STATE_IDLE = 0,       // Waiting for initialization, skip iteration
+    REALTIME_PROFILER_STATE_PUSH_A = 1,     // Push real-time profiler data from buffer A
+    REALTIME_PROFILER_STATE_PUSH_B = 2,     // Push real-time profiler data from buffer B
+    REALTIME_PROFILER_STATE_TERMINATE = 3,  // Signal to terminate the kernel
+};
+
+// Real-time profiler data payload - 16 bytes, PCIe write aligned
+struct realtime_profiler_timestamp_t {
+    uint32_t time_hi;  // High 32 bits of timestamp
+    uint32_t time_lo;  // Low 32 bits of timestamp
+    uint32_t id;       // Real-time profiler event ID
+    uint32_t header;   // Event header/metadata
+};
+
+// Real-time profiler message for D2H socket streaming (ping-pong buffering)
+// Placed after profiler_msg_t in mailboxes_t to allow for expansion
+struct realtime_profiler_msg_t {
+    volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
+    volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)
+    volatile uint32_t realtime_profiler_core_noc_xy;   // NOC XY of real-time profiler core (remote terminate)
+    volatile uint32_t realtime_profiler_mailbox_addr;  // Mailbox addr on real-time profiler core (remote terminate)
+    // Ping-pong buffer A
+    struct realtime_profiler_timestamp_t kernel_start_a;  // Device kernel start time (buffer A)
+    struct realtime_profiler_timestamp_t kernel_end_a;    // Device kernel stop time (buffer A)
+    // Ping-pong buffer B
+    struct realtime_profiler_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
+    struct realtime_profiler_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
+    // Program ID circular buffer
+    volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
+    volatile uint32_t program_id_fifo_start;  // Read index (consumer)
+    volatile uint32_t program_id_fifo_end;    // Write index (producer)
+    // Sync mechanism - host writes timestamp, device captures and responds
+    volatile uint32_t sync_request;         // 1 = enter sync mode, 0 = exit
+    volatile uint32_t sync_host_timestamp;  // Host writes timestamp here for sync
+};
+
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
@@ -395,6 +433,7 @@ struct mailboxes_t {
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
+    struct realtime_profiler_msg_t realtime_profiler;  // Placed after profiler to allow for expansion
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().

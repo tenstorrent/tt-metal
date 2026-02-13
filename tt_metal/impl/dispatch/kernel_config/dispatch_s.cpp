@@ -9,6 +9,7 @@
 #include <string>
 #include <variant>
 #include <vector>
+#include <tt-metalium/kernel_types.hpp>
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
@@ -164,6 +165,26 @@ void DispatchSKernel::CreateKernel() {
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+
+    // Add compute kernel for TRISC0 on Tensix dispatch cores
+    // Note: Only Tensix (WORKER) cores have TRISCs - ETH cores do not
+    if (GetCoreType() == CoreType::WORKER) {
+        const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
+        log_info(
+            tt::LogMetal,
+            "DispatchSKernel: Adding compute kernel {} on core ({}, {})",
+            compute_kernel_path,
+            logical_core_.x,
+            logical_core_.y);
+
+        std::map<std::string, std::string> compute_defines = {
+            {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
+            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
+        };
+        tt::tt_metal::ComputeConfig compute_config;
+        compute_config.defines = compute_defines;
+        tt::tt_metal::CreateKernel(*program_, compute_kernel_path, logical_core_, compute_config);
+    }
 }
 
 void DispatchSKernel::ConfigureCore() {
