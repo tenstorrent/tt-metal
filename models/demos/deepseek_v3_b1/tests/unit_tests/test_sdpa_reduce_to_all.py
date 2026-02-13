@@ -124,7 +124,6 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector)
 
     position_mask = torch.tensor(position_vector, dtype=torch.bfloat16)
     final_reduction = position_mask.sum() > 1.0
-    print("final_reduction:", final_reduction)
 
     m_data_per_device = []
     s_data_per_device = []
@@ -179,6 +178,8 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector)
         memory_config=position_mem_config,
         mesh_mapper=mesh_mapper,
     )
+    if position_vector == [1.0, 1.0, 1.0, 1.0]:
+        position_mesh = None
 
     input_l_mesh = ttnn.from_torch(
         l_data_all,

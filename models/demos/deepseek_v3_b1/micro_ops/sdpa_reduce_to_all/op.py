@@ -145,8 +145,6 @@ class SdpaReduceToAll:
                 r1_01_valid,
                 r1_23_valid,
             )
-
-            print("final_reduction:", final_reduction)
             if final_reduction:
                 l_final = l_final / s_final.expand(-1, l_final.shape[1])
             l_final_cores.append(l_final)
@@ -721,6 +719,7 @@ class SdpaReduceToAll:
                             reader_rt_args[core.x][core.y].extend(
                                 [
                                     device_idx,
+                                    r1_neighbor_device_idx,
                                     r2_neighbor_device_idx,
                                     r2_neighbor_r1_neighbor_idx,
                                 ]

@@ -180,7 +180,6 @@ ALWI void sdpa_tail_streaming_conditional(
     bool local_valid) {
     // Only local valid - copy local data to output
     if (!neighbor_valid && local_valid) {
-        DPRINT << "Case 2: only local valid, normalize=" << (uint32_t)normalize << "\n";
         if constexpr (normalize) {
             // Normalize local data: pass same CB twice to trigger single-input path
             sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
@@ -194,7 +193,6 @@ ALWI void sdpa_tail_streaming_conditional(
 
     // Only neighbor valid - copy neighbor data to output
     if (neighbor_valid && !local_valid) {
-        DPRINT << "Case 3: only neighbor valid, normalize=" << (uint32_t)normalize << "\n";
         if constexpr (normalize) {
             // Normalize neighbor data: pass same CB twice to trigger single-input path
             sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
@@ -207,7 +205,6 @@ ALWI void sdpa_tail_streaming_conditional(
     }
 
     // Case 4: Both valid - perform normal SDPA reduction
-    DPRINT << "Case 4: both valid, normalize=" << (uint32_t)normalize << ", normal SDPA reduction\n";
     sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
 }
@@ -228,9 +225,6 @@ void kernel_main() {
     uint32_t device_idx = 0;
     uint32_t r1_neighbor_device_idx = 0;
     uint32_t r2_neighbor_device_idx = 0;
-
-    DPRINT << "COMPUTE position_enabled: " << (uint32_t)position_enabled << ", cb_position: " << (uint32_t)cb_position
-           << "\n";
 
     if constexpr (position_enabled) {
         // Read device indices from runtime args
@@ -257,7 +251,6 @@ void kernel_main() {
     // =========================================================================
     // ROUND 1: reduce(local, r1_neighbor) → r1_result (unnormalized)
     // =========================================================================
-    DPRINT << "COMPUTE starting R1 reduction\n";
     sdpa_tail_streaming_conditional<
         EXP_APPROX_MODE,
         false /* no normalize - R1 doesn't normalize */,
@@ -273,7 +266,6 @@ void kernel_main() {
         cb_r1_result_l,     // l_out
         r1_neighbor_valid,
         local_valid);
-    DPRINT << "COMPUTE finished R1 reduction\n";
 
     // =========================================================================
     // ROUND 2: reduce(r1_result, r2_neighbor) → final output (ALWAYS normalized)
@@ -298,5 +290,4 @@ void kernel_main() {
         cb_l_out,              // l_out
         r2_neighbor_r1_valid,  // R2 neighbor R1 result validity
         local_r1_valid);       // Local R1 result validity
-    DPRINT << "COMPUTE finished R2 reduction\n";
 }
