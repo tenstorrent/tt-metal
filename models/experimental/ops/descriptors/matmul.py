@@ -48,9 +48,10 @@ def matmul(
     device = input_a.device()
 
     if core_range_set is None:
-        # core_range_set is not used by create_descriptor (core range derived from program_config),
-        # but we need a valid one for the API. Use single-core to match default program config.
-        core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        grid_size = device.compute_with_storage_grid_size()
+        core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        )
 
     # Auto-generate a simple program config if not provided
     if program_config is None:
