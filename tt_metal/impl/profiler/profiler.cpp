@@ -420,6 +420,7 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const st
         get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
 
     std::vector<CoreCoord> virtual_dispatch_cores;
+    virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
             device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));

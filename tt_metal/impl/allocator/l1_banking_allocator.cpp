@@ -66,6 +66,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
 
     // Define the bank assignment here.
     std::vector<uint32_t> shuffled_bank_id = {};
+    shuffled_bank_id.reserve(num_l1_banks);
     if (not config_->l1_bank_remap.empty()) {
         TT_ASSERT(
             num_l1_banks == config_->l1_bank_remap.size(),
@@ -214,6 +215,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
         "Reserved size must be aligned to L1 allocator alignment {}",
         config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
+    config.dram_bank_offsets.reserve(soc_desc.get_num_dram_views());
     for (auto channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }

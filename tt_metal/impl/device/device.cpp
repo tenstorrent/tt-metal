@@ -794,6 +794,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         }
         // Get all logical cores in the worker grid
         std::vector<CoreCoord> all_worker_cores_logical;
+        all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
         for (int i = 0; i < num_cores_x; ++i) {
             for (int j = 0; j < num_cores_y; ++j) {
                 all_worker_cores_logical.push_back(CoreCoord(i, j));

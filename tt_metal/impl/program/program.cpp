@@ -1201,6 +1201,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
+                kernel_ids.reserve(kernel_group->kernel_ids.size());
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     kernel_ids.push_back(device_local_kernel_id);
@@ -1230,6 +1231,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 // No checks for max dispatch class
                 // Validated during CreateKernel if the requested processor is supported
                 std::vector<KernelHandle> kernel_ids;
+                kernel_ids.reserve(kernel_group->kernel_ids.size());
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
