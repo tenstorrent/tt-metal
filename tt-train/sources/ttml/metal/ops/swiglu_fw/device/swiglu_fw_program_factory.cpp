@@ -28,13 +28,13 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel.cpp";
 
 // X reader + Y writer runtime arg indices
-constexpr uint32_t kXReaderXAddrIdx = 0;
-constexpr uint32_t kXReaderYAddrIdx = 1;
+constexpr uint32_t kXReaderXAddrIdx = 0U;
+constexpr uint32_t kXReaderYAddrIdx = 1U;
 
 // Weight sender runtime arg indices
-constexpr uint32_t kWSenderW1AddrIdx = 0;
-constexpr uint32_t kWSenderW2AddrIdx = 1;
-constexpr uint32_t kWSenderW3AddrIdx = 2;
+constexpr uint32_t kWSenderW1AddrIdx = 0U;
+constexpr uint32_t kWSenderW2AddrIdx = 1U;
+constexpr uint32_t kWSenderW3AddrIdx = 2U;
 
 // CBs with input data
 constexpr auto kInputCbIndex = tt::CBIndex::c_0;
@@ -88,16 +88,16 @@ void assign_per_core_runtime_args(
     //   RISCV_0 / NOC1 (receiver cores): Weight receiver
 
     // Compute multicast bounding box (physical coordinates)
-    uint32_t mcast_start_physical_x = 0;
-    uint32_t mcast_start_physical_y = 0;
-    uint32_t mcast_end_physical_x = 0;
-    uint32_t mcast_end_physical_y = 0;
-    uint32_t num_receivers_excluding_sender = 0;
+    uint32_t mcast_start_physical_x = 0U;
+    uint32_t mcast_start_physical_y = 0U;
+    uint32_t mcast_end_physical_x = 0U;
+    uint32_t mcast_end_physical_y = 0U;
+    uint32_t num_receivers_excluding_sender = 0U;
 
-    if (use_multicast && num_cores > 1) {
-        uint32_t max_x = 0;
-        uint32_t max_y = 0;
-        for (uint32_t i = 0; i < num_cores; i++) {
+    if (use_multicast && num_cores > 1U) {
+        uint32_t max_x = 0U;
+        uint32_t max_y = 0U;
+        for (uint32_t i = 0U; i < num_cores; i++) {
             tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
             max_x = std::max(max_x, static_cast<uint32_t>(core.x));
             max_y = std::max(max_y, static_cast<uint32_t>(core.y));
@@ -108,15 +108,15 @@ void assign_per_core_runtime_args(
         mcast_start_physical_y = mcast_start_physical.y;
         mcast_end_physical_x = mcast_end_physical.x;
         mcast_end_physical_y = mcast_end_physical.y;
-        num_receivers_excluding_sender = num_cores - 1;
+        num_receivers_excluding_sender = num_cores - 1U;
     }
 
     auto sender_physical = device->worker_core_from_logical_core({0, 0});
 
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0U, num_rows_written = 0U; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
-        uint32_t num_rows_per_core = 0;
+        uint32_t num_rows_per_core = 0U;
         if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -126,7 +126,7 @@ void assign_per_core_runtime_args(
         }
 
         const uint32_t max_rows_for_sync = use_multicast ? max_rows_across_all_cores : num_rows_per_core;
-        const bool is_sender = (core.x == 0 && core.y == 0);
+        const bool is_sender = (core.x == 0U && core.y == 0U);
 
         // --- RISCV_1: X reader + Y writer (ALL cores, same args) ---
         SetRuntimeArgs(
@@ -176,11 +176,11 @@ void assign_per_core_runtime_args(
                  w2->address(),
                  w3->address(),
                  max_rows_for_sync,
-                 0,
-                 0,
-                 0,
-                 0,  // unused mcast coords
-                 0,  // num_receivers = 0
+                 0U,
+                 0U,
+                 0U,
+                 0U,  // unused mcast coords
+                 0U,  // num_receivers = 0
                  mcast_sender_semaphore_id,
                  mcast_receiver_semaphore_id});
         }
@@ -469,7 +469,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
                 tt::tt_metal::CoreCoord core = {x, y};
                 // Single-sender: only core (0,0) is the sender
                 if (use_multicast) {
-                    if (core.x == 0 && core.y == 0) {
+                    if (core.x == 0U && core.y == 0U) {
                         sender_ranges.push_back(tt::tt_metal::CoreRange(core, core));
                     } else {
                         receiver_ranges.push_back(tt::tt_metal::CoreRange(core, core));
@@ -493,8 +493,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // NOTE: W1, W3, W2 execute sequentially (W1→W3 in Phase A, W2 in Phase C)
     // and share the same multicast topology, so they can reuse the same semaphores.
     // -------------------------------------------------------------------------
-    uint32_t mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    uint32_t mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    uint32_t mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
+    uint32_t mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0U);
 
     // -------------------------------------------------------------------------
     // 3.3) Create dual-NOC dataflow kernels
@@ -648,9 +648,9 @@ void SwiGLUForwardProgramFactory::override_runtime_arguments(
     auto& x_reader_runtime_args = GetRuntimeArgs(program, shared_variables.x_reader_y_writer_kernel_id);
     auto& weight_sender_runtime_args = GetRuntimeArgs(program, shared_variables.weight_sender_kernel_id);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
+    for (uint32_t i = 0U; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i % num_cores_x, i / num_cores_x};
-        bool is_sender = (core.x == 0 && core.y == 0);
+        bool is_sender = (core.x == 0U && core.y == 0U);
 
         // Update X reader + Y writer (all cores): X address and Y address
         {

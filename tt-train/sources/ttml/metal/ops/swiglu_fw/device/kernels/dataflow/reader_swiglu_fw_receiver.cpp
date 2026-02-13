@@ -44,10 +44,10 @@ void kernel_main() {
     const uint64_t sender_semaphore_noc_addr =
         get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, mcast_sender_semaphore_addr);
 
-    for (uint32_t r = 0; r < max_rows_for_sync; ++r) {
+    for (uint32_t r = 0U; r < max_rows_for_sync; ++r) {
         // ---- Phase A: Receive W1/W3 for all p_blocks × k_blocks ----
-        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+        for (uint32_t p_block_start = 0U; p_block_start < Wt; p_block_start += block_size) {
+            for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                 constexpr uint32_t tiles_per_batch = block_size * block_size;
                 mcast_receiver_reserve_and_receive(
                     cb_w1_idx, tiles_per_batch, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);
@@ -59,8 +59,8 @@ void kernel_main() {
         // ---- Phase B: Idle (SiLU is compute-only) ----
 
         // ---- Phase C: Receive W2 for all c_blocks × k_blocks ----
-        for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+        for (uint32_t c_block_start = 0U; c_block_start < Wt; c_block_start += block_size) {
+            for (uint32_t k_block_start = 0U; k_block_start < hidden_Wt; k_block_start += block_size) {
                 constexpr uint32_t tiles_per_batch = block_size * block_size;
                 mcast_receiver_reserve_and_receive(
                     cb_w2_idx, tiles_per_batch, mcast_receiver_sem_ptr, sender_semaphore_noc_addr);

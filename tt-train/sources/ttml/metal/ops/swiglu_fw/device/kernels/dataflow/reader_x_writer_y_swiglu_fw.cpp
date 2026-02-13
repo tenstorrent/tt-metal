@@ -54,7 +54,7 @@ void kernel_main() {
 
         // ---- Phase A: Read X[r, :] ----
         // For padding rows, read last valid row to keep compute fed
-        const uint32_t x_row = is_padding_row ? (end_row - 1) : r;
+        const uint32_t x_row = is_padding_row ? (end_row - 1U) : r;
         read_full_row_tiles(cb_input_idx, x_address_generator, Wt, block_size, tile_bytes, x_row * Wt);
 
         // ---- Phase B: Nothing (SiLU is compute-only, no dataflow needed) ----
