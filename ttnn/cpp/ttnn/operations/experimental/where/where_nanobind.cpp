@@ -55,14 +55,13 @@ void bind_where(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            [](const Tensor& condition,
-               const Tensor& true_value,
-               const Tensor& false_value,
-               std::optional<const DataType> output_dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
-            },
+            static_cast<Tensor (*)(
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                std::optional<const DataType>,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>)>(&ttnn::experimental::ternary::where),
             nb::arg("condition"),
             nb::arg("true_value"),
             nb::arg("false_value"),
@@ -71,14 +70,13 @@ void bind_where(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            [](const Tensor& condition,
-               const float true_value,
-               const Tensor& false_value,
-               std::optional<const DataType> output_dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
-            },
+            static_cast<Tensor (*)(
+                const Tensor&,
+                float,
+                const Tensor&,
+                std::optional<const DataType>,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>)>(&ttnn::experimental::ternary::where),
             nb::arg("condition"),
             nb::arg("true_value"),
             nb::arg("false_value"),
@@ -87,14 +85,13 @@ void bind_where(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            [](const Tensor& condition,
-               const Tensor& true_value,
-               const float false_value,
-               std::optional<const DataType> output_dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
-            },
+            static_cast<Tensor (*)(
+                const Tensor&,
+                const Tensor&,
+                float,
+                std::optional<const DataType>,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>)>(&ttnn::experimental::ternary::where),
             nb::arg("condition"),
             nb::arg("true_value"),
             nb::arg("false_value"),
@@ -103,14 +100,13 @@ void bind_where(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            [](const Tensor& condition,
-               const float true_value,
-               const float false_value,
-               std::optional<const DataType> output_dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
-            },
+            static_cast<Tensor (*)(
+                const Tensor&,
+                float,
+                float,
+                std::optional<const DataType>,
+                const std::optional<MemoryConfig>&,
+                std::optional<Tensor>)>(&ttnn::experimental::ternary::where),
             nb::arg("condition"),
             nb::arg("true_value"),
             nb::arg("false_value"),
