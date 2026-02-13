@@ -30,7 +30,7 @@ void kernel_main() {
     const uint32_t base_l1_write_addr = get_write_ptr(output_cb);
     uint32_t arg_idx = 2;
 
-    for (uint32_t input_id = start_input_id; input_id < end_input_id; input_id++) {
+    for (uint32_t input_id = start_input_id; input_id < end_input_id; ++input_id) {
         const uint32_t num_pages = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t write_offset_pages = get_arg_val<uint32_t>(arg_idx++);
 
@@ -44,7 +44,7 @@ void kernel_main() {
         const uint32_t l1_write_addr = base_l1_write_addr + (write_offset_pages * page_size);
 
         noc_async_read_one_packet_set_state(noc_addr_src, page_size);
-        for (uint32_t page = 0; page < num_pages; page++) {
+        for (uint32_t page = 0; page < num_pages; ++page) {
             noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr + page * page_size);
             l1_read_addr += page_size;
         }

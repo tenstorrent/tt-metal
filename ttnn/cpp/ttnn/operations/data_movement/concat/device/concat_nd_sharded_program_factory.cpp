@@ -127,11 +127,15 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
     // [start,end)). Reader handles inputs [0, mid), writer handles [mid, num_input_tensors).
     const uint32_t mid = (num_input_tensors + 1) / 2;
 
+    std::cout << "cores amount " << cores.size() << " output cores amount " << output_dist_spec.cores().size() << "\n";
+
+    uint32_t cn = 0;
     for (const CoreCoord& core : cores) {
         const size_t core_idx = find_core_index(core, output_dist_spec.cores());
         if (core_idx >= output_dist_spec.num_cores()) {
             continue;
         }
+        std::cout << "core x :" << ++cn << "\n";
 
         uint32_t output_write_offset_pages = 0;
         std::vector<uint32_t> input_num_pages(num_input_tensors);
@@ -161,7 +165,7 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-    }
+    }  // for cores
 
     return {
         std::move(program),
