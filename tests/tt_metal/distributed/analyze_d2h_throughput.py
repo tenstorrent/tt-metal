@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Analyze D2H socket steady-state throughput benchmark results.
+"""Analyze D2H socket benchmark results (throughput or latency).
 
-Usage: python3 analyze_d2h_throughput.py [results.csv]
-
-Outputs:
-  Console  — summary stats, per-page breakdown, FIFO impact
-  PNGs     — d2h_throughput.png, d2h_tp_vs_fifo.png, d2h_tp_heatmap_grid.png
-  CSV      — d2h_throughput_summary.csv (reference spreadsheet format)
+Usage:
+  python3 analyze_d2h_throughput.py --throughput results.csv
+  python3 analyze_d2h_throughput.py --latency   latency_results.csv
 """
 
-import sys, numpy as np, pandas as pd
+import argparse, sys, numpy as np, pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")
@@ -27,8 +24,8 @@ def human_bytes(n):
 # ── data loading ─────────────────────────────────────────────────────────────
 
 
-def load_csv(path):
-    """Load benchmark CSV. Auto-detects column format; handles commas in MeshCoordinate."""
+def load_throughput_csv(path):
+    """Load throughput benchmark CSV. Handles commas in MeshCoordinate."""
     with open(path) as f:
         header = f.readline().strip()
         rows = [l.strip().split(",") for l in f if l.strip()]
@@ -78,72 +75,41 @@ def load_csv(path):
     return df
 
 
+def load_latency_csv(path):
+    """Load latency benchmark CSV (pcie_socket_data_ping output)."""
+    with open(path) as f:
+        header = f.readline().strip()
+        rows = [l.strip().split(",") for l in f if l.strip()]
+
+    cols = [
+        "page_size",
+        "socket_fifo_size",
+        "num_iterations",
+        "avg_us",
+        "min_us",
+        "max_us",
+        "p50_us",
+        "p99_us",
+        "avg_cycles",
+        "min_cycles",
+        "max_cycles",
+    ]
+    nc = len(cols)
+    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
+    for c in cols:
+        df[c] = pd.to_numeric(df[c])
+    return df
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
 def median_over_fifo(df):
     return (
         df.groupby(["page_size", "total_data"])
-        .agg(
-            throughput_gbps=("throughput_gbps", "median"),
-            avg_per_page_us=("avg_per_page_us", "median"),
-        )
+        .agg(throughput_gbps=("throughput_gbps", "median"), avg_per_page_us=("avg_per_page_us", "median"))
         .reset_index()
     )
-
-
-# ── console output ───────────────────────────────────────────────────────────
-
-
-def print_report(df):
-    agg = median_over_fifo(df)
-    nf = df.socket_fifo_size.nunique()
-
-    print(f"\n{'='*70}\n  D2H Steady-State Throughput  ({len(df)} rows)\n{'='*70}")
-    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
-    print(
-        f"  FIFO sizes : {nf} values, {human_bytes(df.socket_fifo_size.min())} .. "
-        f"{human_bytes(df.socket_fifo_size.max())}"
-    )
-    print(f"  Total data : {[human_bytes(x) for x in sorted(df.total_data.unique())]}")
-
-    pk = agg.sort_values("throughput_gbps", ascending=False).iloc[0]
-    print(
-        f"\n  Peak: {pk.throughput_gbps:.3f} GB/s "
-        f"(page={human_bytes(pk.page_size)}, total={human_bytes(pk.total_data)})"
-    )
-
-    # throughput table
-    tds = sorted(agg.total_data.unique())
-    hdr = f"  {'page':>6}" + "".join(f"{human_bytes(t):>8}" for t in tds)
-    print(f"\n  Throughput (GB/s) -- median across {nf} FIFO sizes:\n{hdr}\n  {'-'*(len(hdr)-2)}")
-    for ps in sorted(agg.page_size.unique()):
-        row = f"  {human_bytes(ps):>6}"
-        for td in tds:
-            c = agg[(agg.page_size == ps) & (agg.total_data == td)]
-            row += f"{c.throughput_gbps.values[0]:>8.3f}" if len(c) else f"{'--':>8}"
-        print(row)
-
-    # FIFO impact
-    td = df.total_data.max()
-    sub = df[df.total_data == td]
-    print(f"\n  FIFO impact at total_data={human_bytes(td)}:")
-    print(f"  {'page':>6} {'min':>8} {'median':>8} {'max':>8} {'CV%':>6}")
-    print(f"  {'-'*38}")
-    for ps in sorted(sub.page_size.unique()):
-        g = sub[sub.page_size == ps].throughput_gbps
-        cv = g.std() / g.mean() * 100 if g.mean() > 0 else 0
-        print(f"  {human_bytes(ps):>6} {g.min():>8.3f} {g.median():>8.3f} {g.max():>8.3f} {cv:>5.1f}%")
-
-    # per-page timing
-    agg2 = median_over_fifo(df[df.total_data == td])
-    print(f"\n  Per-page timing (total_data={human_bytes(td)}):")
-    print(f"  {'page':>6} {'us/page':>10} {'cycles':>10} {'GB/s':>8}\n  {'-'*38}")
-    for _, r in agg2.sort_values("page_size").iterrows():
-        print(
-            f"  {human_bytes(r.page_size):>6} {r.avg_per_page_us:>10.3f} "
-            f"{r.avg_per_page_us*1350:>10.0f} {r.throughput_gbps:>8.3f}"
-        )
-
-
-# ── plots ────────────────────────────────────────────────────────────────────
 
 
 def _annotate_heatmap(ax, data, vmax, fontsize=5):
@@ -162,8 +128,60 @@ def _annotate_heatmap(ax, data, vmax, fontsize=5):
                 )
 
 
-def plot_throughput(df, out="d2h_throughput.png"):
-    """BW vs page_size, one line per total_data."""
+# ══════════════════════════════════════════════════════════════════════════════
+#  THROUGHPUT
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def tp_print_report(df):
+    agg = median_over_fifo(df)
+    nf = df.socket_fifo_size.nunique()
+
+    print(f"\n{'='*70}\n  D2H Steady-State Throughput  ({len(df)} rows)\n{'='*70}")
+    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
+    print(
+        f"  FIFO sizes : {nf} values, {human_bytes(df.socket_fifo_size.min())} .. "
+        f"{human_bytes(df.socket_fifo_size.max())}"
+    )
+    print(f"  Total data : {[human_bytes(x) for x in sorted(df.total_data.unique())]}")
+
+    pk = agg.sort_values("throughput_gbps", ascending=False).iloc[0]
+    print(
+        f"\n  Peak: {pk.throughput_gbps:.3f} GB/s "
+        f"(page={human_bytes(pk.page_size)}, total={human_bytes(pk.total_data)})"
+    )
+
+    tds = sorted(agg.total_data.unique())
+    hdr = f"  {'page':>6}" + "".join(f"{human_bytes(t):>8}" for t in tds)
+    print(f"\n  Throughput (GB/s) -- median across {nf} FIFO sizes:\n{hdr}\n  {'-'*(len(hdr)-2)}")
+    for ps in sorted(agg.page_size.unique()):
+        row = f"  {human_bytes(ps):>6}"
+        for td in tds:
+            c = agg[(agg.page_size == ps) & (agg.total_data == td)]
+            row += f"{c.throughput_gbps.values[0]:>8.3f}" if len(c) else f"{'--':>8}"
+        print(row)
+
+    td = df.total_data.max()
+    sub = df[df.total_data == td]
+    print(f"\n  FIFO impact at total_data={human_bytes(td)}:")
+    print(f"  {'page':>6} {'min':>8} {'median':>8} {'max':>8} {'CV%':>6}")
+    print(f"  {'-'*38}")
+    for ps in sorted(sub.page_size.unique()):
+        g = sub[sub.page_size == ps].throughput_gbps
+        cv = g.std() / g.mean() * 100 if g.mean() > 0 else 0
+        print(f"  {human_bytes(ps):>6} {g.min():>8.3f} {g.median():>8.3f} {g.max():>8.3f} {cv:>5.1f}%")
+
+    agg2 = median_over_fifo(df[df.total_data == td])
+    print(f"\n  Per-page timing (total_data={human_bytes(td)}):")
+    print(f"  {'page':>6} {'us/page':>10} {'cycles':>10} {'GB/s':>8}\n  {'-'*38}")
+    for _, r in agg2.sort_values("page_size").iterrows():
+        print(
+            f"  {human_bytes(r.page_size):>6} {r.avg_per_page_us:>10.3f} "
+            f"{r.avg_per_page_us*1350:>10.0f} {r.throughput_gbps:>8.3f}"
+        )
+
+
+def tp_plot_throughput(df, out="d2h_throughput.png"):
     agg = median_over_fifo(df)
     fig, ax = plt.subplots(figsize=(12, 6))
     for td in sorted(agg.total_data.unique()):
@@ -181,8 +199,7 @@ def plot_throughput(df, out="d2h_throughput.png"):
     print(f"\n  Saved {out}")
 
 
-def plot_throughput_vs_fifo(df, out="d2h_tp_vs_fifo.png"):
-    """BW vs FIFO size, one line per page_size, at largest total_data."""
+def tp_plot_vs_fifo(df, out="d2h_tp_vs_fifo.png"):
     td = df.total_data.max()
     sub = df[df.total_data == td]
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -206,8 +223,7 @@ def plot_throughput_vs_fifo(df, out="d2h_tp_vs_fifo.png"):
     print(f"  Saved {out}")
 
 
-def plot_throughput_heatmap_grid(df, out="d2h_tp_heatmap_grid.png"):
-    """Faceted heatmaps: one per total_data, shared color scale."""
+def tp_plot_heatmap_grid(df, out="d2h_tp_heatmap_grid.png"):
     td_vals = sorted(df.total_data.unique())
     ncols, n = 4, len(td_vals)
     nrows = -(-n // ncols)
@@ -245,7 +261,7 @@ def plot_throughput_heatmap_grid(df, out="d2h_tp_heatmap_grid.png"):
     print(f"  Saved {out}")
 
 
-def export_csv(df, out="d2h_throughput_summary.csv"):
+def tp_export_csv(df, out="d2h_throughput_summary.csv"):
     repr_fifos = [1024, 4096, 32768, 512 * 1024 * 1024]
     repr_fifos = [f for f in repr_fifos if f in df.socket_fifo_size.values]
     nf = df.socket_fifo_size.nunique()
@@ -270,10 +286,156 @@ def export_csv(df, out="d2h_throughput_summary.csv"):
     print(f"  Saved {out}")
 
 
+def run_throughput(path):
+    df = load_throughput_csv(path)
+    tp_print_report(df)
+    tp_plot_throughput(df)
+    tp_plot_vs_fifo(df)
+    tp_plot_heatmap_grid(df)
+    tp_export_csv(df)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LATENCY
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def lat_print_report(df):
+    nf = df.socket_fifo_size.nunique()
+    print(f"\n{'='*70}\n  D2H Round-Trip Latency  ({len(df)} rows)\n{'='*70}")
+    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
+    print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
+    print(f"  Iterations : {int(df.num_iterations.iloc[0])}")
+
+    # p50 table: rows=page_size, cols=fifo_size
+    fifos = sorted(df.socket_fifo_size.unique())
+    hdr = f"  {'page':>6}" + "".join(f"{human_bytes(f):>10}" for f in fifos)
+    print(f"\n  p50 latency (us):\n{hdr}\n  {'-'*(len(hdr)-2)}")
+    for ps in sorted(df.page_size.unique()):
+        row = f"  {human_bytes(ps):>6}"
+        for fs in fifos:
+            c = df[(df.page_size == ps) & (df.socket_fifo_size == fs)]
+            row += f"{c.p50_us.values[0]:>10.2f}" if len(c) else f"{'--':>10}"
+        print(row)
+
+    # spread: min vs p50 vs max at largest FIFO
+    fs_max = df.socket_fifo_size.max()
+    sub = df[df.socket_fifo_size == fs_max]
+    print(f"\n  Latency spread at FIFO={human_bytes(fs_max)}:")
+    print(f"  {'page':>6} {'min':>8} {'p50':>8} {'p99':>8} {'max':>8} {'avg':>8}")
+    print(f"  {'-'*50}")
+    for ps in sorted(sub.page_size.unique()):
+        r = sub[sub.page_size == ps].iloc[0]
+        print(
+            f"  {human_bytes(ps):>6} {r.min_us:>8.2f} {r.p50_us:>8.2f} "
+            f"{r.p99_us:>8.2f} {r.max_us:>8.2f} {r.avg_us:>8.2f}"
+        )
+
+    # FIFO impact
+    print(f"\n  FIFO impact on p50 latency:")
+    print(f"  {'page':>6} " + "".join(f"{human_bytes(f):>10}" for f in fifos))
+    print(f"  {'-'*(6 + 10*len(fifos))}")
+    for ps in sorted(df.page_size.unique()):
+        row = f"  {human_bytes(ps):>6}"
+        for fs in fifos:
+            c = df[(df.page_size == ps) & (df.socket_fifo_size == fs)]
+            row += f"{c.p50_us.values[0]:>10.2f}" if len(c) else f"{'--':>10}"
+        print(row)
+
+
+def lat_plot(df, out="d2h_latency.png"):
+    """Latency vs page_size, one line per FIFO size. Dashed min/max lines instead of fill."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for fs in sorted(df.socket_fifo_size.unique()):
+        g = df[df.socket_fifo_size == fs].sort_values("page_size")
+        color = ax.plot(g.page_size, g.p50_us, "o-", label=f"FIFO={human_bytes(fs)}", ms=5, lw=2)[0].get_color()
+        ax.plot(g.page_size, g.min_us, "--", color=color, lw=0.8, alpha=0.5)
+        ax.plot(g.page_size, g.max_us, "--", color=color, lw=0.8, alpha=0.5)
+    ax.set(
+        xscale="log",
+        yscale="log",
+        xlabel="Page Size (bytes)",
+        ylabel="Latency (us)",
+        title="D2H Round-Trip Latency (p50 solid, min/max dashed)",
+    )
+    ax.set_xticks(t := sorted(df.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def lat_plot_breakdown(df, out="d2h_latency_breakdown.png"):
+    """Bar chart: p50 latency stacked by page_size, grouped by FIFO size."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left: p50 latency
+    fifos = sorted(df.socket_fifo_size.unique())
+    pages = sorted(df.page_size.unique())
+    x = np.arange(len(pages))
+    w = 0.8 / len(fifos)
+    for i, fs in enumerate(fifos):
+        g = df[df.socket_fifo_size == fs].set_index("page_size").reindex(pages)
+        axes[0].bar(x + i * w, g.p50_us, w, label=f"FIFO={human_bytes(fs)}")
+    axes[0].set(xlabel="Page Size", ylabel="p50 Latency (us)", title="D2H p50 Latency")
+    axes[0].set_xticks(x + w * (len(fifos) - 1) / 2)
+    axes[0].set_xticklabels([human_bytes(p) for p in pages], rotation=45, fontsize=8)
+    axes[0].legend(fontsize=8)
+    axes[0].grid(alpha=0.2, axis="y")
+
+    # Right: max/p99 outlier view
+    for i, fs in enumerate(fifos):
+        g = df[df.socket_fifo_size == fs].set_index("page_size").reindex(pages)
+        axes[1].bar(x + i * w, g.max_us, w, label=f"FIFO={human_bytes(fs)}", alpha=0.6)
+    axes[1].set(xlabel="Page Size", ylabel="Max Latency (us)", title="D2H Max Latency (outliers)")
+    axes[1].set_xticks(x + w * (len(fifos) - 1) / 2)
+    axes[1].set_xticklabels([human_bytes(p) for p in pages], rotation=45, fontsize=8)
+    axes[1].legend(fontsize=8)
+    axes[1].grid(alpha=0.2, axis="y")
+
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def lat_export_csv(df, out="d2h_latency_summary.csv"):
+    """Pivot: rows=page_size, one set of columns per FIFO size."""
+    fifos = sorted(df.socket_fifo_size.unique())
+    result = pd.DataFrame(index=sorted(df.page_size.unique()))
+    result.index.name = "page_size"
+    for fs in fifos:
+        sub = df[df.socket_fifo_size == fs].set_index("page_size")
+        tag = human_bytes(fs)
+        for col in ["p50_us", "min_us", "max_us", "p99_us", "avg_us"]:
+            result[f"{col} (FIFO={tag})"] = sub[col]
+    result.to_csv(out, float_format="%.4f")
+    print(f"  Saved {out}")
+
+
+def run_latency(path):
+    df = load_latency_csv(path)
+    lat_print_report(df)
+    lat_plot(df)
+    lat_plot_breakdown(df)
+    lat_export_csv(df)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CLI
+# ══════════════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
-    df = load_csv(sys.argv[1] if len(sys.argv) > 1 else "results.csv")
-    print_report(df)
-    plot_throughput(df)
-    plot_throughput_vs_fifo(df)
-    plot_throughput_heatmap_grid(df)
-    export_csv(df)
+    p = argparse.ArgumentParser(description="Analyze D2H benchmark results")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--throughput", action="store_true", help="Analyze throughput benchmark")
+    mode.add_argument("--latency", action="store_true", help="Analyze latency benchmark")
+    p.add_argument("csv", help="Path to benchmark CSV")
+    args = p.parse_args()
+
+    if args.throughput:
+        run_throughput(args.csv)
+    else:
+        run_latency(args.csv)
