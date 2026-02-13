@@ -155,6 +155,9 @@ def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_confi
     except TypeError:
         # Older ttnn builds may not expose program_config for this op.
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
+    except Exception:
+        # Some runtimes accept the kwarg but can reject specific program configs at runtime.
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
 
 
 def _program_config_fuses_activation(program_config) -> bool:
@@ -334,6 +337,12 @@ class TTLayerNorm:
                 return ttnn.layer_norm(x, **kwargs)
             except TypeError:
                 # Backward compat for older runtimes without program_config / compute_kernel_config kwargs.
+                kwargs.pop("program_config", None)
+                kwargs.pop("compute_kernel_config", None)
+                return ttnn.layer_norm(x, **kwargs)
+            except Exception:
+                # Some runtimes accept these kwargs but can fail for particular inputs/configs.
+                # Retry once without the perf configs to avoid hard-failing the entire pipeline.
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
                 return ttnn.layer_norm(x, **kwargs)
