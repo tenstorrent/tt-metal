@@ -38,6 +38,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
+        std::nullopt,  // recip_tensor not needed for rmsnorm (second argument)
         ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,
         kernel_config_val,
