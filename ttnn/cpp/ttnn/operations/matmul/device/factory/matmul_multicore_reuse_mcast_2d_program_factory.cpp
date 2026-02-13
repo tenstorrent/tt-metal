@@ -64,7 +64,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -151,8 +152,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
+    uint32_t start_core_x = sub_device_start_core.x;
+    uint32_t start_core_y = sub_device_start_core.y;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
@@ -197,20 +198,24 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         }
 
         if (transpose_mcast) {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({0, start_core_y}).y;
+            in0_mcast_receiver_grid_diff_coord_start =
+                device->worker_core_from_logical_core({start_core_x, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
+                device->worker_core_from_logical_core({start_core_x, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(
+                    device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
             }
         } else {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({start_core_x, 0}).x;
+            in0_mcast_receiver_grid_diff_coord_start =
+                device->worker_core_from_logical_core({start_core_x, start_core_y}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
+                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, start_core_y}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(
+                    device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
             }
         }
 
@@ -1638,6 +1643,17 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
+    //                      Sub-device start core
+    ////////////////////////////////////////////////////////////////////////////
+    CoreCoord sub_device_start_core = {0, 0};
+    if (operation_attributes.sub_device_id.has_value()) {
+        auto sub_device_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
@@ -1678,7 +1694,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         bias_data_format,
         output_data_format,
         untilize_out,
-        fused_op_signaler);
+        fused_op_signaler,
+        sub_device_start_core);
 }
 
 MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast2DProgramFactory::create(
