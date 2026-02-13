@@ -502,7 +502,8 @@ void kernel_main() {
                             if constexpr (is_chunked) {
                                 // Use page table to read V chunk (forwarding not supported for paged mode)
                                 const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
+                                read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
                                     v_reader,
                                     cb_v_in,
                                     v_head,
