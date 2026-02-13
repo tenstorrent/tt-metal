@@ -20,11 +20,3 @@ struct ExecuteRepeatAndInterleaveEltwiseMul {
 };
 
 }  // namespace ttnn::operations::experimental::ssm
-
-namespace ttnn::experimental {
-
-constexpr auto repeat_and_interleave_eltwise_mul = ttnn::register_operation<
-    "ttnn::experimental::repeat_and_interleave_eltwise_mul",
-    ttnn::operations::experimental::ssm::ExecuteRepeatAndInterleaveEltwiseMul>();
-
-}  // namespace ttnn::experimental

@@ -18,8 +18,3 @@ struct SliceWriteOperation {
 };
 
 }  // namespace ttnn::operations::experimental
-
-namespace ttnn::experimental {
-constexpr auto slice_write =
-    ttnn::register_operation<"ttnn::slice_write", ttnn::operations::experimental::SliceWriteOperation>();
-}

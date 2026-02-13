@@ -18,10 +18,3 @@ struct ExecuteHCSumReduce {
 };
 
 }  // namespace ttnn::operations::experimental::ssm
-
-namespace ttnn::experimental {
-
-constexpr auto hc_sum_reduce = ttnn::
-    register_operation<"ttnn::experimental::hc_sum_reduce", ttnn::operations::experimental::ssm::ExecuteHCSumReduce>();
-
-}  // namespace ttnn::experimental

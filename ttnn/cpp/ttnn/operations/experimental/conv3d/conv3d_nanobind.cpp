@@ -60,7 +60,7 @@ void bind_conv3d(nb::module_& mod) {
                const uint32_t& groups,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-                return ttnn::experimental::conv3d(
+                return ttnn::operations::experimental::conv3d::ExecuteConv3d::invoke(
                     input_tensor,
                     weight_tensor,
                     bias_tensor,

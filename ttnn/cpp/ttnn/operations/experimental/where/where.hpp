@@ -40,5 +40,4 @@ struct WhereOperation {
     }
 };
 
-constexpr auto where = ttnn::register_operation<"ttnn::experimental::where", WhereOperation>();
 }  // namespace ttnn::operations::experimental::ternary

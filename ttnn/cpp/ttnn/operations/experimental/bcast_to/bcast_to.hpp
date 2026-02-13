@@ -15,8 +15,3 @@ struct BcastTo {
         const std::optional<Tensor>& output);
 };
 }  // namespace ttnn::operations::experimental
-
-namespace ttnn::experimental {
-constexpr auto broadcast_to =
-    ttnn::register_operation<"ttnn::experimental::broadcast_to", ttnn::operations::experimental::BcastTo>();
-}

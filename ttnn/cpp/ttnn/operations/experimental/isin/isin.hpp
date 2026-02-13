@@ -24,9 +24,4 @@ struct IsInOperation {
 
 }  // namespace operations::experimental
 
-namespace experimental {
-constexpr auto isin =
-    ttnn::register_operation<"ttnn::experimental::isin", ttnn::operations::experimental::IsInOperation>();
-}  // namespace experimental
-
 }  // namespace ttnn

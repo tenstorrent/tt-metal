@@ -20,10 +20,3 @@ struct ExecutePrefixScan {
 };
 
 }  // namespace ttnn::operations::experimental::ssm
-
-namespace ttnn::experimental {
-
-constexpr auto prefix_scan = ttnn::
-    register_operation<"ttnn::experimental::prefix_scan", ttnn::operations::experimental::ssm::ExecutePrefixScan>();
-
-}  // namespace ttnn::experimental

@@ -48,7 +48,7 @@ void bind_broadcast_to(nb::module_& mod) {
                const ttnn::Shape& output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return ttnn::experimental::broadcast_to(input, output_shape, memory_config, output_tensor);
+                return ttnn::operations::experimental::BcastTo::invoke(input, output_shape, memory_config, output_tensor);
             },
             nb::arg("input"),
             nb::arg("output_shape"),

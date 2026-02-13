@@ -24,7 +24,3 @@ struct DropoutOperation {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental
-namespace ttnn::experimental {
-constexpr auto dropout =
-    ttnn::register_operation<"ttnn::experimental::dropout", ttnn::operations::experimental::DropoutOperation>();
-}  // namespace ttnn::experimental

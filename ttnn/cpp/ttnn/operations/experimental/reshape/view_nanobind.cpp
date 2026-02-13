@@ -39,7 +39,7 @@ void bind_view(nb::module_& mod) {
         doc,
         ttnn::overload_t(
             [](ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
-                return ttnn::experimental::view(input_tensor, ttnn::SmallVector<int>{N, C, H, W});
+                return ttnn::operations::experimental::reshape::ViewOperation::invoke(input_tensor, ttnn::SmallVector<int>{N, C, H, W});
             },
             nb::arg("input_tensor"),
             nb::arg("N"),
@@ -49,7 +49,7 @@ void bind_view(nb::module_& mod) {
         ttnn::overload_t(
             [](ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape) { 
-                return ttnn::experimental::view(input_tensor, shape); 
+                return ttnn::operations::experimental::reshape::ViewOperation::invoke(input_tensor, shape); 
             },
             nb::arg("input_tensor"),
             nb::arg("shape")));

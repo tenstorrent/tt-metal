@@ -28,7 +28,7 @@ void bind_prefix_scan(nb::module_& mod) {
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType> dtype,
                const std::optional<MathFidelity> math_fidelity) {
-                return ttnn::experimental::prefix_scan(a, bx, h_prev, memory_config, dtype, math_fidelity);
+                return ttnn::operations::experimental::ssm::ExecutePrefixScan::invoke(a, bx, h_prev, memory_config, dtype, math_fidelity);
             },
             nb::arg("a"),
             nb::arg("bx"),
