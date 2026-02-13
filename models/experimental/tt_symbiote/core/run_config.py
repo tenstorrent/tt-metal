@@ -15,10 +15,10 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
-    compare_fn_outputs,
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
+from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
@@ -288,6 +288,20 @@ class DispatchManager:
                             func_args[0] = (
                                 t[: int(shp[0]), : int(shp[1]), : int(shp[2]), : int(shp[3])].contiguous().clone()
                             )
+                        func_args = tuple(func_args)
+            # For aten::view: when tensor has padded numel (e.g. device im2col output) but view expects logical
+            # shape, trim to target_numel so reshape in torch_dispatcher.handle_view succeeds.
+            if func.name() == "aten::view" and len(func_args) >= 2:
+                from functools import reduce
+                import operator
+
+                t = func_args[0]
+                shape = func_args[1]
+                if isinstance(t, torch.Tensor) and isinstance(shape, (list, tuple)) and len(shape) > 0:
+                    target_numel = reduce(operator.mul, shape, 1)
+                    if t.numel() > target_numel and target_numel > 0:
+                        func_args = list(func_args)
+                        func_args[0] = t.flatten()[:target_numel].clone()
                         func_args = tuple(func_args)
             # Avoid BFloat16 != float errors when one operand is from TTNN (bfloat16) and another is module param (float32)
             target_dtype = _dtype_from_torch_args(func_args, func_kwargs)
