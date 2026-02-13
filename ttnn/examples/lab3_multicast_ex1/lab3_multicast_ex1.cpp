@@ -278,7 +278,7 @@ void multicast_tensor_tensix(
     // receivers_ready_semaphore: receivers signal when they're ready to receive a tile
     // tile_sent_semaphore: coordinator signals when a tile has been multicast
     uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
-    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, INVALID);
 
     ////////// CIRCULAR BUFFER SETUP //////////
     // CB c_0: tiles_per_batch * 2 for double-buffering (sender reads/mcasts one batch while next is loading).
