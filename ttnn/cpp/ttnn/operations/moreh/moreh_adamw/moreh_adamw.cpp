@@ -8,9 +8,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_adamw {
+namespace ttnn::operations::moreh::moreh_adamw {}  // namespace ttnn::operations::moreh::moreh_adamw
 
-std::vector<std::optional<Tensor>> MorehAdamw::invoke(
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_adamw(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
@@ -29,9 +31,9 @@ std::vector<std::optional<Tensor>> MorehAdamw::invoke(
     const std::optional<Tensor>& exp_avg_out,
     const std::optional<Tensor>& exp_avg_sq_out,
     const std::optional<Tensor>& max_exp_avg_sq_out,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return ttnn::prim::moreh_adamw(
+    return prim::moreh_adamw(
         param_in,
         grad,
         exp_avg_in,
@@ -52,4 +54,4 @@ std::vector<std::optional<Tensor>> MorehAdamw::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_adamw
+}  // namespace ttnn

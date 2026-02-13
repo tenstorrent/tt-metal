@@ -6,8 +6,11 @@
 
 #include "device/moreh_norm_backward_device_operation.hpp"
 
-namespace ttnn::operations::moreh::moreh_norm_backward {
-Tensor MorehNormBackward::invoke(
+namespace ttnn::operations::moreh::moreh_norm_backward {}  // namespace ttnn::operations::moreh::moreh_norm_backward
+
+namespace ttnn {
+
+Tensor moreh_norm_backward(
     const Tensor& input,
     const Tensor& output,
     const Tensor& output_grad,
@@ -20,4 +23,5 @@ Tensor MorehNormBackward::invoke(
     return ttnn::prim::moreh_norm_backward(
         input, output, output_grad, p, dim, keepdim, input_grad, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm_backward
+
+}  // namespace ttnn
