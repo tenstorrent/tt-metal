@@ -35,6 +35,20 @@ uint32_t linear_id_in_grid(uint32_t grid_start_x, uint32_t grid_start_y, uint32_
     }
 }
 
+struct SplitHalfCoreInfo {
+    bool is_half0;
+    uint32_t half_local_idx;
+};
+
+template <bool RowMajor>
+SplitHalfCoreInfo get_split_half_core_info(
+    uint32_t grid_start_x, uint32_t grid_start_y, uint32_t grid_end_x, uint32_t grid_end_y, uint32_t half_num_cores) {
+    const uint32_t linear_idx = linear_id_in_grid<RowMajor>(grid_start_x, grid_start_y, grid_end_x, grid_end_y);
+    const bool is_half0 = linear_idx < half_num_cores;
+    const uint32_t half_local_idx = is_half0 ? linear_idx : (linear_idx - half_num_cores);
+    return {is_half0, half_local_idx};
+}
+
 // ============================================================================
 // Sharded persistent buffer setup utilities
 // ============================================================================

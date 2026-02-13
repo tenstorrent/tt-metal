@@ -8,12 +8,11 @@ from typing import Optional
 import pytest
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
 import ttnn
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 from models.common.llama_models import GeneratorChat
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
