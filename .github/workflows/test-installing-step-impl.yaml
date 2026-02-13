@@ -4,7 +4,6 @@ name: "[internal] Validate installation step from instructions impl"
 on:
   workflow_call:
 
-
 jobs:
   install-and-run-mnist:
     name: TT-Installer and run MNIST MLP
@@ -80,8 +79,6 @@ jobs:
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           SCRIPT=$(which tt-metalium-models)
-          ls -al $(pwd)
-          ls -al tt_dnn-models/Falcon
           sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
@@ -97,7 +94,7 @@ jobs:
 
   install-and-run-llama70b-t3k:
     name: TT-Installer and run T3K Llama 70B Demo
-    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "bare-metal"]
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-llmbox-viommu-stable', 'n300') }}
     timeout-minutes: 120
     steps:
       - name: Prepare system
@@ -119,6 +116,25 @@ jobs:
             --verbose \
             --reboot-option=never \
             --mode-non-interactive
+
+      - name: Download Llama 70B weights from LFC
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -euo pipefail
+          # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
+          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
+          mkdir -p huggingface/tt_cache
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/"
+
+      - name: Patch tt-metalium-models to mount workspace volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          SCRIPT=$(which tt-metalium-models)
+          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
 
       - name: Run T3K Llama 70B Demo via tt-metalium-models
         shell: bash
