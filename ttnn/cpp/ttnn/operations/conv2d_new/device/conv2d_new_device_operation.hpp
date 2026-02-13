@@ -5,8 +5,6 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -23,12 +21,13 @@ namespace ttnn::prim {
 // Conv2dNewDeviceOperation -- ProgramDescriptor variant of conv2d.
 //
 // Functionally identical to Conv2dDeviceOperation but both program
-// factories use ProgramDescriptor for construction.
+// factories use ProgramDescriptor for declarative program construction.
 //
-// Both factories are MeshWorkloadFactoryConcept because they need
-// to create config tensors (sliding window indices) in
-// create_mesh_workload, which cannot be done inside the pure
-// create_descriptor function.
+// Both factories implement ProgramDescriptorFactoryConcept with the
+// optional prepare_resources hook (for creating sliding window config
+// tensors).  The framework's DescriptorMeshWorkloadFactoryAdapter
+// handles all boilerplate: address slot scanning, dynamic CB patching,
+// cache-hit dispatch, and resource lifetime management.
 // ---------------------------------------------------------------
 struct Conv2dNewDeviceOperation {
     using operation_attributes_t = Conv2dParams;

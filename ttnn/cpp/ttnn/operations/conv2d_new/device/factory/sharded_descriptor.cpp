@@ -18,7 +18,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -161,6 +160,125 @@ ActivationReuseConfig calculate_activation_reuse_params(
 }
 
 // ---------------------------------------------------------------------------
+// prepare_resources -- creates the sliding window config tensor
+// ---------------------------------------------------------------------------
+
+tt::tt_metal::DeviceStorage Conv2dShardedDescriptorFactory::prepare_resources(
+    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& tensor_return_value) {
+    using namespace tt::tt_metal;
+    namespace sliding_window = ttnn::operations::sliding_window;
+
+    const auto& a = tensor_args.a;
+    const auto& b = tensor_args.b;
+    const auto& sliding_window_config = operation_attributes.sliding_window_config;
+    const auto& block_config = operation_attributes.block_config;
+    const auto& parallelization_config = operation_attributes.parallelization_config;
+    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+
+    const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+
+    const std::array<uint32_t, 2> shard_shape = a.shard_spec().value().shape;
+    uint32_t input_channels_padded = shard_shape[1];
+    if (block_sharded) {
+        const bool transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+        CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
+        const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
+        const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
+        if (transpose_mcast) {
+            input_channels_padded = shard_shape[1] * in_num_cores_y;
+        } else {
+            input_channels_padded = shard_shape[1] * in_num_cores_x;
+        }
+    }
+
+    const auto& ashape = ttnn::Shape(operation_attributes.input_tensor_shape);
+    const uint32_t output_channels = operation_attributes.output_channels;
+    const uint32_t groups = operation_attributes.groups;
+    const bool has_bias = operation_attributes.has_bias;
+    const auto& force_split_reader = operation_attributes.force_split_reader;
+    const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
+
+    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;
+    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;
+    const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
+
+    const uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
+    const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
+    const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
+
+    const bool is_conv_1d_depthwise_conv_flag =
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, filter_w, ashape[1], has_bias);
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+
+    const bool enable_split_reader =
+        is_split_reader_supported(
+            a.memory_config().memory_layout(), is_conv_1d_depthwise_conv_flag, act_block_h_ntiles) &&
+        force_split_reader.value_or(is_split_reader_viable(
+            a.memory_config().memory_layout(),
+            act_block_h_ntiles,
+            input_channels_padded,
+            filter_w,
+            tt::tt_metal::hal::get_arch(),
+            a.dtype(),
+            parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
+            dilation_w,
+            per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
+            act_block_w_ntiles,
+            fp32_dest_acc_en,
+            tensor_return_value.dtype(),
+            enable_activation_reuse));
+
+    // Compute act_block_h_datums for split reader
+    const uint32_t act_matrix_height_ntiles = per_core_out_matrix_height_ntiles * parallelization_config.num_cores_nhw;
+    const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
+    uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
+
+    uint32_t act_block_h_nsubblocks_split = block_config.act_block_h_ntiles;
+    uint32_t act_block_h_nsubblocks_split_last = 0;
+    if (enable_split_reader) {
+        act_block_h_nsubblocks_split_last = block_config.act_block_h_ntiles / 2;
+        act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
+    }
+    uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
+    uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
+
+    // Generate sliding window metadata
+    std::vector<uint32_t> op_trace_metadata =
+        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    std::vector<sliding_window::ShardBoundary> shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
+
+    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(
+            op_trace_metadata,
+            shard_boundaries,
+            stride_w,
+            true,
+            enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
+            enable_split_reader ? act_block_h_datums_split_last : 0);
+
+    // Create sharded config tensor
+    sliding_window::ParallelConfig input_parallel_config = {
+        .grid = a.memory_config().shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.memory_config().shard_spec().value().orientation,
+    };
+
+    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+        conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
+
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
+    return conv_reader_indices_tensor.device_storage();
+}
+
+// ---------------------------------------------------------------------------
 // create_descriptor -- builds a ProgramDescriptor declaratively
 // ---------------------------------------------------------------------------
 
@@ -168,7 +286,8 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor,
-    tt::tt_metal::Buffer* config_tensor_buffer) {
+    tt::tt_metal::DeviceStorage& resources) {
+    tt::tt_metal::Buffer* config_tensor_buffer = resources.get_buffer();
     using namespace tt::tt_metal;
 
     ProgramDescriptor desc;
@@ -407,7 +526,6 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
         act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
     }
     uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
-    (void)act_block_h_datums_split;  // Used in create_mesh_workload for config tensor generation
 
     uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
     uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
@@ -1466,257 +1584,6 @@ tt::tt_metal::ProgramDescriptor Conv2dShardedDescriptorFactory::create_descripto
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
-}
-
-// ---------------------------------------------------------------------------
-// create_mesh_workload
-// ---------------------------------------------------------------------------
-
-Conv2dShardedDescriptorFactory::cached_mesh_workload_t Conv2dShardedDescriptorFactory::create_mesh_workload(
-    const Conv2dParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const Conv2dInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-    namespace sliding_window = ttnn::operations::sliding_window;
-
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    // ---------------------------------------------------------------
-    // Collect buffer pointers for slot detection
-    // ---------------------------------------------------------------
-    std::vector<tt::tt_metal::Buffer*> bufs;
-    auto collect = [&](const auto& obj) {
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) {
-                if (t.buffer()) {
-                    bufs.push_back(t.buffer());
-                }
-            },
-            obj);
-    };
-    collect(tensor_args);
-    collect(tensor_return_value);
-
-    std::unordered_map<uint32_t, uint16_t> addr_to_id;
-    std::unordered_map<tt::tt_metal::Buffer*, uint16_t> buf_to_id;
-    bool has_addr_collision = false;
-    for (uint16_t i = 0; i < static_cast<uint16_t>(bufs.size()); ++i) {
-        auto [it, inserted] = addr_to_id.emplace(bufs[i]->address(), i);
-        if (!inserted) {
-            has_addr_collision = true;
-        }
-        buf_to_id.emplace(bufs[i], i);
-    }
-
-    // ---------------------------------------------------------------
-    // Create config tensor (sliding window reader indices)
-    // This must happen outside create_descriptor.
-    // ---------------------------------------------------------------
-    const auto& a = tensor_args.a;
-    const auto& sliding_window_config = operation_attributes.sliding_window_config;
-    const auto& block_config = operation_attributes.block_config;
-    const auto& parallelization_config = operation_attributes.parallelization_config;
-    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
-
-    const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-
-    const std::array<uint32_t, 2> shard_shape = a.shard_spec().value().shape;
-    uint32_t input_channels_padded = shard_shape[1];
-    if (block_sharded) {
-        const bool transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
-        CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
-        const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
-        const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
-        if (transpose_mcast) {
-            input_channels_padded = shard_shape[1] * in_num_cores_y;
-        } else {
-            input_channels_padded = shard_shape[1] * in_num_cores_x;
-        }
-    }
-
-    const auto& ashape = ttnn::Shape(operation_attributes.input_tensor_shape);
-    const uint32_t output_channels = operation_attributes.output_channels;
-    const uint32_t groups = operation_attributes.groups;
-    const bool has_bias = operation_attributes.has_bias;
-    const auto& force_split_reader = operation_attributes.force_split_reader;
-    const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
-
-    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;
-    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;
-    const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
-    const uint32_t stride_w = sliding_window_config.is_transpose ? 1 : (uint32_t)sliding_window_config.stride_hw.second;
-
-    const uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
-    const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-
-    const bool is_conv_1d_depthwise_conv_flag =
-        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, filter_w, ashape[1], has_bias);
-
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
-
-    const auto& b = tensor_args.b;
-    const bool enable_split_reader =
-        is_split_reader_supported(
-            a.memory_config().memory_layout(), is_conv_1d_depthwise_conv_flag, act_block_h_ntiles) &&
-        force_split_reader.value_or(is_split_reader_viable(
-            a.memory_config().memory_layout(),
-            act_block_h_ntiles,
-            input_channels_padded,
-            filter_w,
-            tt::tt_metal::hal::get_arch(),
-            a.dtype(),
-            parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
-            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
-            dilation_w,
-            per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
-            act_block_w_ntiles,
-            fp32_dest_acc_en,
-            tensor_return_value.dtype(),
-            enable_activation_reuse));
-
-    // Compute act_block_h_datums for split reader
-    const uint32_t out_block_h_ntiles_local = per_core_out_matrix_height_ntiles;
-    const uint32_t act_matrix_height_ntiles = out_block_h_ntiles_local * parallelization_config.num_cores_nhw;
-    const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
-    // slice_inner_dim used only for force_split_reader check below
-    [[maybe_unused]] const bool slice_inner_dim =
-        (height_sharded && !enable_activation_reuse) || (block_sharded && !operation_attributes.full_inner_dim);
-    const uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
-    uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
-
-    uint32_t act_block_h_nsubblocks_split = block_config.act_block_h_ntiles;
-    uint32_t act_block_h_nsubblocks_split_last = 0;
-    if (enable_split_reader) {
-        act_block_h_nsubblocks_split_last = block_config.act_block_h_ntiles / 2;
-        act_block_h_nsubblocks_split = block_config.act_block_h_ntiles - act_block_h_nsubblocks_split_last;
-    }
-    uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
-    uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
-
-    // Generate sliding window metadata
-    std::vector<uint32_t> op_trace_metadata =
-        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
-    std::vector<sliding_window::ShardBoundary> shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
-
-    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
-        ttnn::operations::sliding_window::generate_sliding_window_op_config(
-            op_trace_metadata,
-            shard_boundaries,
-            stride_w,
-            true,
-            enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
-            enable_split_reader ? act_block_h_datums_split_last : 0);
-
-    // Create sharded config tensors
-    sliding_window::ParallelConfig input_parallel_config = {
-        .grid = a.memory_config().shard_spec().value().grid,
-        .shard_scheme = a.memory_config().memory_layout(),
-        .shard_orientation = a.memory_config().shard_spec().value().orientation,
-    };
-
-    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, input_parallel_config, config_tensors_in_dram);
-    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
-
-    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
-    tt::tt_metal::Buffer* config_tensor_buffer = conv_reader_indices_storage.get_buffer();
-
-    // ---------------------------------------------------------------
-    // Build programs for each mesh coordinate range
-    // ---------------------------------------------------------------
-    for (const auto& range : tensor_coords.ranges()) {
-        auto descriptor =
-            create_descriptor(operation_attributes, tensor_args, tensor_return_value, config_tensor_buffer);
-
-        // Scan runtime args for address slots
-        std::vector<AddressSlot> address_slots;
-        if (!has_addr_collision) {
-            for (uint32_t k = 0; k < static_cast<uint32_t>(descriptor.kernels.size()); ++k) {
-                for (const auto& [core, args] : descriptor.kernels[k].runtime_args) {
-                    for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
-                        auto it = addr_to_id.find(args[i]);
-                        if (it != addr_to_id.end()) {
-                            address_slots.push_back({k, core, i, it->second});
-                        }
-                    }
-                }
-            }
-        }
-
-        tt::tt_metal::Program program{descriptor};
-
-        // Scan for CB slots
-        std::vector<CBSlot> cb_slots;
-        auto program_cbs = program.circular_buffers();
-        for (uint32_t ci = 0; ci < static_cast<uint32_t>(descriptor.cbs.size()); ++ci) {
-            if (descriptor.cbs[ci].buffer) {
-                auto it = buf_to_id.find(descriptor.cbs[ci].buffer);
-                if (it != buf_to_id.end()) {
-                    cb_slots.push_back({program_cbs[ci]->id(), it->second});
-                }
-            }
-        }
-
-        mesh_workload.add_program(range, std::move(program));
-
-        shared_variables[range] = shared_variables_t{
-            .address_slots = std::move(address_slots),
-            .cb_slots = std::move(cb_slots),
-            .conv_reader_indices_storage = conv_reader_indices_storage,
-        };
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
-}
-
-// ---------------------------------------------------------------------------
-// override_runtime_arguments
-// ---------------------------------------------------------------------------
-
-void Conv2dShardedDescriptorFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const Conv2dParams& /*operation_attributes*/,
-    const Conv2dInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-
-        // Collect buffer pointers in the same deterministic order as create_mesh_workload
-        std::vector<tt::tt_metal::Buffer*> bufs;
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) {
-                if (t.buffer()) {
-                    bufs.push_back(t.buffer());
-                }
-            },
-            tensor_args);
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) {
-                if (t.buffer()) {
-                    bufs.push_back(t.buffer());
-                }
-            },
-            tensor_return_value);
-
-        // Patch runtime arg address slots
-        for (const auto& slot : sv.address_slots) {
-            auto& args = tt::tt_metal::GetRuntimeArgs(program, slot.kernel_handle, slot.core);
-            args[slot.arg_index] = bufs[slot.buffer_id]->address();
-        }
-
-        // Patch dynamic CB addresses
-        for (const auto& cb_slot : sv.cb_slots) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_slot.cb_handle, *bufs[cb_slot.buffer_id]);
-        }
-    }
 }
 
 }  // namespace ttnn::prim::conv2d_new_detail
