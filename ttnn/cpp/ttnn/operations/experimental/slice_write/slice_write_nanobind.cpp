@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "slice_write.hpp"
 
 namespace ttnn::operations::experimental::slice_write {
@@ -43,27 +43,26 @@ void bind_slice_write(nb::module_& mod) {
                 ttnn.Tensor: the output tensor after writing the input tensor to it.
 
             Example:
-                >>> ttnn.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
+                >>> ttnn.experimental.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
                 )doc";
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    using OperationType = decltype(ttnn::experimental::slice_write);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"slice_write", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::slice_write,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
+        ttnn::overload_t(
+            [](const ttnn::Tensor& input_tensor,
                ttnn::Tensor& output_tensor,
                const ttnn::SmallVector<uint32_t>& start,
                const ttnn::SmallVector<uint32_t>& end,
-               const ttnn::SmallVector<uint32_t>& step) { return self(input_tensor, output_tensor, start, end, step); },
+               const ttnn::SmallVector<uint32_t>& step) { 
+                return ttnn::experimental::slice_write(input_tensor, output_tensor, start, end, step); 
+            },
             nb::arg("input_tensor"),
             nb::arg("output_tensor"),
             nb::arg("start"),
             nb::arg("end"),
-            nb::arg("step")});
+            nb::arg("step")));
 }
 }  // namespace ttnn::operations::experimental::slice_write

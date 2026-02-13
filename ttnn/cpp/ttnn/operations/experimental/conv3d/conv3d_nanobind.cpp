@@ -15,16 +15,15 @@
 #include <nanobind/stl/string.h>
 
 #include "conv3d.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
 void bind_conv3d(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"conv3d", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::conv3d,
         R"doc(
         Applies a 3D convolution over an input signal composed of several input planes. \
         Expects Input Tensor in [N, D, H, W, C] format.  \
@@ -46,9 +45,8 @@ void bind_conv3d(nb::module_& mod) {
         Returns:
             ttnn.Tensor: Output tensor after applying the Conv3D operation.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::conv3d)& self,
-               const ttnn::Tensor& input_tensor,
+        ttnn::overload_t(
+            [](const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
                const std::optional<ttnn::Tensor>& bias_tensor,
                const ttnn::experimental::prim::Conv3dConfig& config,
@@ -62,7 +60,7 @@ void bind_conv3d(nb::module_& mod) {
                const uint32_t& groups,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(
+                return ttnn::experimental::conv3d(
                     input_tensor,
                     weight_tensor,
                     bias_tensor,
@@ -92,7 +90,7 @@ void bind_conv3d(nb::module_& mod) {
             nb::arg("padding_mode") = "zeros",
             nb::arg("groups") = 1,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 
     auto py_conv3d_config =
         nb::class_<ttnn::experimental::prim::Conv3dConfig>(

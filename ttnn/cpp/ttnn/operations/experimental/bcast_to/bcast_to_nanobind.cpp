@@ -8,7 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
 
@@ -40,23 +40,20 @@ void bind_broadcast_to(nb::module_& mod) {
             Memory Config
                 Interleaved (DRAM / L1)
         )doc";
-    using operationType = decltype(ttnn::experimental::broadcast_to);
-    bind_registered_operation(
+    ttnn::bind_function<"broadcast_to", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::broadcast_to,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const operationType& self,
-               const ttnn::Tensor& input,
+        ttnn::overload_t(
+            [](const ttnn::Tensor& input,
                const ttnn::Shape& output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input, output_shape, memory_config, output_tensor);
+                return ttnn::experimental::broadcast_to(input, output_shape, memory_config, output_tensor);
             },
             nb::arg("input"),
             nb::arg("output_shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output") = nb::none()});
+            nb::arg("output") = nb::none()));
 }
 }  // namespace ttnn::operations::experimental::broadcast_to::detail

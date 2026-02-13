@@ -11,19 +11,19 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 
 namespace ttnn::operations::experimental::dropout::detail {
 
 void bind_experimental_dropout_operation(nb::module_& mod) {
-    auto doc = fmt::format(
+    const auto* doc =
         R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
+        Applies dropout to :attr:`input_tensor` element-wise.
 
         .. math::
-            \verb|{0}|(\mathrm{{input\_tensor}}_i)
+            \verb|dropout|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -55,24 +55,20 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> seed = 124
             >>> prob = 0.2
-            >>> output = {1}(tensor,  probability=prob, scale= 1.0/(1.0 - prob), seed=seed)
-        )doc",
-        ttnn::experimental::dropout.base_name(),
-        ttnn::experimental::dropout.python_fully_qualified_name());
-    using OperationType = decltype(ttnn::experimental::dropout);
-    bind_registered_operation(
+            >>> output = ttnn.experimental.dropout(tensor,  probability=prob, scale= 1.0/(1.0 - prob), seed=seed)
+        )doc";
+
+    ttnn::bind_function<"dropout", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::dropout,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input,
+        ttnn::overload_t(
+            [](const Tensor& input,
                const float probability,
                const float scale,
                const uint32_t seed,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) {
-                return self(input, probability, scale, seed, true, memory_config, output_tensor);
+                return ttnn::experimental::dropout(input, probability, scale, seed, true, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
             nb::arg("probability"),
@@ -80,6 +76,6 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
             nb::arg("seed"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 }  // namespace ttnn::operations::experimental::dropout::detail
