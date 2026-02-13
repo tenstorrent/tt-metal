@@ -128,11 +128,13 @@ void kernel_main() {
 
     // Main latency measurement loop
     // Use separate send and receive buffers to avoid race conditions
-    // Leave a word at the end
+    // Use the last word of the buffer for synchronization, indicating the entire rest of the payload has arrived before it
+
+    const size_t payload_end_offset = payload_size_bytes - sizeof(uint32_t);
     volatile uint32_t* send_buffer_ptr =
-        reinterpret_cast<volatile uint32_t*>(send_buffer_address + payload_size_bytes - sizeof(uint32_t));
+        reinterpret_cast<volatile uint32_t*>(send_buffer_address + payload_end_offset);
     volatile uint32_t* receive_buffer_ptr =
-        reinterpret_cast<volatile uint32_t*>(receive_buffer_address + payload_size_bytes - sizeof(uint32_t));
+        reinterpret_cast<volatile uint32_t*>(receive_buffer_address + payload_end_offset);
 
     // Initialize receive buffer to 0
     *receive_buffer_ptr = 0;

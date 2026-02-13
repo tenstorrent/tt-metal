@@ -104,8 +104,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
     }
+
+    // Use the last word of the buffer for synchronization, indicating the entire rest of the payload has arrived before it
+    const size_t payload_end_offset = payload_size_bytes - sizeof(uint32_t);
     volatile uint32_t* responder_receive_ptr =
-        reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address + payload_size_bytes - sizeof(uint32_t));
+        reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address + payload_end_offset);
     *responder_receive_ptr = 0;
     // Warmup: respond to flush packet
     {
