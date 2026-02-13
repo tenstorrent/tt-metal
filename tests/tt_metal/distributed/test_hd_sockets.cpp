@@ -132,7 +132,7 @@ void test_d2h_socket(
     };
 
     uint32_t num_txns = data_size / page_size;
-    uint32_t measurement_buffer_size = sizeof(uint64_t);
+    uint32_t measurement_buffer_size = sizeof(uint64_t) * num_iterations;
 
     const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
     const DeviceLocalBufferConfig measurement_device_local_config{
@@ -202,10 +202,27 @@ void test_d2h_socket(
     auto fabric_node_id = mesh_device->get_fabric_node_id(sender_core.device_coord);
     auto asic_id = MetalContext::instance().get_control_plane().get_asic_id_from_fabric_node_id(fabric_node_id);
     auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
-    std::cout << "Average Read time: " << latency_data[0] / (num_txns * num_iterations)
-              << "ns for: " << sender_core.device_coord << " " << num_txns * num_iterations << " reads"
-              << " Tray ID: " << *(asic_desc.tray_id) << " ASIC Location: " << *(asic_desc.asic_location) << std::endl;
+
+    // Convert cycles to microseconds: Latency [us] = cycles / (1.35 * 10^3)
+    uint64_t total_cycles = latency_data[0];
+    uint64_t total_transactions = num_txns * num_iterations;
+    double avg_cycles_per_transaction = static_cast<double>(total_cycles) / total_transactions;
+    double avg_latency_us = avg_cycles_per_transaction / 1350.0;
+
+    std::cout << "Average D2H Round-Trip Latency: " << avg_latency_us << " us"
+              << " (cycles: " << avg_cycles_per_transaction << ")"
+              << " for: " << sender_core.device_coord << " Tray ID: " << *(asic_desc.tray_id)
+              << " ASIC Location: " << *(asic_desc.asic_location) << std::endl;
 }
+
+// Forward declaration for benchmark helper
+std::pair<double, double> benchmark_d2h_socket(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size,
+    uint32_t num_iterations,
+    const MeshCoreCoord& sender_core);
 
 void test_hd_socket_loopback(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
@@ -317,6 +334,183 @@ TEST_F(HDSocketFixture, D2HSocket) {
         // // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
         // test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
     }
+}
+
+TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
+    // Skip if mapping to NOC isn't supported on this system
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    std::vector<std::size_t> total_data_sizes = {
+        16 * 1024,            // 16KB
+        32 * 1024,            // 32KB
+        512 * 1024,           // 512KB
+        1024 * 1024,          // 1MB
+        16 * 1024 * 1024,     // 16MB
+        512UL * 1024 * 1024,  // 512MB
+        1024UL * 1024 * 1024  // 1GB
+    };
+
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> fifo_sizes = {
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+        65536,
+        128 * 1024,
+        256 * 1024,
+        512 * 1024,
+        1024 * 1024,
+        2 * 1024 * 1024,
+        4 * 1024 * 1024,
+        8 * 1024 * 1024,
+        16 * 1024 * 1024,
+        32 * 1024 * 1024,
+        64 * 1024 * 1024,
+        128 * 1024 * 1024,
+        256 * 1024 * 1024,
+        512 * 1024 * 1024,
+    };
+    int num_interations;
+
+    std::vector<std::pair<std::size_t, std::size_t>> test_configs;
+    for (auto fifo_size : fifo_sizes) {
+        for (auto page_size : page_sizes) {
+            if (page_size <= fifo_size) {
+                test_configs.push_back({page_size, fifo_size});
+            }
+        }
+    }
+
+    std::cout << "page_size,socket_fifo_size,total_data,num_iterations,avg_latency_us,avg_cycles,device_coord"
+              << std::endl;
+
+    // Only test first MMIO-mapped device
+    for (const auto& sender_coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (!is_device_coord_mmio_mapped(mesh_device_, sender_coord)) {
+            continue;
+        }
+
+        MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
+
+        for (const auto& [page_size, socket_fifo_size] : test_configs) {
+            for (auto total_data : total_data_sizes) {
+                // Skip if total_data < page_size (would be 0 iterations)
+                if (total_data < page_size) {
+                    continue;
+                }
+
+                std::size_t data_size = page_size;  // 1 page per iteration
+                uint32_t num_iterations = total_data / page_size;
+
+                auto [avg_latency_us, avg_cycles] = benchmark_d2h_socket(
+                    mesh_device_, socket_fifo_size, page_size, data_size, num_iterations, sender_core);
+
+                std::cout << page_size << "," << socket_fifo_size << "," << total_data << "," << num_iterations << ","
+                          << avg_latency_us << "," << avg_cycles << "," << sender_coord << std::endl;
+                std::cout.flush();
+            }
+        }
+
+        break;
+    }
+
+    std::cout.flush();
+}
+
+// Helper function for benchmark that returns results without printing extra info
+std::pair<double, double> benchmark_d2h_socket(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size,
+    uint32_t num_iterations,
+    const MeshCoreCoord& sender_core) {
+    auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
+    output_socket.set_page_size(page_size);
+
+    const ReplicatedBufferConfig buffer_config{.size = data_size};
+    auto sender_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+
+    const DeviceLocalBufferConfig sender_device_local_config{
+        .page_size = data_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+
+    uint32_t num_txns = data_size / page_size;
+    uint32_t measurement_buffer_size = sizeof(uint64_t);
+
+    const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
+    const DeviceLocalBufferConfig measurement_device_local_config{
+        .page_size = measurement_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+
+    auto measurement_buffer =
+        MeshBuffer::create(measurement_buffer_config, measurement_device_local_config, mesh_device.get());
+    auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
+
+    auto send_program = CreateProgram();
+    CreateKernel(
+        send_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_sender.cpp",
+        sender_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(sender_data_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(measurement_buffer->address()),
+                static_cast<uint32_t>(num_iterations),
+            }});
+
+    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord, true);
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
+    mesh_workload.add_program(devices, std::move(send_program));
+
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    uint32_t page_size_words = page_size / sizeof(uint32_t);
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        for (uint32_t j = 0; j < num_txns; j++) {
+            output_socket.read(dst_vec.data() + (j * page_size_words), 1);
+        }
+    }
+    output_socket.barrier();
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::vector<uint64_t> latency_data(1);
+    cluster.read_core(
+        latency_data.data(),
+        sizeof(uint64_t),
+        tt_cxy_pair(
+            mesh_device->get_device(sender_core.device_coord)->id(),
+            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
+        measurement_buffer->address());
+
+    uint64_t total_cycles = latency_data[0];
+    uint64_t total_transactions = num_txns * num_iterations;
+    double avg_cycles_per_transaction = static_cast<double>(total_cycles) / total_transactions;
+    double avg_latency_us = avg_cycles_per_transaction / 1350.0;
+
+    return {avg_latency_us, avg_cycles_per_transaction};
 }
 
 TEST_F(HDSocketFixture, H2DSocketLoopback) {
