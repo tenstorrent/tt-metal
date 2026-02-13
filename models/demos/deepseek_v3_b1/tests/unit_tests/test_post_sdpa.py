@@ -7,18 +7,18 @@ TTNN Post SDPA Fused Op Test with CCL All-Reduce
 
 Tests the full post_sdpa fused operation with CCL all-reduce which implements:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
-- Gather1: Collect to [1, 8192] on gather core (12, 9)
-- Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
+- Gather1: Collect to [1, 8192] on gather core (11, 9)
+- Mcast: Broadcast [1, 8192] to 120 cores (12x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
-- Gather2: Collect to [1, 7168] on gather core (12, 9)
+- Gather2: Collect to [1, 7168] on gather core (11, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
-The mcast grid (13x10=130 cores) includes 18 inactive cores (row 8 cols 8-12, row 9 cols 0-12)
+The mcast grid (12x10=120 cores) includes 8 inactive cores (row 9 cols 4-11)
 that receive mcast data but skip matmul2 via is_matmul2_core=false.
 
 CCL All-Reduce uses:
-- CCL Receiver = Gather core (12, 9): already has local data after Gather2
-- CCL Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
+- CCL Receiver = Gather core (11, 9): already has local data after Gather2
+- CCL Sender = Adjacent core (10, 9): reads from gather core, sends via fabric
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -109,13 +109,13 @@ def test_post_sdpa(
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Mcast grid: 13x10 = 130 cores (rectangular for efficient mcast)
-    MCAST_GRID_X = 13
+    # Mcast grid: 12x10 = 120 cores (rectangular for efficient mcast)
+    MCAST_GRID_X = 12
     MCAST_GRID_Y = 10
-    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
+    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 120
 
-    # Active Matmul2 cores: 112 (rows 0-7 full 13 cols + row 8 cols 0-7)
-    # Non-rectangular grid: 13*8 + 8 = 104 + 8 = 112
+    # Active Matmul2 cores: 112 (rows 0-8 full 12 cols + row 9 cols 0-3)
+    # Non-rectangular grid: 12*9 + 4 = 108 + 4 = 112
     num_matmul2_cores = 112
 
     # Per-core dimensions
@@ -124,7 +124,7 @@ def test_post_sdpa(
 
     logger.info(f"Testing full post_sdpa fused op with CCL all-reduce:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x10 grid)")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (12x10 grid)")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  CCL All-Reduce: [{M}, {output_size}] across {num_devices} devices")
     logger.info(f"  Output: [{M}, {output_size}] (fuse_residual_add={fuse_residual_add})")
@@ -134,15 +134,15 @@ def test_post_sdpa(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
     )
     # Active matmul2 cores: non-rectangular grid (112 cores)
-    # - Rows 0-7: all 13 columns = 104 cores
-    # - Row 8: columns 0-7 = 8 cores
+    # - Rows 0-8: all 12 columns = 108 cores
+    # - Row 9: columns 0-3 = 4 cores
     matmul2_grid = ttnn.CoreRangeSet(
         [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),  # 13x8 = 104 cores
-            ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 8)),  # 8x1 = 8 cores
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8)),  # 12x9 = 108 cores
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(3, 9)),  # 4x1 = 4 cores
         ]
     )
-    gather_core = ttnn.CoreCoord(12, 9)
+    gather_core = ttnn.CoreCoord(11, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # ========================================================================
