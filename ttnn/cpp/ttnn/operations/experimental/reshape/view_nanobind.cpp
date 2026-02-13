@@ -38,19 +38,16 @@ void bind_view(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            [](ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
-                return ttnn::experimental::view(input_tensor, ttnn::SmallVector<int>{N, C, H, W});
-            },
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, int32_t, int32_t, int32_t, int32_t)>(
+                &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("N"),
             nb::arg("C"),
             nb::arg("H"),
             nb::arg("W")),
         ttnn::overload_t(
-            [](ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& shape) { 
-                return ttnn::experimental::view(input_tensor, shape); 
-            },
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttnn::SmallVector<int32_t>&)>(
+                &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));
 }

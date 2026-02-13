@@ -61,21 +61,14 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
     ttnn::bind_function<"dropout", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            [](const Tensor& input,
-               const float probability,
-               const float scale,
-               const uint32_t seed,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return ttnn::experimental::dropout(input, probability, scale, seed, true, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("probability"),
-            nb::arg("scale"),
-            nb::arg("seed"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::experimental::dropout,
+        nb::arg("input_tensor"),
+        nb::arg("probability"),
+        nb::arg("scale"),
+        nb::arg("seed"),
+        nb::kw_only(),
+        nb::arg("use_per_device_seed") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::dropout::detail

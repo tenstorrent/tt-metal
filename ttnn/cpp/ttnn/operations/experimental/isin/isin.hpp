@@ -4,13 +4,10 @@
 
 #pragma once
 
-#include <optional>
+#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/types.hpp>
 
-namespace ttnn {
-
-using namespace tt;
-
-namespace experimental {
+namespace ttnn::experimental {
 
 Tensor isin(
     const Tensor& elements,
@@ -19,6 +16,4 @@ Tensor isin(
     bool invert = false,
     const std::optional<Tensor>& opt_out = std::nullopt);
 
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

@@ -29,36 +29,36 @@ Tensor where(
 
 // Overload: value_true is float, value_false is Tensor
 Tensor where(
-    const Tensor& condition,
-    float value_true,
-    const Tensor& value_false,
-    std::optional<const DataType> output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor) {
+    const Tensor& condition [[maybe_unused]],
+    float value_true [[maybe_unused]],
+    const Tensor& value_false [[maybe_unused]],
+    std::optional<const DataType> output_dtype [[maybe_unused]],
+    const std::optional<MemoryConfig>& memory_config [[maybe_unused]],
+    const std::optional<Tensor>& output_tensor [[maybe_unused]]) {
     TT_FATAL(false, "Scalar values are not supported!");
     return Tensor();
 }
 
 // Overload: value_true is Tensor, value_false is float
 Tensor where(
-    const Tensor& condition,
-    const Tensor& value_true,
-    float value_false,
-    std::optional<const DataType> output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor) {
+    const Tensor& condition [[maybe_unused]],
+    const Tensor& value_true [[maybe_unused]],
+    float value_false [[maybe_unused]],
+    std::optional<const DataType> output_dtype [[maybe_unused]],
+    const std::optional<MemoryConfig>& memory_config [[maybe_unused]],
+    const std::optional<Tensor>& output_tensor [[maybe_unused]]) {
     TT_FATAL(false, "Scalar values are not supported!");
     return Tensor();
 }
 
 // Overload: both values are floats
 Tensor where(
-    const Tensor& condition,
-    float value_true,
-    float value_false,
-    std::optional<const DataType> output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor) {
+    const Tensor& condition [[maybe_unused]],
+    float value_true [[maybe_unused]],
+    float value_false [[maybe_unused]],
+    std::optional<const DataType> output_dtype [[maybe_unused]],
+    const std::optional<MemoryConfig>& memory_config [[maybe_unused]],
+    const std::optional<Tensor>& output_tensor [[maybe_unused]]) {
     TT_FATAL(false, "Scalar values are not supported!");
     return Tensor();
 }

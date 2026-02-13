@@ -19,14 +19,14 @@ Tensor where(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> output_tensor = std::nullopt);
 
-// Overload: value_true is float, value_false is Tensor  
+// Overload: value_true is float, value_false is Tensor
 Tensor where(
     const Tensor& condition,
     float value_true,
     const Tensor& value_false,
     std::optional<const DataType> output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 // Overload: value_true is Tensor, value_false is float
 Tensor where(
@@ -35,7 +35,7 @@ Tensor where(
     float value_false,
     std::optional<const DataType> output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 // Overload: both values are floats
 Tensor where(
@@ -44,6 +44,6 @@ Tensor where(
     float value_false,
     std::optional<const DataType> output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<Tensor> output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::ternary

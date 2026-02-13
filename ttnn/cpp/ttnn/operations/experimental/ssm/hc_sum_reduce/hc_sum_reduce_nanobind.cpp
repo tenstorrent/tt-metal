@@ -25,18 +25,12 @@ void bind_hc_sum_reduce(nb::module_& mod) {
     ttnn::bind_function<"hc_sum_reduce", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            [](const ttnn::Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               const std::optional<MathFidelity> math_fidelity) {
-                return ttnn::experimental::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
-            },
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("math_fidelity") = nb::none()));
+        &ttnn::experimental::hc_sum_reduce,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("math_fidelity") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ssm::detail

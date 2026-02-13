@@ -51,18 +51,11 @@ void bind_slice_write(nb::module_& mod) {
     ttnn::bind_function<"slice_write", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            [](const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& output_tensor,
-               const ttnn::SmallVector<uint32_t>& start,
-               const ttnn::SmallVector<uint32_t>& end,
-               const ttnn::SmallVector<uint32_t>& step) { 
-                return ttnn::experimental::slice_write(input_tensor, output_tensor, start, end, step); 
-            },
-            nb::arg("input_tensor"),
-            nb::arg("output_tensor"),
-            nb::arg("start"),
-            nb::arg("end"),
-            nb::arg("step")));
+        &ttnn::experimental::slice_write,
+        nb::arg("input_tensor"),
+        nb::arg("output_tensor"),
+        nb::arg("start"),
+        nb::arg("end"),
+        nb::arg("step"));
 }
 }  // namespace ttnn::operations::experimental::slice_write

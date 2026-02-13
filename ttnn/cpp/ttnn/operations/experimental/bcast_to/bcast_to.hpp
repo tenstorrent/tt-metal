@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <cstdint>
+
+#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/types.hpp>
 
 namespace ttnn::experimental {
 Tensor broadcast_to(

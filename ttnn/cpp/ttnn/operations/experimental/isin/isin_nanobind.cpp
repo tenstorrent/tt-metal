@@ -36,20 +36,13 @@ void bind_isin_operation(nb::module_& mod) {
     ttnn::bind_function<"isin", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            [](const Tensor& elements,
-               const Tensor& test_elements,
-               bool assume_unique,
-               bool invert,
-               const std::optional<Tensor>& out) {
-                return ttnn::experimental::isin(elements, test_elements, assume_unique, invert, out);
-            },
-            nb::arg("elements").noconvert(),
-            nb::arg("test_elements").noconvert(),
-            nb::kw_only(),
-            nb::arg("assume_unique") = false,
-            nb::arg("invert") = false,
-            nb::arg("out") = nb::none()));
+        &ttnn::experimental::isin,
+        nb::arg("elements").noconvert(),
+        nb::arg("test_elements").noconvert(),
+        nb::kw_only(),
+        nb::arg("assume_unique") = false,
+        nb::arg("invert") = false,
+        nb::arg("out") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::isin::detail

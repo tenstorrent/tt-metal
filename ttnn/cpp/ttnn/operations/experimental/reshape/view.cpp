@@ -19,7 +19,17 @@ ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
 }
 
 ttnn::Tensor view(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return view(tensor, ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
+    auto shape = ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector);
+    return tt::tt_metal::view(tensor, shape, shape);
+}
+
+ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::SmallVector<int32_t>& shape_vector) {
+    return ttnn::experimental::view(tensor, tt::stl::Span<const int32_t>(shape_vector.data(), shape_vector.size()));
+}
+
+ttnn::Tensor view(const ttnn::Tensor& tensor, int32_t N, int32_t C, int32_t H, int32_t W) {
+    ttnn::SmallVector<int32_t> shape_vec{N, C, H, W};
+    return ttnn::experimental::view(tensor, tt::stl::Span<const int32_t>(shape_vec.data(), shape_vec.size()));
 }
 
 }  // namespace ttnn::experimental

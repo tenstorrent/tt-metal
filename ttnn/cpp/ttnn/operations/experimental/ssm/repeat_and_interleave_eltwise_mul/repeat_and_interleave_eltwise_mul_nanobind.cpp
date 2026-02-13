@@ -22,20 +22,13 @@ void bind_repeat_and_interleave_eltwise_mul(nb::module_& mod) {
     ttnn::bind_function<"repeat_and_interleave_eltwise_mul", "ttnn.experimental.">(
         mod,
         doc,
-        ttnn::overload_t(
-            [](const ttnn::Tensor& a,
-               const ttnn::Tensor& b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               const std::optional<MathFidelity> math_fidelity) {
-                return ttnn::experimental::repeat_and_interleave_eltwise_mul(a, b, memory_config, dtype, math_fidelity);
-            },
-            nb::arg("a"),
-            nb::arg("b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("math_fidelity") = nb::none()));
+        &ttnn::experimental::repeat_and_interleave_eltwise_mul,
+        nb::arg("a"),
+        nb::arg("b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("math_fidelity") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ssm::detail
