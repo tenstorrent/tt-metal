@@ -254,8 +254,8 @@ tt-run --rank-binding config.yaml [options] <program> [args...]
 | Option | Description |
 |--------|-------------|
 | `--rank-binding` | Path to rank binding YAML file (required) |
-| `--multihost` | Enable recommended MPI settings for multi-host clusters (TCP transport, interface exclusions) |
-| `--tcp-interface <iface>` | Specify network interface for MPI TCP communication (e.g., `cnx1`). Implies `--multihost` |
+| `--bare` | Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups |
+| `--tcp-interface <iface>` | Specify network interface for MPI TCP communication (e.g., `cnx1`). Uses btl_tcp_if_include instead of default exclusions |
 | `--mpi-args "<args>"` | Pass additional arguments to mpirun (quoted) |
 | `--dry-run` | Print the mpirun command without executing |
 | `-v, --verbose` | Show path resolution diagnostics, environment propagation, and MPI command details |
@@ -267,8 +267,8 @@ tt-run --rank-binding config.yaml [options] <program> [args...]
 tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml \
        python3 my_multi_mesh_workload.py
 
-# Multi-host with recommended MPI settings
-tt-run --multihost --rank-binding config.yaml \
+# Multi-host (multihost MPI settings are default)
+tt-run --rank-binding config.yaml \
        --mpi-args "--rankfile hosts.txt" \
        python3 my_workload.py
 
@@ -278,11 +278,11 @@ tt-run --tcp-interface cnx1 --rank-binding config.yaml \
        python3 my_workload.py
 ```
 
-**What `--multihost` does:** Adds recommended MPI settings for multi-host cluster environments:
+**Default multihost MPI settings:** tt-run applies recommended MPI settings for multi-host clusters by default:
 - `--mca btl self,tcp`: Use TCP byte transfer layer for inter-node communication
 - `--mca btl_tcp_if_exclude docker0,lo`: Exclude Docker bridge and loopback interfaces
 
-If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to explicitly select the network interface.
+If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to explicitly select the network interface. Use `--bare` to disable these settings for single-host or special setups.
 
 **Tagged Output:** `tt-run` always enables `--tag-output`, which prefixes each output line with rank information (e.g., `[1,0]<stdout>:`). This makes it easier to identify which rank produced each line of output when debugging distributed applications.
 
@@ -549,7 +549,7 @@ python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml \
        python3 tests/ttnn/distributed/test_multi_mesh.py
 
-# For multi-host clusters, add --multihost or --tcp-interface
+# For multi-host clusters, use --tcp-interface to specify network interface (multihost MPI settings are default)
 tt-run --tcp-interface cnx1 --rank-binding config.yaml \
        --mpi-args "--rankfile hosts.txt" \
        python3 tests/ttnn/distributed/test_multi_mesh.py

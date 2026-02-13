@@ -35,4 +35,4 @@ ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh -
 
 CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/fabric_minimal_example/example.py -c ${CONFIG_FILE}"
 # use tt-run to run the example script across all machines
-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --multihost --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE}" ${CMD}
+${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE}" ${CMD}

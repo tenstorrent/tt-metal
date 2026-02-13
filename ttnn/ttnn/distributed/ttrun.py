@@ -531,15 +531,15 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
 @click.option(
-    "--multihost",
+    "--bare",
     is_flag=True,
-    help="Enable recommended MPI settings for multi-host clusters (TCP transport, interface exclusions, etc.)",
+    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
 )
 @click.option(
     "--tcp-interface",
     type=str,
     default=None,
-    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Implies --multihost.",
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
 )
 @click.pass_context
 def main(
@@ -551,7 +551,7 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
-    multihost: bool,
+    bare: bool,
     tcp_interface: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
@@ -616,8 +616,8 @@ def main(
         # Single host, multiple processes
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # Multi-host with recommended MPI settings
-        tt-run --rank-binding binding.yaml --multihost --mpi-args "--rankfile hosts.txt" ./my_app
+        # Multi-host with rankfile (multihost MPI settings are default)
+        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
         # Multi-host with specific network interface (e.g., ConnectX NIC)
         tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
@@ -703,22 +703,23 @@ def main(
         produced each line of output when debugging distributed applications.
 
     \b
-    Multi-Host Mode (--multihost):
-        The --multihost flag enables recommended MPI settings for multi-host cluster environments.
-        This adds the following MPI arguments:
+    Multi-Host MPI Settings (default):
+        tt-run applies recommended MPI settings for multi-host clusters by default:
 
         - --mca btl self,tcp: Use TCP byte transfer layer for inter-node communication
         - --mca btl_tcp_if_exclude docker0,lo: Exclude Docker bridge and loopback interfaces
 
         If --tcp-interface is specified (e.g., --tcp-interface cnx1), it uses btl_tcp_if_include
-        instead of btl_tcp_if_exclude to explicitly select the network interface.
+        instead to explicitly select the network interface.
+
+        Use --bare to disable these settings (e.g., single-host or special setups).
 
         These settings help avoid common MPI issues in multi-host environments:
         - Stale process connections from other nodes
         - Network interface selection problems (docker0, lo can't route inter-node traffic)
 
         Example:
-            tt-run --multihost --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
+            tt-run --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
             tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
 
     \b
@@ -808,16 +809,14 @@ def main(
         if not program_path.exists() and not shutil.which(program[0]):
             raise click.ClickException(f"Program not found: {program[0]}")
 
-    # Build multihost MPI args if requested
-    # --tcp-interface implies --multihost
-    if tcp_interface:
-        multihost = True
+    # Apply default multihost MPI args unless --bare
+    if tcp_interface and not bare:
         # Validate the interface exists on the local host (best-effort check)
         validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
-    if multihost:
+    if not bare:
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
         # - Exclude loopback and docker0 (can't route inter-node traffic)
@@ -849,7 +848,7 @@ def main(
         effective_mpi_args = multihost_args + effective_mpi_args
 
         if verbose:
-            logger.info(f"{TT_RUN_PREFIX} Multihost mode enabled with args: {' '.join(multihost_args)}")
+            logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(

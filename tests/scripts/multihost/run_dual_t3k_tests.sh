@@ -14,7 +14,7 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
-  # tcp flags are handled by --multihost for tt-run
+  # tcp flags are default for tt-run
   local mpi_args="--hostfile /etc/mpirun/hostfile"
   local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
   local rank_binding="tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml"
@@ -22,10 +22,10 @@ run_dual_t3k_unit_tests() {
 
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --multihost --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
-  tt-run --multihost --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
-  tt-run --multihost --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
-  tt-run --multihost --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
+  tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

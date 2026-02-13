@@ -1,7 +1,7 @@
 # MeshSocket Test Configuration Example
 # This file demonstrates a basic test configuration with explicit socket definitions for multiprocess 2x2 T3k
 # use command to run:
-# tt-run --multihost --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_test_config_example.yaml
+# tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_test_config_example.yaml
 
 # Physical mesh configuration (optional)
 physical_mesh:
