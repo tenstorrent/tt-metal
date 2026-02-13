@@ -3,24 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/decorators.hpp"
-
+#include "ttnn/common/vector_init.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::binary_backward {
 
@@ -51,8 +44,8 @@ std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
     float t_nan = std::nanf("");
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    std::vector<EltwiseUnaryWithParam> ops_chain = {
-        EltwiseUnaryWithParam{UnaryOpType::SQUARE}, EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE}, EltwiseUnaryWithParam{UnaryOpType::RECIP});
     Tensor recip_mul = ttnn::multiply(
         grad,
         ttnn::unary_chain(ttnn::hypot(input, other, output_mem_config), ops_chain, output_mem_config),
