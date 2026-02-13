@@ -10,18 +10,26 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 | Metric | Count |
 |--------|-------|
 | Total operations found | 311 |
-| **Data Movement COMPLETE** | **47** (all data_movement ops migrated!) |
-| In outstanding PRs | ~15 (conv + reduction) |
-| Remaining to migrate | ~249 (mostly eltwise ~150 + others) |
+| **Completed Migrations** | **79** |
+| **Data Movement** | **47** (COMPLETE!) |
+| **Moreh Operations** | **32** (COMPLETE!) |
+| Conv operations (merged from PR) | 3 |
+| In outstanding PRs | ~10 (reduction ops) |
+| Remaining to migrate | ~229 (mostly eltwise ~150 + others) |
 
-### Batch Breakdown
+### Migration Breakdown
+**Data Movement (47):**
 - Pre-existing: 7 operations
 - Test Batch: 4 operations (squeeze reverted)
 - Batch 1: 10 operations
 - Batch 2: 15 operations
 - Batch 3 Phase 1: 5 operations
-- Batch 3 Phase 2: 6 operations (sharded operations + sort)
-- **Total: 47 operations completed**
+- Batch 3 Phase 2: 6 operations
+
+**Moreh Operations (32):**
+- Batch 1: 8 operations (arange, sum, mean, cumsum, getitem, fold, abs_pow, dot)
+- Batch 2: 10 operations (matmul ops + softmax + layer_norm)
+- Batch 3: 14 operations (optimizers + norms + losses)
 
 ## Migration Status by Directory
 
@@ -197,27 +205,19 @@ Migration from `register_operation` + `bind_registered_operation` to `bind_funct
 - [ ] `generic/` - GenericOp
 - [ ] `examples/` - Example operations
 
-### 📋 TODO - Medium Priority (Moreh Operations ~35)
-- [ ] `moreh/moreh_adam/` - MorehAdam
-- [ ] `moreh/moreh_adamw/` - MorehAdamW
-- [ ] `moreh/moreh_sgd/` - MorehSGD
-- [ ] `moreh/moreh_matmul/` - MorehMatmul
-- [ ] `moreh/moreh_linear/` - MorehLinear
-- [ ] `moreh/moreh_bmm/` - MorehBMM
-- [ ] `moreh/moreh_dot/` - MorehDot
-- [ ] `moreh/moreh_sum/` - MorehSum
-- [ ] `moreh/moreh_mean/` - MorehMean
-- [ ] `moreh/moreh_norm/` - MorehNorm
-- [ ] `moreh/moreh_layer_norm/` - MorehLayerNorm
-- [ ] `moreh/moreh_group_norm/` - MorehGroupNorm
-- [ ] `moreh/moreh_softmax/` - MorehSoftmax
-- [ ] `moreh/moreh_cumsum/` - MorehCumsum
-- [ ] `moreh/moreh_getitem/` - MorehGetitem
-- [ ] `moreh/moreh_nll_loss/` - MorehNLLLoss
-- [ ] `moreh/moreh_arange/` - MorehArange
-- [ ] `moreh/moreh_fold/` - MorehFold
-- [ ] `moreh/moreh_abs_pow/` - MorehAbsPow
-- [ ] And ~15 more moreh backward operations
+### ✅ Moreh Operations (32 operations - **COMPLETE!**)
+All Moreh operations migrated in 3 batches:
+- [x] moreh_adam, moreh_adamw, moreh_sgd (optimizers) ✅
+- [x] moreh_matmul, moreh_linear, moreh_bmm, moreh_dot (matmul ops) ✅
+- [x] moreh_matmul_backward, moreh_bmm_backward, moreh_linear_backward, moreh_dot_backward ✅
+- [x] moreh_sum, moreh_mean, moreh_cumsum, moreh_arange, moreh_getitem ✅
+- [x] moreh_sum_backward, moreh_mean_backward ✅
+- [x] moreh_layer_norm, moreh_layer_norm_backward ✅
+- [x] moreh_group_norm, moreh_group_norm_backward ✅
+- [x] moreh_softmax (softmax/softmin/logsoftmax), moreh_softmax_backward ✅
+- [x] moreh_norm, moreh_norm_backward ✅
+- [x] moreh_nll_loss, moreh_nll_loss_backward, moreh_nll_loss_unreduced_backward ✅
+- [x] moreh_fold, moreh_abs_pow, moreh_clip_grad_norm ✅
 
 ### 📋 TODO - Lower Priority (Experimental ~100 operations)
 - [ ] `experimental/ccl/` - ~30 async CCL operations
@@ -299,3 +299,8 @@ After each batch:
 | 2026-02-13 | Batch 3 Phase 1 | 5 | pad, repeat, moe_routing_remap, reshape_on_device, reshard - ✅ BUILD SUCCESSFUL |
 | 2026-02-13 | Batch 3 Phase 2 | 6 | sharded_to_interleaved, sharded_to_interleaved_partial, interleaved_to_sharded_partial, interleaved_to_sharded (2 overloads), sort (returns vector, uses mod.def lambda) - ✅ BUILD SUCCESSFUL |
 | 2026-02-13 | **DATA MOVEMENT COMPLETE** | **47 total** | All data_movement operations migrated! 🎉 |
+| 2026-02-13 | Moreh Batch 1 | 8 | moreh_arange, moreh_sum, moreh_mean, moreh_cumsum, moreh_getitem, moreh_fold, moreh_abs_pow, moreh_dot - ✅ BUILD SUCCESSFUL |
+| 2026-02-13 | Moreh Batch 2 | 10 | moreh_matmul, moreh_bmm, moreh_linear, moreh_matmul_backward, moreh_bmm_backward, moreh_linear_backward, moreh_dot_backward, moreh_softmax (3 variants), moreh_softmax_backward (3 variants), moreh_layer_norm - ✅ BUILD SUCCESSFUL |
+| 2026-02-13 | Moreh Batch 3 | 14 | moreh_adam, moreh_adamw, moreh_sgd, moreh_group_norm, moreh_group_norm_backward, moreh_layer_norm_backward, moreh_norm, moreh_norm_backward, moreh_mean_backward, moreh_sum_backward, moreh_nll_loss, moreh_nll_loss_backward, moreh_nll_loss_unreduced_backward, moreh_clip_grad_norm - ✅ BUILD SUCCESSFUL |
+| 2026-02-13 | **MOREH COMPLETE** | **32 total** | All Moreh operations migrated! 🎉 |
+| 2026-02-13 | **MILESTONE** | **79 total** | Data Movement (47) + Moreh (32) = 79 operations complete! |
