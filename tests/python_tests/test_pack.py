@@ -256,25 +256,23 @@ def test_pack(
         golden_tensor, res_tensor, formats.output_format, print_erros=False
     )
 
-    if not test_passed and relu_type in [
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ]:
-        # When a datum is extremely close to the ReLU threshold, differences can arise due to
-        # floating point precision limitations and rounding during format conversions.
-        # We check if all mismatches are within a small tolerance of the threshold. If so, we consider the test as passed.
-        is_tolerance_issue = is_relu_threshold_tolerance_issue(
+    if (
+        not test_passed
+        and relu_type
+        in [
+            PackerReluType.MinThresholdRelu,
+            PackerReluType.MaxThresholdRelu,
+        ]
+        and is_relu_threshold_tolerance_issue(
             golden_tensor,
             res_tensor,
             relu_config,
             data_formats.pack_src,
         )
-
-        if is_tolerance_issue:
-            print(
-                "Detected a packer ReLU threshold precision difference between hardware and software "
-                "the discrepancy is within tolerance and is considered acceptable."
-            )
-            test_passed = True
+    ):
+        # When a datum is extremely close to the ReLU threshold, differences can arise due to
+        # floating point precision limitations and rounding during format conversions.
+        # We check if all mismatches are within a small tolerance of the threshold. If so, we consider the test as passed.
+        test_passed = True
 
     assert test_passed
