@@ -265,8 +265,9 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Single-card N300 often exposes a harvested 8x7 worker grid.
-        grid = (8, 7)
+        # Koyeb N300 (and many dev setups) expose a full 8x8 compute grid.
+        # Using 8x8 also matches the reference sharded ViT demo program configs.
+        grid = (8, 8)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -299,9 +300,11 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         l1_resident=True,
         use_block_sharded=False,
         sdpa_grid=grid,
-        qkv_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
-        proj_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
-        mlp_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        # Keep encoder activations block-sharded in perf mode so sharded program
+        # configs (LN/QKV/FFN) are applicable.
+        qkv_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
+        proj_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
+        mlp_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
         split_heads_memcfg=split_mem,
         qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
         qk_program_config=qk_pc,
