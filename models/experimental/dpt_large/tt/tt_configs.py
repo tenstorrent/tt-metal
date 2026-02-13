@@ -292,8 +292,42 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     mlp_grid = None
     mlp_prog_cfgs = {}
     if config.device.endswith("n300"):
-        mlp_grid = (8, 1)
+        # Use a 2-row grid to split sequence tiles across y and avoid large
+        # per-core output buffers that can clash with static circular buffers in L1.
+        mlp_grid = (8, 2)
         mlp_prog_cfgs = _build_perf_program_configs(config, mlp_grid)
+        # `_build_perf_program_configs` defaults `per_core_M` to the full padded
+        # sequence tile count. For block-sharded MLP activations across (x,y),
+        # each core sees only seqL_t / grid_y tiles along M.
+        try:
+            seqL_t = int(mlp_prog_cfgs.get("_seqL_t"))
+            dim_t__x = int(mlp_prog_cfgs.get("_dim_t__x"))
+            grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
+            if grid_y > 1 and seqL_t % grid_y == 0:
+                per_core_M = seqL_t // grid_y
+                mlp_prog_cfgs["ff1_matmul_program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=mlp_grid,
+                    in0_block_w=dim_t__x,
+                    out_subblock_h=1,
+                    out_subblock_w=(dim_t__x * 4) // 2,
+                    per_core_M=per_core_M,
+                    per_core_N=dim_t__x * 4,
+                    transpose_mcast=False,
+                    fused_activation=(ttnn.UnaryOpType.GELU, True),
+                )
+                mlp_prog_cfgs["ff2_matmul_program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=mlp_grid,
+                    in0_block_w=dim_t__x * 4,
+                    out_subblock_h=1,
+                    out_subblock_w=dim_t__x,
+                    per_core_M=per_core_M,
+                    per_core_N=dim_t__x,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+        except Exception:
+            # Keep the default configs if the runtime doesn't expose these types/attrs.
+            pass
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
     # Disable custom attention configs if forced or if sharding would exceed grid width.
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
