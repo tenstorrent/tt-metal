@@ -372,19 +372,21 @@ def test_pre_sdpa(
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
-    # Each SDPA Input core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
+    # After 3-phase CreateQHeads tilization:
+    #   Each SDPA Input core receives 8 heads, tilized as [8, 576] with [8, 32] tiles
+    #   Total: 8 cores × 8 heads = 64 rows, 576 elements per head
     # SDPA Input grid: 4×2 rectangle at logical (0,1)-(3,2)
     SDPA_INPUT_GRID_COLS = 4
     SDPA_INPUT_GRID_ROWS = 2
     SDPA_INPUT_NUM_CORES = SDPA_INPUT_GRID_COLS * SDPA_INPUT_GRID_ROWS  # 8 cores
     COMBINED_HEAD_SIZE = QNOPE_OUT_DIM + QROPE_HEAD_DIM  # 512 + 64 = 576
-    SDPA_INPUT_ELEMENTS_PER_CORE = HEADS_PER_ROW * COMBINED_HEAD_SIZE  # 8 * 576 = 4608
 
     sdpa_input_grid = ttnn.CoreRange(
         ttnn.CoreCoord(0, 1), ttnn.CoreCoord(SDPA_INPUT_GRID_COLS - 1, 1 + SDPA_INPUT_GRID_ROWS - 1)
     )
-    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)  # [8, 4608] total
-    sdpa_input_output_shard_shape = (1, SDPA_INPUT_ELEMENTS_PER_CORE)  # [1, 4608] per core
+    sdpa_tile = ttnn.Tile([8, 32])  # Tilize tile shape for CreateQHeads output
+    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, COMBINED_HEAD_SIZE)  # [64, 576] total
+    sdpa_input_output_shard_shape = (HEADS_PER_ROW, COMBINED_HEAD_SIZE)  # [8, 576] per core
     sdpa_input_output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({sdpa_input_grid}),
         sdpa_input_output_shard_shape,
@@ -400,7 +402,7 @@ def test_pre_sdpa(
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=sdpa_input_output_mem_config,
-        tile=tile,
+        tile=sdpa_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
@@ -434,7 +436,7 @@ def test_pre_sdpa(
     cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
     sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
 
-    ttnn_cos = ttnn.from_torch(
+    ttnn_qrope_cos = ttnn.from_torch(
         cos_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -444,7 +446,7 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    ttnn_sin = ttnn.from_torch(
+    ttnn_qrope_sin = ttnn.from_torch(
         sin_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -578,8 +580,8 @@ def test_pre_sdpa(
             ttnn_rmsnorm2_gamma,
             ttnn_matmul2_weights,
             ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
+            ttnn_qrope_sin,
+            ttnn_qrope_cos,
             ttnn_trans_mat,
             ttnn_krope_cos,
             ttnn_krope_sin,
@@ -606,13 +608,13 @@ def test_pre_sdpa(
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses shuffled weights to produce same interleaved output
+    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE)
     _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
-        torch_matmul2_weights_shuffled,  # Use shuffled weights
+        torch_matmul2_weights_unshuffled,  # Use unshuffled weights
         torch_matmul3_weights,
         torch_sin,
         torch_cos,
@@ -630,7 +632,7 @@ def test_pre_sdpa(
     )
 
     slice_size = sdpa_input_output_shape[0]
-    expected_width = 4608
+    expected_width = COMBINED_HEAD_SIZE  # 576
 
     for device_idx in range(mesh_rows * mesh_cols):
         start = device_idx * slice_size
@@ -638,13 +640,13 @@ def test_pre_sdpa(
         # Trim to expected width for comparison
         received = sdpa_input_output_torch[start:end, :expected_width]
 
-        # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
-        # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
-        # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
-        torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
+        # Golden SDPA Input shape: [64, 576] (already reshaped by golden function)
+        # Each row is one head: [qnope[512], qrope[64]]
+        # 8 cores × 8 heads = 64 rows
+        torch_sdpa_input_expected_flat = torch_sdpa_expected
         if received.shape != torch_sdpa_input_expected_flat.shape:
             logger.error(
-                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_expected.shape}"
+                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_input_expected_flat.shape}"
             )
             continue
 
