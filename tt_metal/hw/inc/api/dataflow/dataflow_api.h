@@ -1857,12 +1857,45 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 }
 
 /**
- * This blocking call waits for all the outstanding read, write, and atomic NOC
+ * This blocking call waits for all the outstanding posted atomic transactions
+ * issued on the current Tensix core to be flushed/sent. Posted atomics are
+ * "fire and forget" operations that do not wait for acknowledgment. After
+ * returning from this call, all posted atomic transactions will have been
+ * transmitted, but may not yet have been processed by the recipient.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
+ */
+FORCE_INLINE
+void noc_async_posted_atomics_flushed(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::ATOMIC_BARRIER, false, noc);
+
+    WAYPOINT("NPAW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_atomics_sent(noc));
+    } else {
+        while (!ncrisc_noc_posted_atomics_sent(noc));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NPAD");
+}
+
+/**
+* This blocking call waits for all the outstanding read, write, and atomic NOC
  * transactions issued on the current Tensix core to complete. After returning
  * from this call all transaction queues will be empty for the current Tensix
  * core.
- *
+
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc_idx  | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
@@ -1889,6 +1922,10 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx)) {
             invalidate_l1_cache();
         }
+        WAYPOINT("NFGW");
+        while (!ncrisc_dynamic_noc_posted_atomics_sent(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFBD");
     } else {
         WAYPOINT("NFBW");
@@ -1901,6 +1938,8 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
         while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
         WAYPOINT("NFFW");
         while (!ncrisc_noc_posted_writes_sent(noc_idx));
+        WAYPOINT("NFGW");
+        while (!ncrisc_noc_posted_atomics_sent(noc_idx));
         WAYPOINT("NFBD");
     }
 }
