@@ -23,7 +23,11 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-Tensor MorehMatmul::invoke(
+}  // namespace ttnn::operations::moreh::moreh_matmul
+
+namespace ttnn {
+
+Tensor moreh_matmul(
     const Tensor& input,
     const Tensor& other,
     bool transpose_input,
@@ -31,11 +35,12 @@ Tensor MorehMatmul::invoke(
     const std::optional<Tensor>& output,
     const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    if (is_dot_forward(input, other, transpose_input, transpose_other)) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (operations::moreh::moreh_matmul::is_dot_forward(input, other, transpose_input, transpose_other)) {
         return ttnn::moreh_dot(input, other, output, input.dtype(), memory_config, compute_kernel_config);
     }
     return ttnn::prim::moreh_matmul(
         input, other, transpose_input, transpose_other, output, bias, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_matmul
+
+}  // namespace ttnn

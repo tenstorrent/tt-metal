@@ -8,8 +8,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_layer_norm {
-std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
+namespace ttnn::operations::moreh::moreh_layer_norm {}  // namespace ttnn::operations::moreh::moreh_layer_norm
+
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_layer_norm(
     const Tensor& input,
     const uint32_t normalized_dims,
     const float eps,
@@ -24,4 +27,4 @@ std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
         input, normalized_dims, eps, gamma, beta, output, mean, rstd, memory_config, compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_layer_norm
+}  // namespace ttnn

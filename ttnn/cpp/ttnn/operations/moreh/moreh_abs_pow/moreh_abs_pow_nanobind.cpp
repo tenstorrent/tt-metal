@@ -10,22 +10,21 @@
 #include <nanobind/stl/optional.h>
 
 #include "moreh_abs_pow.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 
 void bind_moreh_abs_pow_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_abs_pow">(
         mod,
-        ttnn::moreh_abs_pow,
         "Moreh Pow Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_abs_pow,
             nb::arg("input"),
             nb::arg("p"),
             nb::kw_only(),
             nb::arg("output") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-        });
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_abs_pow

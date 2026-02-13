@@ -7,36 +7,42 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_softmax_backward {
-
-#define DEFINE_MOREH_SOFT_BACKWARD_OP(name)                                         \
-    struct name {                                                                   \
-        static Tensor invoke(                                                       \
-            const Tensor& output_tensor,                                            \
-            const Tensor& output_grad_tensor,                                       \
-            uint32_t dim,                                                           \
-            const std::optional<Tensor>& input_grad_tensor,                         \
-            const MorehSoftmaxBackwardOp op,                                        \
-            const MorehSoftmaxBackwardOpParallelizationStrategy strategy,           \
-            const std::optional<MemoryConfig>& memory_config,                       \
-            const std::optional<DeviceComputeKernelConfig>& compute_kernel_config); \
-    }
-
-DEFINE_MOREH_SOFT_BACKWARD_OP(MorehSoftmaxBackward);
-DEFINE_MOREH_SOFT_BACKWARD_OP(MorehSoftminBackward);
-DEFINE_MOREH_SOFT_BACKWARD_OP(MorehLogSoftmaxBackward);
-#undef DEFINE_MOREH_SOFT_BACKWARD_OP
-
-}  // namespace ttnn::operations::moreh::moreh_softmax_backward
-
 namespace ttnn {
-constexpr auto moreh_softmax_backward = ttnn::register_operation<
-    "ttnn::moreh_softmax_backward",
-    ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackward>();
-constexpr auto moreh_softmin_backward = ttnn::register_operation<
-    "ttnn::moreh_softmin_backward",
-    ttnn::operations::moreh::moreh_softmax_backward::MorehSoftminBackward>();
-constexpr auto moreh_logsoftmax_backward = ttnn::register_operation<
-    "ttnn::moreh_logsoftmax_backward",
-    ttnn::operations::moreh::moreh_softmax_backward::MorehLogSoftmaxBackward>();
+
+Tensor moreh_softmax_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& input_grad_tensor = std::nullopt,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::SOFTMAX,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+Tensor moreh_softmin_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& input_grad_tensor = std::nullopt,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::SOFTMIN,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+Tensor moreh_logsoftmax_backward(
+    const Tensor& output_tensor,
+    const Tensor& output_grad_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& input_grad_tensor = std::nullopt,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp op =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::LOGSOFTMAX,
+    const ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy strategy =
+        ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn
