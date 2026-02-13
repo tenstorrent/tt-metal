@@ -4,12 +4,43 @@
 
 import torch
 import pytest
+from dataclasses import dataclass
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.common.utility_functions import skip_for_blackhole
 
 from tracy import signpost
+
+
+@dataclass
+class MinimalMatmulStridedReduceScatterTestConfig:
+    """Test configuration for fused matmul + strided reduce scatter.
+
+    Using a dataclass ensures parameters can't be provided in wrong order
+    and makes test cases self-documenting.
+    """
+
+    M: int
+    K: int
+    N: int
+    dim: int
+    mm_block_m: int
+    mm_block_k: int
+    mm_block_n: int
+    mm_core_grid: object  # ttnn.CoreCoord
+    chunk_width_in_mm_blocks: int
+    subblock_h: int = 1
+    subblock_w: int = 1
+    layout: object = None  # ttnn.Layout, set in __post_init__
+    input_dtype: object = None  # ttnn.DataType, set in __post_init__
+    num_workers_per_link: object = None  # Optional[int]
+
+    def __post_init__(self):
+        if self.layout is None:
+            self.layout = ttnn.TILE_LAYOUT
+        if self.input_dtype is None:
+            self.input_dtype = ttnn.bfloat16
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -288,46 +319,106 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "M, K, N, dim, num_workers_per_link, layout, input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, chunk_width_in_mm_blocks",
+    "test_config",
     [
-        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=2, cwimb=1
-        # Based on experimental_strided_toy_3_correctness_check_3
-        # MM output = [1, 1, 128, 512], slice_Wt=2
-        (128, 256, 512, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 1),
-        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=4, cwimb=1
-        # Based on experimental_strided_toy_2 adapted to mm_cores_y=2
-        # MM output = [1, 1, 128, 1024], slice_Wt=4
-        (128, 256, 1024, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 1),
-        # RS geometry: mm_cores_y=2, mm_block_ht=4, mm_block_wt=4, mm_N_block_wt=8, cwimb=2
-        # Based on experimental_strided_toy_4_correctness_check_2
-        # MM output = [1, 1, 512, 2048], slice_Wt=8
-        (512, 512, 2048, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 128, 128, 128, 1, 1, ttnn.CoreCoord(8, 2), 2),
-        # RS geometry: mm_cores_y=2, mm_block_ht=2, mm_block_wt=2, mm_N_block_wt=10, cwimb=4
-        # Based on experimental_strided_toy_4_correctness_check_3
-        # MM output = [1, 1, 512, 2560], slice_Wt=10
-        (512, 256, 2560, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 64, 64, 1, 1, ttnn.CoreCoord(8, 2), 4),
-        # RS geometry: mm_cores_y=4, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=8, cwimb=1
-        # Based on experimental_strided_toy_5_correctness_check
-        # MM output = [1, 1, 4096, 2048], slice_Wt=8
-        (4096, 512, 2048, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 4), 1),
-        # RS geometry: mm_cores_y=4, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=16, cwimb=2
-        # Based on experimental_strided_toy_6_correctness_check
-        # MM output = [1, 1, 4096, 4096], slice_Wt=16
-        (4096, 512, 4096, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 4), 2),
-        # RS geometry: mm_cores_y=6, mm_block_ht=8, mm_block_wt=8, mm_N_block_wt=16, cwimb=2
-        # Adapted from experimental_strided_toy_7 (mm_cores_y=8 doesn't fit in fused case --
-        # RS cores need rows below the MM grid, but WH B0 grid is 8x8)
-        # MM output = [1, 1, 3072, 4096], slice_Wt=16
-        (3072, 512, 4096, 3, None, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 1, 1, ttnn.CoreCoord(8, 6), 2),
-    ],
-    ids=[
-        "small_Nwt2_cwimb1",
-        "medium_Nwt4_cwimb1",
-        "large_Nwt8_cwimb2",
-        "large_Nwt10_cwimb4",
-        "xlarge_4k_Nwt8_cwimb1",
-        "xlarge_4k_Nwt16_cwimb2",
-        "xlarge_4k_y6_Nwt16_cwimb2",
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=128,
+                K=256,
+                N=512,
+                dim=3,
+                mm_block_m=64,
+                mm_block_k=64,
+                mm_block_n=64,
+                mm_core_grid=ttnn.CoreCoord(8, 2),
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="small_Nwt2_cwimb1",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=128,
+                K=256,
+                N=1024,
+                dim=3,
+                mm_block_m=64,
+                mm_block_k=64,
+                mm_block_n=64,
+                mm_core_grid=ttnn.CoreCoord(8, 2),
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="medium_Nwt4_cwimb1",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=512,
+                K=512,
+                N=2048,
+                dim=3,
+                mm_block_m=128,
+                mm_block_k=128,
+                mm_block_n=128,
+                mm_core_grid=ttnn.CoreCoord(8, 2),
+                chunk_width_in_mm_blocks=2,
+            ),
+            id="large_Nwt8_cwimb2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=512,
+                K=256,
+                N=2560,
+                dim=3,
+                mm_block_m=64,
+                mm_block_k=64,
+                mm_block_n=64,
+                mm_core_grid=ttnn.CoreCoord(8, 2),
+                chunk_width_in_mm_blocks=4,
+            ),
+            id="large_Nwt10_cwimb4",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4096,
+                K=512,
+                N=2048,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 4),
+                chunk_width_in_mm_blocks=1,
+            ),
+            id="xlarge_4k_Nwt8_cwimb1",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=4096,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 4),
+                chunk_width_in_mm_blocks=2,
+            ),
+            id="xlarge_4k_Nwt16_cwimb2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=3072,
+                K=512,
+                N=4096,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=256,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 6),
+                chunk_width_in_mm_blocks=2,
+            ),
+            id="xlarge_4k_y6_Nwt16_cwimb2",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -365,59 +456,47 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 )
 def test_minimal_matmul_strided_reduce_scatter_async(
     mesh_device,
-    M,
-    K,
-    N,
-    dim,
+    test_config,
     num_links,
-    input_dtype,
-    layout,
     mem_config_input,
     mem_config_mm,
     mem_config_rs,
     enable_trace,
     topology,
     num_iters,
-    num_workers_per_link,
-    mm_block_m,
-    mm_block_k,
-    mm_block_n,
-    subblock_h,
-    subblock_w,
-    mm_core_grid,
-    chunk_width_in_mm_blocks,
     use_non_fused,
 ):
+    cfg = test_config
     TILE_SIZE = 32
-    Nt = N // TILE_SIZE
-    Nt_per_core = Nt // mm_core_grid.x
+    Nt = cfg.N // TILE_SIZE
+    Nt_per_core = Nt // cfg.mm_core_grid.x
     assert Nt_per_core >= (
-        mm_block_n // TILE_SIZE
-    ), f"block_n size is {mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
+        cfg.mm_block_n // TILE_SIZE
+    ), f"block_n size is {cfg.mm_block_n // TILE_SIZE} tiles, but only {Nt_per_core} tiles of work per core"
 
     run_minimal_matmul_strided_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        M,
-        K,
-        N,
-        dim,
+        cfg.M,
+        cfg.K,
+        cfg.N,
+        cfg.dim,
         num_links,
-        input_dtype,
-        layout,
+        cfg.input_dtype,
+        cfg.layout,
         mem_config_input,
         mem_config_mm,
         mem_config_rs,
         topology=topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        num_workers_per_link=num_workers_per_link,
-        mm_block_m=mm_block_m,
-        mm_block_k=mm_block_k,
-        mm_block_n=mm_block_n,
-        subblock_h=subblock_h,
-        subblock_w=subblock_w,
-        mm_core_grid=mm_core_grid,
-        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+        num_workers_per_link=cfg.num_workers_per_link,
+        mm_block_m=cfg.mm_block_m,
+        mm_block_k=cfg.mm_block_k,
+        mm_block_n=cfg.mm_block_n,
+        subblock_h=cfg.subblock_h,
+        subblock_w=cfg.subblock_w,
+        mm_core_grid=cfg.mm_core_grid,
+        chunk_width_in_mm_blocks=cfg.chunk_width_in_mm_blocks,
         use_non_fused=use_non_fused,
     )
