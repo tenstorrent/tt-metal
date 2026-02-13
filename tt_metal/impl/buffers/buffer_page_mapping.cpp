@@ -71,7 +71,7 @@ BufferPageMapping::BufferPageMapping(const UncompressedBufferPageMapping& page_m
         if (host_ranges.empty()) {
             continue;
         }
-        core_page_mapping.push_back(BufferCorePageMapping{
+        core_page_mapping.emplace_back(BufferCorePageMapping{
             .device_start_page = 0,
             .num_pages = static_cast<uint32_t>(core_host_page_indices.size()),
             .host_ranges = std::move(host_ranges),
@@ -124,7 +124,7 @@ BufferPageMapping BufferPageMapping::filter_by_host_range(uint32_t start_host_pa
                     continue;
                 }
 
-                result_core_mapping.host_ranges.push_back({
+                result_core_mapping.host_ranges.emplace_back(BufferCorePageMapping::ContiguousHostPages{
                     .device_page_offset = host_range.device_page_offset + host_range_start - host_range.host_page_start,
                     .host_page_start = host_range_start - start_host_page,
                     .num_pages = host_range_end - host_range_start,
