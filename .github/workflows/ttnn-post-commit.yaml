@@ -156,6 +156,11 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           enable-kernel-ccache: true
+          redis-ccache-user: ${{ vars.REDIS_CCACHE_USER }}
+          redis-ccache-password: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+          redis-ccache-host: ${{ vars.REDIS_CCACHE_HOST }}
+          redis-ccache-port: ${{ vars.REDIS_CCACHE_PORT }}
+          redis-ccache-readonly: ${{ vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: Set ttnn fast runtime if exists in config
