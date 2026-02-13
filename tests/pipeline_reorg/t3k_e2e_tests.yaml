@@ -69,7 +69,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
   skus:
     wh_llmbox:
-      timeout: 50
+      timeout: 20
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
