@@ -6,7 +6,6 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <future>
 #include <initializer_list>

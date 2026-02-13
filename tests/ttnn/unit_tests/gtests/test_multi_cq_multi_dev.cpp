@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstring>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <map>
 #include <memory>
 #include <optional>

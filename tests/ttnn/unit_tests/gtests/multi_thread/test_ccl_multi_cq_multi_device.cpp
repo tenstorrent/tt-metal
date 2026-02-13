@@ -33,7 +33,6 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 
