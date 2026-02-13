@@ -15,22 +15,6 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A_mop_config(
-    const bool transpose_of_faces,
-    const std::uint32_t operand_id,
-    const std::uint32_t unpack_src_format = 0,
-    std::uint32_t unpack_dst_format = 0) {
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
-}
-
-template <
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -41,8 +25,8 @@ inline void llk_unpack_A_init(
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
+    // TODO NC: Move to TRISC1 tt-metal#36411
     if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
-        // TODO NC: Move to TRISC1 tt-metal#36411
         llk_unpack_dbg_feature_disable();
     }
 
@@ -84,7 +68,7 @@ inline void llk_unpack_A_block(
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
     std::uint32_t address = base_address + start_tile_index * offset_address;
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);

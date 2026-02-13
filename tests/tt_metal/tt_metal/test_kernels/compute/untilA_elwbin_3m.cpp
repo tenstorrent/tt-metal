@@ -34,10 +34,11 @@ void core_agnostic_main() {
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
 
-            llk_math_eltwise_binary_init<ELWADD, NONE, MathFidelity::LoFi>();
+            llk_math_eltwise_binary_init<ELWADD, NONE, MathFidelity::LoFi>(0, 1);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
-                llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(0);
+                llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+                    0, 1, 0);
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }

@@ -3,19 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_assert.h"
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
  *************************************************************************/
-
-inline void llk_unpack_AB_matmul_mop_config(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool partial_face_a, const bool partial_face_b) {
-    // in0 - loaded to SrcB
-    // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(ct_dim, rt_dim, partial_face_a, partial_face_b);
-}
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
@@ -26,19 +20,29 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t kt_dim = 1) {
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
-    const uint32_t operandA_id = get_operand_id(operandB);
-    const uint32_t operandB_id = get_operand_id(operandA);
+    const std::uint32_t operandA_id = get_operand_id(operandB);
+    const std::uint32_t operandB_id = get_operand_id(operandA);
 
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    const bool reuse_a = ct_dim >= rt_dim;
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces =
+    const std::uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
+    const std::uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+
+    LLK_ASSERT(ct_dim > 0, "ct_dim must be > 0");
+    LLK_ASSERT(rt_dim > 0, "rt_dim must be > 0");
+    LLK_ASSERT(kt_dim > 0, "kt_dim must be > 0");
+
+    // Validate operand constraints
+    // In0 (SrcB) = operandB_id: narrow_tile must be False
+    LLK_ASSERT(!get_operand_narrow_tile(operandB_id), "In0/SrcB: narrow_tile must be False");
+
+    // In1 (SrcA) = operandA_id: face_r_dim must be 16
+    LLK_ASSERT(unpA_face_r_dim == 16, "In1/SrcA: face_r_dim must be 16");
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -64,19 +68,21 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
     // TODO: remove partial_face flag, as this is easily to be confused with the partial face flag in math kernel
     const bool partial_face_a = get_operand_partial_face(operandB_id);  // In1/InB -> srcA
-    const bool partial_face_b = get_operand_partial_face(operandA_id);  // In0/InA -> srcB`
+    const bool partial_face_b = get_operand_partial_face(operandA_id);  // In0/InA -> srcB
 
-    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
-    std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
-    std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    const std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    const std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    LLK_ASSERT(ct_dim > 0, "ct_dim must be > 0");
+    LLK_ASSERT(rt_dim > 0, "rt_dim must be > 0");
+    LLK_ASSERT(kt_dim > 0, "kt_dim must be > 0");
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

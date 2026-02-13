@@ -44,7 +44,7 @@ ALWI void deepseek_mul_tiles_bcast_scalar_hw_startup(uint32_t icb0, uint32_t icb
 ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
@@ -76,7 +76,8 @@ template <
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, fp32_dest_acc_en, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
+    MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+        icb0, icb0, false)));
 }
 
 /**

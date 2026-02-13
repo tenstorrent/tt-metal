@@ -62,8 +62,7 @@ ALWI void binary_tiles_init(
     uint32_t icb0, uint32_t icb1, bool acc_to_dest = false, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
 
-    MATH((
-        llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(icb0, icb1, acc_to_dest)));
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(icb0, icb1, acc_to_dest)));
 
     if constexpr (full_init) {
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/)));
@@ -206,7 +205,8 @@ template <
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
+    MATH(
+        (llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(icb0, icb0, false)));
 }
 
 // clang-format off
