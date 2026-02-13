@@ -7,8 +7,7 @@
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile-time arguments (must match reader/writer on same device)
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
@@ -147,4 +146,3 @@ void MAIN {
         DPRINT << "batch: " << b << " done" << ENDL();
     }
 }
-}  // namespace NAMESPACE
