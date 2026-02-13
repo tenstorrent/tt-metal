@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <fmt/format.h>
-<parameter name="nanobind/nanobind.h>
+#include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
