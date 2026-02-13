@@ -35,7 +35,7 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass
 
-from triage import ScriptConfig, log_check_risc, run_script, triage_field, collection_serializer
+from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
