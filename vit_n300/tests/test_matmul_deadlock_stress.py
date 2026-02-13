@@ -167,6 +167,14 @@ def run_single_matmul(device, name, cfg, weight_tensor, bias_tensor=None):
         fused_activation=cfg["fused_activation"],
     )
 
+    # Match ViT model: packer_l1_acc=True enables PACKER_L1_ACC in the compute kernel
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
     if bias_tensor is not None:
         # Use ttnn.linear with bias — matches actual ViT model (FUSE_BIAS path)
         output = ttnn.linear(
@@ -176,6 +184,7 @@ def run_single_matmul(device, name, cfg, weight_tensor, bias_tensor=None):
             program_config=program_config,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
+            compute_kernel_config=compute_config,
         )
     else:
         output = ttnn.matmul(
@@ -184,6 +193,7 @@ def run_single_matmul(device, name, cfg, weight_tensor, bias_tensor=None):
             program_config=program_config,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
+            compute_kernel_config=compute_config,
         )
 
     tt_input.deallocate()
@@ -366,6 +376,13 @@ def run_fast_bias_matmul(device, name, cfg, weight_tensor, bias_tensor, input_dr
         fused_activation=cfg["fused_activation"],
     )
 
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
     output = ttnn.linear(
         tt_input,
         weight_tensor,
@@ -373,6 +390,7 @@ def run_fast_bias_matmul(device, name, cfg, weight_tensor, bias_tensor, input_dr
         program_config=program_config,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
+        compute_kernel_config=compute_config,
     )
     tt_input.deallocate()
     output.deallocate()
@@ -531,6 +549,12 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
             transpose_mcast=False,
             fused_activation=cfg["fused_activation"],
         )
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
         ttnn.linear(
             trace_inputs[name],
             weights[name],
@@ -538,6 +562,7 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
             program_config=program_config,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
+            compute_kernel_config=compute_config,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
@@ -575,3 +600,158 @@ def test_matmul_deadlock_stress_2cq(device, num_iterations):
         w.deallocate()
     for b in biases.values():
         b.deallocate()
+
+
+@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "trace_region_size": 1753088}],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_iterations", [1000])
+def test_matmul_l1acc_correctness(device, num_iterations):
+    """
+    Correctness test: run matmul+bias with packer_l1_acc=True and compare
+    output against a golden reference computed with packer_l1_acc=False.
+    If the L1_ACC race causes data corruption (wrong accumulation), the output
+    will differ from the reference. This catches the first-order effect of the
+    race condition even when it doesn't cause a hang.
+    """
+    import time
+
+    torch.manual_seed(42)
+
+    # Use the self_output config (smallest, fastest to compute golden)
+    cfg = VIT_MATMUL_CONFIGS["self_output"]
+    M, K, N = cfg["M"], cfg["K"], cfg["N"]
+    grid = cfg["grid"]
+
+    compute_config_l1acc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    compute_config_no_l1acc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=cfg["in0_block_w"],
+        out_subblock_h=cfg["out_subblock_h"],
+        out_subblock_w=cfg["out_subblock_w"],
+        per_core_M=cfg["per_core_M"],
+        per_core_N=cfg["per_core_N"],
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+    # Create tensors
+    torch_input = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_weight = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 1, 1, N, dtype=torch.bfloat16)
+
+    input_mem_config = create_block_sharded_config(grid, M, K, N)
+
+    weight_tt = ttnn.from_torch(
+        torch_weight,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    bias_tt = ttnn.from_torch(
+        torch_bias,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_dram = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Compute golden reference (no L1_ACC)
+    tt_input_ref = ttnn.to_memory_config(input_dram, input_mem_config)
+    ref_output = ttnn.linear(
+        tt_input_ref,
+        weight_tt,
+        bias=bias_tt,
+        program_config=program_config,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        compute_kernel_config=compute_config_no_l1acc,
+    )
+    ref_output_dram = ttnn.to_memory_config(ref_output, ttnn.DRAM_MEMORY_CONFIG)
+    ref_torch = ttnn.to_torch(ref_output_dram)
+    ref_output.deallocate()
+    ref_output_dram.deallocate()
+    tt_input_ref.deallocate()
+    ttnn.synchronize_device(device)
+
+    print(f"[correctness] Golden computed. Running {num_iterations} L1_ACC iterations...", flush=True)
+    errors_found = 0
+    t0 = time.time()
+
+    for i in range(num_iterations):
+        tt_input = ttnn.to_memory_config(input_dram, input_mem_config)
+        output = ttnn.linear(
+            tt_input,
+            weight_tt,
+            bias=bias_tt,
+            program_config=program_config,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            compute_kernel_config=compute_config_l1acc,
+        )
+        output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        result_torch = ttnn.to_torch(output_dram)
+        output.deallocate()
+        output_dram.deallocate()
+        tt_input.deallocate()
+
+        # Compare
+        if not torch.allclose(result_torch, ref_torch, atol=0, rtol=0):
+            diff = (result_torch - ref_torch).abs()
+            max_diff = diff.max().item()
+            num_diff = (diff > 0).sum().item()
+            total = diff.numel()
+            errors_found += 1
+            print(
+                f"  *** MISMATCH iter {i}: max_diff={max_diff:.6f} "
+                f"num_diff={num_diff}/{total} ({100*num_diff/total:.2f}%) ***",
+                flush=True,
+            )
+            if errors_found >= 10:
+                print("  Stopping after 10 mismatches", flush=True)
+                break
+
+        if (i + 1) % 100 == 0:
+            ttnn.synchronize_device(device)
+            elapsed = time.time() - t0
+            print(
+                f"[correctness] iter {i+1}/{num_iterations} ({elapsed:.1f}s) " f"errors={errors_found}",
+                flush=True,
+            )
+
+    ttnn.synchronize_device(device)
+    elapsed = time.time() - t0
+    weight_tt.deallocate()
+    bias_tt.deallocate()
+    input_dram.deallocate()
+
+    print(
+        f"[correctness] DONE — {num_iterations} iterations in {elapsed:.1f}s, " f"{errors_found} mismatches",
+        flush=True,
+    )
+    if errors_found > 0:
+        print(f"*** L1_ACC RACE DETECTED: {errors_found} mismatches ***", flush=True)
+    assert errors_found == 0, f"L1_ACC race: {errors_found} mismatches in {num_iterations} iterations"

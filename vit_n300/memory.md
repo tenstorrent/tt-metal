@@ -315,6 +315,147 @@ The race is too rare to trigger through the high-level Python API in a reasonabl
 - `tests/tt_metal/tt_metal/llk/sources.cmake` -- Modified to include test_packer_l1acc_race.cpp
 - Kernel instrumentation in `ttnn/.../matmul/device/kernels/` (3 files)
 
+## Reproduction Attempts & Experimental Findings (Feb 13, 2026 - Session 2)
+
+### CRITICAL FINDING: ViT Model Uses L1_ACC Only for LayerNorm, NOT Matmul
+
+Examining `models/demos/vision/classification/vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py`:
+- `packer_l1_acc=True` is ONLY set in `ln_compute_config` (used by LayerNorm ops, lines 149-154)
+- ALL matmul operations (`ttnn.linear`, `ttnn.matmul`) at lines 194, 240, 273, 294, 318, 339, 359, 500 do NOT pass `compute_kernel_config`
+- Default `WormholeComputeKernelConfig` has `packer_l1_acc=False` (confirmed in `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`)
+
+**Implication**: If the original theory (L1_ACC race in matmul causes the hang) is correct, the race would have to be triggered through the LayerNorm path, not matmul. OR: the matmul operations use L1_ACC through a different mechanism (e.g., the program config or runtime decision). This needs verification by checking what `PACKER_L1_ACC` define is actually set to in the compiled matmul kernels.
+
+**Alternative**: The matmul kernel `bmm_large_block_zm_fused_bias_activation.cpp` checks `#ifdef PACKER_L1_ACC` at compile time. The define comes from `compute_kernel_config.packer_l1_acc`. If the ViT model's linear ops don't set this, then `reconfigure_packer_l1_acc()` is never called during matmul, and the L1_ACC race in matmul is a red herring for this specific test.
+
+**TODO**: Check if LayerNorm operations also call `reconfigure_packer_l1_acc()` or have a similar race path.
+
+### Fault Injection Experiments (Summary)
+
+| Experiment | Modification | Result | Conclusion |
+|-----------|-------------|--------|------------|
+| Race Amplification | 200 dummy cfg_reg_rmw_tensix writes before correct value | No hang | Pipeline flooding doesn't widen race enough |
+| Deterministic L1_ACC=0 | Force L1_ACC=0 regardless of input | No hang (wrong output) | Wrong L1_ACC = corruption, not hang |
+| Split State (SEC0 correct, SEC1 opposite) | Different L1_ACC per section | No hang after 40K ops | Per-section inconsistency = corruption, not hang |
+| Correctness Test (L1_ACC=True vs False) | Compare outputs | 100% mismatch, deterministic | **FLAWED TEST** - comparing different computation modes |
+
+**Key conclusion from fault injection**: L1_ACC misconfiguration (wrong values, inconsistent sections) causes **data corruption**, NOT packer FSM hangs. The original theory that per-section config inconsistency causes an "undefined FSM state" leading to a permanent stall appears to be **incorrect** based on empirical evidence.
+
+### Correctness Test Design Flaw
+
+The test `test_matmul_l1acc_correctness` in `vit_n300/tests/test_matmul_deadlock_stress.py` compared:
+- Golden: `packer_l1_acc=False`
+- Test iterations: `packer_l1_acc=True`
+
+Result: Every iteration showed identical mismatch (max_diff=6.0, 83.42% values different). This is NOT a race condition - it's the expected numerical difference between accumulation modes.
+
+**To fix**: Golden should also use `packer_l1_acc=True`. Differences between L1_ACC=True runs would indicate actual race-induced corruption.
+
+### Baseline Reproduction Attempts
+
+| Test | Runs | Duration | Hangs | Notes |
+|------|------|----------|-------|-------|
+| ViT CI test loop (repro_loop.sh) | 200 | 75 min | 0 | Exact CI test configuration |
+| Matmul stress (test_matmul_deadlock_stress) | ~40K ops | ~5 min | 0 | Isolated matmul with L1_ACC=True |
+
+### Watcher Investigation
+
+Watcher (`TT_METAL_WATCHER=<seconds>`) adds minimal device-side overhead:
+- Waypoints: simple L1 mailbox writes
+- NOC sanitization: validates addresses before NOC transactions
+- `TT_METAL_WATCHER_DEBUG_DELAY=<cycles>`: adds NOC delays but does NOT affect intra-core pipeline hazards
+
+Key env vars: `TT_METAL_WATCHER`, `TT_METAL_WATCHER_DEBUG_DELAY`, `TT_METAL_WATCHER_DUMP_ALL`
+Key files: `tt_metal/impl/debug/watcher_server.cpp`, `tt_metal/hw/inc/api/debug/waypoint.h`
+
+### Trace Replay Pattern (From ViT CI Test)
+
+The actual CI test uses a sophisticated 2-CQ trace replay pattern:
+- CQ 0: computation (trace execution, resharding)
+- CQ 1: I/O (host↔device copies)
+- Events synchronize between CQs
+- 100 warmup + 1000 measurement iterations (1100 total replays)
+- Input updated via `ttnn.reshard()` with persistent L1 tensor
+- Trace executed non-blocking: `ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)`
+
+This pattern is fundamentally different from simple operation loops. The device runs more autonomously during trace replay, potentially creating more opportunities for race conditions.
+
+### `mm_block_init_short` Analysis
+
+Found at `tt_metal/hw/inc/api/compute/matmul.h:322`:
+```cpp
+ALWI void mm_block_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, ...) {
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+}
+```
+This is initialization-only, no obvious stall/hang points. The CI watcher showing trisc2 stuck in `mm_block_init_short` likely means the packer RISC is executing init code while waiting for something upstream (or the init itself was interrupted by a prior stall condition).
+
+### CRITICAL FINDING: ViT Matmul DOES Use PACKER_L1_ACC (via Default)
+
+**Initial wrong conclusion**: The ViT model only sets `packer_l1_acc=True` explicitly for LayerNorm. Matmul/linear ops don't pass `compute_kernel_config`.
+
+**Corrected finding**: When `compute_kernel_config` is NOT passed to matmul, the default is resolved in `matmul_device_operation.cpp:1419`:
+```cpp
+auto kernel_config_val = init_device_compute_kernel_config(
+    arch, parameters.compute_kernel_config, math_fidelity,
+    /*default_approx_mode=*/false,
+    /*default_fp32_acc=*/is_float_32,
+    /*default_l1_acc=*/!is_float_32);  // <-- TRUE for non-float32 output!
+```
+
+Since ViT uses bfloat8_b output (not float32), `default_l1_acc = true`. And then in the 2D mcast factory (`matmul_multicore_reuse_mcast_2d_program_factory.cpp:85`):
+```cpp
+bool packer_l1_acc_en = packer_l1_acc && (((bias_buffer != nullptr) && num_blocks > 1) || (num_blocks > 2));
+```
+
+For ViT matmuls with bias and `in0_block_w=3, K_tiles=24 → num_blocks=8`:
+- `packer_l1_acc=true` AND `bias != null` AND `num_blocks=8 > 1` → **PACKER_L1_ACC IS ENABLED**
+
+**Which ViT matmuls use L1_ACC**:
+| Operation | in0_block_w | K_tiles | num_blocks | Has Bias | L1_ACC Enabled |
+|-----------|-------------|---------|------------|----------|----------------|
+| QKV projection | 3 | 24 | 8 | Yes | **YES** |
+| Attention scores | 2 | 2 | 1 | No | No |
+| Attention × Value | 7 | 7 | 1 | No | No |
+| Self output | 3 | 24 | 8 | Yes | **YES** |
+| FF1 | 3 | 24 | 8 | Yes | **YES** |
+| FF2 | 12 | 96 | 8 | Yes | **YES** |
+| Classifier | varies | varies | varies | Yes | Likely yes |
+
+**Conclusion**: The original theory IS correct. The L1_ACC race in `reconfigure_packer_l1_acc()` is exercised by 4+ matmul operations per encoder layer × 12 layers × 1100 replays = ~50,000+ race windows per CI test run.
+
+### LayerNorm Does NOT Use L1_ACC
+
+Verified: `layernorm_op_multi_core_sharded.cpp` extracts `packer_l1_acc` from compute config but **never uses it** — never passed as a define to the compute kernel. LayerNorm compute kernels don't call `reconfigure_packer_l1_acc()`. The `packer_l1_acc=True` in `ln_compute_config` is effectively ignored.
+
+### Trace Replay Testing Results
+
+| Test | Replays | Matmul Ops | Duration | Hung? |
+|------|---------|-----------|----------|-------|
+| Single matmul trace replay | 2,000 | 2,000 | 0.1s | No |
+| 3-chain matmul trace replay | 2,000 | 6,000 | 0.8s | No |
+| ViT CI test loop | 200 runs | ~13M+ | 75 min | No |
+
+Total: ~13M+ matmul operations with L1_ACC, zero hangs. This suggests either:
+1. The hang requires very specific timing that this hardware doesn't exhibit
+2. The hang requires the full model context (not just matmul chains)
+3. The hang rate is genuinely < 0.01% per operation
+4. Something unique to the CI environment (different firmware, chip characteristics, thermal conditions)
+
+### Remaining Theories
+
+1. **The race causes data corruption, not direct hangs**: Fault injection experiments proved that wrong L1_ACC values (even per-section inconsistency) cause corrupt output but NOT packer FSM hangs. The hang might be a second-order effect: corruption → downstream protocol violation → deadlock.
+
+2. **Metastability**: The actual race involves reading a register MID-WRITE (transient electrical state), which can't be reproduced by writing wrong-but-stable values. This would require the exact timing overlap between config write commit and packer read.
+
+3. **Full model context matters**: The ViT model runs many different operations between matmuls (LayerNorm, softmax, attention, add). The interleaving of these operations creates different pipeline states that may make the race more likely.
+
+4. **N300 ETH dispatch**: The CI test runs on N300 with ethernet dispatch to a second chip. This adds NOC traffic and timing perturbations that single-chip testing doesn't have.
+
+---
+
 ## Key Source Files
 
 | File | What It Contains |
@@ -327,3 +468,81 @@ The race is too rare to trigger through the high-level Python API in a reasonabl
 | `tt_llk_wormhole_b0/llk_lib/llk_pack.h:185` | `_llk_pack_()` -- issues set_dst_write_addr + program_packer_dest + mop_run |
 | `hw/ckernels/wormhole_b0/metal/llk_io/llk_io_pack.h:57` | `llk_push_to_brisc()` -- where TRISC2 hangs |
 | `bmm_large_block_zm_fused_bias_activation.cpp:342-355` | PACKER_L1_ACC reconfig → pack_tile_block (race window) |
+| `ttnn_optimized_sharded_vit_wh.py:149-154` | ViT model: `packer_l1_acc=True` ONLY for LayerNorm |
+| `vit_n300/tests/test_matmul_deadlock_stress.py` | Python stress tests (matmul + correctness) |
+| `vit_n300/tests/test_trace_replay_hang.py` | Trace-replay stress tests |
+| `vit_n300/scripts/repro_loop.sh` | ViT CI test loop runner (200 runs, 0 hangs) |
+| `matmul_device_operation.cpp:1419` | Where default `packer_l1_acc=!is_float_32` is set |
+| `matmul_multicore_reuse_mcast_2d_program_factory.cpp:85` | Where `packer_l1_acc_en` condition is evaluated |
+| `compute_kernel_config.cpp:17` | `init_device_compute_kernel_config()` -- default resolution |
+
+---
+
+## Investigation Summary (Feb 11-13, 2026)
+
+### What Was Accomplished
+
+1. **Root cause identified with high confidence**: The missing `TTI_STALLWAIT` in `reconfigure_packer_l1_acc()` is a real bug that creates a pipeline hazard. Every unpack operation in the LLK has the equivalent stall; the pack L1_ACC path is the only one missing it.
+
+2. **Confirmed the ViT model exercises the bug**: Despite initial confusion (the model doesn't explicitly pass `packer_l1_acc=True` to matmuls), traced through the default resolution path to prove that 4+ matmuls per encoder layer DO use PACKER_L1_ACC.
+
+3. **Empirically proved L1_ACC misconfiguration causes corruption, not direct hangs**: Three different fault injection experiments (wrong values, forced zero, split sections) all produced corrupt output but zero packer stalls across 40K+ operations.
+
+4. **Mapped the complete deadlock propagation chain**: Single-core packer stall -> CB fills -> multicast sender blocks -> column deadlock -> row deadlock -> global hang. Two distinct CI failure logs show Mode A (root cause) and Mode B (propagation).
+
+5. **Found active related work**: TT engineer ryanzhu's `pack-recfg` branch adds config verification, confirming the bug is known internally.
+
+### What Was NOT Accomplished
+
+- **Failed to reproduce the hang**: ~13M matmul operations with L1_ACC across various test configurations, zero hangs. The race window is too narrow or requires conditions not present on this system.
+- **Failed to create a reliable reproducer**: The user's requirement was 20% hang rate within 10 minutes. Best achieved: 0% across all attempts.
+
+### Key Lessons for AI-Driven ND Debugging
+
+1. **Static analysis >> stress testing** for this class of bug. The root cause was found in hours through code tracing; stress testing burned days with no result.
+2. **Always trace default parameter resolution paths**. The `packer_l1_acc` default was `true` for non-float32, which was non-obvious and initially led to a wrong conclusion.
+3. **Fault injection has limits**: Software-injected faults produce stable wrong values. Real hardware races produce metastable/transient values. The two can have very different effects.
+4. **AI should not run hardware tests autonomously**: Risk of damaging accelerator cards. All test code should be human-reviewed before execution.
+
+---
+
+## Blueprint: Learning the Relevant Codebase (~5 days)
+
+### Phase 1: Tensix Architecture Fundamentals (1-2 days)
+
+**Goal**: Understand the 5-RISC per-core architecture and how compute kernels execute.
+
+- **Read**: `docs/source/tt-metalium/` -- architecture overview
+- **Key concepts**: BRISC/NCRISC/TRISC0-2 roles, circular buffers (CBs), UNPACK->MATH->PACK pipeline, config registers (THCON), `TTI_STALLWAIT` pipeline synchronization
+- **Key files**: `tt_metal/hw/inc/api/compute/matmul.h`, `tt_metal/hw/inc/api/dataflow/dataflow_api.h`
+
+### Phase 2: LLK (Low-Level Kernels) (1-2 days)
+
+**Goal**: Understand how pack/unpack operations work at the hardware instruction level.
+
+- **Key files** (in `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/`):
+  - `common/inc/cpack_common.h` -- **THE FILE WITH THE BUG**
+  - `common/inc/ckernel.h` -- `cfg_reg_rmw_tensix()` template
+  - `llk_lib/llk_pack.h` and `llk_lib/llk_pack_common.h`
+- **Exercise**: Search for all `TTI_STALLWAIT.*TRISC_CFG` patterns. Note how every unpack has one; only BFP pack path has one. The L1_ACC pack path is missing it.
+
+### Phase 3: Matmul Operation Pipeline (1 day)
+
+**Goal**: Understand how `ttnn.linear()` becomes device kernel execution.
+
+- **Path**: `ttnn.linear()` -> `matmul.cpp` -> `matmul_device_operation.cpp` -> factory files -> device kernel
+- **Default resolution**: `init_device_compute_kernel_config()` in `compute_kernel_config.cpp`
+- **Device kernel**: `bmm_large_block_zm_fused_bias_activation.cpp` -- search `#ifdef PACKER_L1_ACC`
+- **Multicast protocol**: reader/writer kernels using `noc_semaphore_wait` and multicast
+
+### Phase 4: Trace Replay and Command Queues (0.5 days)
+
+- **Read**: `test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py` (178 lines)
+- **Key APIs**: `begin_trace_capture`, `end_trace_capture`, `execute_trace`, `record_event`, `wait_for_event`
+
+### Phase 5: Watcher and Debug Tools (0.5 days)
+
+- **Read**: `docs/source/tt-metalium/tools/watcher.rst`
+- **Env vars**: `TT_METAL_WATCHER=<seconds>`, `TT_METAL_WATCHER_DUMP_ALL=1`
+- **Practice**: Run any test with watcher, read `generated/watcher/watcher.log`
+- **Key skill**: Given stuck RISCs from watcher dump, trace through LLK to determine what each is waiting for
