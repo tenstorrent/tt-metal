@@ -1,17 +1,16 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  push:
-    branches:
-      - ashah/merge-queue
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  # Allow manual runs from GitHub Actions UI
   workflow_dispatch:
 
+  # Run automatically every 5 minutes
   schedule:
     - cron: "*/5 * * * *"
+
+  # Also run when PRs are opened or updated
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -22,27 +21,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout repository
       - uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # Verify token works
-      # ------------------------------------------------------------
+      # Verify GitHub token works
       - name: Check GitHub API rate limit
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api rate_limit
 
-      # ------------------------------------------------------------
-      # Compute timestamp (30 min lookback for safety)
-      # ------------------------------------------------------------
+      # Compute lookback timestamp
+      # We look back 30 minutes to safely capture recent merges or closes
       - name: Compute lookback timestamp
         id: time
         run: |
           echo "LOOKBACK=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-      # ------------------------------------------------------------
-      # Fetch merge queue
-      # ------------------------------------------------------------
+      # Fetch current merge queue entries
       - name: Fetch merge queue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -70,9 +65,7 @@ jobs:
           }
           ' > merge_queue_raw.json
 
-      # ------------------------------------------------------------
       # Fetch recently merged PRs
-      # ------------------------------------------------------------
       - name: Fetch merged PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,9 +94,7 @@ jobs:
           }
           " > merged_prs_raw.json
 
-      # ------------------------------------------------------------
-      # Fetch recently closed (NOT merged) PRs
-      # ------------------------------------------------------------
+      # Fetch recently closed but not merged PRs
       - name: Fetch closed PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,9 +122,7 @@ jobs:
           }
           " > closed_prs_raw.json
 
-      # ------------------------------------------------------------
-      # Build unified snapshot
-      # ------------------------------------------------------------
+      # Build unified snapshot JSON
       - name: Build merge queue snapshot
         run: |
           set -euo pipefail
@@ -152,7 +141,6 @@ jobs:
             collected_at: $ts,
             merge_queue:
               (
-                # ---------------- IN QUEUE ----------------
                 [
                   $queue[0].data.repository.mergeQueue.entries.nodes[]? | {
                     pr_number: .pullRequest.number,
@@ -167,10 +155,7 @@ jobs:
                     collected_at: $ts
                   }
                 ]
-
                 +
-
-                # ---------------- MERGED ----------------
                 [
                   $merged[0].data.search.nodes[]? | {
                     pr_number: .number,
@@ -185,10 +170,7 @@ jobs:
                     collected_at: $ts
                   }
                 ]
-
                 +
-
-                # ---------------- CLOSED (NOT MERGED) ----------------
                 [
                   $closed[0].data.search.nodes[]? | {
                     pr_number: .number,
@@ -207,21 +189,17 @@ jobs:
           }
           ' > generated/merge_queue/merge_queue_snapshot.json
 
-          echo "[Info] Snapshot size:"
+          echo "Snapshot record count:"
           jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
 
-      # ------------------------------------------------------------
-      # Timestamp filename
-      # ------------------------------------------------------------
+      # Add timestamp to filename
       - name: Add timestamp to filename
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
 
-      # ------------------------------------------------------------
-      # Upload via SFTP
-      # ------------------------------------------------------------
+      # Upload file via SFTP
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
