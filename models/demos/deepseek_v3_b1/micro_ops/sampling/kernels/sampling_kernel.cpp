@@ -74,7 +74,6 @@ void kernel_main() {
     constexpr uint32_t winner_page_bytes = get_named_compile_time_arg_val("sampling_winner_page_bytes");
     constexpr uint32_t num_senders = get_named_compile_time_arg_val("sampling_num_senders");
     constexpr uint32_t expected_remote_incs = get_named_compile_time_arg_val("sampling_expected_remote_incs");
-    constexpr uint32_t winner_cb = get_named_compile_time_arg_val("sampling_winner_cb");
     constexpr uint32_t gather_cb = get_named_compile_time_arg_val("sampling_gather_cb");
     constexpr uint32_t semaphore_id = get_named_compile_time_arg_val("sampling_receiver_semaphore_id");
     constexpr uint32_t local_ready_semaphore_id = get_named_compile_time_arg_val("sampling_local_ready_semaphore_id");
@@ -130,22 +129,15 @@ void kernel_main() {
         if constexpr (Core::is_final_core) {
             write_winner_slot(gather_addr + slot_offset, best_score, best_index);
         } else {
-            cb_reserve_back(winner_cb, 1);
-            const uint32_t local_slot_addr = get_write_ptr(winner_cb);
+            const uint32_t local_slot_addr = gather_addr + slot_offset;
             write_winner_slot(local_slot_addr, best_score, best_index);
-            cb_push_back(winner_cb, 1);
-
-            cb_wait_front(winner_cb, 1);
             const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
             const uint64_t dst_data_noc_addr = final_noc_base | (uint64_t)(gather_addr + slot_offset);
             const uint64_t dst_sem_noc_addr = final_noc_base | (uint64_t)(get_semaphore(semaphore_id));
-            const uint32_t src_data_addr = get_read_ptr(winner_cb);
-
-            noc_async_write_one_packet<true, true>(src_data_addr, dst_data_noc_addr, winner_page_bytes);
+            noc_async_write_one_packet<true, true>(local_slot_addr, dst_data_noc_addr, winner_page_bytes);
             noc_semaphore_inc(dst_sem_noc_addr, 1);
             noc_async_posted_writes_flushed();
             noc_async_atomic_barrier();
-            cb_pop_front(winner_cb, 1);
         }
     }
 

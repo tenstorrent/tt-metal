@@ -100,7 +100,7 @@ class SamplingOp:
             if mesh_axis != "x":
                 raise NotImplementedError("Sampling mesh mode currently supports only mesh_axis='x'")
             if mesh_device.shape[0] >= 2 and mesh_device.shape[1] == 2:
-                return SamplingOp._op_mesh_2x2_axis_x(
+                return SamplingOp._op_mesh_rx2_axis_x(
                     scores_tensor=scores_tensor,
                     indices_tensor=indices_tensor,
                     output_index_tensor=output_index_tensor,
@@ -301,7 +301,7 @@ class SamplingOp:
         return output_index_tensor
 
     @staticmethod
-    def _op_mesh_2x2_axis_x(
+    def _op_mesh_rx2_axis_x(
         scores_tensor,
         indices_tensor,
         output_index_tensor,
