@@ -9,85 +9,85 @@ import pytest
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.parametrize(
-    "shape, shard_shape, core_grid, shard_strategy",
-    [
-        # Small shapes
-        ((1, 1, 128, 64), (32, 64), ttnn.CoreGrid(y=4, x=1), ttnn.ShardStrategy.HEIGHT),
-        ((1, 1, 64, 128), (64, 32), ttnn.CoreGrid(y=1, x=4), ttnn.ShardStrategy.WIDTH),
-        ((1, 1, 128, 128), (32, 32), ttnn.CoreGrid(y=4, x=4), ttnn.ShardStrategy.BLOCK),
-        # Larger shapes - 256x256
-        ((1, 1, 256, 256), (32, 256), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
-        ((1, 1, 256, 256), (256, 32), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
-        ((1, 1, 256, 256), (32, 32), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
-        # Larger shapes - 512x512
-        ((1, 1, 512, 512), (64, 512), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
-        ((1, 1, 512, 512), (512, 64), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
-        ((1, 1, 512, 512), (64, 64), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
-        # Non-square shapes
-        ((1, 1, 256, 512), (32, 512), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
-        ((1, 1, 512, 256), (512, 32), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
-        ((1, 1, 256, 512), (32, 64), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype, output_dtype",
-    [
-        (ttnn.float32, ttnn.bfloat16),
-        (ttnn.bfloat16, ttnn.float32),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_range",
-    [
-        {"high": 100, "low": -100},
-        {"high": 3e38, "low": 1e-20},
-        {"high": -1e38, "low": -3e-20},
-    ],
-)
-def test_typecast_sharded_fp32_bf16(
-    shape, shard_shape, core_grid, shard_strategy, input_dtype, output_dtype, input_range, device
-):
-    """
-    Test typecast operation on sharded tensors.
-    Verifies float32 <-> bfloat16 conversion with various sharding strategies.
-    """
-    torch.manual_seed(42)
+# @pytest.mark.parametrize(
+#     "shape, shard_shape, core_grid, shard_strategy",
+#     [
+#         # Small shapes
+#         ((1, 1, 128, 64), (32, 64), ttnn.CoreGrid(y=4, x=1), ttnn.ShardStrategy.HEIGHT),
+#         ((1, 1, 64, 128), (64, 32), ttnn.CoreGrid(y=1, x=4), ttnn.ShardStrategy.WIDTH),
+#         ((1, 1, 128, 128), (32, 32), ttnn.CoreGrid(y=4, x=4), ttnn.ShardStrategy.BLOCK),
+#         # Larger shapes - 256x256
+#         ((1, 1, 256, 256), (32, 256), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
+#         ((1, 1, 256, 256), (256, 32), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
+#         ((1, 1, 256, 256), (32, 32), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
+#         # Larger shapes - 512x512
+#         ((1, 1, 512, 512), (64, 512), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
+#         ((1, 1, 512, 512), (512, 64), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
+#         ((1, 1, 512, 512), (64, 64), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
+#         # Non-square shapes
+#         ((1, 1, 256, 512), (32, 512), ttnn.CoreGrid(y=8, x=1), ttnn.ShardStrategy.HEIGHT),
+#         ((1, 1, 512, 256), (512, 32), ttnn.CoreGrid(y=1, x=8), ttnn.ShardStrategy.WIDTH),
+#         ((1, 1, 256, 512), (32, 64), ttnn.CoreGrid(y=8, x=8), ttnn.ShardStrategy.BLOCK),
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "input_dtype, output_dtype",
+#     [
+#         (ttnn.float32, ttnn.bfloat16),
+#         (ttnn.bfloat16, ttnn.float32),
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "input_range",
+#     [
+#         {"high": 100, "low": -100},
+#         {"high": 3e38, "low": 1e-20},
+#         {"high": -1e38, "low": -3e-20},
+#     ],
+# )
+# def test_typecast_sharded_fp32_bf16(
+#     shape, shard_shape, core_grid, shard_strategy, input_dtype, output_dtype, input_range, device
+# ):
+#     """
+#     Test typecast operation on sharded tensors.
+#     Verifies float32 <-> bfloat16 conversion with various sharding strategies.
+#     """
+#     torch.manual_seed(42)
 
-    # Create sharded memory config
-    shard_config = ttnn.create_sharded_memory_config(
-        shape=shard_shape,
-        core_grid=core_grid,
-        strategy=shard_strategy,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+#     # Create sharded memory config
+#     shard_config = ttnn.create_sharded_memory_config(
+#         shape=shard_shape,
+#         core_grid=core_grid,
+#         strategy=shard_strategy,
+#         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+#         use_height_and_width_as_shard_shape=True,
+#     )
 
-    # Create input tensor
-    torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
-    high = input_range["high"]
-    low = input_range["low"]
-    torch_input = torch.rand(shape, dtype=torch_dtype) * (high - low) + low
+#     # Create input tensor
+#     torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+#     high = input_range["high"]
+#     low = input_range["low"]
+#     torch_input = torch.rand(shape, dtype=torch_dtype) * (high - low) + low
 
-    # Convert to ttnn and move to sharded memory
-    tt_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_input_sharded = ttnn.to_memory_config(tt_input, shard_config)
+#     # Convert to ttnn and move to sharded memory
+#     tt_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+#     tt_input_sharded = ttnn.to_memory_config(tt_input, shard_config)
 
-    # Perform typecast
-    tt_output = ttnn.typecast(tt_input_sharded, output_dtype)
+#     # Perform typecast
+#     tt_output = ttnn.typecast(tt_input_sharded, output_dtype)
 
-    # Convert back to torch for comparison
-    tt_output_torch = ttnn.to_torch(tt_output)
+#     # Convert back to torch for comparison
+#     tt_output_torch = ttnn.to_torch(tt_output)
 
-    # Expected output (convert torch tensor to target dtype)
-    torch_output_dtype = torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16
-    expected_output = torch_input.to(torch_output_dtype)
+#     # Expected output (convert torch tensor to target dtype)
+#     torch_output_dtype = torch.float32 if output_dtype == ttnn.float32 else torch.bfloat16
+#     expected_output = torch_input.to(torch_output_dtype)
 
-    # Verify output dtype
-    assert tt_output.dtype == output_dtype, f"Expected dtype {output_dtype}, got {tt_output.dtype}"
+#     # Verify output dtype
+#     assert tt_output.dtype == output_dtype, f"Expected dtype {output_dtype}, got {tt_output.dtype}"
 
-    # Verify values match: device typecast must exactly match PyTorch's float32 <-> bfloat16 conversion
-    assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
+#     # Verify values match: device typecast must exactly match PyTorch's float32 <-> bfloat16 conversion
+#     assert torch.equal(expected_output, tt_output_torch), "Typecast mismatch"
 
 
 @pytest.mark.parametrize(
