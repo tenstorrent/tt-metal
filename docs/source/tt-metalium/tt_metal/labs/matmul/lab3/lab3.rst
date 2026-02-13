@@ -676,12 +676,23 @@ Perform the following steps to complete the exercise:
      .. code-block:: bash
 
         grep -rn "." --include=\*.{cpp,h,hpp} -e 'WAYPOINT("CWFW")'
+
         ./tt_metal/hw/inc/api/dataflow/dataflow_api.h:476:    WAYPOINT("CWFW");
 
-     Then you can examine the code around line ``476`` to understand what the ``CWFW`` waypoint is.
+     You can then examine the code around line ``476`` to better understand the ``CWFW`` waypoint.
 
-   * ``smsg`` shows if subordinate processors are in initialization (``I``), runing/go (``G``) or done (``D``) state.
-   * ``k_ids`` are numbers used to identify kernels running on different cores.
+   * ``rmsg`` shows basic info about the state of the Tensix core with respect to code being dispatched to this core.
+     The first field indicates whether the kernels were dispatched to this Tensix core
+     by the host (H) or by another core on the device (D). The second field indicates the NOC ID used by the
+     primary processor (BRISC). Note that NCRISC uses the other NOC by convention.
+     The third field indicates the state of the Tensix core with respect to code being dispatched to it:
+     initialization (``I``), running/go (``G``) or done (``D``). This is followed by the ``|`` separator and then codes
+     for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e. there
+     is a kernel running on it), while lowercase letters means it is disabled (i.e. there is no kernel running on it).
+     For example, ``BNT`` means that BRISC, NCRISC, and TRISCs are all enabled, whereas ``Bnt`` means that only BRISC is enabled.
+   * ``smsg`` shows the run state of the subordinate processors, using the same ``I/G/D`` codes mentioned above.
+   * ``k_ids`` are numbers identifying which kernel (by ID) is loaded on each of the five processors on this core.
+     The five values correspond to BRISC, NCRISC, TRISC0, TRISC1, and TRISC2.
 
    Let us examine an example line of the log file to better understand how to interpret the information:
 
@@ -691,35 +702,38 @@ Perform the following steps to complete the exercise:
 
    Breaking this apart:
 
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | Field                    | Value                   | Meaning                                                    |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                                 |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                    |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `NSW`                    | BRISC status            | **N**\ OC **S**\ emaphore **W**\ ait                       |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `CWFW`                   | NCRISC status           | **C**\ B **W**\ ait **F**\ or **W**\ rite                  |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `K`                      | TRISC0 status           | In **K**\ ernel                                            |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `MWDD`                   | TRISC1 status           | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency          |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `K`                      | TRISC2 status           | In **K**\ ernel                                            |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `rmsg:D0G\|BNT`          | Run message             | Dispatch, NOC 0, Go state; BRISC/NCRISC/TRISC enabled      |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running) |
-   +--------------------------+-------------------------+------------------------------------------------------------+
-   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                            |
-   +--------------------------+-------------------------+------------------------------------------------------------+
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | Field                    | Value                   | Meaning                                                      |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                                   |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                      |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `NSW`                    | BRISC status            | **N**\ OC **S**\ emaphore **W**\ ait                         |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `CWFW`                   | NCRISC status           | **C**\ B **W**\ ait **F**\ or **W**\ rite                    |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `K`                      | TRISC0 status           | In **K**\ ernel                                              |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `MWDD`                   | TRISC1 status           | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency            |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `K`                      | TRISC2 status           | In **K**\ ernel                                              |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `rmsg:D0G\|BNT`          | Run message             | Device dispatch, NOC0, Go state; BRISC/NCRISC/TRISCs enabled |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `h_id:  0`               | Host assigned ID        | Internal ID used for profiling                               |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)   |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
+   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                              |
+   +--------------------------+-------------------------+--------------------------------------------------------------+
 
-   Kernels running on different cores are identified through their IDs, and mapping between kernel IDs and source file names is listed
-   at the end of each dump section.
+   Kernels are identified by their IDs (``k_ids``). The mapping from kernel ID to source file name for a given section
+   is listed at the end of that section.
+
    Idle cores where the program hasn't created any kernels can easily be identified by their ``k_ids`` fields all set to 0.
 
-   To help us identify the source of the hang, we observe the **first column of the status** (BRISC status) for the
+   To help us identify the source of the hang, we analyze the **first column of the status** (BRISC status) for the
    cores running our kernels and observe that they are all stuck at ``NSW`` (**N**OC **S**emaphore **W**ait).
    Of course, we need to verify that this is actually a hang and not just a slow operation, which we can do by observing
    that the program state in multiple dumps doesn't change.
@@ -754,7 +768,8 @@ Perform the following steps to complete the exercise:
 #. Update all ``CreateKernel`` calls to point to kernel source files in the new directory.
 
 #. Update ``CMakeLists.txt`` files in the new directory and in the parent directory to include the new executable,
-   then build and run the new program to confirm that it works as expected.
+   then build and run the new program to confirm that it works the same as the original.
+   This is a good practice to ensure that you are starting with a working program before making any changes.
 
 #. Update the host program to include the sender core in the core range when creating the compute and writer kernels.
    Don't forget to also pass runtime arguments for all cores where the kernels are created, including the sender core.
@@ -784,6 +799,9 @@ Perform the following steps to complete the exercise:
 #. Build and run your program and verify that it completes successfully.
    Make sure that the output indicates correct number of receiver cores and output tiles.
 
+#. Profile your program using the device profiler you learned about in previous labs.
+   Record the firmware time of this program as a reference point for the next exercise.
+
 In case you encounter any hangs, don't forget to use the ``tt-smi -r`` command to reset the device
 before running the program again.
 
@@ -800,7 +818,7 @@ receivers, perform the multicast, and then signal completion. While this protoco
 the synchronization overhead is non-trivial. When tiles are transferred one at a time, this overhead is
 incurred for every single tile, which can significantly limit throughput.
 
-A straightforward way to amortize this overhead is to transfer multiple tiles per semaphore handshake.
+A straightforward way to reduce this overhead is to transfer multiple tiles per semaphore handshake.
 Instead of multicasting one tile and then performing the full synchronization protocol, the sender reads
 a **batch** of tiles from DRAM, multicasts the entire batch in a single ``noc_async_write_multicast``
 call, and only then performs the semaphore signaling. Receivers similarly reserve space for the entire
@@ -808,15 +826,19 @@ batch and perform a single semaphore exchange per batch rather than per tile. Th
 synchronization rounds by a factor equal to the batch size, while the NoC hardware transfers the larger
 payload efficiently.
 
-In this exercise, you will modify the basic multicast example to transfer ten tiles per batch instead of
-one tile at a time, and then profile both versions to measure the performance improvement.
+In this exercise, you will modify your solution for Exercise 2 to multicast ten tiles per batch instead of
+one tile at a time, and then compare the performance of the two versions using the device profiler.
 
 Perform the following steps to complete the exercise:
 
-#. Start by copying the files from the ``lab_multicast`` directory into a new directory
-   (e.g. ``lab3_ex3``). Update the ``CMakeLists.txt`` files in the new directory and in the
-   parent directory to include the new executable, then build and run the new program to confirm that
-   it produces the expected output.
+#. Start by copying the files from the Exercise 2 solution directory into a new directory
+   (e.g. ``lab3_ex3``) and rename the copied ``.cpp`` file with the main host program
+   to match the directory name.
+
+#. Update all ``CreateKernel`` calls to point to kernel source files in the new directory.
+
+#. Update ``CMakeLists.txt`` files in the new directory and in the parent directory to include
+   the new executable, then build and run the new program to confirm that it works the same as the original.
 
 #. Define a compile-time constant ``tiles_per_batch`` with a value of ``10`` in the host program.
    This constant represents the number of tiles that will be transferred in each multicast batch.
@@ -832,10 +854,13 @@ Perform the following steps to complete the exercise:
 #. Update the sender kernel to operate on batches of tiles rather than individual tiles by
    reserving ``tiles_per_batch`` tiles in the CB at once using ``cb_reserve_back``.
    You can still read tiles from DRAM one at a time in an inner loop.
+   Since you will need to update the CB write address in the inner loop, make sure to preserve
+   the starting address of the batch (i.e. starting CB write address) in a variable,
+   so it can be used as the multicast address for the batch.
    Perform the semaphore handshake once per batch using the same semaphore handshake protocol
    as before, but transferring ``tiles_per_batch`` tiles at once.
 
-#. Update the receiver kernel to receive one batch at a time  rather than one tile at a time by
+#. Update the receiver kernel to receive one batch at a time rather than one tile at a time by
    reserving ``tiles_per_batch`` tiles in the CB at once using ``cb_reserve_back``, performing
    the semaphore handshake once per batch, and pushing ``tiles_per_batch`` tiles at once.
 
@@ -845,11 +870,9 @@ Perform the following steps to complete the exercise:
 
 #. Build and run your modified program. Verify that it completes successfully.
 
-#. Profile the original (unmodified) basic multicast example using the device profiler
-   you learned about in previous labs.
-   Then profile your batched multicast program in the same way. Compare the firmware times of the
-   two versions. You should observe that the batched version is noticeably faster due to the reduced
-   number of synchronization rounds.
+#. Profile your batched multicast program, then compare the firmware times of the batched version
+   and the non-batched solution of Exercise 2. You should observe that the batched version is
+   noticeably faster due to the reduced number of synchronization rounds.
 
 In this exercise you have observed that the semaphore handshake protocol has measurable overhead,
 and that batching multiple tiles per handshake is an effective strategy for amortizing this cost.
@@ -1144,3 +1167,14 @@ Additional information about features used in this lab can be found in the follo
 * Networks and Communication Lesson: https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md
 * Introduction to Data Movement in TT-Metal: https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md
 * Watcher Documentation: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html
+
+
+
+Appendix A: Watcher Log File Format
+***********************************
+
+The Watcher log file format is as follows:
+
+.. code-block:: text
+
+   Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
