@@ -46,23 +46,25 @@ def _stage_breakdown_to_seconds(stage_breakdown_ms: dict | None) -> dict:
     return converted
 
 
-def _resolve_effective_dp(args, use_tt: bool) -> int:
-    if int(args.dp) < 1:
+def _resolve_dp_and_batch_size(args, use_tt: bool) -> tuple[int, int]:
+    dp = int(args.dp)
+    if dp < 1:
         raise SystemExit("--dp must be >= 1")
-    if int(args.batch_size) < 1:
+    if args.batch_size is not None and int(args.batch_size) < 1:
         raise SystemExit("--batch-size must be >= 1")
 
-    if int(args.dp) != 1 and int(args.batch_size) != 1 and int(args.dp) != int(args.batch_size):
-        raise SystemExit("--dp and --batch-size must match when both are > 1")
-
-    effective_dp = max(int(args.dp), int(args.batch_size) if use_tt else 1)
-    if effective_dp not in (1, 2):
+    if dp not in (1, 2):
         raise SystemExit("Only dp=1 or dp=2 is currently supported")
-    if effective_dp > 1 and not use_tt:
+    if dp > 1 and not use_tt:
         raise SystemExit("Data parallel mode requires --tt-run")
-    if effective_dp > 1 and str(args.device).lower() != "wormhole_n300":
+    if dp > 1 and str(args.device).lower() != "wormhole_n300":
         raise SystemExit("Data parallel mode (dp=2) is currently supported only on --device wormhole_n300")
-    return effective_dp
+
+    batch_size = int(args.batch_size) if args.batch_size is not None else (dp if (use_tt and dp > 1) else 1)
+    if use_tt and dp > 1 and batch_size != dp:
+        raise SystemExit("--batch-size must equal --dp when --dp > 1 in TT mode")
+
+    return dp, batch_size
 
 
 def _open_dp_mesh_device(effective_dp: int, num_cq: int):
@@ -162,8 +164,8 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1,
-        help="Images processed per timed iteration. In TT mode with dp=2, each chip still runs B=1.",
+        default=None,
+        help="Images processed per timed iteration. Default is 1 for dp=1 and defaults to --dp for dp>1.",
     )
     parser.add_argument(
         "--dp",
@@ -198,8 +200,7 @@ def main():
         raise SystemExit("--device must be 'cpu' unless --tt-run is set")
 
     use_tt = bool(args.tt_run)
-    effective_dp = _resolve_effective_dp(args, use_tt=use_tt)
-    effective_batch_size = max(1, int(args.batch_size))
+    effective_dp, effective_batch_size = _resolve_dp_and_batch_size(args, use_tt=use_tt)
 
     config = DPTLargeConfig(
         image_size=args.image_size,
