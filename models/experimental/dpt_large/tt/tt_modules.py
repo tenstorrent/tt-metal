@@ -148,17 +148,6 @@ def _apply_attn_mask(attn_logits: torch.Tensor, attn_mask) -> torch.Tensor:
 
 def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_config, program_config):
     """Call ttnn.linear with best-effort program_config plumbing across runtime versions."""
-    # Some runtime builds accept `program_config` but can throw at execution time
-    # (e.g., L1 circular buffer pressure). Cache failures to avoid repeated slow
-    # exceptions in hot paths like the ViT encoder.
-    global _FAILED_PROGRAM_CONFIG_IDS
-    try:
-        _FAILED_PROGRAM_CONFIG_IDS
-    except NameError:  # pragma: no cover
-        _FAILED_PROGRAM_CONFIG_IDS = set()
-
-    if program_config is not None and id(program_config) in _FAILED_PROGRAM_CONFIG_IDS:
-        program_config = None
     if program_config is None:
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     try:
@@ -168,10 +157,6 @@ def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_confi
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     except Exception:
         # Some runtimes accept the kwarg but can reject specific program configs at runtime.
-        try:
-            _FAILED_PROGRAM_CONFIG_IDS.add(id(program_config))
-        except Exception:
-            pass
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
 
 
@@ -515,6 +500,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
+            if qkv_pc is not None and not _ttnn_is_sharded(x4):
+                qkv_pc = None
             qkv4 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self._wqkv_tt,
@@ -587,6 +574,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
+            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
+                proj_pc = None
             out_tt4 = _ttnn_linear_with_optional_program_config(
                 x=ctx_tt4,
                 w=self._proj_w_tt,
