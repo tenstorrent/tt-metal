@@ -341,10 +341,10 @@ void MetalContext::initialize(
     watcher_server_->attach_devices();
 
     // Register teardown function, but only once.
-    if (not teardown_registered_) {
-        std::atexit([]() { MetalContext::instance().teardown(); });
-        teardown_registered_ = true;
-    }
+    // if (not teardown_registered_) {
+    //     std::atexit([]() { MetalContext::instance().teardown(); });
+    //     teardown_registered_ = true;
+    // }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
@@ -424,9 +424,33 @@ void MetalContext::teardown() {
     }
 }
 
-MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
-    return inst.get();
+std::map<ContextId, MetalContext>& MetalContext::get_contexts_map() {
+    static std::map<ContextId, MetalContext> contexts;
+    return contexts;
+}
+
+MetalContext& MetalContext::instance(ContextId context_id) {
+    auto& ctx_map = get_contexts_map();
+    TT_FATAL(ctx_map.contains(context_id), "Context ID {} not found. Was construct() called?", context_id);
+    return ctx_map.at(context_id);
+}
+
+ContextId MetalContext::construct(const ContextDescriptor& descriptor) {
+    std::lock_guard<std::mutex> lock(construct_mutex_);
+
+    static ContextId next_context_id = 0;
+    ContextId context_id = next_context_id++;
+
+    auto& ctx_map = get_contexts_map();
+    ctx_map.emplace(context_id, MetalContext(descriptor));
+
+    return context_id;
+}
+
+void MetalContext::destruct(ContextId context_id) {
+    std::lock_guard<std::mutex> lock(construct_mutex_);
+    auto& ctx_map = get_contexts_map();
+    ctx_map.erase(context_id);
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
@@ -539,11 +563,18 @@ void MetalContext::initialize_base_objects() {
     cluster_->set_hal(hal_.get());
 }
 
-MetalContext::MetalContext() {
+MetalContext::MetalContext(const ContextDescriptor& descriptor) {
+    // This descriptor is not expected to have the HAL or Cluster provided
+
     // Check if mock mode was configured via API (before env vars take effect)
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    } else if (descriptor.is_mock_device()) {
+        std::string mock_cluster_desc_path = std::string(descriptor.mock_cluster_desc_path());
+        rtoptions_.set_mock_cluster_desc(mock_cluster_desc_path);
+        log_info(
+            tt::LogMetal, "Using programmatically configured mock mode from descriptor: {}", mock_cluster_desc_path);
     }
 
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
@@ -574,7 +605,7 @@ MetalContext::MetalContext() {
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
+    // std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {

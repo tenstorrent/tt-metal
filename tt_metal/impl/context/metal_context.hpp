@@ -10,6 +10,7 @@
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "tt_stl/strong_type.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -41,6 +42,10 @@ class WatcherServer;
 class DispatchMemMap;
 class NOCDebugState;
 
+using ContextId = uint8_t;
+
+constexpr ContextId DEFAULT_CONTEXT_ID = 0;
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -51,7 +56,13 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance();
+    static MetalContext& instance(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Construct a new MetalContext with the given descriptor and return the context ID.
+    static ContextId construct(const ContextDescriptor& descriptor);
+
+    // Destruct the MetalContext with the given context ID.
+    static void destruct(ContextId context_id);
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
@@ -148,9 +159,11 @@ public:
     void on_dispatch_timeout_detected();
 
 private:
-    friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext();
+    MetalContext(const ContextDescriptor& descriptor);
     ~MetalContext();
+
+    static std::map<ContextId, MetalContext>& get_contexts_map();
+    static std::mutex construct_mutex_;
 
     void clear_l1_state(ChipId device_id);
     void clear_dram_state(ChipId device_id);
@@ -196,7 +209,6 @@ private:
         ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
 
     bool initialized_ = false;
-    bool teardown_registered_ = false;
     bool force_reinit_ = false;
 
     uint8_t num_hw_cqs_ = 0;
