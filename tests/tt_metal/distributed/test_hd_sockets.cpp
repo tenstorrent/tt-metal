@@ -336,7 +336,7 @@ TEST_F(HDSocketFixture, D2HSocket) {
     }
 }
 
-TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
+TEST_F(HDSocketFixture, D2HSocketThroughputBenchmark) {
     // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
@@ -375,51 +375,57 @@ TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
         256 * 1024 * 1024,
         512 * 1024 * 1024,
     };
-    int num_interations;
 
-    std::vector<std::pair<std::size_t, std::size_t>> test_configs;
-    for (auto fifo_size : fifo_sizes) {
-        for (auto page_size : page_sizes) {
-            if (page_size <= fifo_size) {
-                test_configs.push_back({page_size, fifo_size});
-            }
+    // Pages sent per kernel iteration. Capped so data_size fits in L1 (~1.46MB bank).
+    constexpr std::size_t TARGET_PAGES_PER_ITER = 1;
+    constexpr std::size_t L1_DATA_BUDGET = 1400000;
+
+    auto compute_data_size = [&](std::size_t page_size) -> std::size_t {
+        std::size_t pages = std::min<std::size_t>(TARGET_PAGES_PER_ITER, L1_DATA_BUDGET / page_size);
+        return page_size * std::max<std::size_t>(pages, 1);
+    };
+
+    // Find first MMIO-mapped device
+    MeshCoordinate sender_coord = mesh_device_->shape();  // invalid sentinel
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
+            sender_coord = coord;
+            break;
         }
     }
+    MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
 
-    std::cout << "page_size,socket_fifo_size,total_data,num_iterations,avg_latency_us,avg_cycles,device_coord"
-              << std::endl;
+    std::cout << "page_size,socket_fifo_size,total_data,data_size,pages_per_iter,"
+              << "num_iterations,total_pages,avg_per_page_us,avg_per_page_cycles,"
+              << "throughput_gbps,device_coord" << std::endl;
 
-    // Only test first MMIO-mapped device
-    for (const auto& sender_coord : MeshCoordinateRange(mesh_device_->shape())) {
-        if (!is_device_coord_mmio_mapped(mesh_device_, sender_coord)) {
-            continue;
-        }
+    for (auto fifo_size : fifo_sizes) {
+        for (auto page_size : page_sizes) {
+            if (page_size > fifo_size) {
+                continue;
+            }
+            std::size_t data_size = compute_data_size(page_size);
+            std::size_t pages_per_iter = data_size / page_size;
 
-        MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
-
-        for (const auto& [page_size, socket_fifo_size] : test_configs) {
             for (auto total_data : total_data_sizes) {
-                // Skip if total_data < page_size (would be 0 iterations)
-                if (total_data < page_size) {
+                uint32_t num_iterations = total_data / data_size;
+                if (num_iterations == 0) {
                     continue;
                 }
+                uint64_t total_pages = static_cast<uint64_t>(pages_per_iter) * num_iterations;
 
-                std::size_t data_size = page_size;  // 1 page per iteration
-                uint32_t num_iterations = total_data / page_size;
+                auto [us, cycles] =
+                    benchmark_d2h_socket(mesh_device_, fifo_size, page_size, data_size, num_iterations, sender_core);
 
-                auto [avg_latency_us, avg_cycles] = benchmark_d2h_socket(
-                    mesh_device_, socket_fifo_size, page_size, data_size, num_iterations, sender_core);
+                double throughput_gbps = static_cast<double>(page_size) / (us * 1e3);
 
-                std::cout << page_size << "," << socket_fifo_size << "," << total_data << "," << num_iterations << ","
-                          << avg_latency_us << "," << avg_cycles << "," << sender_coord << std::endl;
+                std::cout << page_size << "," << fifo_size << "," << total_data << "," << data_size << ","
+                          << pages_per_iter << "," << num_iterations << "," << total_pages << "," << us << "," << cycles
+                          << "," << throughput_gbps << "," << sender_coord << std::endl;
                 std::cout.flush();
             }
         }
-
-        break;
     }
-
-    std::cout.flush();
 }
 
 // Helper function for benchmark that returns results without printing extra info
