@@ -786,22 +786,22 @@ def parse_shard_spec_string(shard_spec_str):
 
                     try:
                         result["grid"] = json.loads(test_json)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
                         # Strategy 2: If strategy 1 failed, add all missing braces before final ']'
                         missing = open_count - close_count
                         test_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
                         try:
                             result["grid"] = json.loads(test_json)
-                        except json.JSONDecodeError:
-                            # Both strategies failed, silently skip
-                            pass
+                        except json.JSONDecodeError as e2:
+                            # Both strategies failed, log and skip
+                            print(f"⚠️ Warning: Could not fix malformed grid JSON: {e2}")
                 else:
                     # No missing braces, try to parse normally
                     try:
                         result["grid"] = json.loads(grid_json)
-                    except json.JSONDecodeError:
-                        # Silently skip if parsing fails
-                        pass
+                    except json.JSONDecodeError as e:
+                        # Log warning if parsing fails
+                        print(f"⚠️ Warning: Could not parse grid JSON: {e}")
 
         # Extract shape - it's an array like [128, 576]
         shape_match = re.search(r"shape=\[(\d+),\s*(\d+)\]", shard_spec_str)

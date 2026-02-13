@@ -14,10 +14,14 @@ import json
 import os
 import sys
 import ttnn
+import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 # Get the base directory dynamically - import from model_tracer
@@ -265,14 +269,16 @@ class MasterConfigLoader:
 
             # Prefer reconstructed V2 if it exists (from database)
             if os.path.exists(reconstructed_v2_path):
-                print(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
+                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
                 master_file_path = reconstructed_v2_path
             elif os.path.exists(v2_path):
-                print(f"✅ Using V2 JSON: {v2_path}")
+                logger.info(f"✅ Using V2 JSON: {v2_path}")
                 master_file_path = v2_path
             else:
-                print(f"⚠️  V2 JSON not found at {v2_path}")
-                print(f"   Please ensure ttnn_operations_master_v2.json exists in model_tracer/traced_operations/")
+                logger.warning(f"⚠️  V2 JSON not found at {v2_path}")
+                logger.warning(
+                    f"   Please ensure ttnn_operations_master_v2.json exists in model_tracer/traced_operations/"
+                )
                 master_file_path = v2_path  # Set it anyway, will fail gracefully in load_master_data
 
         self.master_file_path = master_file_path
@@ -280,17 +286,23 @@ class MasterConfigLoader:
         self.traced_configs_cache = {}  # Cache configs by operation name
 
     def load_master_data(self):
-        """Load the master JSON file"""
+        """Load the master JSON file
+
+        Note: If the file is not found or corrupted, we continue with empty data
+        to allow the system to function in degraded mode (no traced configs).
+        """
         if self.master_data is None:
             try:
                 with open(self.master_file_path, "r") as f:
                     self.master_data = json.load(f)
-                print(f"✅ Loaded master data with {len(self.master_data.get('operations', {}))} operations")
+                logger.info(f"✅ Loaded master data with {len(self.master_data.get('operations', {}))} operations")
             except FileNotFoundError:
-                print(f"❌ Master file not found: {self.master_file_path}")
+                logger.error(f"❌ Master file not found: {self.master_file_path}")
+                logger.warning(f"⚠️  Continuing with empty master data (degraded mode)")
                 self.master_data = {"operations": {}}
             except json.JSONDecodeError as e:
-                print(f"❌ Error parsing master JSON: {e}")
+                logger.error(f"❌ Error parsing master JSON: {e}")
+                logger.warning(f"⚠️  Continuing with empty master data (degraded mode)")
                 self.master_data = {"operations": {}}
 
     def get_operation_configs(self, operation_name: str) -> List[List[Dict]]:
@@ -369,7 +381,7 @@ class MasterConfigLoader:
                     configs = self.master_data["operations"][transformer_base].get("configurations", [])
                     return self._normalize_configs(configs)
 
-        print(f"⚠️ No configurations found for operation: {operation_name}")
+        logger.warning(f"⚠️ No configurations found for operation: {operation_name}")
         return []
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
@@ -735,7 +747,7 @@ class MasterConfigLoader:
 
             except Exception as e:
                 # Add config_id context to error
-                print(f"⚠️ Skipping config_id={config_id} due to error: {e}")
+                logger.warning(f"⚠️ Skipping config_id={config_id} due to error: {e}")
                 continue
 
             # Skip if no tensors found
@@ -767,7 +779,7 @@ class MasterConfigLoader:
                     parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                     if parsed_mem_config is None:
-                        print(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
+                        logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
                         continue
 
                     config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
@@ -793,7 +805,7 @@ class MasterConfigLoader:
         if not traced_config_list:
             return {"traced_config": []}
 
-        print(f"✅ Loaded {len(traced_config_list)} traced configurations for {operation_name}")
+        logger.info(f"✅ Loaded {len(traced_config_list)} traced configurations for {operation_name}")
 
         # Collect all unique keys across all configs
         all_keys = []
@@ -851,7 +863,7 @@ class MasterConfigLoader:
             configs = self.get_operation_configs(operation_name)
 
             if not configs:
-                print(f"⚠️ No traced configurations found for {operation_name}")
+                logger.warning(f"⚠️ No traced configurations found for {operation_name}")
                 # Return empty lists - sweep tests will handle defaults
                 return {
                     "input_shape": [[1, 32, 32]],
@@ -865,9 +877,9 @@ class MasterConfigLoader:
             return self._get_generic_parameters(operation_name, configs)
 
         except Exception as e:
-            print(f"❌ Error loading configurations for {operation_name}: {e}")
-            print(f"   This error occurred while processing one or more configs.")
-            print(f"   Check logs above for specific config_id that failed.")
+            logger.error(f"❌ Error loading configurations for {operation_name}: {e}")
+            logger.error(f"   This error occurred while processing one or more configs.")
+            logger.error(f"   Check logs above for specific config_id that failed.")
             import traceback
 
             traceback.print_exc()
@@ -973,7 +985,7 @@ class MasterConfigLoader:
                                     input_memory_configs.append(memory_config_ttnn)
 
             except Exception as e:
-                print(f"⚠️ Error processing config: {e}")
+                logger.warning(f"⚠️ Error processing config: {e}")
                 continue
 
         # Create sweep parameters structure
@@ -989,11 +1001,11 @@ class MasterConfigLoader:
         # Add default output memory configs (could be derived from inputs)
         sweep_params["master_configs"]["output_memory_configs"] = [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]
 
-        print(f"✅ Generated sweep parameters for {operation_name}:")
-        print(f"   • {len(input_shapes)} unique input shapes")
-        print(f"   • {len(input_dtypes)} unique dtypes")
-        print(f"   • {len(input_layouts)} unique layouts")
-        print(f"   • {len(input_memory_configs)} unique memory configs")
+        logger.info(f"✅ Generated sweep parameters for {operation_name}:")
+        logger.info(f"   • {len(input_shapes)} unique input shapes")
+        logger.info(f"   • {len(input_dtypes)} unique dtypes")
+        logger.info(f"   • {len(input_layouts)} unique layouts")
+        logger.info(f"   • {len(input_memory_configs)} unique memory configs")
 
         return sweep_params
 
@@ -1029,7 +1041,7 @@ def create_master_based_sweep_test(operation_name: str):
     master_params = load_master_configs_for_operation(operation_name)
 
     if not master_params:
-        print(f"❌ No master configurations found for {operation_name}")
+        logger.error(f"❌ No master configurations found for {operation_name}")
         return None
 
     # Create combined parameters (master + some manual ones for comparison)
@@ -1071,12 +1083,13 @@ def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader
 
 if __name__ == "__main__":
     # Example usage
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     loader = MasterConfigLoader()
 
     # Test with add operation
     add_params = loader.convert_to_sweep_parameters("add")
-    print(f"\n📊 Master-based parameters for 'add': {len(add_params)} suites")
+    logger.info(f"\n📊 Master-based parameters for 'add': {len(add_params)} suites")
 
     # Test with transpose operation
     transpose_params = loader.convert_to_sweep_parameters("transpose")
-    print(f"\n📊 Master-based parameters for 'transpose': {len(transpose_params)} suites")
+    logger.info(f"\n📊 Master-based parameters for 'transpose': {len(transpose_params)} suites")
