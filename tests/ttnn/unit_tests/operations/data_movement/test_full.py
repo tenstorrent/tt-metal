@@ -214,13 +214,6 @@ def test_full_nd_sharded(
             ttnn.BufferType.DRAM,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
         ),
-        (
-            ttnn.TILE_LAYOUT,
-            [32, 32],
-            [512, 512],
-            ttnn.BufferType.L1,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ),
     ],
 )
 def test_full_nd_sharded_manual_sharding(

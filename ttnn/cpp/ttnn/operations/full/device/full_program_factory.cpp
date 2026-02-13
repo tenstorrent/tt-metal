@@ -8,7 +8,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -64,7 +63,6 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page, page_size};
-    std::map<std::string, std::string> writer_defines = reader_defines;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateWriteKernel(
@@ -72,7 +70,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
         writer_compile_time_args,
-        writer_defines);
+        reader_defines);
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
@@ -85,7 +83,6 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
         // Create the reader compile time arguments
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)cb_index2, elems_per_page, page_size};
-        std::map<std::string, std::string> reader_kernel_defines = reader_defines;
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
 
         // Create the reader kernel
@@ -94,7 +91,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
             "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
             all_cores,
             reader_compile_time_args,
-            reader_kernel_defines);
+            reader_defines);
     }
 
     // Set runtime arguments
