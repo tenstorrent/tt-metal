@@ -264,12 +264,13 @@ def main():
             if iter_tt_inputs is None:
                 raise RuntimeError("DP trace mode requires host TT inputs but none were prepared")
 
-            from .mesh_trace_dp import MeshTraceDPExecutor
+            from .submesh_trace_dp import SubmeshTraceDPExecutor
 
-            # Capture a single mesh-level trace that runs each submesh replica once.
-            dp_executor = MeshTraceDPExecutor(mesh_device=mesh_device, tt_pipelines=tt_pipelines, execution_mode=requested_exec_mode)
+            # Capture one full trace per submesh device, then enqueue both traces
+            # non-blocking to allow device-side overlap without Python threading.
+            dp_executor = SubmeshTraceDPExecutor(tt_pipelines=tt_pipelines, execution_mode=requested_exec_mode)
             warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(effective_dp)]
-            dp_executor.capture(warmup_tt_inputs)
+            dp_executor.prepare(warmup_tt_inputs)
 
             for _ in range(max(0, int(args.warmup))):
                 _ = dp_executor.run(iter_tt_inputs, normalize=True)

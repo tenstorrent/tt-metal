@@ -209,11 +209,11 @@ def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warm
     last = None
     assert iter_tt_inputs is not None
 
-    from .mesh_trace_dp import MeshTraceDPExecutor
+    from .submesh_trace_dp import SubmeshTraceDPExecutor
 
-    dp_exec = MeshTraceDPExecutor(mesh_device=mesh_device, tt_pipelines=tt_pipelines, execution_mode=exec_mode)
+    dp_exec = SubmeshTraceDPExecutor(tt_pipelines=tt_pipelines, execution_mode=exec_mode)
     warmup_tt_inputs = [iter_tt_inputs[i % len(iter_tt_inputs)] for i in range(len(tt_pipelines))]
-    dp_exec.capture(warmup_tt_inputs)
+    dp_exec.prepare(warmup_tt_inputs)
 
     for _ in range(max(0, int(warmup))):
         _ = dp_exec.run(iter_tt_inputs, normalize=True)
@@ -227,7 +227,7 @@ def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warm
         timings_ms.append((end - start) * 1000.0)
         if len(outs) > 0:
             last = outs[-1]
-    dp_exec.close()
+    # Traces are released by pipeline.close() in the caller.
 
     total_ms_mean = float(np.mean(timings_ms))
     per_image_ms = total_ms_mean / max(1, len(iter_pixel_values))
