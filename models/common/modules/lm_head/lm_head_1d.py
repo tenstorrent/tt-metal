@@ -258,10 +258,18 @@ class LMHead1D(LightweightModule):
             for ss in split_sizes
         ]
 
-        # Get input memory config from model_config (width-sharded for DRAM-sharded matmul)
-        if model_config is None:
-            model_config = args.get_model_config()
-        input_memcfg = model_config.get("LM_HEAD_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
+        # Get input memory config: width-sharded across lm_head_core_grid
+        # (DRAM-sharded matmul requires width-sharded input in L1)
+        input_memcfg = ttnn.create_sharded_memory_config(
+            (
+                tile_padded_batch_rows,
+                _nearest_32(dim // lm_head_core_grid.num_cores),
+            ),
+            lm_head_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
         config = LMHead1DConfig(
             output_weights=output_weights,
@@ -377,6 +385,10 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LMHead1DConfi
 # =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
+
+
+def _nearest_32(x: int) -> int:
+    return math.ceil(x / 32) * 32
 
 
 def _compute_kernel_config_hifi2() -> ttnn.WormholeComputeKernelConfig:

@@ -357,12 +357,23 @@ def test_lm_head_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
         dtype=ttnn.bfloat8_b,
     )
 
-    # Create input in the correct memory config for LM head (matches TTTv1 LM_HEAD_INPUT_MEMCFG)
-    model_config = model_args.get_model_config()
+    # Create input in the correct memory config for LM head (width-sharded matching lm_head_core_grid)
     batch_rows = TILE_SIZE * math.ceil(model_args.max_batch_size / TILE_SIZE)
     torch_input = torch.randn(1, 1, batch_rows, model_args.dim, dtype=torch.bfloat16)
 
-    input_memcfg = model_config.get("LM_HEAD_INPUT_MEMCFG", ttnn.DRAM_MEMORY_CONFIG)
+    def _nearest_32(x):
+        return math.ceil(x / 32) * 32
+
+    input_memcfg = ttnn.create_sharded_memory_config(
+        (
+            batch_rows,
+            _nearest_32(model_args.dim // model_args.lm_head_core_grid.num_cores),
+        ),
+        model_args.lm_head_core_grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     tt_input = ttnn.from_torch(
         torch_input,
         device=ttnn_mesh_device,
