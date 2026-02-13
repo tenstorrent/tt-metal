@@ -89,10 +89,15 @@ class WanAttention(Module):
                 **col_parallel_kwargs,
             )
         else:
-            # Separate Q, K, V for cross-attention (different inputs for Q vs K/V)
+            # Cross-attention: Q from spatial, K/V from prompt
             self.to_q = ColParallelLinear(dim, dim, **col_parallel_kwargs)
-            self.to_k = ColParallelLinear(dim, dim, **col_parallel_kwargs)
-            self.to_v = ColParallelLinear(dim, dim, **col_parallel_kwargs)
+            # Fused KV: single matmul split into 2 outputs
+            self.to_kv = ColParallelLinear(
+                dim,
+                2 * dim,
+                chunks=2,
+                **col_parallel_kwargs,
+            )
 
         self.to_out = ColParallelLinear(
             dim,
@@ -160,37 +165,49 @@ class WanAttention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
 
+        def _interleave_heads(tensors: list[torch.Tensor]):
+            """Interleave weight/bias tensors so column-parallel fracturing assigns correct heads per device.
+
+            Each tensor has out-dim = num_heads * head_dim.  We interleave them on the heads
+            axis so that after TP column-sharding each device gets the right heads from every tensor.
+
+            Args:
+                tensors: list of tensors in [out, in] PyTorch convention (or [out, 1] for bias).
+            Returns:
+                Merged tensor in [out, in] PyTorch convention.
+            """
+            n_dev = self.parallel_config.tensor_parallel.factor
+            # Transpose to [in, out]
+            tensors = [t.T for t in tensors]
+            # Reshape out dim to [in, n_dev, n_local_heads, head_dim]
+            tensors = [t.reshape(t.shape[0], n_dev, self.n_local_heads, self.head_dim) for t in tensors]
+            # Concatenate on the heads dim so each device shard gets its own heads from every tensor
+            merged = torch.cat(tensors, dim=2)  # [in, n_dev, len(tensors)*n_local_heads, head_dim]
+            merged = merged.reshape(merged.shape[0], len(tensors) * self.num_heads * self.head_dim)
+            # Transpose back to [out, in] PyTorch convention
+            return merged.T
+
         if self.is_self:
             # Merge separate to_q, to_k, to_v weights into fused to_qkv
-            # Rearrange so that column-parallel fracturing assigns the correct heads per device
             q_state = pop_substate(state, "to_q")
             k_state = pop_substate(state, "to_k")
             v_state = pop_substate(state, "to_v")
 
-            def _merge_tensors(q, k, v):
-                n_dev = self.parallel_config.tensor_parallel.factor
-                # Weights are in [out, in] PyTorch convention; transpose to [in, out]
-                q, k, v = q.T, k.T, v.T
-                # Reshape out dim to [in, n_dev, n_local_heads, head_dim]
-                q = q.reshape(q.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                k = k.reshape(k.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                v = v.reshape(v.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                # Concatenate Q, K, V on the heads dim so each device shard gets its own Q, K, V heads
-                qkv = torch.cat([q, k, v], dim=2)  # [in, n_dev, 3*n_local_heads, head_dim]
-                qkv = qkv.reshape(qkv.shape[0], 3 * self.num_heads * self.head_dim)
-                # Transpose back to [out, in] PyTorch convention
-                qkv = qkv.T
-                return qkv
-
-            weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
-            state["to_qkv.weight"] = weight
-
+            state["to_qkv.weight"] = _interleave_heads([q_state["weight"], k_state["weight"], v_state["weight"]])
             if "bias" in q_state:
-                bias = _merge_tensors(
-                    q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)
+                bias = _interleave_heads(
+                    [q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)]
                 )
-                bias = bias.squeeze(-1)
-                state["to_qkv.bias"] = bias
+                state["to_qkv.bias"] = bias.squeeze(-1)
+        else:
+            # Merge separate to_k, to_v weights into fused to_kv
+            k_state = pop_substate(state, "to_k")
+            v_state = pop_substate(state, "to_v")
+
+            state["to_kv.weight"] = _interleave_heads([k_state["weight"], v_state["weight"]])
+            if "bias" in k_state:
+                bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
+                state["to_kv.bias"] = bias.squeeze(-1)
 
     def forward(
         self,
@@ -230,11 +247,10 @@ class WanAttention(Module):
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         else:
-            # Separate projections for cross-attention (Q from spatial, K/V from prompt)
+            # Cross-attention: Q from spatial, fused KV from prompt
             kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
             q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
-            k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
-            v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
