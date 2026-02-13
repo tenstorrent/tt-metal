@@ -366,10 +366,7 @@ class DPTViTBackboneTTNN(torch.nn.Module):
 
         # Perf path only: pad sequence to tile multiple for sharded program configs.
         orig_len = int(tokens_tt3.shape[1])
-        # Sharded-token path is opt-in because attention ops vary across runtime versions.
-        pad_seq = bool(getattr(self.config, "tt_perf_encoder", False)) and bool(
-            getattr(self.config, "tt_shard_encoder_tokens", False)
-        )
+        pad_seq = bool(getattr(self.config, "tt_perf_encoder", False))
         seq_len = int(orig_len)
         if pad_seq:
             # Use a wider pad multiple for perf mode so SDPA chunking can pick
@@ -380,33 +377,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 seq_len = int(padded_len)
 
         tokens_tt = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
-        # Keep [B,1,N,C] through encoder blocks (this matches the reference sharded ViT demo).
+        # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
         tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
-        # In perf-encoder mode, run encoder blocks on a block-sharded tokens tensor
-        # so sharded program configs (LN/QKV/FFN) can be enabled.
-        if pad_seq:
-            try:
-                # Use the encoder grid chosen by tt_configs (tile-aligned sharding for this seq length).
-                if self.tt_layer_cfg is not None and hasattr(self.tt_layer_cfg, "grid"):
-                    grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
-                else:
-                    grid = self.tt_device.compute_with_storage_grid_size()
-                    grid_x, grid_y = (int(getattr(grid, "x", 8)), int(getattr(grid, "y", 8)))
-                core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
-                shape_for_shard = getattr(tokens_tt, "padded_shape", None) or [int(B), 1, int(seq_len), int(C)]
-                shard_mc = ttnn.create_sharded_memory_config(
-                    shape_for_shard,
-                    core_grid=core_grid,
-                    strategy=ttnn.ShardStrategy.BLOCK,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                )
-                tokens_tt = ttnn.to_memory_config(tokens_tt, memory_config=shard_mc, dtype=ttnn.bfloat16)
-            except Exception:
-                inc_vit_backbone_fallback()
-                if not bool(getattr(self.config, "allow_cpu_fallback", True)):
-                    raise
-                # Fall back to interleaved execution.
-                tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
         if pad_seq and orig_len < seq_len:
@@ -439,15 +411,6 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             h_tt = hidden_states_tt[idx + 1]
             if return_tt:
                 try:
-                    # The encoder may keep tokens sharded for perf; convert to interleaved
-                    # before reshape/slice/permute for token-map extraction.
-                    try:
-                        is_sharded = bool(ttnn.is_sharded(h_tt)) if hasattr(ttnn, "is_sharded") else bool(h_tt.is_sharded())
-                    except Exception:
-                        is_sharded = False
-                    if is_sharded:
-                        h_tt = ttnn.to_memory_config(h_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-
                     tokens_tt4 = h_tt
                     shape = tuple(int(v) for v in tuple(getattr(tokens_tt4, "shape", ())))
                     if len(shape) == 3:

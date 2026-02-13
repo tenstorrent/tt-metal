@@ -18,11 +18,6 @@ import math
 import torch
 
 from .tt_cnn_ops import TTConv2dCached
-from .perf_counters import (
-    inc_vit_program_config_applied,
-    inc_vit_program_config_retry,
-    inc_vit_program_config_suppressed,
-)
 
 try:
     import ttnn  # type: ignore
@@ -156,15 +151,12 @@ def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_confi
     if program_config is None:
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     try:
-        out = ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config, program_config=program_config)
-        inc_vit_program_config_applied()
-        return out
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config, program_config=program_config)
     except TypeError:
         # Older ttnn builds may not expose program_config for this op.
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
     except Exception:
         # Some runtimes accept the kwarg but can reject specific program configs at runtime.
-        inc_vit_program_config_retry()
         return ttnn.linear(x, w, bias=bias, dtype=dtype, memory_config=memory_config)
 
 
@@ -186,17 +178,6 @@ def _ttnn_is_sharded(x) -> bool:
         pass
     try:
         return bool(x.is_sharded())
-    except Exception:
-        return False
-
-
-def _ttnn_is_sharded_or_memory_config_sharded(x) -> bool:
-    # Some tensor wrappers expose memory_config sharding without is_sharded().
-    if _ttnn_is_sharded(x):
-        return True
-    try:
-        mc = x.memory_config()
-        return bool(mc.is_sharded())
     except Exception:
         return False
 
@@ -359,35 +340,24 @@ class TTLayerNorm:
             pc = self.program_config
             ln_pc = getattr(pc, "ln_program_config", None) if pc is not None else None
             # Perf LN program configs typically assume a sharded input tensor.
-            if ln_pc is not None and _ttnn_is_sharded_or_memory_config_sharded(x):
+            if ln_pc is not None and _ttnn_is_sharded(x):
                 kwargs["program_config"] = ln_pc
-            elif ln_pc is not None and not _ttnn_is_sharded_or_memory_config_sharded(x):
-                inc_vit_program_config_suppressed()
 
             cc = getattr(pc, "ln_compute_config", None) if pc is not None else None
             if cc is not None:
                 kwargs["compute_kernel_config"] = cc
-            # Prefer keeping sharded activations sharded through LN.
-            if _ttnn_is_sharded_or_memory_config_sharded(x):
-                kwargs["memory_config"] = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None)
-            elif self.output_mem is not None:
-                kwargs["memory_config"] = self.output_mem
             try:
                 return ttnn.layer_norm(x, **kwargs)
             except TypeError:
                 # Backward compat for older runtimes without program_config / compute_kernel_config kwargs.
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
-                kwargs.pop("memory_config", None)
                 return ttnn.layer_norm(x, **kwargs)
             except Exception:
                 # Some runtimes accept these kwargs but can fail for particular inputs/configs.
                 # Retry once without the perf configs to avoid hard-failing the entire pipeline.
-                if "program_config" in kwargs or "compute_kernel_config" in kwargs:
-                    inc_vit_program_config_retry()
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
-                kwargs.pop("memory_config", None)
                 return ttnn.layer_norm(x, **kwargs)
         except Exception as exc:
             if not self.allow_cpu_fallback:
@@ -530,9 +500,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
-            if qkv_pc is not None and not _ttnn_is_sharded_or_memory_config_sharded(x4):
+            if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
-                inc_vit_program_config_suppressed()
             qkv4 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self._wqkv_tt,
@@ -544,11 +513,9 @@ class TTAttention:
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] tensors
-            split_mem = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
-            split_kwargs = dict(num_heads=H, transpose_key=False)
-            if split_mem is not None:
-                split_kwargs["memory_config"] = split_mem
-            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, **split_kwargs)
+            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv3, num_heads=H, transpose_key=False
+            )
             scale = 1.0 / math.sqrt(D)
             sdpa_kwargs = dict(is_causal=False, scale=scale)
             if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
@@ -565,76 +532,10 @@ class TTAttention:
                         sdpa_kwargs["program_config"] = maybe_pc
                 except Exception:
                     pass
-            if split_mem is not None:
-                sdpa_kwargs["memory_config"] = split_mem
-            # SDPA in some runtimes only supports interleaved operands; if our
-            # Q/K/V are sharded, convert them to interleaved for the SDPA op,
-            # then reshard the merged context back to match the encoder's sharded
-            # activation layout.
-            need_interleaved_sdpa = (
-                _ttnn_is_sharded_or_memory_config_sharded(q_tt)
-                or _ttnn_is_sharded_or_memory_config_sharded(k_tt)
-                or _ttnn_is_sharded_or_memory_config_sharded(v_tt)
-            )
-            q_sdpa, k_sdpa, v_sdpa = q_tt, k_tt, v_tt
-            if need_interleaved_sdpa:
-                sdpa_kwargs.pop("program_config", None)
-                sdpa_kwargs.pop("memory_config", None)
-                q_sdpa = ttnn.to_memory_config(q_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-                k_sdpa = ttnn.to_memory_config(k_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-                v_sdpa = ttnn.to_memory_config(v_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            try:
-                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **sdpa_kwargs)
-            except TypeError:
-                # Older runtimes may not accept memory_config for this op.
-                sdpa_kwargs.pop("memory_config", None)
-                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **sdpa_kwargs)
-            except Exception:
-                # Some runtimes accept program_config/memory_config but can fail for
-                # particular layouts (for example with an attention mask). Retry
-                # conservatively before falling back to the host path.
-                retry_kwargs = dict(sdpa_kwargs)
-                if "program_config" in retry_kwargs:
-                    inc_vit_program_config_retry()
-                    retry_kwargs.pop("program_config", None)
-                    try:
-                        ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **retry_kwargs)
-                    except Exception:
-                        if "memory_config" in retry_kwargs:
-                            retry_kwargs.pop("memory_config", None)
-                            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, **retry_kwargs)
-                        else:
-                            raise
-                else:
-                    raise
+            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
             # Merge heads back to [B, N, C]
-            concat_kwargs = {}
-            if need_interleaved_sdpa:
-                concat_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-            try:
-                merged = ttnn.transformer.concatenate_heads(ctx_tt, **concat_kwargs)
-            except TypeError:
-                merged = ttnn.transformer.concatenate_heads(ctx_tt)
+            merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
-            if need_interleaved_sdpa and _ttnn_is_sharded_or_memory_config_sharded(x4):
-                try:
-                    cfg = getattr(self, "program_config", None)
-                    grid = getattr(cfg, "grid", None) if cfg is not None else None
-                    if grid is not None:
-                        grid_x, grid_y = int(grid[0]), int(grid[1])
-                        core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
-                        ctx4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
-                        shape_for_shard = getattr(ctx4, "padded_shape", None) or [int(B), 1, int(N), int(C)]
-                        shard_mc = ttnn.create_sharded_memory_config(
-                            shape_for_shard,
-                            core_grid=core_grid,
-                            strategy=ttnn.ShardStrategy.BLOCK,
-                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                        )
-                        ctx4 = ttnn.to_memory_config(ctx4, memory_config=shard_mc, dtype=ttnn.bfloat16)
-                        ctx = ctx4 if len(shape) == 4 else ttnn.reshape(ctx4, (B, N, C))
-                except Exception:
-                    pass
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
@@ -673,9 +574,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
-            if proj_pc is not None and not _ttnn_is_sharded_or_memory_config_sharded(ctx_tt4):
+            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
-                inc_vit_program_config_suppressed()
             out_tt4 = _ttnn_linear_with_optional_program_config(
                 x=ctx_tt4,
                 w=self._proj_w_tt,
@@ -761,12 +661,10 @@ class TTMLP:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
-            if ff1_pc is not None and not _ttnn_is_sharded_or_memory_config_sharded(x4):
+            if ff1_pc is not None and not _ttnn_is_sharded(x4):
                 ff1_pc = None
-                inc_vit_program_config_suppressed()
-            if ff2_pc is not None and not _ttnn_is_sharded_or_memory_config_sharded(x4):
+            if ff2_pc is not None and not _ttnn_is_sharded(x4):
                 ff2_pc = None
-                inc_vit_program_config_suppressed()
             y1 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self.w1_tt,
@@ -874,14 +772,8 @@ class TTTransformerBlock:
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
         h = self.ln1(x)
         h = self.attn(h, **mm_opts)
-        if _ttnn_is_sharded_or_memory_config_sharded(x) or _ttnn_is_sharded_or_memory_config_sharded(h):
-            x = ttnn.add(x, h, memory_config=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None))
-        else:
-            x = ttnn.add(x, h)
+        x = ttnn.add(x, h)
         h = self.ln2(x)
         h = self.mlp(h, **mm_opts)
-        if _ttnn_is_sharded_or_memory_config_sharded(x) or _ttnn_is_sharded_or_memory_config_sharded(h):
-            x = ttnn.add(x, h, memory_config=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None))
-        else:
-            x = ttnn.add(x, h)
+        x = ttnn.add(x, h)
         return x

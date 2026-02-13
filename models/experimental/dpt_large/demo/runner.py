@@ -160,12 +160,6 @@ def main():
     parser.add_argument("--dump-depth", type=str, default=None)
     parser.add_argument("--dump-depth-color", type=str, default=None)
     parser.add_argument("--dump-perf", type=str, default=None)
-    parser.add_argument(
-        "--dump-perf-header",
-        type=str,
-        default=None,
-        help="Optional explicit path for the perf header JSON (defaults to <dump-perf>_header.json).",
-    )
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument(
@@ -174,11 +168,6 @@ def main():
         default="eager",
         choices=("eager", "trace", "trace_2cq"),
         help="Execution mode for TT path. trace/trace_2cq execute a captured full-model trace (backbone+neck+head).",
-    )
-    parser.add_argument(
-        "--tt-shard-encoder-tokens",
-        action="store_true",
-        help="Experimental: enable sharded ViT encoder tokens (required for sharded program configs).",
     )
     args = parser.parse_args()
 
@@ -207,7 +196,6 @@ def main():
         tt_device_reassembly=use_tt,
         tt_device_fusion=use_tt,
         tt_perf_encoder=use_tt,
-        tt_shard_encoder_tokens=bool(args.tt_shard_encoder_tokens),
         tt_perf_neck=use_tt,
         tt_approx_align_corners=use_tt,
         tt_execution_mode=str(args.tt_execution_mode),
@@ -429,11 +417,10 @@ def main():
             Path(args.dump_perf).parent.mkdir(parents=True, exist_ok=True)
             Path(args.dump_perf).write_text(json.dumps(perf, indent=2))
 
-        header_path = None
-        if args.dump_perf_header:
-            header_path = Path(args.dump_perf_header)
-        elif args.dump_perf:
+        if args.dump_perf:
             header_path = Path(args.dump_perf).with_name(Path(args.dump_perf).stem + "_header.json")
+        else:
+            header_path = None
 
         if header_path is not None:
             header_path.parent.mkdir(parents=True, exist_ok=True)

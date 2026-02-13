@@ -50,9 +50,6 @@ class DPTLargeConfig:
     tt_device_fusion: bool = False
     # Fast/perf encoder flag (sharded, L1, fused ops)
     tt_perf_encoder: bool = False
-    # Experimental: shard encoder tokens to enable sharded ViT program configs.
-    # Kept opt-in because attention ops vary across runtime versions.
-    tt_shard_encoder_tokens: bool = False
     # Fast/perf neck+head flag (device-first convs/upsample)
     tt_perf_neck: bool = False
     # In perf mode, allow TT upsample to approximate align_corners=True semantics

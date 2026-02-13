@@ -119,37 +119,17 @@ def vit_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     if config.device.endswith("n300"):
         # Single-card N300 often exposes a harvested 8x7 worker grid.
         grid = (8, 7)
-        math_fidelity = "hi-fi2"
+        math = "hi-fi2"
     elif config.device.endswith("n150"):
         grid = (6, 6)
-        math_fidelity = "hi-fi3"
+        math = "hi-fi3"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
-        math_fidelity = "hi-fi2"
+        math = "hi-fi2"
     else:
         grid = (6, 6)
-        math_fidelity = "hi-fi3"
-    return TTLayerConfig(grid=grid, math_fidelity=math_fidelity, attn_fused_qkv=True, activation_fused=True)
-
-
-def _choose_tile_aligned_grid_y(*, seq_len_padded: int, max_grid_y: int, tile: int = 32) -> int:
-    """Pick a grid_y that yields a tile-aligned per-shard height for block-sharded tokens.
-
-    With row-major block sharding on [B,1,seq,C], the physical shard height is
-    proportional to seq/grid_y. TTNN requires shard dimensions to be multiples
-    of the tile size (32).
-    """
-    try:
-        seq_len_padded = int(seq_len_padded)
-        max_grid_y = max(1, int(max_grid_y))
-        tile = max(1, int(tile))
-    except Exception:
-        return int(max_grid_y) if max_grid_y else 1
-
-    for y in range(max_grid_y, 0, -1):
-        if (seq_len_padded % y) == 0 and ((seq_len_padded // y) % tile) == 0:
-            return int(y)
-    return int(max_grid_y)
+        math = "hi-fi3"
+    return TTLayerConfig(grid=grid, math_fidelity=math, attn_fused_qkv=True, activation_fused=True)
 
 
 def cnn_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
@@ -180,10 +160,7 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         TILE = 32
         patch_count = config.image_size // config.patch_size
         seq_len = patch_count * patch_count + 1  # include CLS
-        # Keep in sync with vit_backbone encoder padding: we pad to a wider
-        # multiple (64) to make SDPA chunking friendlier when masking is used,
-        # while still remaining tile-aligned (32).
-        seq_len_padded = math.ceil(seq_len / 64) * 64
+        seq_len_padded = math.ceil(seq_len / TILE) * TILE
         seqL_t = seq_len_padded // TILE
         dim_t = config.hidden_size // TILE
 
@@ -288,17 +265,15 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # DPT perf runs use per-chip microbatch=1 (dp=2/batch=2 -> each chip sees B=1).
-        # The reference sharded ViT encoder expects batch-size == grid_y for QKV head creation,
-        # so keep grid_y=1 and shard only across width (grid_x).
-        grid = (8, 1)
-        math_fidelity = "hi-fi2"
+        # Single-card N300 often exposes a harvested 8x7 worker grid.
+        grid = (8, 7)
+        math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
-        math_fidelity = "hi-fi2"
+        math = "hi-fi2"
     else:
         grid = (6, 6)
-        math_fidelity = "hi-fi3"
+        math = "hi-fi3"
 
     prog_cfgs = _build_perf_program_configs(config, grid)
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
@@ -310,16 +285,13 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
-    shard_tokens = bool(getattr(config, "tt_shard_encoder_tokens", False))
-    if shard_tokens:
-        split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
-    else:
-        # Default attention path on current runtimes expects interleaved Q/K/V.
+    split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
+    if disable_attn_pc:
         split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
     return TTLayerConfig(
         grid=grid,
-        math_fidelity=math_fidelity,
+        math_fidelity=math,
         shard_tokens=True,
         shard_heads=True,
         use_fused_ops=True,
@@ -327,10 +299,9 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         l1_resident=True,
         use_block_sharded=False,
         sdpa_grid=grid,
-        # Sharded memcfgs are only valid when the encoder tokens are actually sharded.
-        qkv_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
-        proj_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
-        mlp_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
+        qkv_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        proj_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        mlp_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
         split_heads_memcfg=split_mem,
         qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
         qk_program_config=qk_pc,
