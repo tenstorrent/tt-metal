@@ -31,7 +31,7 @@ High-Level Motivation
 
 Consider the example matrix multiplication shown in Figure 1.
 
-.. figure:: images/data_reuse_no_multicast.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_no_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid
    :width: 900
    :align: center
@@ -58,7 +58,7 @@ Since DRAM bandwidth is limited, this is inefficient because the same data is re
 Instead, we would like to load a tile from DRAM once and share it across all cores that need it through the NoC.
 A possible way to achieve this is shown in Figure 2.
 
-.. figure:: images/data_reuse_with_multicast.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_with_multicast.png
    :alt: Example matrix multiplication on a 3x3 core grid with multicast
    :width: 900
    :align: center
@@ -121,7 +121,7 @@ The program creates a 2D tensor and fills it with random data.
 One **sender core** uses a reader kernel to read tiles of this tensor from DRAM and also multicasts them to three **receiver cores**.
 The flow of data is shown in Figure 3.
 
-.. figure:: images/data_flow_multicast.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_flow_multicast.png
    :alt: Data flow in the multicast example program
    :width: 700
    :align: center
@@ -188,7 +188,7 @@ High-Level Multicast Protocol
 Before looking at the code, it is helpful to describe the multicast protocol at a high level,
 as shown in Figure 4.
 
-.. figure:: images/multicast_protocol.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/multicast_protocol.png
    :alt: Multicast Protocol
    :width: 1900
    :align: center
@@ -839,7 +839,7 @@ read tiles of ``B`` from DRAM and multicast them to all other cores in the same 
 With this arrangement, all the receiving cores for every multicast operation form a rectangular grid.
 This is shown in Figure 5.
 
-.. figure:: images/core_roles.png
+.. figure:: https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/core_roles.png
    :alt: Core roles in Matrix Multiplication with Multicast
    :width: 400
    :align: center
