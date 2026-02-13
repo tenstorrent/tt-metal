@@ -566,7 +566,11 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
     const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : ashape_logical[-1] % in0_tile.get_width();
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");

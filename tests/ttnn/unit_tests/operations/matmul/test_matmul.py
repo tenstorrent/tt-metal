@@ -1841,8 +1841,10 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
-        (1, 1, 2, 3, 4),
+        (2, 2, 2, 3, 4),
         (1, 1, 1024, 64, 512),
+        (1, 1, 512, 8, 256),
+        (1, 1, 583, 7, 227),
     ],
 )
 @pytest.mark.parametrize("transpose_b", [True, False])
