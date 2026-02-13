@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 16])
+@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17])
 @pytest.mark.parametrize("k_chunk_size", [128, 256])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
 def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_len):
