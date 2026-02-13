@@ -83,10 +83,14 @@ class SubmeshTraceDPExecutor:
                 completion_event = ttnn.record_event(dev, 0)
                 completions.append((pipe, completion_event, t_exec))
 
-        # Wait for both devices to finish before reading from outputs.
+        # Ensure both devices have completed the traced step before reading outputs.
+        #
+        # NOTE: `ttnn.wait_for_event` is primarily a command-queue synchronization
+        # primitive (it can enqueue dependencies), and does not necessarily act as
+        # a host-side barrier. For wall-clock measurements we use
+        # `ttnn.synchronize_device` as the host-visible completion point.
         per_worker = []
         for pipe, ev, t_exec in completions:
-            ttnn.wait_for_event(0, ev)
             trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
             if self.execution_mode == "trace_2cq":
                 pipe._trace_op_event = ev
@@ -100,6 +104,12 @@ class SubmeshTraceDPExecutor:
             }
             pipe.last_perf = dict(entry)
             per_worker.append(entry)
+
+        # Host-visible barrier: wait for work completion on each submesh device.
+        for pipe in self.tt_pipelines:
+            dev = pipe.backbone.tt_device
+            if dev is not None and hasattr(ttnn, "synchronize_device"):
+                ttnn.synchronize_device(dev)
 
         trace_wall_ms = (time.perf_counter() - trace_wall_start) * 1000.0
 

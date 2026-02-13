@@ -279,7 +279,10 @@ class DPTTTPipeline:
                 # Record completion after enqueuing trace execution and wait for
                 # it before reading from the persistent trace output tensor.
                 completion_event = ttnn.record_event(self.backbone.tt_device, 0)
-                ttnn.wait_for_event(0, completion_event)
+                # Host-visible barrier for timing: `wait_for_event` is CQ-level
+                # synchronization and may not block the host.
+                if hasattr(ttnn, "synchronize_device"):
+                    ttnn.synchronize_device(self.backbone.tt_device)
                 trace_wall_ms = (time.perf_counter() - trace_wall_start) * 1000.0
                 trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
                 self._trace_op_event = completion_event
