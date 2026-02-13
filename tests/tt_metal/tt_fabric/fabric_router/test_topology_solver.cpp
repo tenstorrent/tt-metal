@@ -1605,6 +1605,85 @@ AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Helper: create N chained 2x4 meshes in a line using cardinal connections
+// Creates N separate 2x4 meshes and connects them sequentially via cardinal connections
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_chained_2x4_meshes_with_cardinal(size_t num_meshes) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    using CardinalConnectionType = typename AdjacencyGraph<NodeId>::CardinalConnectionType;
+    AdjacencyMap adj_map;
+    std::vector<CardinalConnectionType> cardinal_connections;
+    const size_t mesh_size = 2 * 4;  // 8 nodes per mesh
+
+    // Create each 2x4 mesh and offset node IDs
+    for (size_t mesh_idx = 0; mesh_idx < num_meshes; ++mesh_idx) {
+        auto mesh = create_2d_mesh_graph<NodeId>(2, 4);
+        const auto& mesh_nodes = mesh.get_nodes();
+        NodeId base_id = static_cast<NodeId>(mesh_idx * mesh_size);
+
+        // Copy mesh edges with offset (only within-mesh edges)
+        for (const auto& node : mesh_nodes) {
+            NodeId global_node = static_cast<NodeId>(base_id + static_cast<NodeId>(node));
+            const auto& neighbors = mesh.get_neighbors(node);
+            std::vector<NodeId> global_neighbors;
+            for (const auto& neighbor : neighbors) {
+                global_neighbors.push_back(static_cast<NodeId>(base_id + static_cast<NodeId>(neighbor)));
+            }
+            adj_map[global_node] = global_neighbors;
+        }
+
+        // Connect to previous mesh using cardinal connection: rightmost column of previous mesh to leftmost column of
+        // this mesh
+        if (mesh_idx > 0) {
+            CardinalConnectionType cardinal;
+            // Group A: rightmost column of previous mesh (nodes at (row, 3) for row in [0, 1])
+            for (size_t row = 0; row < 2; ++row) {
+                NodeId prev_right = static_cast<NodeId>((mesh_idx - 1) * mesh_size + row * 4 + 3);
+                cardinal.group_a.push_back(prev_right);
+            }
+            // Group B: leftmost column of this mesh (nodes at (row, 0) for row in [0, 1])
+            for (size_t row = 0; row < 2; ++row) {
+                NodeId curr_left = static_cast<NodeId>(mesh_idx * mesh_size + row * 4);
+                cardinal.group_b.push_back(curr_left);
+            }
+            // 2 connections (one per row)
+            cardinal.num_connections = 1;
+            cardinal_connections.push_back(cardinal);
+        }
+    }
+    return AdjacencyGraph<NodeId>(adj_map, cardinal_connections);
+}
+
+TEST_F(TopologySolverTest, StressTest_4x2x4MeshesCardinalOn4x8Mesh) {
+    // Target: 4 chained 2x4 meshes (stages) with cardinal connections between meshes = 32 nodes
+    // Each mesh is internally connected, but meshes are connected via cardinal constraints
+    // Each cardinal constraint requires 2 connections between adjacent meshes
+    auto target_graph = create_chained_2x4_meshes_with_cardinal<TestTargetNode>(4);
+    // Global: Single 4x8 mesh = 32 nodes
+    // No cardinal connections in global graph - all connections are explicit
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+
+    EXPECT_EQ(target_graph.get_nodes().size(), 32u);                // 4 meshes * 8 nodes = 32
+    EXPECT_EQ(global_graph.get_nodes().size(), 32u);                // 4 * 8 = 32
+    EXPECT_EQ(target_graph.get_cardinal_connections().size(), 3u);  // 3 cardinal constraints between 4 meshes
+    EXPECT_EQ(global_graph.get_cardinal_connections().size(), 0u);  // No cardinal in global graph
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Stress test: 4x2x4 meshes (cardinal) should map onto 4x8 mesh. Error: "
+                                << result.error_message;
+
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.size(), 32u);
+        log_info(
+            tt::LogFabric,
+            "Stress test completed: dfs_calls={}, backtracks={}",
+            result.stats.dfs_calls,
+            result.stats.backtrack_count);
+    }
+}
+
 TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners) {
     // Create global graph: 8x8 mesh (64 nodes, no wrap-around, has 4 corners)
     auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
