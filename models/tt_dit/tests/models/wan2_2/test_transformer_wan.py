@@ -374,9 +374,9 @@ def test_wan_transformer_inner_step(
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
     prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
 
-    # Run TT inner_step
+    # Run TT inner_step (returns on-device tensor)
     logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
-    tt_output_1BNI = tt_model.inner_step(
+    tt_output_1BNI_tt = tt_model.inner_step(
         spatial_1BNI_torch=spatial_host,
         prompt_1BLP=prompt_1BLP,
         rope_cos_1HND=rope_cos_1HND,
@@ -385,6 +385,7 @@ def test_wan_transformer_inner_step(
         N=N,
         timestep_torch=timestep_input,
     )
+    tt_output_1BNI = tt_model.device_to_host(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
     del tt_model
 
