@@ -37,7 +37,29 @@ except Exception:  # pragma: no cover
 
 
 def _tt_from_torch_rm(t: torch.Tensor, device):
-    return torch_to_tt_tensor_rm(t, device, put_on_device=True)
+    if callable(torch_to_tt_tensor_rm):
+        return torch_to_tt_tensor_rm(t, device, put_on_device=True)
+    if ttnn is None:
+        raise RuntimeError("TT runtime is unavailable; cannot convert torch tensor to TT tensor")
+    return ttnn.from_torch(
+        t.to(dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+
+def _tt_from_torch_tile(t: torch.Tensor, device):
+    if callable(torch2tt_tensor):
+        return torch2tt_tensor(t, device)
+    if ttnn is None:
+        raise RuntimeError("TT runtime is unavailable; cannot convert torch tensor to TT tensor")
+    return ttnn.from_torch(
+        t.to(dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
 
 
 def pad_tokens_3d(x_3d: torch.Tensor, pad_multiple: int = 32):
@@ -140,7 +162,7 @@ class TTLinear:
         self.device = device
         # Keep weights in TILE layout on device to avoid RM<->TILE conversions on every matmul.
         wt = weight.unsqueeze(0).unsqueeze(0)  # 1,1,out,in
-        self.weight = torch2tt_tensor(wt, device)
+        self.weight = _tt_from_torch_tile(wt, device)
         # Bias can remain in row-major layout; keep conversion lightweight.
         self.bias = _tt_from_torch_rm(bias.unsqueeze(0).unsqueeze(0), device) if bias is not None else None
         self.output_mem = output_mem
