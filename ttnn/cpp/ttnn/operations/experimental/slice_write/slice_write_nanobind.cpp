@@ -57,7 +57,7 @@ void bind_slice_write(nb::module_& mod) {
                const ttnn::SmallVector<uint32_t>& start,
                const ttnn::SmallVector<uint32_t>& end,
                const ttnn::SmallVector<uint32_t>& step) { 
-                return ttnn::operations::experimental::SliceWriteOperation::invoke(input_tensor, output_tensor, start, end, step); 
+                return ttnn::experimental::slice_write(input_tensor, output_tensor, start, end, step); 
             },
             nb::arg("input_tensor"),
             nb::arg("output_tensor"),

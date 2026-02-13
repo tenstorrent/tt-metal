@@ -28,7 +28,7 @@ void bind_repeat_and_interleave_eltwise_mul(nb::module_& mod) {
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType> dtype,
                const std::optional<MathFidelity> math_fidelity) {
-                return ttnn::operations::experimental::ssm::ExecuteRepeatAndInterleaveEltwiseMul::invoke(a, b, memory_config, dtype, math_fidelity);
+                return ttnn::experimental::repeat_and_interleave_eltwise_mul(a, b, memory_config, dtype, math_fidelity);
             },
             nb::arg("a"),
             nb::arg("b"),

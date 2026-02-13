@@ -7,19 +7,19 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::experimental::reshape {
+namespace ttnn::experimental {
 
-ttnn::Tensor ViewOperation::invoke(
+ttnn::Tensor view(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     return tt::tt_metal::view(tensor, logical_shape, padded_shape);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return tt::tt_metal::view(tensor, shape, shape);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(tensor, ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
+ttnn::Tensor view(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
+    return view(tensor, ttnn::operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 
-}  // namespace ttnn::operations::experimental::reshape
+}  // namespace ttnn::experimental

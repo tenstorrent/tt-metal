@@ -5,13 +5,10 @@
 #pragma once
 #include <cstdint>
 
-#include "ttnn/decorators.hpp"
-namespace ttnn::operations::experimental {
-struct BcastTo {
-    static Tensor invoke(
-        const Tensor& input,
-        const Shape& output_shape,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& output);
-};
-}  // namespace ttnn::operations::experimental
+namespace ttnn::experimental {
+Tensor broadcast_to(
+    const Tensor& input,
+    const Shape& output_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output);
+}  // namespace ttnn::experimental

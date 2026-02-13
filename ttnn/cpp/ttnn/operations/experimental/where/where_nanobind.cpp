@@ -61,7 +61,7 @@ void bind_where(nb::module_& mod) {
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
-                return ttnn::operations::experimental::ternary::WhereOperation::invoke(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
             },
             nb::arg("condition"),
             nb::arg("true_value"),
@@ -77,7 +77,7 @@ void bind_where(nb::module_& mod) {
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
-                return ttnn::operations::experimental::ternary::WhereOperation::invoke(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
             },
             nb::arg("condition"),
             nb::arg("true_value"),
@@ -93,7 +93,7 @@ void bind_where(nb::module_& mod) {
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
-                return ttnn::operations::experimental::ternary::WhereOperation::invoke(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
             },
             nb::arg("condition"),
             nb::arg("true_value"),
@@ -109,7 +109,7 @@ void bind_where(nb::module_& mod) {
                std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
-                return ttnn::operations::experimental::ternary::WhereOperation::invoke(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
+                return ttnn::experimental::ternary::where(condition, true_value, false_value, output_dtype, memory_config, std::move(output_tensor));
             },
             nb::arg("condition"),
             nb::arg("true_value"),

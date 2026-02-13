@@ -4,17 +4,13 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+namespace ttnn::experimental {
 
-namespace ttnn::operations::experimental {
+ttnn::Tensor slice_write(
+    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& output_tensor,
+    const ttnn::SmallVector<uint32_t>& begins,
+    const ttnn::SmallVector<uint32_t>& ends,
+    const ttnn::SmallVector<uint32_t>& step);
 
-struct SliceWriteOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& output_tensor,
-        const ttnn::SmallVector<uint32_t>& begins,
-        const ttnn::SmallVector<uint32_t>& ends,
-        const ttnn::SmallVector<uint32_t>& step);
-};
-
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

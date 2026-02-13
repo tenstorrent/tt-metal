@@ -30,7 +30,7 @@ void bind_hc_sum_reduce(nb::module_& mod) {
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType> dtype,
                const std::optional<MathFidelity> math_fidelity) {
-                return ttnn::operations::experimental::ssm::ExecuteHCSumReduce::invoke(input, memory_config, dtype, math_fidelity);
+                return ttnn::experimental::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
             },
             nb::arg("input"),
             nb::kw_only(),

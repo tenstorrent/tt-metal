@@ -5,19 +5,13 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include <optional>
 
-namespace ttnn {
-namespace operations::experimental::reshape {
+namespace ttnn::experimental {
 
-struct ViewOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
-};
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+ttnn::Tensor view(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
 
-}  // namespace operations::experimental::reshape
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental
