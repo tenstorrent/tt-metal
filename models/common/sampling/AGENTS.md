@@ -1,93 +1,45 @@
 # Sampling Module
 
-On-device top-k / top-p / temperature sampling with penalties and trace
-capture for Tenstorrent models.
+On-device top-k / top-p / temperature sampling with penalties and trace capture for Tenstorrent models.
 
 ## File Map
 
 | File | Purpose |
 |---|---|
-| `generator.py` | `SamplingGenerator` -- high-level orchestrator (owns TTSampling + TTPenalties, trace capture); also `format_sampling_params`, `SeedManager` |
-| `tt_sampling.py` | `TTSampling` -- low-level on-device sampling with multi-device all-gather |
-| `tt_penalties.py` | `TTPenalties` -- presence / frequency / repetition penalties |
-| `tt_log_probs.py` | `LogProbsCalculator` -- numerically stable log-softmax across sharded vocabulary |
+| `generator.py` | `SamplingGenerator` orchestrator; `format_sampling_params`; `SeedManager` |
+| `tt_sampling.py` | `TTSampling` — on-device top-k/top-p/temp with multi-device all-gather |
+| `tt_penalties.py` | `TTPenalties` — presence / frequency / repetition penalties |
+| `tt_log_probs.py` | `LogProbsCalculator` — log-softmax across sharded vocabulary |
 | `_utils.py` | Shared helpers: `clamp`, `is_default_value`, `filter_none` |
 
-## Integration Steps
+See [README.md](README.md) for quick-start code.
 
-### 1. Prepare the args object
-
-Your model's args object must expose `vocab_size` and `cluster_shape` at
-minimum:
+## Required `args` Attributes
 
 ```python
-class ModelArgs:
-    vocab_size = 128256
-    padded_vocab_size = 128256  # must be divisible by TP device count
-    cluster_shape = (4, 8)      # (rows, cols) of the device mesh
-    max_batch_size = 32         # per sampling row
-    max_top_k = 32
-    sub_core_grids = None       # or a CoreRangeSet
+vocab_size: int           # actual vocabulary size (unpadded)
+cluster_shape: tuple      # (rows, cols) of the device mesh, e.g. (4, 8)
 ```
 
-Optional args attributes: `sampling_all_gather_axis` (default 0),
-`sub_core_grid_topk`, `start_core`, `sampling_dp` (>1 for multi-row DP),
-`model_config` (dict with keys `GALAXY_NUM_LINKS`,
-`DECODE_SAMPLING_INPUT_MEMCFG`, `SAMPLING_AG_CONFIG`).
-
-### 2. Create the SamplingGenerator
+Optional (with defaults):
 
 ```python
-from models.common.sampling import SamplingGenerator, format_sampling_params
-
-sampling_gen = SamplingGenerator(
-    args=args,
-    mesh_device=mesh_device,
-    tt_ccl=tt_ccl,
-    enable_internal_trace=True,
-)
+padded_vocab_size: int    # tile-aligned total vocab; defaults to vocab_size
+max_batch_size: int       # per sampling row; default 32
+max_top_k: int            # default 32
+sampling_dp: int          # >1 for multi-row DP; default 1
+sub_core_grids            # CoreRangeSet or None
+model_config: dict        # keys: GALAXY_NUM_LINKS, DECODE_SAMPLING_INPUT_MEMCFG, SAMPLING_AG_CONFIG
 ```
 
-### 3. Format and set sampling parameters
+## Pitfalls
 
-`SamplingParams` is defined in `models/tt_transformers/tt/generator.py`.
-Pad/clamp before passing to the generator:
+**`padded_vocab_size` vs `vocab_size`**: TTPenalties requires per-device vocab width to be tile-aligned (multiple of 32). Models must set `padded_vocab_size` accordingly and pad logits to match. However, TTSampling device offsets for global token IDs use the *unpadded* `vocab_size` — using padded offsets shifts token IDs from devices 1+ and produces garbled output. The split is handled internally; just set both attributes correctly on args.
 
-```python
-from models.tt_transformers.tt.generator import SamplingParams
+**`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. The `Generator` in `models/tt_transformers/tt/generator.py` handles chunking and merging automatically.
 
-raw = SamplingParams(temperature=0.6, top_k=10, top_p=0.9)
-formatted = format_sampling_params(raw, max_batch_size=args.max_batch_size)
-sampling_gen.reset_sampling_params(formatted)
-```
+**Trace invalidation**: Changing `force_argmax_sampling` state (e.g. switching from k=1,p=1,temp=1 to non-default) invalidates captured traces. `SamplingGenerator.reset_sampling_params` handles this.
 
-### 4. Run sampling in decode loop
+## Future Work
 
-```python
-tt_tokens, tt_log_probs = sampling_gen.sample(
-    tt_logits,
-    enable_trace=True,
-    tt_out_tok=tt_output_buffer,  # optional pre-allocated output
-)
-```
-
-### 5. Seeds and penalties (optional)
-
-```python
-# Seeds
-sampling_gen.seed_manager.reset_seed(seeds=[42], user_ids=[0])
-sampling_gen.seed_manager.get_new_values(empty_slots=range(32))
-
-# Penalties (activate automatically when non-default values are set)
-sampling_gen.reset_prompt_tokens(prompt_tokens)   # torch [B, S]
-sampling_gen.reset_output_state(output_tokens)     # torch [B, S] or None
-```
-
-## Multi-Row Data Parallel Sampling
-
-For models using multiple mesh rows (e.g., GPT-OSS on 4x8 Galaxy with 4
-independent rows of 32 users each = 128 total):
-
-1. Set `args.sampling_dp = 4`
-2. Provide k/p/temp tensors of size `max_batch_size * sampling_dp` (e.g., 128)
-3. The module row-shards parameters with `ShardTensor2dMesh(dims=(0, None))`
+- Consolidate `SamplingParams` (currently defined in both `models/tt_transformers/tt/generator.py` and `models/demos/deepseek_v3/tt/generator.py`)
