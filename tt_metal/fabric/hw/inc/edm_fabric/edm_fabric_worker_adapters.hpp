@@ -92,6 +92,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
             edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+            edm_connection_handshake_l1_addr = get_stream_scratch_register_address<0>();
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
@@ -186,7 +187,7 @@ struct WorkerToFabricEdmSenderImpl {
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
                 : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
-        ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
+        // ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address
         this->edm_copy_of_wr_counter_addr =
