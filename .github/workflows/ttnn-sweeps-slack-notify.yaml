@@ -128,6 +128,7 @@ jobs:
           conclusion: ${{ steps.check.outputs.conclusion }}
           source-git-sha: ${{ steps.check.outputs.source_git_sha }}
           source-git-branch: ${{ steps.check.outputs.source_git_branch }}
+          slack-alert-user-ids: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_ALERT_USER_IDS }}
           slack-webhook-url: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_WEBHOOK_URL }}
           database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
 

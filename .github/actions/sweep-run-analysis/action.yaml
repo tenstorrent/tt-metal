@@ -20,6 +20,9 @@ inputs:
   source-git-branch:
     description: 'Git branch from the triggering ttnn-run-sweeps workflow run'
     required: false
+  slack-alert-user-ids:
+    description: 'Comma-separated Slack user IDs to mention on non-green results (e.g., U123,U456)'
+    required: false
   slack-webhook-url:
     description: 'Slack webhook URL for notifications'
     required: true
@@ -81,6 +84,7 @@ runs:
         CONCLUSION: ${{ inputs.conclusion }}
         SOURCE_GITHUB_RUN_ID: ${{ inputs.github-run-id }}
         SOURCE_GITHUB_RUN_NUMBER: ${{ inputs.source-github-run-number }}
+        SLACK_ALERT_USER_IDS: ${{ inputs.slack-alert-user-ids }}
         RESULTS_FILE: sweep_results.json
       run: |
         echo "Sending Slack notification..."
