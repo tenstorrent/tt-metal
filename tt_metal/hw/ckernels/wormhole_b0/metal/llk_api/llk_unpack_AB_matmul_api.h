@@ -41,7 +41,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT(
-        are_unpacker_AB_configured_correctly(
+        (are_unpacker_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[operandB_id],
@@ -49,7 +49,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             unpA_face_r_dim,
             unpB_face_r_dim,
             unpA_num_faces,
-            unpB_num_faces),
+            unpB_num_faces)),
         "");
 
     _llk_unpack_AB_matmul_init_(
@@ -91,7 +91,7 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
     LLK_ASSERT(
-        are_unpacker_AB_configured_correctly(
+        (are_unpacker_AB_configured_correctly(
             unpack_src_format[operandB_id],
             unpack_dst_format[operandB_id],
             unpack_src_format[operandA_id],
@@ -99,7 +99,7 @@ inline void llk_unpack_AB_matmul(
             get_operand_face_r_dim(operandB_id),
             get_operand_face_r_dim(operandA_id),
             partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-            partial_face_b ? 1 : get_operand_num_faces(operandA_id)),
+            partial_face_b ? 1 : get_operand_num_faces(operandA_id))),
         "");
 
     WAYPOINT("UPMW");
