@@ -112,6 +112,48 @@ GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
         // Degree is the number of unique neighbors (not counting multi-edges or self-connections)
         global_deg[i] = global_adj_idx[i].size();
     }
+
+    // Build indexed cardinal constraints from target graph
+    for (const auto& conn : target_graph.get_cardinal_connections()) {
+        CardinalConstraintIdx idx_conn;
+        idx_conn.num_connections = conn.num_connections;
+        for (const auto& node : conn.group_a) {
+            auto it = target_to_idx.find(node);
+            if (it != target_to_idx.end()) {
+                idx_conn.group_a_indices.push_back(it->second);
+            }
+        }
+        for (const auto& node : conn.group_b) {
+            auto it = target_to_idx.find(node);
+            if (it != target_to_idx.end()) {
+                idx_conn.group_b_indices.push_back(it->second);
+            }
+        }
+        if (!idx_conn.group_a_indices.empty() && !idx_conn.group_b_indices.empty()) {
+            target_cardinal_constraints.push_back(std::move(idx_conn));
+        }
+    }
+
+    // Build indexed cardinal constraints from global graph
+    for (const auto& conn : global_graph.get_cardinal_connections()) {
+        CardinalConstraintIdx idx_conn;
+        idx_conn.num_connections = conn.num_connections;
+        for (const auto& node : conn.group_a) {
+            auto it = global_to_idx.find(node);
+            if (it != global_to_idx.end()) {
+                idx_conn.group_a_indices.push_back(it->second);
+            }
+        }
+        for (const auto& node : conn.group_b) {
+            auto it = global_to_idx.find(node);
+            if (it != global_to_idx.end()) {
+                idx_conn.group_b_indices.push_back(it->second);
+            }
+        }
+        if (!idx_conn.group_a_indices.empty() && !idx_conn.group_b_indices.empty()) {
+            global_cardinal_constraints.push_back(std::move(idx_conn));
+        }
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -178,6 +220,19 @@ void GraphIndexData<TargetNode, GlobalNode>::print_adjacency_maps() const {
             }
         }
         ss << std::endl;
+    }
+    if (!target_cardinal_constraints.empty() || !global_cardinal_constraints.empty()) {
+        ss << "\n=== Cardinal Constraints (indexed) ===" << std::endl;
+        for (size_t i = 0; i < target_cardinal_constraints.size(); ++i) {
+            const auto& c = target_cardinal_constraints[i];
+            ss << "  Target [" << i << "]: group_a " << c.group_a_indices.size() << " nodes, group_b "
+               << c.group_b_indices.size() << " nodes, num_connections=" << c.num_connections << std::endl;
+        }
+        for (size_t i = 0; i < global_cardinal_constraints.size(); ++i) {
+            const auto& c = global_cardinal_constraints[i];
+            ss << "  Global [" << i << "]: group_a " << c.group_a_indices.size() << " nodes, group_b "
+               << c.group_b_indices.size() << " nodes, num_connections=" << c.num_connections << std::endl;
+        }
     }
     ss << "===================================" << std::endl;
     log_info(tt::LogFabric, "{}", ss.str());
@@ -704,6 +759,51 @@ size_t ConsistencyChecker::count_reachable_unused(
     return count;
 }
 
+template <typename TargetNode, typename GlobalNode>
+bool ConsistencyChecker::check_cardinal_constraints(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+    for (const auto& constraint : graph_data.target_cardinal_constraints) {
+        // Count explicit edges in target graph between group_a and group_b
+        size_t explicit_target = 0;
+        for (size_t a_idx : constraint.group_a_indices) {
+            for (size_t b_idx : constraint.group_b_indices) {
+                auto it = graph_data.target_conn_count[a_idx].find(b_idx);
+                if (it != graph_data.target_conn_count[a_idx].end()) {
+                    explicit_target += it->second;
+                }
+            }
+        }
+        size_t total_required = explicit_target + constraint.num_connections;
+
+        // Count connections in global graph between mapped(group_a) and mapped(group_b)
+        size_t connections_in_global = 0;
+        for (size_t a_idx : constraint.group_a_indices) {
+            int mapped_a = mapping[a_idx];
+            if (mapped_a == -1) {
+                return false;  // Incomplete mapping
+            }
+            size_t global_a = static_cast<size_t>(mapped_a);
+            for (size_t b_idx : constraint.group_b_indices) {
+                int mapped_b = mapping[b_idx];
+                if (mapped_b == -1) {
+                    return false;  // Incomplete mapping
+                }
+                size_t global_b = static_cast<size_t>(mapped_b);
+                auto it = graph_data.global_conn_count[global_a].find(global_b);
+                if (it != graph_data.global_conn_count[global_a].end()) {
+                    connections_in_global += it->second;
+                }
+            }
+        }
+
+        if (connections_in_global < total_required) {
+            return false;  // Cardinal constraint not satisfied
+        }
+    }
+    return true;
+}
+
 // ============================================================================
 // DFSSearchEngine Implementation
 // ============================================================================
@@ -737,7 +837,11 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     ConnectionValidationMode validation_mode) {
     // Base case: all target nodes assigned
     if (pos >= graph_data.n_target) {
-        return true;
+        // Validate cardinal constraints before accepting mapping
+        if (ConsistencyChecker::check_cardinal_constraints(state_.mapping, graph_data)) {
+            return true;
+        }
+        return false;  // Cardinal constraints not satisfied, backtrack
     }
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
@@ -1166,6 +1270,22 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                 return false;
             }
         }
+    }
+
+    // Validate cardinal constraints (additional connections between groups)
+    if (!ConsistencyChecker::check_cardinal_constraints(mapping, graph_data)) {
+        std::string error_msg =
+            "Mapping validation failed: cardinal constraint(s) not satisfied. "
+            "Total connections between mapped groups in global graph is insufficient.";
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
+        if (warnings != nullptr) {
+            warnings->push_back(error_msg);
+        }
+        return false;
     }
 
     // Validate connection counts (collects warnings/errors)
