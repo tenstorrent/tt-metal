@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
     constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(6);
+    constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(6);
     constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(7);
     constexpr uint32_t mm_block_ht = get_compile_time_arg_val(8);
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
@@ -30,8 +30,7 @@ void kernel_main() {
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
-
-    uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
+    const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
     DPRINT << "compile time args:" << ENDL();
@@ -50,7 +49,7 @@ void kernel_main() {
     DPRINT << "worker_id: " << worker_id << ENDL();
     DPRINT << "num_workers: " << num_workers << ENDL();
     DPRINT << "batch_size: " << batch_size << ENDL();
-    DPRINT << "M_blocks_per_core: " << M_blocks_per_core << ENDL();
+    DPRINT << "mm_M_blocks_per_core: " << mm_M_blocks_per_core << ENDL();
     DPRINT << "chunks_per_mm_N_block: " << chunks_per_mm_N_block << ENDL();
     DPRINT << "ring_size: " << ring_size << ENDL();
     DPRINT << "mm_N_blocks_per_slice: " << mm_N_blocks_per_slice << ENDL();
@@ -67,7 +66,7 @@ void kernel_main() {
         DPRINT << "================================================" << ENDL();
         DPRINT << "batch: " << b << " started" << ENDL();
 
-        for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
             DPRINT << "--------------------------------" << ENDL();
             DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
 
