@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -12,8 +13,6 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
@@ -24,6 +23,13 @@ from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+
+@dataclass(frozen=True)
+class SamplingParams:
+    temperature: float = 0.0
+    top_k: int = 0
+    top_p: float = 0.0
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -41,7 +47,7 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
     return out
 
 
-class DeepseekGenerator(WarmupForwardMixin):
+class DeepseekGenerator:
     """
     Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
 
@@ -150,6 +156,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.prefill_max_tokens = prefill_max_tokens
         self.force_recalculate = force_recalculate
         logger.info(f"Enable trace: {self.enable_trace}")
+
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
             device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
@@ -912,24 +919,22 @@ class DeepseekGenerator(WarmupForwardMixin):
     def decode_forward(
         self,
         tokens: torch.Tensor,
-        start_pos: torch.Tensor,
+        positions: torch.Tensor,
         batch_size_per_row: int,
         gen_idx: int = 0,
         profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
-        page_table: torch.Tensor | None = None,
-        read_from_device: bool = False,
-        sampling_params: SamplingParams | None = None,
+        page_tables: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
         if not enable_trace:
-            return self._decode_step(tokens, start_pos, batch_size_per_row, page_table).squeeze(0).squeeze(0)
+            return self._decode_step(tokens, positions, batch_size_per_row, page_tables).squeeze(0).squeeze(0)
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
+                self._capture_decode_trace(tokens, positions, batch_size_per_row, page_tables)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
@@ -965,7 +970,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
 
             host_positions = ttnn.from_torch(
-                start_pos,
+                positions,
                 device=None,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.int32,
@@ -973,11 +978,11 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
 
-            host_rot_idxs = self.rope_setup.get_rot_idxs(start_pos, on_host=True)
+            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
             ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs)
 
-            if page_table is not None:
-                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_table, device=None)
+            if page_tables is not None:
+                page_tables_to_use = self._convert_vllm_page_table_for_batch(page_tables, device=None)
                 for i, page_table in enumerate(page_tables_to_use):
                     ttnn.copy_host_to_device_tensor(page_table, self._trace_page_tables_to_use[i])
 
