@@ -332,6 +332,16 @@ class SamplingOp:
         if not (0 <= target_row < mesh_rows and 0 <= target_col < mesh_cols):
             raise ValueError(f"final_mesh_coord {final_mesh_coord} out of bounds for mesh shape {mesh_shape}")
 
+        def _x_axis_link_idx_for_stage1_sender(sender_row: int) -> int:
+            # Use ring distance along x (row) only:
+            # - first half of distances (rounded up) -> link 0
+            # - second half of distances (rounded down) -> link 1
+            linear_distance = abs(int(sender_row) - target_row)
+            ring_distance = min(linear_distance, mesh_rows - linear_distance)
+            max_ring_distance = mesh_rows // 2
+            first_half_threshold = (max_ring_distance + 1) // 2
+            return 0 if ring_distance <= first_half_threshold else 1
+
         scores_per_device = ttnn.get_device_tensors(scores_tensor)
         indices_per_device = ttnn.get_device_tensors(indices_tensor)
         output_per_device = ttnn.get_device_tensors(output_index_tensor)
@@ -439,12 +449,15 @@ class SamplingOp:
                 if is_stage1_sender:
                     dest_coord = ttnn.MeshCoordinate(target_row, col)
                     send_slot_offset = stage1_slot_base_offset + row * winner_page_bytes
+                    sender_link_idx = _x_axis_link_idx_for_stage1_sender(row)
                 elif is_stage2_sender:
                     dest_coord = ttnn.MeshCoordinate(target_row, target_col)
                     send_slot_offset = stage2_slot_base_offset + col * winner_page_bytes
+                    sender_link_idx = 0
                 else:
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     send_slot_offset = 0
+                    sender_link_idx = 0
 
                 ncrisc_named_compile_time_args = [
                     ("sampling_num_values", num_values),
@@ -605,7 +618,7 @@ class SamplingOp:
                     fabric_rt_args = ttnn.setup_fabric_connection(
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),
-                        link_idx=0,
+                        link_idx=sender_link_idx,
                         program_descriptor=program,
                         worker_core=final_core_coord,
                     )
