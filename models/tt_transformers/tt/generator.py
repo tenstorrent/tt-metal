@@ -666,7 +666,7 @@ class Generator(WarmupForwardMixin):
             return tt_logits
 
     # Note: This function is called by vLLM
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -1224,50 +1224,13 @@ class Generator(WarmupForwardMixin):
         else:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
+        output = None
         if read_from_device:
             to_host = self.read_decode_output(tt_logits)
-            return self.process_decode_output_host(to_host)
+            output = self.process_decode_output_host(to_host)
         else:
-            return tt_logits
+            output = tt_logits
 
-    def decode_forward(
-        self,
-        start_pos,
-        tokens,
-        prefill_cross_attention_masks,
-        prefill_full_text_row_masked_out_mask,
-        decode_cross_attention_masks,
-        decode_full_text_row_masked_out_mask,
-        xattn_caches=None,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-        enable_trace=True,
-        read_from_device=True,
-    ):
-        if not self.model_args[0].is_llama_vision():
-            output = self.decode_forward_text(
-                tokens,
-                start_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=kv_cache,
-            )
-        else:
-            output = self.decode_forward_llama_vision(
-                start_pos,
-                tokens,
-                prefill_cross_attention_masks,
-                prefill_full_text_row_masked_out_mask,
-                decode_cross_attention_masks,
-                decode_full_text_row_masked_out_mask,
-                xattn_caches,
-                page_table,
-                kv_cache,
-                cross_page_table,
-                enable_trace,
-                read_from_device,
-            )
         # skip returning log-probs
         if isinstance(output, tuple):
             return output[0]
