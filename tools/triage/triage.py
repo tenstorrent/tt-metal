@@ -337,14 +337,14 @@ class TriageScript:
 
 
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
-    # Build graph and in-degree map
-    graph = defaultdict(list)  # dep_path -> list of scripts depending on it
-    in_degree = defaultdict(int)  # script_path -> number of unmet dependencies
+    # Build script dependents graph and script missing dependencies map
+    script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
+    script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
 
     for path, script in scripts.items():
-        in_degree[path] = len(script.config.depends)
+        script_missing_dependencies[path] = len(script.config.depends)
         for dep in script.config.depends:
-            graph[dep].append(path)
+            script_dependents[dep].append(path)
 
     # Min-heap for runnable scripts: (-priority, script name, script object)
     # Negative priority because heapq is a min-heap
@@ -352,7 +352,7 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # Initialize heap with scripts with in-degree 0 (no unmet dependencies)
     for path, script in scripts.items():
-        if in_degree[path] == 0:
+        if script_missing_dependencies[path] == 0:
             heapq.heappush(heap, (-script.config.priority.value, path, script))
 
     result = []
@@ -363,9 +363,9 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
         result.append(script)
 
         # Decrease in-degree of dependent scripts
-        for dep_path in graph[path]:
-            in_degree[dep_path] -= 1
-            if in_degree[dep_path] == 0:
+        for dep_path in script_dependents[path]:
+            script_missing_dependencies[dep_path] -= 1
+            if script_missing_dependencies[dep_path] == 0:
                 dep_script = scripts[dep_path]
                 heapq.heappush(heap, (-dep_script.config.priority.value, dep_path, dep_script))
 

@@ -228,13 +228,17 @@ class RunChecks:
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
 
-    def get_broken_devices(self) -> set[Device]:
+    def is_device_broken(self, device: Device) -> bool:
         with self._skip_lock:
-            return self._broken_devices
+            return device in self._broken_devices
 
-    def get_broken_cores(self) -> dict[Device, set[BrokenCore]]:
+    def is_device_in_broken_cores(self, device: Device) -> bool:
         with self._skip_lock:
-            return self._broken_cores
+            return device in self._broken_cores
+
+    def get_device_broken_cores(self, device: Device) -> set[BrokenCore] | None:
+        with self._skip_lock:
+            return self._broken_cores.get(device).copy()
 
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
@@ -275,15 +279,19 @@ class RunChecks:
                     except TimeoutDeviceRegisterError as e:
                         with self._skip_lock:
                             self._broken_devices.add(device)
+                            if print_broken_devices:
+                                log_warning(
+                                    f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
+                                )
                             if device.is_local:
                                 # We are classifying remote devices as broken since we cannot access them if their local device is broken
                                 for remote_device in device.remote_devices:
                                     # Broken remote devices will inherit the error from the local device
                                     self._broken_devices.add(remote_device)
-                        if print_broken_devices:
-                            log_warning(
-                                f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
-                            )
+                                    if print_broken_devices:
+                                        log_warning(
+                                            f"Device {remote_device.id} will be skipped from now on due to its local device (device {device.id}) being broken."
+                                        )
                         continue
                     except Exception as e:
                         log_warning(f"Skipping device {device.id}: {str(e)}")

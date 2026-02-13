@@ -94,17 +94,17 @@ class DeviceHealthSummary:
 
 
 def collect_device_health_summary(run_checks: RunChecks) -> list[DeviceHealthSummary] | None:
-    broken_devices = run_checks.get_broken_devices()
     device_health_summaries: list[DeviceHealthSummary] = []
     for device in run_checks.devices:
-        if device in broken_devices:
+        if run_checks.is_device_broken(device):
             device_health_summaries.append(
                 DeviceHealthSummary(device=device, broken_cores=f"[error]Device is broken so it is skipped.[/]")
             )
         else:
-            broken_cores = run_checks.get_broken_cores()
-            if device in broken_cores:
-                device_health_summaries.append(DeviceHealthSummary(device=device, broken_cores=broken_cores[device]))
+            if run_checks.is_device_in_broken_cores(device):
+                device_health_summaries.append(
+                    DeviceHealthSummary(device=device, broken_cores=run_checks.get_device_broken_cores(device))
+                )
     return device_health_summaries if len(device_health_summaries) > 0 else None
 
 
