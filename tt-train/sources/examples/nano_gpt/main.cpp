@@ -313,7 +313,11 @@ int main(int argc, char **argv) {
 
     TrainingConfig training_config = parse_config(yaml_config);
     DeviceConfig device_config = parse_device_config(yaml_config);
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
+    // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
+    auto training_config_path = std::filesystem::path(training_config_name).parent_path();
+    std::string model_config_path =
+        (training_config_path.parent_path().parent_path() / training_config.model_config).string();
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
