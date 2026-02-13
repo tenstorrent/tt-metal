@@ -41,7 +41,8 @@ def test_expand(input_shape, output_shape, tensor_layout, dtype, device):
     torch_output_tensor = torch_input_tensor.expand(output_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=tensor_layout, device=device)
-    output_tensor = ttnn.expand(input_tensor, output_shape)
+    with device.cache_entries_counter.measure():
+        output_tensor = ttnn.expand(input_tensor, output_shape)
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
@@ -56,10 +57,9 @@ def test_expand(input_shape, output_shape, tensor_layout, dtype, device):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_expand_callback(tensor_layout, dtype, device):
-    num_program_cache_entries_list = []
-    for i in range(2):
-        test_expand([32, 1], [32, 32], tensor_layout, dtype, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    test_expand([32, 1], [32, 32], tensor_layout, dtype, device)
+    num_cache_entries = device.cache_entries_counter.total
+    assert num_cache_entries > 0
 
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+    test_expand([32, 1], [32, 32], tensor_layout, dtype, device)
+    assert device.cache_entries_counter.total == num_cache_entries

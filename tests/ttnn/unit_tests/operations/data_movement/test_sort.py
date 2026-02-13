@@ -195,7 +195,8 @@ def test_sort_program_cache(shape, dim, descending, device):
     test_iterations = 3
     for _ in range(test_iterations):
         # Run the sort operation multiple times to fill the program cache
-        ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+        with device.cache_entries_counter.measure():
+            ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
         ttnn_sort_values_torch = ttnn.to_torch(ttnn_sort_values)
 
         assert torch_sort_values.shape == ttnn_sort_values.shape
@@ -206,10 +207,11 @@ def test_sort_program_cache(shape, dim, descending, device):
 
         assert_equal(torch_sort_values, ttnn_sort_values_torch)
         ttnn.synchronize_device(device)
-    cache_entries = device.num_program_cache_entries()
     device.disable_and_clear_program_cache()
-    assert cache_entries == 1, "Expected only one program cache entry for sort operation, but found {}".format(
-        cache_entries
+    assert (
+        device.cache_entries_counter.total == 1
+    ), "Expected only one program cache entry for sort operation, but found {}".format(
+        device.cache_entries_counter.total
     )
 
 

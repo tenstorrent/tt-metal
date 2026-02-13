@@ -105,7 +105,8 @@ def test_embedding_bw_with_program_cache(
         grad_data = torch.randn(grad_shape, requires_grad=True)
         grad_tensor = ttnn.from_torch(grad_data, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-        tt_output_tensor_on_device = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=output_dtype)
+        with device.cache_entries_counter.measure():
+            tt_output_tensor_on_device = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=output_dtype)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
 
         # PyTorch reference
@@ -119,4 +120,4 @@ def test_embedding_bw_with_program_cache(
         logger.debug(comp_out)
         assert comp_pass
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1

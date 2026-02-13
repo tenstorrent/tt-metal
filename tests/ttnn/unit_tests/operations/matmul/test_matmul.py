@@ -527,15 +527,16 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     in0 = torch.randn(in0_shape).bfloat16()
     in1 = torch.randn(in1_shape).bfloat16()
 
-    if in0_sharded:
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            (b, 1, m, k),
-            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_mcast else ttnn.ShardOrientation.COL_MAJOR,
-        )
-    else:
-        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    with device.cache_entries_counter.measure():
+        if in0_sharded:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (b, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_mcast else ttnn.ShardOrientation.COL_MAJOR,
+            )
+        else:
+            in0_memory_config = ttnn.L1_MEMORY_CONFIG
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -563,61 +564,62 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        out_block_h=out_block_h,
-        out_block_w=out_block_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=transpose_mcast,
-        fused_activation=None,
-        fuse_batch=fuse_batch,
-    )
+    with device.cache_entries_counter.measure():
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=out_block_h,
+            out_block_w=out_block_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=transpose_mcast,
+            fused_activation=None,
+            fuse_batch=fuse_batch,
+        )
 
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-    if out_sharded:
-        out_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
-    else:
-        out_mem_config = ttnn.L1_MEMORY_CONFIG
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    pt_out = in0 @ in1
-    if has_bias:
-        pt_out += bias
+        if out_sharded:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
+        else:
+            out_mem_config = ttnn.L1_MEMORY_CONFIG
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        pt_out = in0 @ in1
+        if has_bias:
+            pt_out += bias
 
-    # required for multi-device stress tests
-    for o in ttnn.get_device_tensors(output_t):
-        output_tensor = ttnn.to_torch(o)
-        assert_with_pcc(pt_out, output_tensor, 0.999)
+        # required for multi-device stress tests
+        for o in ttnn.get_device_tensors(output_t):
+            output_tensor = ttnn.to_torch(o)
+            assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("b", [1, 2])
@@ -677,7 +679,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert mesh_device.num_program_cache_entries() == 1
+    assert mesh_device.cache_entries_counter.total == 1
 
 
 def run_matmul_2d_tiny_tile(
@@ -763,27 +765,29 @@ def run_matmul_2d_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
+
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
@@ -831,7 +835,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 def run_matmul_1d_tiny_tile(
@@ -920,27 +924,28 @@ def run_matmul_1d_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-            output_tile=output_tile,
-        )
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+                output_tile=output_tile,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
@@ -988,7 +993,7 @@ def test_matmul_1d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 def run_matmul_1d_multiple_output_blocks_per_core(
@@ -1130,25 +1135,26 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     else:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    if has_bias:
-        output_t = ttnn.linear(
-            in0_t,
-            in1_t,
-            bias=bias_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_mem_config,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=compute_kernel_config,
-        )
+    with device.cache_entries_counter.measure():
+        if has_bias:
+            output_t = ttnn.linear(
+                in0_t,
+                in1_t,
+                bias=bias_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
+        else:
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_mem_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=compute_kernel_config,
+            )
     output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
@@ -1207,7 +1213,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize("side", ["height", "width"])

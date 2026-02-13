@@ -1389,7 +1389,9 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
         [-0.0, 0.0, +0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch_dtype
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
@@ -1729,7 +1731,9 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
         [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
         dtype=torch_dtype,
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn_op(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_op)

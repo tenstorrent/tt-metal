@@ -313,7 +313,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3101998  # Measured: 3.10ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(
