@@ -12,6 +12,7 @@ This test suite verifies:
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -113,8 +114,7 @@ def _get_or_init_embedding_weight(model_name: str, vocab_size: int, dim: int) ->
 _slow = pytest.mark.slow
 
 
-# Collected from embedding_1d_test_cases.csv (deduplicated, representative subset)
-# Each case: (mesh_shape, vocab_size, dim, seq_len, embed_scale, hf_model_name)
+# Each case: (mesh_shape, vocab_size, dim, seq_len, embed_scale, hf_model_name, pcc)
 # Vocab/dim derived from model, seq_len varies per collected case.
 def _list_test_cases() -> list[pytest.param]:
     # fmt: off
@@ -132,8 +132,9 @@ def _list_test_cases() -> list[pytest.param]:
         # Non-Llama models
         pytest.param((1, 1), 32768, 4096, 32, 1.0, MISTRAL_7B, 0.999, id="1x1-32-Mistral-7B"),
         pytest.param((1, 2), 152064, 3584, 128, 1.0, QWEN2_7B, 0.999, id="1x2-128-Qwen2-7B"),
+        pytest.param((1, 8), 32000, 4096, 128, 1.0, MIXTRAL_8X7B, 0.999, id="1x8-128-Mixtral-8x7B"),
 
-        # === Slow tests (full coverage from CSV) ===
+        # === Slow tests (full coverage) ===
         # (1,1) Llama-3.2-1B
         pytest.param((1, 1), 128256, 2048, 1024, 1.0, LLAMA_1B, 0.999, id="1x1-1024-1B", marks=_slow),
         pytest.param((1, 1), 128256, 2048, 2048, 1.0, LLAMA_1B, 0.999, id="1x1-2048-1B", marks=_slow),
@@ -291,8 +292,6 @@ def test_embedding_1d_vs_reference(
 ):
     """
     Test Embedding1D constructed via direct APIs matches torch.nn.Embedding reference.
-
-    Configs pulled from embedding_1d_test_cases.csv (deduplicated).
     """
     seed = 42
     torch.manual_seed(seed)
@@ -319,9 +318,11 @@ def test_embedding_1d_vs_reference(
     weight_4d = weight_torch.unsqueeze(0).unsqueeze(0)  # [1, 1, vocab_size, dim]
 
     ttnn.SetDefaultDevice(ttnn_mesh_device)
+    cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/embedding"))
     lazy_weights = LazyWeight(
         source=weight_4d,
         dtype=ttnn.bfloat16,
+        cache_dir_weight_name=(cache_dir, "weights"),
     )
 
     tt_model = Embedding1D(weights=lazy_weights, embed_scale=embed_scale)
@@ -354,7 +355,7 @@ def test_embedding_1d_vs_reference(
 
     passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
     logger.info(comp_allclose(ref_output, tt_output_torch))
-    logger.info(f"Embedding1D vs reference: {pcc_message}")
+    logger.info(f"Embedding1D PCC vs reference: {pcc_message}")
 
     assert passing, f"Embedding1D output does not meet PCC requirement {pcc}: {pcc_message}."
     logger.info(f"Embedding1D vs reference: PASSED for seq_len={seq_len}, vocab={vocab_size}, dim={dim}")
@@ -448,7 +449,63 @@ def test_embedding_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
     pcc_required = 0.999
     passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc_required)
     logger.info(comp_allclose(ref_output, tt_output_torch))
-    logger.info(f"Embedding1D (from_model_args) vs reference: {pcc_message}")
+    logger.info(f"Embedding1D (from_model_args) PCC vs reference: {pcc_message}")
 
     assert passing, f"Embedding1D output does not meet PCC requirement {pcc_required}: {pcc_message}."
     logger.info(f"Embedding1D (from_model_args) vs reference: PASSED for seq_len={seq_len}")
+
+
+# ============================================================================
+# ttnn.Tensor input path test (forward accepts ttnn.Tensor | LazyWeight)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=True,
+)
+def test_embedding_1d_forward_with_ttnn_tensor_input(ttnn_mesh_device: ttnn.MeshDevice):
+    """
+    Test that Embedding1D.forward() works when x is a pre-built ttnn.Tensor (not LazyWeight).
+
+    This covers the ttnn.Tensor branch of the forward(x: ttnn.Tensor | LazyWeight) signature.
+    """
+    torch.manual_seed(42)
+    vocab_size, dim, seq_len = 1024, 128, 32
+
+    weight_torch = torch.randn(1, 1, vocab_size, dim, dtype=torch.bfloat16)
+    input_ids = torch.randint(0, vocab_size, (1, seq_len), dtype=torch.int64)
+
+    # Reference
+    ref_embedding = torch.nn.Embedding(vocab_size, dim)
+    with torch.no_grad():
+        ref_embedding.weight.copy_(weight_torch.squeeze(0).squeeze(0))
+    ref_output = ref_embedding(input_ids)  # [1, seq_len, dim]
+
+    # Build TT model
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    lazy_weights = LazyWeight(source=weight_torch, dtype=ttnn.bfloat16)
+    tt_model = Embedding1D(weights=lazy_weights)
+
+    # Pass a pre-built ttnn.Tensor as input (not LazyWeight)
+    tt_input = ttnn.from_torch(
+        input_ids.reshape(1, 1, 1, seq_len).to(torch.int32),
+        device=ttnn_mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(ttnn_mesh_device),
+    )
+
+    tt_output = tt_model.forward(tt_input)
+    tt_output_torch = to_torch_auto_compose(tt_output)
+    ttnn.SetDefaultDevice(None)
+
+    tt_output_torch = tt_output_torch.view(1, seq_len, dim)
+
+    pcc_required = 0.999
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc_required)
+    logger.info(f"Embedding1D (ttnn.Tensor input) PCC vs reference: {pcc_message}")
+
+    assert passing, f"Embedding1D ttnn.Tensor input PCC failed: {pcc_message}."
