@@ -57,13 +57,10 @@ static constexpr uint32_t L_SEM_BASE_THRESHOLD = 2;
  */
 FORCE_INLINE void prepare_ms_for_compute(
     uint32_t cb_ms, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t recv_buffer_addr) {
-    DPRINT << "START OF prepare_ms_for_compute\n";
     cb_reserve_back(cb_ms, 1);
 
     // Wait for MS packet (sem >= 1)
-    DPRINT << "before waiting for MS,\n";
     noc_semaphore_wait_min(sem_ptr, MS_SEM_THRESHOLD);
-    DPRINT << "after waiting for MS,\n";
 
     // MS is at end of buffer (offset = total_l_bytes)
     tt_memmove<true, false, false, 0>(get_write_ptr(cb_ms), recv_buffer_addr + total_l_bytes, ms_tile_size_bytes);
@@ -96,18 +93,13 @@ FORCE_INLINE void prepare_data_for_compute(
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     // MS first (sem >= 1)
-    DPRINT << "before preparing MS, sem value:\n";
     prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
-    DPRINT << "after preparing MS, sem value:\n";
 
     // L chunks (sem >= 2, 3, 4, ...)
     for (uint32_t i = 0; i < num_l_chunks; i++) {
         prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
     }
-
-    DPRINT << "before semaphore set\n";
     noc_semaphore_set(sem_ptr, 0);
-    DPRINT << "after semaphore set\n";
 }
 
 // =============================================================================
@@ -129,27 +121,13 @@ void kernel_main() {
     cb_reserve_back(cb_local_ms, 1);
     cb_push_back(cb_local_ms, 1);
 
-    // =========================================================================
-    // ROUND 1: Prepare R1 neighbor data for compute
-    // =========================================================================
-    DPRINT << "READER starting R1 prepare\n";
-    prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
-    DPRINT << "READER finished R1 prepare\n";
-
-    // =========================================================================
-    // ROUND 2: Prepare R2 neighbor data for compute
-    // IMPORTANT: R2 neighbor's R1 result may be invalid if both devices in that pair were invalid
-    // We need to check R2 neighbor's R1 validity before receiving
-    // =========================================================================
-    DPRINT << "READER starting R2 prepare\n";
-
-    // Compute R2 neighbor's R1 validity: valid if at least one device in that pair was valid
-    // We need to read the position for r2_neighbor and its R1 neighbor
-    bool r2_neighbor_r1_valid = true;  // Default: assume R2 neighbor's R1 is valid
+    bool r2_neighbor_r1_valid = true;
+    bool r1_neighbor_valid = true;
 
     if constexpr (position_enabled) {
         // Get r2_neighbor_r1_neighbor_idx from runtime args
         uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
         uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
         uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
         cb_reserve_back(cb_position, 1);
@@ -159,23 +137,37 @@ void kernel_main() {
         cb_push_back(cb_position, 1);
 
         // R2 neighbor's R1 result is valid if at least one device in that pair was valid
+        uint32_t r1_neighbor_val = position_data_base[r1_neighbor_device_idx];
         uint32_t r2_neighbor_val = position_data_base[r2_neighbor_device_idx];
         uint32_t r2_neighbor_r1_neighbor_val = position_data_base[r2_neighbor_r1_neighbor_idx];
         r2_neighbor_r1_valid = (r2_neighbor_val != 0) || (r2_neighbor_r1_neighbor_val != 0);
+        r1_neighbor_valid = (r1_neighbor_val != 0);
     }
+
+    // =========================================================================
+    // ROUND 1: Prepare R1 neighbor data for compute
+    // =========================================================================
+    if (r1_neighbor_valid) {
+        prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    } else {
+        cb_reserve_back(cb_r1_neighbor_ms, 1);
+        cb_push_back(cb_r1_neighbor_ms, 1);
+
+        cb_reserve_back(cb_r1_neighbor_l, out_tiles);
+        cb_push_back(cb_r1_neighbor_l, out_tiles);
+    }
+    // =========================================================================
+    // ROUND 2: Prepare R2 neighbor data for compute
+    // =========================================================================
 
     // Only receive R2 data if R2 neighbor's R1 result is valid
     if (r2_neighbor_r1_valid) {
         prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
     } else {
-        // Push dummy MS tile (will not be used by compute)
         cb_reserve_back(cb_r2_neighbor_ms, 1);
         cb_push_back(cb_r2_neighbor_ms, 1);
 
-        // Push dummy L tiles (will not be used by compute)
         cb_reserve_back(cb_r2_neighbor_l, out_tiles);
         cb_push_back(cb_r2_neighbor_l, out_tiles);
     }
-
-    DPRINT << "READER finished R2 prepare\n";
 }
