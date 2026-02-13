@@ -505,7 +505,7 @@ void py_module(nb::module_& mod) {
         Creates a new tensor with the same shape as the given tensor, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
 
         Args:
-            tensor (ttnn.Tensor): The tensor whose shape will be used for the output tensor.
+            tensor (ttnn.Tensor): The reference tensor whose shape will be used for the output tensor.
 
         Keyword Args:
             dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
