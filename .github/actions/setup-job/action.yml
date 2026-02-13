@@ -25,6 +25,10 @@ inputs:
     description: 'Enable LLK asserts'
     default: false
     type: boolean
+  enable-kernel-ccache:
+    description: 'Enable kernel ccache'
+    default: false
+    type: boolean
   use-evaluation-image:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
@@ -103,6 +107,31 @@ runs:
       run: |
         echo "Enabling TT Metal LLK Asserts"
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up kernel ccache
+      if: ${{ inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal kernel ccache"
+        echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+        echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+        echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+        echo "TT_METAL_RUNTIME_ROOT=/work" >> $GITHUB_ENV
+
+        if [ -z "${{ secrets.REDIS_CCACHE_PASSWORD }}" ]; then
+          echo "Redis ccache password is missing. Did you forget 'secrets: inherit'?"
+          exit 1
+        fi
+        CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}"
+        echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+
+        mkdir -p /tmp/ccache
+        echo "=== Creating ccache files for ephemeral runner ==="
+        # Create inode cache file that ccache expects
+        touch /tmp/ccache/inode-cache-64.v2
+        # Set appropriate permissions
+        chmod 644 /tmp/ccache/inode-cache-64.v2
       shell: bash
 
     - name: Set up env vars for auto-triage
