@@ -201,8 +201,8 @@ std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     const Tensor& grad_i = grad.imag();
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    std::vector<EltwiseUnaryWithParam> ops_chain = {
-        EltwiseUnaryWithParam{UnaryOpType::NEG}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+        EltwiseUnaryWithParam{UnaryOpType::NEG}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha});
     grad_tensor.emplace_back(ComplexTensor(
         {ttnn::unary_chain(grad_r, ops_chain, output_mem_config),
          ttnn::unary_chain(grad_i, ops_chain, output_mem_config)}));

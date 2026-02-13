@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
+#include <ttnn/common/vector_init.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -117,15 +118,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         is_last_chip);
 
     // Get OP Config, topology config
-    std::vector<Tensor> input_tensors;
-    input_tensors.reserve(1);
-    input_tensors.emplace_back(input_tensor);
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(1);
-    output_tensors.emplace_back(output_tensor);
-    std::vector<Tensor> temp_tensors;
-    temp_tensors.reserve(1);
-    temp_tensors.emplace_back(temp_tensor);
+    auto input_tensors = vector_init<Tensor>(input_tensor);
+    auto output_tensors = vector_init<Tensor>(output_tensor);
+    auto temp_tensors = vector_init<Tensor>(temp_tensor);
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, temp_tensors, operation_attributes.topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ::ttnn::ccl::get_forward_backward_configuration(
