@@ -158,12 +158,18 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 
     Mirrors `models/demos/wormhole/vit/tt/ttnn_optimized_sharded_vit_wh.py` but
     adapts tile counts to DPT-Large geometry (padded seq len + head count).
+
+    Note: The DPT ViT backbone pads the token sequence length in perf mode to a
+    multiple of 64 (not 32) to make attention-mask chunking pick better divisors.
+    Program configs that use `per_core_M` must match that padded length, or TTNN
+    will hard-fail at runtime during trace capture.
     """
     try:
         TILE = 32
         patch_count = config.image_size // config.patch_size
         seq_len = patch_count * patch_count + 1  # include CLS
-        seq_len_padded = math.ceil(seq_len / TILE) * TILE
+        pad_multiple = 64 if getattr(config, "tt_perf_encoder", False) else TILE
+        seq_len_padded = math.ceil(seq_len / pad_multiple) * pad_multiple
         seqL_t = seq_len_padded // TILE
         dim_t = config.hidden_size // TILE
 
