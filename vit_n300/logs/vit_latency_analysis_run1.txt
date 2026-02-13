@@ -1,0 +1,153 @@
+Parsing: vit_n300/logs/watcher_vit_latency_run1.log
+
+==========================================================================================
+SEMAPHORE WAIT LATENCY ANALYSIS
+==========================================================================================
+Total cores with data: 5972
+Clock: 1 GHz (1 cycle = 1 ns)
+
+--- Site 0x10: BRISC: in1_mcast_sem_wait ---
+  Cores reporting: 5199, non-zero: 5199
+  Min:     46,483 cycles (46.5 us)
+  Avg:     47,251 cycles (47.3 us)
+  Max:     48,094 cycles (48.1 us)
+  Spread (max/avg): 1.0x
+  Top 5 slowest cores:
+    dev=0 core=(7,6) virtual=(25,24):     48,094 cycles (48.1 us)
+    dev=0 core=(5,1) virtual=(23,19):     48,033 cycles (48.0 us)
+    dev=0 core=(1,5) virtual=(19,23):     48,002 cycles (48.0 us)
+    dev=0 core=(1,7) virtual=(19,25):     47,911 cycles (47.9 us)
+    dev=0 core=(6,7) virtual=(24,25):     47,908 cycles (47.9 us)
+
+--- Site 0x20: BRISC: bias_mcast_sem_wait ---
+  Cores reporting: 5222, non-zero: 5222
+  Min:     46,358 cycles (46.4 us)
+  Avg:     46,435 cycles (46.4 us)
+  Max:     46,650 cycles (46.6 us)
+  Spread (max/avg): 1.0x
+  Top 5 slowest cores:
+    dev=0 core=(0,5) virtual=(18,23):     46,650 cycles (46.6 us)
+    dev=0 core=(4,4) virtual=(22,22):     46,626 cycles (46.6 us)
+    dev=0 core=(0,4) virtual=(18,22):     46,614 cycles (46.6 us)
+    dev=0 core=(5,4) virtual=(23,22):     46,583 cycles (46.6 us)
+    dev=0 core=(3,5) virtual=(21,23):     46,558 cycles (46.6 us)
+
+--- Site 0x30: BRISC: out_sharded_wait ---
+  Cores reporting: 5222, non-zero: 5069
+  Min:          0 cycles (0.0 us)
+  Avg:      8,569 cycles (8.6 us)
+  Max:     27,069 cycles (27.1 us)
+  Spread (max/avg): 3.2x
+  Top 5 slowest cores:
+    dev=0 core=(0,5) virtual=(18,23):     27,069 cycles (27.1 us)
+    dev=0 core=(3,5) virtual=(21,23):     27,067 cycles (27.1 us)
+    dev=0 core=(1,1) virtual=(19,19):     27,064 cycles (27.1 us)
+    dev=0 core=(4,1) virtual=(22,19):     27,064 cycles (27.1 us)
+    dev=0 core=(6,5) virtual=(24,23):     27,063 cycles (27.1 us)
+
+--- Site 0x40: BRISC: out_cb_wait ---
+  Cores reporting: 5223, non-zero: 153
+  Min:          0 cycles (0.0 us)
+  Avg:          6 cycles (0.0 us)
+  Max:        234 cycles (0.2 us)
+  Spread (max/avg): 36.3x
+  Top 5 slowest cores:
+    dev=0 core=(1,3) virtual=(19,21):        234 cycles (0.2 us)
+    dev=0 core=(2,5) virtual=(20,23):        234 cycles (0.2 us)
+    dev=0 core=(1,3) virtual=(19,21):        234 cycles (0.2 us)
+    dev=0 core=(2,5) virtual=(20,23):        234 cycles (0.2 us)
+    dev=0 core=(1,3) virtual=(19,21):        234 cycles (0.2 us)
+
+--- Site 0x50: Compute: in0_cb_wait ---
+  Cores reporting: 5972, non-zero: 5972
+  Min:          1 cycles (0.0 us)
+  Avg:     26,629 cycles (26.6 us)
+  Max:     72,377 cycles (72.4 us)
+  Spread (max/avg): 2.7x
+  Top 5 slowest cores:
+    dev=0 core=(2,7) virtual=(20,25):     72,377 cycles (72.4 us)
+    dev=0 core=(1,5) virtual=(19,23):     72,363 cycles (72.4 us)
+    dev=0 core=(2,6) virtual=(20,24):     72,359 cycles (72.4 us)
+    dev=0 core=(1,6) virtual=(19,24):     72,350 cycles (72.3 us)
+    dev=0 core=(3,7) virtual=(21,25):     72,349 cycles (72.3 us)
+
+--- Site 0x60: Compute: in1_cb_wait ---
+  Cores reporting: 5972, non-zero: 5972
+  Min:          1 cycles (0.0 us)
+  Avg:        149 cycles (0.1 us)
+  Max:        776 cycles (0.8 us)
+  Spread (max/avg): 5.2x
+  Top 5 slowest cores:
+    dev=0 core=(7,6) virtual=(25,24):        776 cycles (0.8 us)
+    dev=0 core=(6,1) virtual=(24,19):        776 cycles (0.8 us)
+    dev=0 core=(7,1) virtual=(25,19):        771 cycles (0.8 us)
+    dev=0 core=(6,7) virtual=(24,25):        756 cycles (0.8 us)
+    dev=0 core=(6,6) virtual=(24,24):        752 cycles (0.8 us)
+
+--- Site 0x70: Compute: partials_cb_wait (bias) ---
+  Cores reporting: 5972, non-zero: 4755
+  Min:          0 cycles (0.0 us)
+  Avg:          7 cycles (0.0 us)
+  Max:         16 cycles (0.0 us)
+  Spread (max/avg): 2.3x
+  Top 5 slowest cores:
+    dev=0 core=(4,0) virtual=(22,18):         16 cycles (0.0 us)
+    dev=0 core=(7,3) virtual=(25,21):         16 cycles (0.0 us)
+    dev=0 core=(7,0) virtual=(25,18):         16 cycles (0.0 us)
+    dev=0 core=(7,3) virtual=(25,21):         16 cycles (0.0 us)
+    dev=0 core=(5,0) virtual=(23,18):         16 cycles (0.0 us)
+
+--- Site 0x80: Compute: out_reserve (bias) ---
+  Cores reporting: 5972, non-zero: 4655
+  Min:          0 cycles (0.0 us)
+  Avg:          7 cycles (0.0 us)
+  Max:         45 cycles (0.0 us)
+  Spread (max/avg): 6.2x
+  Top 5 slowest cores:
+    dev=0 core=(6,6) virtual=(24,24):         45 cycles (0.0 us)
+    dev=0 core=(1,0) virtual=(19,18):         44 cycles (0.0 us)
+    dev=0 core=(4,0) virtual=(22,18):         44 cycles (0.0 us)
+    dev=0 core=(5,0) virtual=(23,18):         44 cycles (0.0 us)
+    dev=0 core=(0,0) virtual=(18,18):         44 cycles (0.0 us)
+
+--- Site 0x90: NCRISC: sender_sem_wait ---
+  Cores reporting: 5346, non-zero: 5346
+  Min:      9,991 cycles (10.0 us)
+  Avg:     20,441 cycles (20.4 us)
+  Max:     22,541 cycles (22.5 us)
+  Spread (max/avg): 1.1x
+  Top 5 slowest cores:
+    dev=0 core=(0,1) virtual=(18,19):     22,541 cycles (22.5 us)
+    dev=0 core=(0,2) virtual=(18,20):     22,536 cycles (22.5 us)
+    dev=0 core=(0,2) virtual=(18,20):     22,533 cycles (22.5 us)
+    dev=0 core=(0,6) virtual=(18,24):     22,532 cycles (22.5 us)
+    dev=0 core=(0,4) virtual=(18,22):     22,532 cycles (22.5 us)
+
+--- Site 0xA0: NCRISC: receiver_mcast_wait ---
+  Cores reporting: 5359, non-zero: 5359
+  Min:     46,497 cycles (46.5 us)
+  Avg:     47,421 cycles (47.4 us)
+  Max:     50,143 cycles (50.1 us)
+  Spread (max/avg): 1.1x
+  Top 5 slowest cores:
+    dev=0 core=(1,5) virtual=(19,23):     50,143 cycles (50.1 us)
+    dev=0 core=(1,0) virtual=(19,18):     50,124 cycles (50.1 us)
+    dev=0 core=(1,1) virtual=(19,19):     50,122 cycles (50.1 us)
+    dev=0 core=(3,7) virtual=(21,25):     50,090 cycles (50.1 us)
+    dev=0 core=(2,0) virtual=(20,18):     50,071 cycles (50.1 us)
+
+==========================================================================================
+HIGHEST VARIANCE SITE: 0x40 (BRISC: out_cb_wait)
+Max/Avg ratio: 36.3x
+==========================================================================================
+
+Device 0 - Heatmap (core coords, values in us):
+       y=0      y=1      y=2      y=3      y=4      y=5      y=6      y=7
+x=0      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=1      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=2      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=3      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=4      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=5      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=6      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00
+x=7      --     0.00    0.00    0.00    0.00    0.00    0.00    0.00

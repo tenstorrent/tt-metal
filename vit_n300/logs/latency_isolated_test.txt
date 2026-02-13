@@ -1,0 +1,140 @@
+Parsing: generated/watcher/watcher.log
+
+==========================================================================================
+SEMAPHORE WAIT LATENCY ANALYSIS
+==========================================================================================
+Total cores with data: 2176
+Clock: 1 GHz (1 cycle = 1 ns)
+
+--- Site 0x10: BRISC: in1_mcast_sem_wait ---
+  Cores reporting: 1904, non-zero: 1904
+  Min:     46,506 cycles (46.5 us)
+  Avg:     47,411 cycles (47.4 us)
+  Max:     48,613 cycles (48.6 us)
+  Spread (max/avg): 1.0x
+  Top 5 slowest cores:
+    dev=0 core=(1,4) virtual=(19,22):     48,613 cycles (48.6 us)
+    dev=0 core=(7,7) virtual=(25,25):     48,508 cycles (48.5 us)
+    dev=0 core=(6,7) virtual=(24,25):     48,485 cycles (48.5 us)
+    dev=0 core=(5,7) virtual=(23,25):     48,478 cycles (48.5 us)
+    dev=0 core=(6,7) virtual=(24,25):     48,475 cycles (48.5 us)
+
+--- Site 0x20: BRISC: bias_mcast_sem_wait ---
+  Cores reporting: 1904, non-zero: 1904
+  Min:     46,350 cycles (46.4 us)
+  Avg:     46,440 cycles (46.4 us)
+  Max:     46,538 cycles (46.5 us)
+  Spread (max/avg): 1.0x
+  Top 5 slowest cores:
+    dev=0 core=(1,2) virtual=(19,20):     46,538 cycles (46.5 us)
+    dev=0 core=(7,2) virtual=(25,20):     46,528 cycles (46.5 us)
+    dev=0 core=(7,5) virtual=(25,23):     46,523 cycles (46.5 us)
+    dev=0 core=(7,5) virtual=(25,23):     46,523 cycles (46.5 us)
+    dev=0 core=(5,4) virtual=(23,22):     46,523 cycles (46.5 us)
+
+--- Site 0x30: BRISC: out_sharded_wait ---
+  Cores reporting: 1904, non-zero: 1904
+  Min:      1,567 cycles (1.6 us)
+  Avg:      9,186 cycles (9.2 us)
+  Max:     27,142 cycles (27.1 us)
+  Spread (max/avg): 3.0x
+  Top 5 slowest cores:
+    dev=0 core=(1,2) virtual=(19,20):     27,142 cycles (27.1 us)
+    dev=0 core=(7,5) virtual=(25,23):     27,139 cycles (27.1 us)
+    dev=0 core=(3,3) virtual=(21,21):     27,139 cycles (27.1 us)
+    dev=0 core=(6,5) virtual=(24,23):     27,136 cycles (27.1 us)
+    dev=0 core=(3,1) virtual=(21,19):     27,136 cycles (27.1 us)
+
+--- Site 0x50: Compute: in0_cb_wait ---
+  Cores reporting: 2176, non-zero: 2176
+  Min:          1 cycles (0.0 us)
+  Avg:     25,529 cycles (25.5 us)
+  Max:     72,167 cycles (72.2 us)
+  Spread (max/avg): 2.8x
+  Top 5 slowest cores:
+    dev=0 core=(3,2) virtual=(21,20):     72,167 cycles (72.2 us)
+    dev=0 core=(3,3) virtual=(21,21):     72,158 cycles (72.2 us)
+    dev=0 core=(6,1) virtual=(24,19):     72,132 cycles (72.1 us)
+    dev=0 core=(4,0) virtual=(22,18):     72,118 cycles (72.1 us)
+    dev=0 core=(0,3) virtual=(18,21):     72,080 cycles (72.1 us)
+
+--- Site 0x60: Compute: in1_cb_wait ---
+  Cores reporting: 2176, non-zero: 2176
+  Min:          1 cycles (0.0 us)
+  Avg:        103 cycles (0.1 us)
+  Max:      1,035 cycles (1.0 us)
+  Spread (max/avg): 10.0x
+  Top 5 slowest cores:
+    dev=0 core=(5,0) virtual=(23,18):      1,035 cycles (1.0 us)
+    dev=0 core=(5,2) virtual=(23,20):      1,022 cycles (1.0 us)
+    dev=0 core=(5,0) virtual=(23,18):      1,014 cycles (1.0 us)
+    dev=0 core=(5,5) virtual=(23,23):        987 cycles (1.0 us)
+    dev=0 core=(5,0) virtual=(23,18):        978 cycles (1.0 us)
+
+--- Site 0x70: Compute: partials_cb_wait (bias) ---
+  Cores reporting: 2176, non-zero: 2176
+  Min:          1 cycles (0.0 us)
+  Avg:          8 cycles (0.0 us)
+  Max:         16 cycles (0.0 us)
+  Spread (max/avg): 2.0x
+  Top 5 slowest cores:
+    dev=0 core=(3,0) virtual=(21,18):         16 cycles (0.0 us)
+    dev=0 core=(7,0) virtual=(25,18):         16 cycles (0.0 us)
+    dev=0 core=(3,1) virtual=(21,19):         16 cycles (0.0 us)
+    dev=0 core=(3,0) virtual=(21,18):         16 cycles (0.0 us)
+    dev=0 core=(7,0) virtual=(25,18):         16 cycles (0.0 us)
+
+--- Site 0x80: Compute: out_reserve (bias) ---
+  Cores reporting: 2173, non-zero: 2173
+  Min:          1 cycles (0.0 us)
+  Avg:         13 cycles (0.0 us)
+  Max:         44 cycles (0.0 us)
+  Spread (max/avg): 3.5x
+  Top 5 slowest cores:
+    dev=0 core=(7,3) virtual=(25,21):         44 cycles (0.0 us)
+    dev=0 core=(2,6) virtual=(20,24):         44 cycles (0.0 us)
+    dev=0 core=(0,0) virtual=(18,18):         44 cycles (0.0 us)
+    dev=0 core=(3,3) virtual=(21,21):         44 cycles (0.0 us)
+    dev=0 core=(1,0) virtual=(19,18):         44 cycles (0.0 us)
+
+--- Site 0x90: NCRISC: sender_sem_wait ---
+  Cores reporting: 2176, non-zero: 2176
+  Min:     21,149 cycles (21.1 us)
+  Avg:     21,801 cycles (21.8 us)
+  Max:     22,413 cycles (22.4 us)
+  Spread (max/avg): 1.0x
+  Top 5 slowest cores:
+    dev=0 core=(0,3) virtual=(18,21):     22,413 cycles (22.4 us)
+    dev=0 core=(0,3) virtual=(18,21):     22,411 cycles (22.4 us)
+    dev=0 core=(0,1) virtual=(18,19):     22,407 cycles (22.4 us)
+    dev=0 core=(0,2) virtual=(18,20):     22,401 cycles (22.4 us)
+    dev=0 core=(0,3) virtual=(18,21):     22,399 cycles (22.4 us)
+
+--- Site 0xA0: NCRISC: receiver_mcast_wait ---
+  Cores reporting: 2176, non-zero: 2176
+  Min:     46,884 cycles (46.9 us)
+  Avg:     47,779 cycles (47.8 us)
+  Max:     50,505 cycles (50.5 us)
+  Spread (max/avg): 1.1x
+  Top 5 slowest cores:
+    dev=0 core=(3,1) virtual=(21,19):     50,505 cycles (50.5 us)
+    dev=0 core=(6,3) virtual=(24,21):     50,502 cycles (50.5 us)
+    dev=0 core=(2,3) virtual=(20,21):     50,488 cycles (50.5 us)
+    dev=0 core=(2,3) virtual=(20,21):     50,486 cycles (50.5 us)
+    dev=0 core=(2,1) virtual=(20,19):     50,485 cycles (50.5 us)
+
+==========================================================================================
+HIGHEST VARIANCE SITE: 0x60 (Compute: in1_cb_wait)
+Max/Avg ratio: 10.0x
+==========================================================================================
+
+Device 0 - Heatmap (core coords, values in us):
+       y=0      y=1      y=2      y=3      y=4      y=5      y=6      y=7
+x=0     0.06    0.30    0.27    0.28    0.30    0.29    0.27    0.29
+x=1     0.00    0.77    0.75    0.75    0.78    0.75    0.74    0.77
+x=2     0.00    0.30    0.27    0.28    0.29    0.28    0.27    0.29
+x=3     0.00    0.30    0.28    0.28    0.31    0.28    0.27    0.31
+x=4     0.00    0.31    0.30    0.30    0.32    0.29    0.27    0.31
+x=5     0.00    0.49    0.47    0.47    0.50    0.48    0.56    0.49
+x=6     0.00    0.29    0.27    0.27    0.29    0.28    0.25    0.28
+x=7     0.00    0.28    0.27    0.28    0.29    0.27    0.25    0.29

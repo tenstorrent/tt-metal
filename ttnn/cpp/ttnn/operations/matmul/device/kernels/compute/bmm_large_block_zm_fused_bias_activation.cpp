@@ -8,6 +8,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
+#include "api/debug/ring_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
@@ -15,6 +16,9 @@
 #endif
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+
+// Latency measurement for TRISC (compute): use READ_REG since get_timestamp_32b is BRISC/NCRISC only
+inline uint32_t read_wall_clock_32b() { return READ_REG(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -201,6 +205,13 @@ void kernel_main() {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+
+    // Latency tracking: max cycles spent in each CB wait site
+    uint32_t max_wait_in0 = 0;          // Site 0x50: cb_wait_front(in0)
+    uint32_t max_wait_in1 = 0;          // Site 0x60: cb_wait_front(in1)
+    uint32_t max_wait_partials = 0;     // Site 0x70: cb_wait_front(partials) in bias path
+    uint32_t max_wait_out_reserve = 0;  // Site 0x80: cb_reserve_back(out) in bias path
+
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -251,8 +262,22 @@ void kernel_main() {
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
-                    cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                    cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                    {
+                        uint32_t t0 = read_wall_clock_32b();
+                        cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                        uint32_t dt = read_wall_clock_32b() - t0;
+                        if (dt > max_wait_in0) {
+                            max_wait_in0 = dt;
+                        }
+                    }
+                    {
+                        uint32_t t0 = read_wall_clock_32b();
+                        cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                        uint32_t dt = read_wall_clock_32b() - t0;
+                        if (dt > max_wait_in1) {
+                            max_wait_in1 = dt;
+                        }
+                    }
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -420,7 +445,14 @@ void kernel_main() {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                         // Redundant wait since we know data was just pushed
-                        cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
+                        {
+                            uint32_t t0 = read_wall_clock_32b();
+                            cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
+                            uint32_t dt = read_wall_clock_32b() - t0;
+                            if (dt > max_wait_partials) {
+                                max_wait_partials = dt;
+                            }
+                        }
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bcast_tile_idx = in1_index_subblock_offset;
@@ -445,7 +477,14 @@ void kernel_main() {
 #endif
 
                         // Pack out to output buffer
-                        cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        {
+                            uint32_t t0 = read_wall_clock_32b();
+                            cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
+                            uint32_t dt = read_wall_clock_32b() - t0;
+                            if (dt > max_wait_out_reserve) {
+                                max_wait_out_reserve = dt;
+                            }
+                        }
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
@@ -496,4 +535,15 @@ void kernel_main() {
             }
         }
     }
+
+    // Push max wait latencies to ring buffer.
+    // Format: 0xSSNNNNNN where SS=site ID, NNNNNN=max cycles (24-bit, up to 16M cycles ~16ms)
+    // Site 0x50: cb_wait_front(in0) - waiting for in0 tiles from dataflow
+    // Site 0x60: cb_wait_front(in1) - waiting for in1 tiles from dataflow
+    // Site 0x70: cb_wait_front(partials) in FUSE_BIAS path
+    // Site 0x80: cb_reserve_back(out) in FUSE_BIAS path
+    WATCHER_RING_BUFFER_PUSH(0x50000000 | (max_wait_in0 & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x60000000 | (max_wait_in1 & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x70000000 | (max_wait_partials & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x80000000 | (max_wait_out_reserve & 0x00FFFFFF));
 }

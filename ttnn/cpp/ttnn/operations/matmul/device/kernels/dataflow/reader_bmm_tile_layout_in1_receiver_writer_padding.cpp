@@ -5,8 +5,12 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/ring_buffer.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+
+// Latency measurement: read low 32 bits of wall clock (no-op cost: ~1 cycle)
+inline uint32_t read_wall_clock() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
 void kernel_main() {
     // READER
@@ -103,6 +107,12 @@ void kernel_main() {
     const uint64_t in1_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
+    // Latency tracking: max cycles spent in each semaphore wait site
+    uint32_t max_wait_in1_sem = 0;      // Site 0x10: wait for in1 mcast data
+    uint32_t max_wait_bias_sem = 0;     // Site 0x20: wait for bias mcast data
+    uint32_t max_wait_out_sharded = 0;  // Site 0x30: wait for all output tiles (OUT_SHARDED)
+    uint32_t max_wait_out_cb = 0;       // Site 0x40: wait for output CB tiles (non-sharded writer)
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -119,7 +129,14 @@ void kernel_main() {
                     noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                    {
+                        uint32_t t0 = read_wall_clock();
+                        noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                        uint32_t dt = read_wall_clock() - t0;
+                        if (dt > max_wait_in1_sem) {
+                            max_wait_in1_sem = dt;
+                        }
+                    }
 
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
                 }
@@ -137,7 +154,14 @@ void kernel_main() {
                     noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                    {
+                        uint32_t t0 = read_wall_clock();
+                        noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                        uint32_t dt = read_wall_clock() - t0;
+                        if (dt > max_wait_bias_sem) {
+                            max_wait_bias_sem = dt;
+                        }
+                    }
 
                     cb_push_back(cb_id_in3, in3_block_w);
                 }
@@ -172,7 +196,14 @@ void kernel_main() {
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
 
-                        cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                        {
+                            uint32_t t0 = read_wall_clock();
+                            cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                            uint32_t dt = read_wall_clock() - t0;
+                            if (dt > max_wait_out_cb) {
+                                max_wait_out_cb = dt;
+                            }
+                        }
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
@@ -222,8 +253,26 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_wait_front(
-        cb_id_out0,
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    {
+        uint32_t t0 = read_wall_clock();
+        cb_wait_front(
+            cb_id_out0,
+            batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+        uint32_t dt = read_wall_clock() - t0;
+        if (dt > max_wait_out_sharded) {
+            max_wait_out_sharded = dt;
+        }
+    }
 #endif
+
+    // Push max wait latencies to ring buffer.
+    // Format: 0xSSNNNNNN where SS=site ID, NNNNNN=max cycles (24-bit, up to 16M cycles ~16ms)
+    // Site 0x10: in1 mcast semaphore wait
+    // Site 0x20: bias mcast semaphore wait
+    // Site 0x30: output CB wait (OUT_SHARDED final)
+    // Site 0x40: output CB wait (non-sharded per-subblock)
+    WATCHER_RING_BUFFER_PUSH(0x10000000 | (max_wait_in1_sem & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x20000000 | (max_wait_bias_sem & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x30000000 | (max_wait_out_sharded & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0x40000000 | (max_wait_out_cb & 0x00FFFFFF));
 }

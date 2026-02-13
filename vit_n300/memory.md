@@ -1,203 +1,283 @@
-# ViT N300 Non-Deterministic Hang Investigation -- Comprehensive Memory
+# ViT N300 Non-Deterministic Hang Investigation
 
 ## Problem Statement
 
-The `vit-N300-func` CI test non-deterministically hangs with:
+The `vit-N300-func` CI test non-deterministically hangs with `TIMEOUT: device timeout in fetch queue wait`. Involves matmul kernels using block-sharded L1 + multicast on 8x8 grid. Observed twice in CI (ND_failure.log, ND_failure2.log). **These are TWO DISTINCT failure modes that may be causally linked.**
+
+---
+
+## ROOT CAUSE IDENTIFIED: Missing Pipeline Stall in Packer L1_ACC Reconfiguration
+
+### The Bug
+
+In `reconfigure_packer_l1_acc()` (cpack_common.h:710), a `TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::TRISC_CFG)` is **commented out** at line 725. This creates a pipeline hazard where PACR (pack) instructions can execute before RMWCI (config write) instructions have committed to the THCON config registers.
+
+### Evidence
+
+1. **Systematic pattern**: Every unpack operation in the LLK codebase uses `TTI_STALLWAIT(STALL_UNPACK, TRISC_CFG)` with the comment "Stall unpacker until pending CFG writes from Trisc have completed." Found in:
+   - `llk_unpack_tilize.h` (4 instances)
+   - `llk_unpack_untilize.h` (1 instance)
+   - `llk_unpack_AB.h` (2 instances)
+   - `llk_unpack_AB_matmul.h` (1 instance)
+   - `llk_unpack_reduce.h` (1 instance)
+   - `llk_unpack_A.h` (1 instance)
+   - `llk_unpack_AB_reduce_custom.h` (1 instance)
+
+2. **Packer's own reconfig_data_format uses it**: `reconfig_packer_data_format()` (cpack_common.h:450) includes `TTI_STALLWAIT(STALL_THCON, TRISC_CFG)` for BFP format paths.
+
+3. **SECOND commented-out stall**: `program_packer_destination()` (cpack_common.h:634) also has a commented-out `TTI_STALLWAIT(STALL_THCON, PACK)`.
+
+4. **Active investigation by TT engineer**: `ryanzhu/pack-recfg` branch (commits from Feb 12-13, 2026) adds `are_packers_configured_correctly()` with `tensix_sync()` (full pipeline fence) to verify packer config. This function was added to the LLK submodule on the test branch `test-llk-ryanzhu/pack-recfg-1770946861`.
+
+5. **Both WH and BH affected**: The STALLWAIT is commented out in both `tt_llk_wormhole_b0` and `tt_llk_blackhole` versions of `cpack_common.h`.
+
+### The Race Condition in Detail
+
+The matmul compute kernel (`bmm_large_block_zm_fused_bias_activation.cpp`) does this sequence:
 
 ```
-RuntimeError: TT_THROW @ .../system_memory_manager.cpp:572: tt::exception
-TIMEOUT: device timeout in fetch queue wait, potential hang detected
+tile_regs_wait();                           // Packer is idle (confirmed by MATH_PACK semaphore)
+PACK((pack_reconfig_data_format(out_cb)));   // Config writes (REG2FLOP, WRCFG, RMWCI)
+PACK((llk_pack_reconfig_l1_acc(0 or 1)));   // 4x cfg_reg_rmw_tensix -> 4-16 TT_RMWCIB* instructions
+                                             // NO STALLWAIT HERE
+uint32_t start_dst_index = 0;               // ~zero delay
+pack_tile_block(...);                        // Issues PACR instructions (via mop_run)
 ```
 
-The hang is a **Tensix matmul deadlock** in `bmm_large_block_zm_fused_bias_activation` using block-sharded L1 + `MatmulMultiCoreReuseMultiCastProgramConfig` on an 8x8 grid. It was observed twice in CI (ND_failure1.log, ND_failure2.log).
+`cfg_reg_rmw_tensix<>()` uses `TT_RMWCIB0/1/2/3` instructions (up to 4 per register) to write 4 THCON section config registers:
+- `THCON_SEC0_REG1_Pack_L1_Acc`
+- `THCON_SEC0_REG8_Pack_L1_Acc`
+- `THCON_SEC1_REG1_Pack_L1_Acc`
+- `THCON_SEC1_REG8_Pack_L1_Acc`
+
+Without the STALLWAIT, these RMWCI writes may not have committed to the hardware config registers before the PACR instruction from `mop_run(1,1)` reaches the packer. Result:
+- **Some THCON sections see new L1_ACC value, others see old value**
+- **Per-section config inconsistency** across the 4 packer sections (which process 4 faces of a tile)
+- This can cause the packer FSM to enter an undefined state, leading to a permanent stall
+
+### The Fix
+
+Uncomment `TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::TRISC_CFG)` at line 725 of:
+- `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cpack_common.h`
+- `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h`
+
+Performance impact: one additional stall instruction per L1_ACC reconfiguration. Since `tile_regs_wait()` already confirmed the packer is idle, the stall should complete quickly (just waiting for TRISC_CFG writes to propagate, ~few cycles).
 
 ---
 
-## Root Cause (from CI triage)
+## CRITICAL INSIGHT: The Two Failure Modes Are Causally Linked
 
-**Deadlock at physical core (7,3) = virtual core 9-5 on device 0:**
+### Failure Mode A → Triggers Failure Mode B
 
-| RISC | Kernel | Stuck At | Meaning |
-|------|--------|----------|---------|
-| BRISC (kernel 66) | reader_bmm_tile_layout_in1_receiver_writer_padding | cb_wait_front() line 225 | Waiting for output CB tiles |
-| TRISC0 (kernel 67) | bmm_large_block_zm_fused_bias_activation | wait_for_next_context() in add_tiles_bcast_rows line 430 | Unpacker waiting for next context |
-| TRISC1 (kernel 67) | bmm_large_block_zm_fused_bias_activation | set_dst_write_addr() in add_tiles_bcast_rows line 430 | Math engine executing |
-| TRISC2 (kernel 67) | bmm_large_block_zm_fused_bias_activation | llk_push_to_brisc() / cb_push_back | Packer trying to push output tile |
+**Failure Mode A** (single-core packer stall from the missing STALLWAIT) causes one core to stop making progress. This core stops consuming input CBs (in0 and in1).
 
-**Deadlock chain:** TRISC2 (packer) cannot push output tiles because BRISC (writer) hasn't consumed previous ones. BRISC is waiting for output tiles but can't see them. This is a **circular buffer semaphore race condition** in the FUSE_BIAS path of the matmul compute kernel.
+**This triggers Failure Mode B** (global multicast deadlock) through the multicast sender protocol:
 
----
+1. The stuck core's in0/in1 CBs fill up
+2. The stuck core can't signal "ready" to multicast senders (can't do `cb_reserve_back`)
+3. in0 row sender blocks at `noc_semaphore_wait` (waiting for ALL receivers ready)
+4. in1 column sender blocks at `noc_semaphore_wait` (waiting for ALL receivers ready)
+5. Other cores in the same row/column lose their in0/in1 data sources
+6. Their compute stalls → their CBs fill up → they can't signal ready to OTHER senders
+7. Deadlock propagates across the entire grid (column first, then rows)
 
-## CI Test Environment (where hang occurs)
+This explains why ND_failure.log shows an ENTIRE COLUMN of cores stuck while ND_failure2.log shows only ONE core stuck -- **Mode A is the root cause, Mode B is the propagation effect**.
 
-- **Test:** `test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py::test_vit`
-- **Hardware:** N300 (2 Wormhole chips via MeshDevice)
-- **Config:** `l1_small_size=32768, num_command_queues=2, trace_region_size=1753088`
-- **Batch size:** 8
-- **CI env variables:** `TT_METAL_OPERATION_TIMEOUT_SECONDS=5`
-- **Pattern:** 2CQ trace replay with:
-  - CQ0: reshard, execute_trace (full ViT model: ~60 matmul ops per trace), to_memory_config (output to DRAM)
-  - CQ1 (concurrent): copy_host_to_device, from_device (output to host)
-  - Synchronized via record_event / wait_for_event between CQs
-- **Iterations:** 100 warmup + 1000 measurement = **1100 trace replays** = ~66K matmul ops
-- **Normal throughput:** ~1323 samples/sec (N300), ~1470 (N150)
+### Multicast Protocol (detailed)
 
----
-
-## Experiments Performed (This Session)
-
-### 1. Running the Actual CI Test
-
-| Run | Config | Samples/sec | Duration | Hang? | Total Matmul Ops |
-|-----|--------|------------|----------|-------|-----------------|
-| 1 | Watcher only, timeout=10s | 261 | 70s | No | ~66K |
-| 2 | Watcher + DEBUG_DELAY=2000 (not properly configured) | 259 | 71s | No | ~66K |
-| 3-7 (loop of 5) | No watcher, timeout=5s | ~1198 | ~11.5s each | No | ~330K |
-| 8-12 (loop of 5) | Watcher + DEBUG_DELAY=100000 (NOT properly configured) | ~260 | ~38-71s each | No | ~330K |
-| 13 | Watcher + DEBUG_DELAY=5000, one core only (format error) | 199 | 82s | No | ~66K |
-| 14 | Watcher + DEBUG_DELAY=5000, ALL 128 cores properly configured | 193 | 53s | No | ~66K |
-
-**Total ops across all runs: ~990K matmul operations, zero hangs.**
-
-### 2. Previous Session's Stress Tests (isolated matmul, not full ViT)
-
-- test_matmul_with_bias: 10000 iters x 4 configs = 40K ops per run, ~8000 ops/s
-- test_matmul_deadlock_stress_2cq: 10000 iters x 4 configs + 5 CQ1 copies = 40K matmul + 50K copy ops
-- Combined previous session total: ~320K+ matmul operations, zero hangs
-
----
-
-## CRITICAL DISCOVERY: TT_METAL_WATCHER_DEBUG_DELAY Configuration
-
-**The debug delay feature was NOT working in most experiments!**
-
-Setting `TT_METAL_WATCHER_DEBUG_DELAY=<cycles>` alone is NOT sufficient. You MUST also specify which cores to delay using:
-
-```bash
-# Environment variables for debug delay:
-export TT_METAL_WATCHER=1                                    # Required: enable watcher
-export TT_METAL_WATCHER_DEBUG_DELAY=5000                     # Delay cycles per NoC transaction
-export TT_METAL_WRITE_DEBUG_DELAY_CORES='(0,0)-(7,7)'       # Target cores for write delays
-export TT_METAL_ATOMIC_DEBUG_DELAY_CORES='(0,0)-(7,7)'      # Target cores for atomic delays
-# Optional:
-export TT_METAL_READ_DEBUG_DELAY_CORES='(0,0)-(7,7)'        # Target cores for read delays
+**In0 sender (NCRISC):** multicasts along rows
+```
+noc_semaphore_wait(sender_sem, num_receivers)  // Wait ALL receivers ready
+noc_async_write_multicast(data)                 // Send data
+noc_semaphore_set_multicast(receiver_sem)       // Signal "data valid"
 ```
 
-**Core range format:**
-- Single core: `0,0` or `3,4`
-- Range: `(0,0)-(7,7)` (parentheses required!)
-- `all`, `worker`, `dispatch` -- DO NOT WORK for delay feature (only populate all_cores flag, not cores map; the watcher server delay init iterates cores only)
-
-**Verification:** Correct configuration produces 128 "Configured Watcher debug delays" log messages (64 per device on N300). Without proper core targeting, you get 0 or 2 messages and the delay has zero effect on performance.
-
-**Performance impact with proper configuration:**
-- No watcher: ~1198 samples/sec
-- Watcher only: ~260 samples/sec (4.6x slower due to NoC sanitization)
-- Watcher + 5K delay on all cores: ~193 samples/sec (6.2x slower total)
-
----
-
-## Device Profiler (NoC Events)
-
-**How to use:**
-```bash
-export TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1
-export TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH=/path/to/reports
-# NOTE: Conflicts with TT_METAL_WATCHER -- cannot use both simultaneously
-# Requires Tracy-enabled build
+**In1 sender (BRISC):** multicasts along columns
+```
+noc_semaphore_wait(sender_sem, num_receivers)  // Wait ALL receivers ready
+noc_async_write_multicast(data)                 // Send data
+noc_semaphore_set_multicast(receiver_sem)       // Signal "data valid"
 ```
 
-**Output:** JSON files in the report path: `noc_trace_dev{N}_ID{RuntimeID}[_traceID{N}].json`
-
-**Findings:**
-- Captures dispatch-level NoC operations (BRISC + NCRISC reads/writes)
-- **Does NOT capture kernel-internal multicast operations** (the ones involved in the deadlock)
-- Event types seen: READ, READ_SET_STATE, READ_WITH_STATE, WRITE_, READ/WRITE_BARRIER_START/END
-- No MULTICAST events in trace replay data
-- Max timing gap in a passing run: 220 cycles (tiny -- no anomalies)
-
-**Conclusion:** The profiler is NOT useful for detecting "near miss" patterns in the matmul multicast deadlock because it doesn't instrument kernel-internal NoC transactions.
-
----
-
-## Why the Hang Cannot Be Reproduced Easily
-
-1. **Extremely rare:** Over 1.3M matmul operations executed across all experiments with zero hangs
-2. **Full model complexity required:** The CI test runs the complete ViT model (~60 ops per trace including layernorm, attention, softmax, etc.), not just isolated matmuls. The memory allocation pattern and operation ordering may be critical.
-3. **N300 dual-chip specifics:** MeshDevice with 2 chips introduces ethernet dispatch overhead (commented in CI test: "there's a problem with eth dispatch, hence lower perf")
-4. **Concurrent 2CQ traffic pattern:** The CI test has a specific interleaving of CQ0 (compute trace) and CQ1 (host-device copies) synchronized by events -- more complex than our stress tests
-5. **Thermal/environmental:** CI runs in Docker containers with potentially different thermal/timing characteristics
-6. **Memory fragmentation:** The full model allocates and deallocates many buffers; a specific allocation pattern might be needed
+**Deadlock cycle:**
+```
+Core(r,c) packer hangs (Mode A)
+  → Core(r,c) can't consume in0/in1 → CBs fill
+  → Core(r,c) can't signal ready to in1 column sender
+  → in1 column sender blocks → all cores in column c lose in1
+  → cores in column c can't consume in0 → their in0 CBs fill
+  → cores in column c can't signal ready to their respective in0 row senders
+  → in0 row senders block → all cores in those rows lose in0
+  → global deadlock
+```
 
 ---
 
-## Hardware Details
+## Detailed Failure Mode Analysis
 
-- **Board:** N300 (2 Wormhole B0 chips, PCIe 0000:04:00.0)
-- **Device 0 harvesting:** tensix=0x220 (rows 5,9 harvested) -> 56 L1 banks
-- **Device 1 harvesting:** tensix=0x300 (rows 8,9 harvested) -> 56 L1 banks
-- **KMD:** 2.6.0, UMD firmware bundle 19.4.2
-- **Dispatch:** ETH dispatch (DispatchCoreType.ETH, DispatchCoreAxis.ROW)
+### Failure Mode A: Single-Core Packer Stall (ND_failure2.log)
 
----
+**Only ONE core stuck**: physical (7,3), virtual 9-5, device 0. All other cores completed.
 
-## Debug Tools Summary
+| RISC | Stuck At | Root Cause |
+|------|----------|------------|
+| TRISC2 | `llk_push_to_brisc()` llk_io_pack.h:57 | **Packer TTI_STALLWAIT(STALL_THCON, PACK) never completes** |
+| TRISC0 | `wait_for_next_context()` cunpack_common.h:165 | UNPACK_SYNC not freed (ZEROACC never executed) |
+| TRISC1 | `set_dst_write_addr()` cmath_common.h:163 | Blocked because TRISC0 blocked |
+| BRISC | `cb_wait_front()` dataflow_api.h:468 | tiles_received_ptr never updated |
+| NCRISC | `wait_for_brisc_notification()` | DONE, waiting for next dispatch |
 
-| Tool | Usefulness for This Bug | Notes |
-|------|------------------------|-------|
-| TT_METAL_OPERATION_TIMEOUT_SECONDS | **Essential** -- detects hangs | Set to 5s (CI default). Resets on any dispatch progress. |
-| TT_METAL_WATCHER | **Good for post-hang diagnosis** | Captures core state snapshot. 1s polling too slow for "near miss". |
-| TT_METAL_WATCHER_DEBUG_DELAY | **Theoretically useful** -- widens race windows | Must configure target cores properly (see above). 5K delay = 26% slowdown. Not yet tested with large enough delay on all cores in a long loop. |
-| DPRINT | **Not useful** -- too much overhead | Crashes machine with high volume. Event-driven logging is "pure noise" (fires on expected waits). Overhead prevents OPERATION_TIMEOUT from triggering. |
-| Device Profiler (NoC events) | **Not useful for this bug** | Only captures dispatch-level NoC, not kernel-internal multicast. Conflicts with Watcher. |
-| Watcher Ring Buffer | **Untested but promising** | 32-entry per-core circular buffer. Low overhead. Could log CB semaphore states. Requires kernel code changes. |
+**Causality chain** (traced through LLK source):
 
----
+1. TRISC2 in FUSE_BIAS path calls `cb_push_back()` → `llk_push_to_brisc()` which issues `TTI_STALLWAIT(STALL_THCON, PACK)` waiting for packer HW to finish writing tiles to L1
+2. Packer HW is hung due to operating with inconsistent per-section L1_ACC config (from the missing STALLWAIT race)
+3. The preceding `tile_regs_release()` → `_llk_pack_dest_section_done_()` Tensix instructions are queued but blocked:
+   - `TTI_STALLWAIT(STALL_MATH, PACK)` at llk_pack_common.h:37
+   - `TT_ZEROACC(CLR_ALL)` at line 42 -- auto-releases UNPACK_SYNC semaphore
+   - Since packer stuck, ZEROACC never executes → UNPACK_SYNC never freed
+4. TRISC0 polls `semaphore_read(UNPACK_SYNC) >= 1` forever
+5. BRISC polls `reg_read(tiles_received_ptr)` -- the `TT_STOREREG` in `llk_push_to_brisc` never executes
 
-## Recommended Next Steps
+### Failure Mode B: Global Multicast Deadlock (ND_failure.log)
 
-### Highest Priority: Reproduce the hang
+**ALL cores in column 0 stuck** (systemic). This is the propagation of Mode A.
 
-1. **Run the actual CI test in a long loop** with properly configured debug delay:
-   ```bash
-   export TT_METAL_WATCHER=1
-   export TT_METAL_WATCHER_DEBUG_DELAY=10000
-   export TT_METAL_WRITE_DEBUG_DELAY_CORES='(0,0)-(7,7)'
-   export TT_METAL_ATOMIC_DEBUG_DELAY_CORES='(0,0)-(7,7)'
-   export TT_METAL_OPERATION_TIMEOUT_SECONDS=15
-   # Run: ./vit_n300/scripts/loop_vit_ci_test.sh 100 10000
-   ```
-   This needs ~100+ runs with proper delay to have a chance. Previous experiments used incorrect delay config.
-
-2. **Instrument matmul kernels with Watcher Ring Buffer** (WATCHER_RING_BUFFER_PUSH) to log CB semaphore states at critical points in:
-   - bmm_large_block_zm_fused_bias_activation.cpp (compute kernel, TRISC)
-   - reader_bmm_tile_layout_in1_receiver_writer_padding.cpp (BRISC writer)
-   - reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp (NCRISC reader)
-
-   This is low-overhead and data persists in L1 -- readable after a hang via watcher dump.
-
-3. **Try running with MCAST_INPUT_BUFFERING_DEPTH=1** combined with the properly configured debug delay (this combination was never tested -- previous MCAST_INPUT_BUFFERING_DEPTH=1 tests had no delay).
-
-### Alternative: Analyze the CI deadlock more deeply
-
-4. **Examine the exact add_tiles_bcast_rows call at line 430** of bmm_large_block_zm_fused_bias_activation.cpp -- both TRISC0 (unpack) and TRISC1 (math) were stuck there. This is the FUSE_BIAS path where bias tiles are broadcast-added to output tiles. The unpacker-math-packer pipeline might have a specific ordering issue in this bias path.
-
-5. **Check if the issue is in llk_push_to_brisc** -- TRISC2 was stuck trying to signal BRISC that output tiles are ready. If this semaphore increment doesn't reach BRISC (or BRISC reads a stale value), the deadlock occurs.
+| RISC | Stuck At | Root Cause |
+|------|----------|------------|
+| BRISC | `noc_semaphore_wait()` kernel:344 | In1 SENDER waiting for receiver acks |
+| NCRISC | `noc_semaphore_wait()` kernel:286 | In0 SENDER waiting for receiver acks |
+| TRISC0 | `cb_wait_front(in0)` kernel:255 | Waiting for input data |
+| TRISC1 | `matmul_block()` kernel:287 | Mid-computation |
+| TRISC2 | `pack_main` kernel:261 | In main loop |
 
 ---
 
-## Files Modified/Created
+## Key Code Paths Traced
 
-- `/tt-metal/vit_n300/tests/test_matmul_deadlock_stress.py` -- Stress test with multiple matmul configs, 2CQ, bias
-- `/tt-metal/vit_n300/scripts/stress_test_matmul.sh` -- Runner script
-- `/tt-metal/vit_n300/scripts/loop_vit_ci_test.sh` -- Loop script for actual CI test
-- `/tt-metal/vit_n300/INVESTIGATION_STATUS.md` -- Previous investigation status
-- `/tt-metal/vit_n300/README.md` -- Usage instructions
-- `/tt-metal/vit_n300/logs/` -- All experiment logs
-- `/tt-metal/vit_n300/logs/noc_profiler/` -- Device profiler NoC trace data
+### CB Synchronization Protocol
+- **Compute side** writes ABSOLUTE values to stream registers via `TT_STOREREG`
+- **Dataflow side** INCREMENTS stream registers
+- CB init resets LOCAL copies but NOT stream registers
+- This asymmetry is correct by design (safe across trace replays)
+
+### Dest Context Protocol (SyncFull)
+TRISC0 acquires → TRISC1 computes → TRISC2 packs → TRISC2 releases via `ZEROACC` side-effect.
+`_llk_pack_dest_section_done_()`: `STALLWAIT(MATH,PACK)` → `ZEROACC(CLR_ALL)` → `SEMGET(MATH_PACK)`
+
+### Packer L1_ACC Reconfiguration (THE BUG)
+`reconfigure_packer_l1_acc()` writes config via `cfg_reg_rmw_tensix` (expands to `TT_RMWCIB*` instructions).
+`TTI_STALLWAIT(STALL_PACK, TRISC_CFG)` was **commented out** at line 725. Without it, PACR instructions can race ahead of config writes.
+
+### The `cfg_reg_rmw_tensix` Function (ckernel.h:350)
+Template function that writes to THCON config registers using `TT_RMWCIB0/1/2/3` (read-modify-write config immediate byte). Issues up to 4 byte-level writes per call. Called 4 times in `reconfigure_packer_l1_acc()` for 4 THCON sections.
 
 ---
 
-## Key Insight
+## Latency Instrumentation Results
 
-The most important finding from this session is that **all previous TT_METAL_WATCHER_DEBUG_DELAY experiments were ineffective** because the target cores were not properly specified. The delay feature requires explicit core range configuration via `TT_METAL_WRITE_DEBUG_DELAY_CORES='(0,0)-(7,7)'` (with parentheses). The `all` keyword does not work for the delay feature. Future experiments should use the correct configuration to actually amplify race windows.
+Instrumented all matmul kernels with cycle counters at every wait site. Key findings from 2 runs (~190 watcher dumps each):
+
+- **System is highly deterministic**: <0.5% variance between runs
+- **Site 0x50 (in0 CB wait)**: Highest at 94 us (72 us typical), transient spikes
+- **Sites 0x70/0x80 (bias path)**: Near-zero (18-45 cycles). Binary gap to infinity -- confirms hang is abrupt protocol violation, not gradual contention
+- Analysis tool: `vit_n300/scripts/parse_latency.py`
+
+---
+
+## Actionable Next Steps
+
+### Immediate (The Fix)
+1. **Uncomment the STALLWAIT** in `reconfigure_packer_l1_acc()` at cpack_common.h:725
+   - WH: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cpack_common.h`
+   - BH: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h`
+2. **Contact ryanzhu** who is already investigating packer reconfiguration (`ryanzhu/pack-recfg` branch)
+3. **Also investigate** the commented-out STALLWAIT in `program_packer_destination()` at cpack_common.h:634
+
+### Validation
+1. Run ViT CI stress test with the fix applied -- Mode A should not recur
+2. If Mode A is fixed and Mode B also doesn't recur, this confirms the causal link
+3. Run the instrumented version with the fix -- latency profiles should be unchanged (the stall is nearly free when packer is idle)
+
+---
+
+## AI-Driven ND Failure Analysis Methodology
+
+### What Worked (High Value)
+
+1. **Static code analysis over stress testing**: Traced the full dependency chain from the hung core through LLK firmware to the exact missing instruction. This found the root cause in hours, not weeks of stress testing.
+
+2. **Analyzing MULTIPLE failure logs independently**: The two failure logs showed completely different patterns (single-core vs grid-wide). Analyzing each independently and then finding the causal link was the breakthrough.
+
+3. **Pattern matching across codebase**: Searching for `TTI_STALLWAIT.*TRISC_CFG` revealed 10+ instances in unpack code, exactly ONE instance in pack code (BFP path), and ZERO instances in the L1_ACC reconfig path. This inconsistency was the smoking gun.
+
+4. **Watcher log interpretation**: The stuck RISC states (which file:line each core was at) provided the entry point for the entire analysis. Without this, blind stress testing would be useless.
+
+5. **Understanding hardware pipeline semantics**: Knowing that `cfg_reg_rmw_tensix` writes go through a different pipeline than PACR instructions, and that `TTI_STALLWAIT` serializes them, was essential.
+
+### What Didn't Work (Low Value for ND)
+
+1. **Stress testing**: 1.3M matmul operations with zero reproduction. The race window is too narrow for brute-force reproduction.
+
+2. **Latency instrumentation for hang detection**: Passing runs showed near-zero latency at the bias path sites. Hangs are binary (either instant or infinite), not gradual, so "approaching-hang" signals don't exist.
+
+3. **Debug delay injection (`TT_METAL_WATCHER_DEBUG_DELAY`)**: Adds latency to NoC operations but doesn't affect intra-core pipeline hazards (which is where the bug is).
+
+### Recommended Methodology for AI-Driven ND Failure Analysis
+
+```
+1. GATHER: Collect ALL available failure logs (watcher dumps, core states)
+2. CLASSIFY: Analyze each failure log independently -- are they the same failure mode?
+3. TRACE: For each stuck core, trace the dependency chain:
+   - What instruction is each RISC stuck at? (from watcher)
+   - What resource is it waiting for? (from the instruction semantics)
+   - Who should provide that resource? (trace through the protocol)
+   - Is that provider also stuck? (check its state)
+4. SEARCH: Once you have the specific mechanism (e.g., "packer config race"),
+   search for SIMILAR patterns across the codebase:
+   - Does the same protection exist elsewhere? (e.g., STALLWAIT in unpack)
+   - Is it missing in this specific case?
+5. VERIFY: Check for active work on related issues:
+   - Git log for relevant file changes
+   - Branch names suggesting related investigation
+6. LINK: If multiple failure modes exist, determine if they're independent or causally linked
+```
+
+---
+
+## CI Test Environment
+
+- Test: `test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py::test_vit`
+- Hardware: N300 (2 Wormhole chips), ETH dispatch
+- 2CQ trace replay, 1100 iterations, ~66K matmul ops per run
+- `TT_METAL_OPERATION_TIMEOUT_SECONDS=5`
+
+## Debug Tools
+
+| Tool | Usefulness | Key Notes |
+|------|-----------|-----------|
+| WATCHER | Essential for post-hang | 1s polling, captures stuck state per RISC |
+| WATCHER_DEBUG_DELAY | Not useful for this bug | Affects NoC, not intra-core pipeline |
+| Ring Buffer | Effective for passing runs | 32-entry/core, low overhead |
+| DPRINT | Not useful | Crashes machine, too much overhead |
+| Device Profiler | Not useful | No kernel-internal capture |
+
+## Files
+
+- `vit_n300/ND_failure.log` -- CI failure log (Mode B: global deadlock)
+- `vit_n300/ND_failure2.log` -- CI failure log (Mode A: single-core packer stall)
+- `vit_n300/scripts/parse_latency.py` -- Watcher ring buffer analysis
+- `vit_n300/scripts/loop_vit_ci_test.sh` -- CI test loop runner
+- Kernel instrumentation in `ttnn/.../matmul/device/kernels/` (3 files)
+
+## Key Source Files
+
+| File | What It Contains |
+|------|-----------------|
+| `tt_llk_wormhole_b0/common/inc/cpack_common.h:710` | **THE BUG**: `reconfigure_packer_l1_acc()` with commented-out STALLWAIT |
+| `tt_llk_wormhole_b0/common/inc/cpack_common.h:627` | `program_packer_destination()` with second commented-out STALLWAIT |
+| `tt_llk_wormhole_b0/common/inc/cpack_common.h:382` | `reconfig_packer_data_format()` (has STALLWAIT, for comparison) |
+| `tt_llk_wormhole_b0/common/inc/ckernel.h:350` | `cfg_reg_rmw_tensix()` -- the TT_RMWCIB wrapper |
+| `tt_llk_wormhole_b0/llk_lib/llk_pack_common.h:35` | `_llk_pack_dest_section_done_()` |
+| `tt_llk_wormhole_b0/llk_lib/llk_pack.h:185` | `_llk_pack_()` -- issues set_dst_write_addr + program_packer_dest + mop_run |
+| `hw/ckernels/wormhole_b0/metal/llk_io/llk_io_pack.h:57` | `llk_push_to_brisc()` -- where TRISC2 hangs |
+| `bmm_large_block_zm_fused_bias_activation.cpp:342-355` | PACKER_L1_ACC reconfig → pack_tile_block (race window) |

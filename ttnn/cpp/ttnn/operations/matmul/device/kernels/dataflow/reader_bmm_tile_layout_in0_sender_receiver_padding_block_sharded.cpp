@@ -5,9 +5,13 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/ring_buffer.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+
+// Latency measurement: read low 32 bits of wall clock
+inline uint32_t read_wall_clock() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -126,6 +130,10 @@ void kernel_main() {
         );
     }
 
+    // Latency tracking: max cycles spent in each semaphore wait site
+    uint32_t max_wait_sender_sem = 0;    // Site 0x90: sender waiting for receivers to be ready
+    uint32_t max_wait_receiver_sem = 0;  // Site 0xA0: receiver waiting for mcast data
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_h_dim_block_start_addr = in0_tensor_shard_read_addr;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -192,12 +200,19 @@ void kernel_main() {
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // wait for every core in receiver grid EXCLUDING myself
-                            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
-                        } else {
-                            // wait for every core in receiver grid
-                            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+                        {
+                            uint32_t t0 = read_wall_clock();
+                            if constexpr (core_in_in0_receiver_mcast_grid) {
+                                // wait for every core in receiver grid EXCLUDING myself
+                                noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests - 1);
+                            } else {
+                                // wait for every core in receiver grid
+                                noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+                            }
+                            uint32_t dt = read_wall_clock() - t0;
+                            if (dt > max_wait_sender_sem) {
+                                max_wait_sender_sem = dt;
+                            }
                         }
                         noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
@@ -283,7 +298,12 @@ void kernel_main() {
 
                     if constexpr (core_in_in0_receiver_mcast_grid) {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        uint32_t t0 = read_wall_clock();
                         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                        uint32_t dt = read_wall_clock() - t0;
+                        if (dt > max_wait_receiver_sem) {
+                            max_wait_receiver_sem = dt;
+                        }
                     }
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
 
@@ -301,4 +321,11 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+
+    // Push max wait latencies to ring buffer.
+    // Format: 0xSSNNNNNN where SS=site ID, NNNNNN=max cycles (24-bit, up to 16M cycles ~16ms)
+    // Site 0x90: sender waiting for all receivers ready (noc_semaphore_wait on sender sem)
+    // Site 0xA0: receiver waiting for mcast data (noc_semaphore_wait on receiver sem)
+    WATCHER_RING_BUFFER_PUSH(0x90000000 | (max_wait_sender_sem & 0x00FFFFFF));
+    WATCHER_RING_BUFFER_PUSH(0xA0000000 | (max_wait_receiver_sem & 0x00FFFFFF));
 }
