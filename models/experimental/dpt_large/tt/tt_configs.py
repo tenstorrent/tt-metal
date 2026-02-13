@@ -310,7 +310,8 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
-    split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
+    shard_tokens = bool(getattr(config, "tt_shard_encoder_tokens", False))
+    split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None) if shard_tokens else None
 
     return TTLayerConfig(
         grid=grid,
@@ -322,11 +323,10 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         l1_resident=True,
         use_block_sharded=False,
         sdpa_grid=grid,
-        # Keep encoder activations block-sharded in perf mode so sharded program
-        # configs (LN/QKV/FFN) are applicable.
-        qkv_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
-        proj_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
-        mlp_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None),
+        # Sharded memcfgs are only valid when the encoder tokens are actually sharded.
+        qkv_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
+        proj_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
+        mlp_memcfg=(getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) if shard_tokens else getattr(ttnn, "L1_MEMORY_CONFIG", None)),
         split_heads_memcfg=split_mem,
         qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
         qk_program_config=qk_pc,
