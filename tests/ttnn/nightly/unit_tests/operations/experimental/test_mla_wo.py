@@ -27,7 +27,7 @@ def run_test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     core2dram = {}
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
         core2dram[core_coords] = dram_bank_id
