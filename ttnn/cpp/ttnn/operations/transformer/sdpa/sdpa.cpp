@@ -13,9 +13,9 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::transformer {
 
-ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
+ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -53,7 +53,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
-ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
+ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -89,7 +89,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
-ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
+ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -124,7 +124,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         kernel_config_val);
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -149,7 +149,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
     return {output_tensors.output, output_tensors.joint_output};
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -196,7 +196,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
 }
 
-ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
+ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -231,7 +231,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         kernel_config_val);
 }
 
-ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
+ttnn::Tensor chunked_flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -266,7 +266,7 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
         kernel_config_val);
 }
 
-ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
+ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -299,4 +299,4 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         chunk_start_idx);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer
