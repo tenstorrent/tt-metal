@@ -441,11 +441,11 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 void DeviceManager::initialize_profiler() {
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto active_devices = this->get_all_active_devices_impl();
-    initializers_[ProfilerInitializer::key()] =
+    initializers_[ProfilerInitializer::key] =
         std::make_unique<ProfilerInitializer>(descriptor_, skip_remote_devices_, ctx.profiler_state_manager().get());
-    initializers_[ProfilerInitializer::key()]->init(active_devices, init_done_);
-    init_done_.insert(ProfilerInitializer::key());
-    initializers_[ProfilerInitializer::key()]->configure();
+    initializers_[ProfilerInitializer::key]->init(active_devices, init_done_);
+    init_done_.insert(ProfilerInitializer::key);
+    initializers_[ProfilerInitializer::key]->configure();
 }
 
 void DeviceManager::initialize_fabric_and_dispatch_fw() {
@@ -458,17 +458,17 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 
     auto active_devices = this->get_all_active_devices_impl();
 
-    initializers_[FabricFirmwareInitializer::key()] =
+    initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, ctx.get_control_plane());
-    initializers_[FabricFirmwareInitializer::key()]->init(active_devices, init_done_);
-    init_done_.insert(FabricFirmwareInitializer::key());
+    initializers_[FabricFirmwareInitializer::key]->init(active_devices, init_done_);
+    init_done_.insert(FabricFirmwareInitializer::key);
 
-    initializers_[DispatchKernelInitializer::key()] = std::make_unique<DispatchKernelInitializer>(descriptor_);
-    initializers_[DispatchKernelInitializer::key()]->init(active_devices, init_done_);
-    init_done_.insert(DispatchKernelInitializer::key());
-    initializers_[DispatchKernelInitializer::key()]->configure();
+    initializers_[DispatchKernelInitializer::key] = std::make_unique<DispatchKernelInitializer>(descriptor_);
+    initializers_[DispatchKernelInitializer::key]->init(active_devices, init_done_);
+    init_done_.insert(DispatchKernelInitializer::key);
 
-    initializers_[FabricFirmwareInitializer::key()]->configure();
+    initializers_[DispatchKernelInitializer::key]->configure();
+    initializers_[FabricFirmwareInitializer::key]->configure();
 
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
@@ -478,19 +478,20 @@ void DeviceManager::initialize_dispatch_firmware() {
     // It will re initialize the dispatch firmware on the active devices as they were manually
     // disabled
     auto active_devices = this->get_all_active_devices_impl();
-    initializers_[DispatchKernelInitializer::key()] = std::make_unique<DispatchKernelInitializer>(descriptor_);
-    initializers_[DispatchKernelInitializer::key()]->init(active_devices, init_done_);
-    initializers_[DispatchKernelInitializer::key()]->configure();
-    init_done_.insert(DispatchKernelInitializer::key());
+    init_done_.erase(DispatchKernelInitializer::key);
+    initializers_[DispatchKernelInitializer::key] = std::make_unique<DispatchKernelInitializer>(descriptor_);
+    initializers_[DispatchKernelInitializer::key]->init(active_devices, init_done_);
+    initializers_[DispatchKernelInitializer::key]->configure();
+    init_done_.insert(DispatchKernelInitializer::key);
 }
 
 void DeviceManager::init_firmware_on_active_devices() {
     auto active_devices = this->get_all_active_devices_impl();
 
-    initializers_[CommandQueueInitializer::key()] =
+    initializers_[CommandQueueInitializer::key] =
         std::make_unique<CommandQueueInitializer>(descriptor_, skip_remote_devices_);
-    initializers_[CommandQueueInitializer::key()]->init(active_devices, init_done_);
-    init_done_.insert(CommandQueueInitializer::key());
+    initializers_[CommandQueueInitializer::key]->init(active_devices, init_done_);
+    init_done_.insert(CommandQueueInitializer::key);
 
     if (init_profiler_) {
         this->initialize_profiler();
@@ -570,7 +571,7 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command
 }
 
 bool DeviceManager::is_dispatch_firmware_active() const {
-    auto it = initializers_.find(DispatchKernelInitializer::key());
+    auto it = initializers_.find(DispatchKernelInitializer::key);
     return it != initializers_.end() && it->second->is_initialized();
 }
 
@@ -623,15 +624,15 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     // Order matters
-    initializers_[DispatchKernelInitializer::key()]->teardown();
-    initializers_[FabricFirmwareInitializer::key()]->teardown();
-    initializers_[ProfilerInitializer::key()]->teardown();
-    initializers_[CommandQueueInitializer::key()]->teardown();
+    initializers_[DispatchKernelInitializer::key]->teardown();
+    initializers_[FabricFirmwareInitializer::key]->teardown();
+    initializers_[ProfilerInitializer::key]->teardown();
+    initializers_[CommandQueueInitializer::key]->teardown();
 
-    initializers_[DispatchKernelInitializer::key()]->post_teardown();
-    initializers_[FabricFirmwareInitializer::key()]->post_teardown();
-    initializers_[ProfilerInitializer::key()]->post_teardown();
-    initializers_[CommandQueueInitializer::key()]->post_teardown();
+    initializers_[DispatchKernelInitializer::key]->post_teardown();
+    initializers_[FabricFirmwareInitializer::key]->post_teardown();
+    initializers_[ProfilerInitializer::key]->post_teardown();
+    initializers_[CommandQueueInitializer::key]->post_teardown();
 
     init_done_.clear();
     initializers_.clear();

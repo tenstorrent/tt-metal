@@ -10,7 +10,7 @@ namespace tt::tt_metal {
 
 class CommandQueueInitializer final : public FirmwareInitializer {
 public:
-    static constexpr InitializerKey key() { return InitializerKey::CommandQueue; }
+    static constexpr InitializerKey key = InitializerKey::CommandQueue;
 
     CommandQueueInitializer(std::shared_ptr<const ContextDescriptor> descriptor, bool skip_remote_devices);
 

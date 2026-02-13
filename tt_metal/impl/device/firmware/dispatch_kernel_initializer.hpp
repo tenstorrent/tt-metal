@@ -10,7 +10,7 @@ namespace tt::tt_metal {
 
 class DispatchKernelInitializer final : public FirmwareInitializer {
 public:
-    static constexpr InitializerKey key() { return InitializerKey::Dispatch; }
+    static constexpr InitializerKey key = InitializerKey::Dispatch;
 
     using FirmwareInitializer::FirmwareInitializer;
 
