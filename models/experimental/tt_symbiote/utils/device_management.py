@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device management utilities for TTNN modules."""
+"""Device management utilities for TTNN modules and tensor device preparation (e.g. GR00T)."""
 import time
 
+import ttnn
 from torch import nn
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
@@ -127,3 +128,37 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                         _set_device_recursive(v)
 
     _set_device_recursive(obj)
+
+
+def unwrap_ttnn(tensor):
+    """Recursively extracts the core tensor from TTNN or Symbiote wrappers."""
+    if tensor is None:
+        return None
+    curr = tensor
+    while hasattr(curr, "ttnn_tensor") or hasattr(curr, "value") or hasattr(curr, "tensor"):
+        curr = getattr(curr, "ttnn_tensor", getattr(curr, "value", getattr(curr, "tensor", curr)))
+    return curr
+
+
+def assimilate_to_device(tensor, device):
+    """
+    Prepares tensors for GR00T inference by handling unwrapping,
+    complex-to-real conversion, and moving to the Tenstorrent device.
+    """
+    if tensor is None:
+        return None
+
+    from models.experimental.tt_symbiote.core.utils import ensure_tile_layout
+
+    curr = unwrap_ttnn(tensor)
+
+    if isinstance(curr, ttnn.Tensor) and curr.storage_type() == ttnn.StorageType.DEVICE:
+        return ensure_tile_layout(curr)
+
+    import torch
+
+    torch_t = curr if isinstance(curr, torch.Tensor) else ttnn.to_torch(curr)
+    if torch.is_complex(torch_t):
+        torch_t = torch_t.real
+
+    return ttnn.from_torch(torch_t.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)

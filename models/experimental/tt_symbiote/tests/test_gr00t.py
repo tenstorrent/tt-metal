@@ -105,6 +105,33 @@ def _apply_speed_optimizations():
     os.environ.setdefault("TT_SYMBIOTE_NUM_INFERENCE_TIMESTEPS", "1")
 
 
+def test_view_padded_tensor_via_dispatch():
+    """Regression: view on padded tensor (e.g. after im2col) must succeed via dispatch path.
+
+    Padded-view handling lives in run_config.dispatch_to_torch_wrapper; torch_dispatcher.handle_view
+    stays simple (reshape only). This test ensures the run_config logic is exercised.
+    """
+    from functools import reduce
+    import operator
+
+    # Simulate padded buffer: 2965872 elements, view expects (1, 1152, 196, 4) = 903168
+    padded = torch.randn(2965872, dtype=torch.bfloat16)
+    shape = (1, 1152, 196, 4)
+    target_numel = reduce(operator.mul, shape, 1)
+    assert target_numel == 903168 and padded.numel() > target_numel
+
+    class ViewFunc:
+        def name(self):
+            return "aten::view"
+
+    args = (padded, shape)
+    result = DispatchManager.dispatch_to_torch_wrapper(ViewFunc(), args, {})
+    # result may be TorchTTNNTensor-wrapped; .shape and .numel() still work
+    out = result.to_torch if hasattr(result, "to_torch") else result
+    assert out.shape == shape
+    assert out.numel() == target_numel
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
 @pytest.mark.filterwarnings("ignore:Accessing config attribute.*AlternateVLDiT.*:FutureWarning")
 def test_gr00t_inference_validation(device):

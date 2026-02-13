@@ -4,22 +4,8 @@
 
 
 def handle_view(func, args, kwargs):
-    """Handle view operation (torch path). Expects tensor size to match product of new_shape.
-    When tensor has padded numel (e.g. device im2col output 2965872) but view expects logical
-    (1, 1152, 196, 4)=903168, take first 903168 elements and reshape so view succeeds."""
-    t = args[0]
-    shape = args[1]
-    if not isinstance(shape, (list, tuple)) or len(shape) == 0:
-        return t.reshape(shape)
-    from functools import reduce
-    import operator
-
-    target_numel = reduce(operator.mul, shape, 1)
-    if t.numel() == target_numel:
-        return t.reshape(shape)
-    if t.numel() > target_numel and target_numel > 0:
-        return t.flatten()[:target_numel].clone().reshape(shape)
-    return t.reshape(shape)
+    """Handle view operation."""
+    return args[0].reshape(args[1])
 
 
 func_to_torch = {
