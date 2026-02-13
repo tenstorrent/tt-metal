@@ -22,6 +22,15 @@ void bind_dit_layernorm_pre_all_gather(nb::module_& mod) {
             producing a 2-tile-wide tensor with sum(x) and sum(x**2) per row (tile columns 0 and 1).
             Intended to be followed by an all-gather across devices, then ``dit_layernorm_post_allgather``.
 
+            Args:
+              input_tensor (ttnn.Tensor): the input tensor.
+              recip_tensor (ttnn.Tensor): the reciprocals tensor for Welford algorithm.
+
+            Keyword args:
+              dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to BFLOAT16.
+              compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration.
+              memory_config (ttnn.MemoryConfig, optional): the memory configuration.
+
             Limitations:
               - Input must be TILE layout, on device, non-sharded.
               - Supported dtypes: BF16, BF8_B, FP32 for input; output stats are BF16.
@@ -29,6 +38,7 @@ void bind_dit_layernorm_pre_all_gather(nb::module_& mod) {
             )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),
+            nb::arg("recip_tensor"),
             nb::kw_only(),
             nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
             nb::arg("compute_kernel_config") = nb::none(),
