@@ -16,7 +16,8 @@ void bind_example_operation(nb::module_& mod) {
     ttnn::bind_function<"composite_example">(
         mod,
         R"doc(composite_example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
-        ttnn::overload_t(&ttnn::composite_example, nb::arg("input_tensor")));
+        &ttnn::composite_example,
+        nb::arg("input_tensor"));
 }
 
 }  // namespace ttnn::operations::examples
