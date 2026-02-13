@@ -39,7 +39,7 @@ void DispatchKernelInitializer::init(
     }
 
     TT_ASSERT(
-        init_done.contains(FabricFirmwareInitializer::key()),
+        init_done.contains(FabricFirmwareInitializer::key),
         "Fabric firmware must be initialized before dispatch firmware");
 
     // Compile dispatch kernels if using fast dispatch.
