@@ -119,17 +119,17 @@ def vit_block_config(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     if config.device.endswith("n300"):
         # Single-card N300 often exposes a harvested 8x7 worker grid.
         grid = (8, 7)
-        math = "hi-fi2"
+        math_fidelity = "hi-fi2"
     elif config.device.endswith("n150"):
         grid = (6, 6)
-        math = "hi-fi3"
+        math_fidelity = "hi-fi3"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
-        math = "hi-fi2"
+        math_fidelity = "hi-fi2"
     else:
         grid = (6, 6)
-        math = "hi-fi3"
-    return TTLayerConfig(grid=grid, math_fidelity=math, attn_fused_qkv=True, activation_fused=True)
+        math_fidelity = "hi-fi3"
+    return TTLayerConfig(grid=grid, math_fidelity=math_fidelity, attn_fused_qkv=True, activation_fused=True)
 
 
 def _choose_tile_aligned_grid_y(*, seq_len_padded: int, max_grid_y: int, tile: int = 32) -> int:
@@ -297,13 +297,13 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         seq_len_padded = math.ceil(seq_len / 64) * 64
         grid_y = _choose_tile_aligned_grid_y(seq_len_padded=seq_len_padded, max_grid_y=max_grid_y, tile=32)
         grid = (int(grid_x), int(grid_y))
-        math = "hi-fi2"
+        math_fidelity = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
-        math = "hi-fi2"
+        math_fidelity = "hi-fi2"
     else:
         grid = (6, 6)
-        math = "hi-fi3"
+        math_fidelity = "hi-fi3"
 
     prog_cfgs = _build_perf_program_configs(config, grid)
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
@@ -321,7 +321,7 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
 
     return TTLayerConfig(
         grid=grid,
-        math_fidelity=math,
+        math_fidelity=math_fidelity,
         shard_tokens=True,
         shard_heads=True,
         use_fused_ops=True,
