@@ -1139,13 +1139,13 @@ The format is best explained by analyzing an example line:
 
 The meaning of the fields is as follows:
 
-* The first field identifies the device number (some systems may have multiple devices),
+* The first field identifies the device number (some systems may have multiple devices)
   and the logical and device (a.k.a. virtual) coordinates of the core.
 
-* State of each RISC-V processor is indicated either through a single-character code
-  (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code
-  (e.g., ``NRW`` = "NoC Read Wait", ``NSW`` = "NoC Semaphore Wait").
-  These codes correspond to the last waypoint string encountered in that core's execution.
+* This is followed by a comma-separated list of waypoints for BRISC, NCRISC, TRISC0, TRISC1, and TRISC2, respectively.
+  Waypoints are usually single-character codes (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done),
+  or multi-character codes (e.g., ``NRW`` = "NoC Read Wait", ``NSW`` = "NoC Semaphore Wait").
+  These codes correspond to the last waypoint encountered in that core's execution.
   If you're unsure what some of the codes mean, you can `grep` for the corresponding
   waypoint string in the source code. For example:
 
@@ -1216,4 +1216,4 @@ is listed at the end of that section. For example:
 Idle cores, where the program has not created any kernels, can easily be identified by their ``k_ids`` fields all set to 0.
 
 Together with waypoints, asserts, and DPRINTs, this log format turns Watcher into a practical tool for quickly pinpointing
-the cores, kernels, and code locations involved in hangs and other hard-to-debug issues.
+the cores, kernels, and code locations involved in hangs and other hard to debug issues.
