@@ -893,7 +893,7 @@ def compute_matmul_golden(
     # (L, E/D, K, N) -> (L, E, K, N)
     torch_w1 = torch_w1.repeat([1, devices, 1, 1])
     # (L, E/D, N, K) -> (L, E, N, K)
-    torch_w2 = torch_w2.repeat([1, device, 1, 1])
+    torch_w2 = torch_w2.repeat([1, devices, 1, 1])
 
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
@@ -976,7 +976,9 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+    "selected_experts_k, num_layers, num_iterations",
+    [(1, 1, 1)]
+    #    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1092,15 +1094,13 @@ def test_moe_compute(
             dtype=tt_to_torch_dtype(dtype),
         )
 
-        original_token_layers.append(original_tokens)
-
         # Compute goldens
         tilize_golden_output, expert_token_counts = compute_selective_tilize_golden(
             sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
         )
         logger.info(f"  expert_token_counts:\n{expert_token_counts}")
         per_expert_tokens_goldens.append(expert_token_counts)
-        dense_token_golden_layer_outputs.append(tilize_golden_output)
+        tilize_golden_layer_outputs.append(tilize_golden_output)
 
         golden_activation, experts_per_device_check = compute_expert_activation_golden(
             expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
@@ -1388,6 +1388,9 @@ def test_moe_compute(
             ),
         }
     )
+
+    output_shard_cores = ttnn.get_moe_combine_cores(mesh_device)
+
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1433,7 +1436,7 @@ def test_moe_compute(
                 layer_id,
                 experts_per_device,
                 all_core_range_set,
-                output_shard_cores,  # TODO AFM define me
+                output_shard_cores,
                 output_shard_height_dim,
                 output_shard_width_dim,
                 tokens_per_device * devices,

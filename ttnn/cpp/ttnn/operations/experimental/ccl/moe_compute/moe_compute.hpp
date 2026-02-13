@@ -34,5 +34,7 @@ namespace experimental {
 constexpr auto moe_compute = ttnn::
     register_operation<"ttnn::experimental::moe_compute", ttnn::operations::experimental::ccl::ExecuteMoECompute>();
 
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
+
 }  // namespace experimental
 }  // namespace ttnn

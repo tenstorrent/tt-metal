@@ -48,4 +48,6 @@ std::vector<Tensor> moe_compute(
     uint32_t output_width_shard_dim,
     const std::optional<uint32_t>& cluster_axis);
 
+using ttnn::experimental::prim::get_moe_combine_cores;
+
 }  // namespace ttnn::prim

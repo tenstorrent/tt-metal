@@ -120,7 +120,7 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
-std::vector<ttnn::CoreCoord> get_combine_cores(ttnn::MeshDevice* mesh_device) {
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
     constexpr auto comine_cores_return_index = 5;
 
     const auto get_cores_return = get_cores(mesh_device);

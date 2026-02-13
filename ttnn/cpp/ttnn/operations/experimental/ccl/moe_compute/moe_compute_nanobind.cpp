@@ -11,6 +11,7 @@
 #include "moe_compute_nanobind.hpp"
 #include "moe_compute.hpp"
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
@@ -72,4 +73,13 @@ void bind_moe_compute(nb::module_& mod) {
         )doc");
 }
 
+void bind_get_moe_combine_cores(nb::module_& mod) {
+    const auto* doc = R"doc(Return the ordered list of cores assigned to A2A Combine for the MoE module flow )doc";
+    ttnn::bind_function<"get_moe_combine_cores">(
+        mod,
+        doc,
+        // Overload 1: single split_size (int64_t)
+        ttnn::overload_t(
+            nb::overload_cast<ttnn::MeshDevice*>(&ttnn::experimental::get_moe_combine_cores), nb::arg("input_tensor")));
+}
 }  // namespace ttnn::operations::experimental::ccl
