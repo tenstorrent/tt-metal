@@ -316,8 +316,6 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
     split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
-    if disable_attn_pc:
-        split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
     return TTLayerConfig(
         grid=grid,
