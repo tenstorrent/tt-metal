@@ -189,7 +189,10 @@ public:
     //                                      Getters
     // ======================================================================================
 private:
-    // TODO: remove this, use case has been all cleaned up
+    // TODO(river):
+    // This will be removed as part of Metal Tensor split lowering (#37692).
+    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
+    // effort.
     const Storage& storage() const;
 
 public:
