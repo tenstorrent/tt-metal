@@ -448,6 +448,10 @@ void kernel_main() {
                         }
 
                         // Forward K chunk to next core(s): initiate async write (NOC write channel)
+                        // For mcast: send linked data + companion semaphore back-to-back.
+                        // The companion must be issued immediately after the linked write —
+                        // any noc_async_read_barrier() between them deadlocks (the read barrier
+                        // blocks while a linked write awaits its companion).
                         {
                             if (should_forward) {
                                 noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
@@ -461,6 +465,8 @@ void kernel_main() {
                                             k_chunk_tiles * k_tile_bytes,
                                             mcast_num_dests,
                                             true /* linked: semaphore mcast follows */);
+                                        noc_semaphore_set_multicast(
+                                            valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
                                     } else {
                                         uint64_t k_unicast_data_addr =
                                             get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
@@ -471,7 +477,7 @@ void kernel_main() {
                             }
                         }
 
-                        // Mask read uses NOC read channel — overlaps with in-flight K write
+                        // Mask read — safe after linked write pair is complete
                         if constexpr (use_provided_mask) {
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
@@ -511,12 +517,10 @@ void kernel_main() {
                         }
 
                         // Complete K forward: flush write and signal receiver(s)
+                        // (mcast path already completed above — companion sent with linked write)
                         {
                             if (should_forward) {
-                                if constexpr (mcast_enabled) {
-                                    noc_semaphore_set_multicast(
-                                        valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                                } else {
+                                if constexpr (!mcast_enabled) {
                                     noc_async_writes_flushed();
                                     noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                                 }
