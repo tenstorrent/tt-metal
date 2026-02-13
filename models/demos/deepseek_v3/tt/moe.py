@@ -167,8 +167,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                 strategy=ttnn.ShardStrategy.WIDTH,
             )
 
+            NUM_DECODE_RS_SHARD_CORES = 7
             sum_experts_output_memory_config = ttnn.create_sharded_memory_config(
-                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE),
+                shape=(USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE // NUM_DECODE_RS_SHARD_CORES),
                 core_grid=ttnn.CoreRangeSet(
                     [
                         ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
@@ -177,7 +178,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                         ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
                         ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
                         ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                        ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
                     ]
                 ),
                 strategy=ttnn.ShardStrategy.WIDTH,

@@ -86,7 +86,18 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
                 ttnn.BufferType.L1,
                 ttnn.NdShardSpec(
                     ttnn.Shape([1, 1, 32, 128]),
-                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+                    ttnn.CoreRangeSet(
+                        [
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)),
+                        ]
+                    ),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
                 ),
@@ -110,8 +121,8 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
                             ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
                             ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
                             ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
-                            ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 0)),
-                            # ttnn.CoreRange(ttnn.CoreCoord(7, 5), ttnn.CoreCoord(7, 5)), # hypothetical final core
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                            # ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(0, 5)), # hypothetical final core
                         ]
                     ),
                     ttnn.ShardOrientation.ROW_MAJOR,
@@ -143,7 +154,14 @@ from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepsee
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "trace_region_size": 1531456,
+            },
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_ring"],
