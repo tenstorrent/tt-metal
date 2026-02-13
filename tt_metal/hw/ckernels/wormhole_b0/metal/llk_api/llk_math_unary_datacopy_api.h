@@ -76,5 +76,7 @@ inline void llk_math_fast_tilize_block_(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+
+    _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units, num_faces);
 }
