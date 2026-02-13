@@ -60,6 +60,7 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           enable-watcher: false
           enable-kernel-ccache: true
+          secrets: inherit
 
       - name: Prepare ccache summary
         run: |
