@@ -127,13 +127,36 @@ def test_forward_pass(
     # Run MoE forward with gathered input
     if mode == "prefill":
         tt_output = MoE.forward_prefill(tt_input_gathered, run_config)
+        tt_output = ttnn.sum(tt_output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+
+        # Perform reduce_scatter after forward pass
+        tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_output, **ccl.populate_reduce_scatter_runtime_args(run_config["final_output_reduce_scatter"])
+        )
     else:  # decode
         tt_output = MoE.forward_decode(tt_input_gathered, run_config)
 
-    # Perform reduce_scatter after forward pass
-    tt_output = ttnn.experimental.reduce_scatter_minimal_async(
-        tt_output, **ccl.populate_reduce_scatter_runtime_args(run_config["final_output_reduce_scatter"])
-    )
+        # Perform reduce_scatter after forward pass
+        if cfg["optimized_final_output_reduce_scatter"].topology == ttnn.Topology.Ring:
+            tt_output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                tt_output,
+                dim=0,
+                split_size=tt_output[-1] // tp_size,
+                output_memory_config=cfg["optimized_sum_experts_output_memory_config"],
+            )
+
+            # Single reduce_scatter on combined output
+            tt_output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                tt_output, **cfg["optimized_final_output_reduce_scatter"]
+            )
+        else:
+            tt_output = ttnn.sum(tt_output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+
+            # Single reduce_scatter on combined output
+            tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+                tt_output,
+                **ccl_shared.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"]),
+            )
 
     # Cleanup gathered input
     ttnn.deallocate(tt_input_gathered)

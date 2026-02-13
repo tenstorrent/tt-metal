@@ -113,6 +113,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
         # Run both MoE and SharedExpert with the same gathered input
         mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
+        mlp_out = ttnn.sum(mlp_out, dim=0, keepdim=True, memory_config=cfg["moe"]["sum_experts_output_memory_config"])
+
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_prefill(x_gathered, cfg["shared_expert"])
 
@@ -164,24 +166,47 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
 
-        # Add outputs first, then reduce_scatter the combined result
-        combined_out = ttnn.add(mlp_out, shared_expert_out)
+        # We sum the experts from MoE along with SharedExpert inside a single reduce by concatting first, instead
+        # of a reduce on the MoE experts, and then a following add with the SharedExpert. This enables us to use
+        # the optimized reduce_scatter.
+        combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
 
         # Handle reduce_scatter if input was TP-sharded
         if x_dim == hidden_size // tp_size:
-            # Single reduce_scatter on combined output using shared_expert's config
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                combined_out,
-                **ccl_shared.populate_reduce_scatter_runtime_args(cfg["shared_expert"]["reduce_scatter_async"]),
-            )
+            # Add outputs first, then reduce_scatter the combined result
+            # Use the optimized version if ring fabric is available
+
+            if cfg["moe"]["optimized_final_output_reduce_scatter"].topology == ttnn.Topology.Ring:
+                combined_out = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    combined_out,
+                    dim=0,
+                    split_size=combined_out[-1] // tp_size,
+                    output_memory_config=cfg["moe"]["optimized_sum_experts_output_memory_config"],
+                )
+
+                # Single reduce_scatter on combined output
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                    combined_out, **cfg["moe"]["optimized_final_output_reduce_scatter"]
+                )
+            else:
+                combined_out = ttnn.sum(
+                    combined_out, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"]
+                )
+
+                # Single reduce_scatter on combined output
+                output = ttnn.experimental.reduce_scatter_minimal_async(
+                    combined_out,
+                    **ccl_shared.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
+                )
+
             ttnn.deallocate(combined_out)
             # Cleanup gathered tensor
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
         else:
             # If not TP-sharded, combined output is the final output
-            output = combined_out
+            output = ttnn.sum(combined_out, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
 
         return output

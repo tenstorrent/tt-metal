@@ -314,7 +314,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Note: reduce_scatter is handled by the caller (decoder block or test)
+        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
 
         return post_combine_output_tensor
 
@@ -435,8 +435,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
             )
             ttnn.deallocate(topk_weights_chunk)
-
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
