@@ -26,6 +26,10 @@ REPORT_JSON_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_REPORT_JSON"
 
 DEFAULT_REPORT_NAME = "deepseek_v3_cache_specs_report.json"
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 def product(xs: Iterable[int]) -> int:
     return reduce(mul, xs, 1)
@@ -111,7 +115,7 @@ class ReplayResult:
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": optimal_topology,
         }
     ],
     indirect=True,

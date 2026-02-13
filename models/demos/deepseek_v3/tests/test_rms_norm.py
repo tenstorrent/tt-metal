@@ -21,6 +21,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
@@ -34,7 +38,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": optimal_topology}],
     indirect=True,
 )
 @pytest.mark.parametrize(

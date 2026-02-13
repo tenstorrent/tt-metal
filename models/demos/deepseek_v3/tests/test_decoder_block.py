@@ -31,6 +31,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     torch_cache_from_transformers_single_layer,
 )
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 def generate_reference_io(
     model_path: Path,
@@ -204,7 +208,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": optimal_topology},
     ],
     indirect=True,
 )

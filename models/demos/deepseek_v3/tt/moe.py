@@ -168,7 +168,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             NUM_DECODE_RS_SHARD_CORES = 7
-            sum_experts_output_memory_config = ttnn.MemoryConfig(
+            optimized_sum_experts_output_memory_config = ttnn.MemoryConfig(
                 ttnn.BufferType.L1,
                 ttnn.NdShardSpec(
                     ttnn.Shape([1, 1, USERS_PER_ROW, HIDDEN_SIZE // TP_SIZE // NUM_DECODE_RS_SHARD_CORES]),
@@ -208,8 +208,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": input_output_memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
-                "sum_experts_output_memory_config": sum_experts_output_memory_config,
-                "final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
+                "optimized_sum_experts_output_memory_config": optimized_sum_experts_output_memory_config,
+                "sum_experts_output_memory_config": memory_config,
+                "optimized_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
+                    cluster_axis=1,
+                    dim=3,
+                    memory_config=input_output_memory_config,
+                ),
+                "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
@@ -248,7 +254,13 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "optimized_sum_experts_output_memory_config": memory_config,
                 "sum_experts_output_memory_config": memory_config,
+                "optimized_final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
+                    cluster_axis=1,
+                    dim=3,
+                    memory_config=memory_config,
+                ),
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
@@ -302,9 +314,15 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Reduce Scatter
-        post_combine_output_tensor = ttnn.experimental.deepseek_moe_reduce_scatter(
-            post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
-        )
+        if cfg["optimized_final_output_reduce_scatter"].topology == ttnn.Topology.Ring:
+            post_combine_output_tensor = ttnn.experimental.deepseek_moe_reduce_scatter(
+                post_combine_output_tensor, **cfg["optimized_final_output_reduce_scatter"]
+            )
+        else:
+            post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                post_combine_output_tensor,
+                **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"]),
+            )
 
         return post_combine_output_tensor
 
@@ -459,13 +477,18 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
 
-        tp_size = cfg["mesh_device"].shape[1]
-        post_combine_output_tensor = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-            post_combine_output_tensor,
-            dim=0,
-            split_size=post_combine_output_tensor[-1] // tp_size,
-            output_memory_config=cfg["sum_experts_output_memory_config"],
-        )
+        if cfg["optimized_final_output_reduce_scatter"].topology == ttnn.Topology.Ring:
+            tp_size = cfg["mesh_device"].shape[1]
+            post_combine_output_tensor = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                post_combine_output_tensor,
+                dim=0,
+                split_size=post_combine_output_tensor[-1] // tp_size,
+                output_memory_config=cfg["optimized_sum_experts_output_memory_config"],
+            )
+        else:
+            post_combine_output_tensor = ttnn.sum(
+                post_combine_output_tensor, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"]
+            )
 
         return post_combine_output_tensor
 

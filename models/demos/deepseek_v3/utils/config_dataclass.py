@@ -196,7 +196,7 @@ class DeepseekMoEReduceScatterConfig(OpConfigBase):
     output_memory_config: ttnn.MemoryConfig
     dim: int
     num_links: int = 4
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     cluster_axis: int | None = None
 
 

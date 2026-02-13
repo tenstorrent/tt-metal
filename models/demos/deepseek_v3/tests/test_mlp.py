@@ -26,10 +26,14 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
+
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": optimal_topology}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
     # Add a skip for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375
     if tuple(mesh_device.shape) == (8, 8):
@@ -51,7 +55,7 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
 
 # TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": optimal_topology}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
@@ -141,7 +145,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         ("prefill", _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": optimal_topology}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [
