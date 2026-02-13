@@ -170,7 +170,7 @@ COPY --from=cba-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 
 # Copy pre-built mold from GHCR tool image
-COPY --from=mold-layer /install/bin/ /install/lib/ /usr/local/
+COPY --from=mold-layer /install/ /usr/local/
 
 # Copy pre-built ci-build venv from tool image
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
