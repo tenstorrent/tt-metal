@@ -10,6 +10,7 @@
 #include <string>
 #include <tt-logger/tt-logger.hpp>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #include <nanobind/nanobind.h>
@@ -34,6 +35,13 @@ struct overload_t {
 // Deduction guide
 template <typename Func, typename... Args>
 overload_t(Func, Args...) -> overload_t<Func, Args...>;
+
+template <typename T>
+struct is_overload_t : std::false_type {};
+template <typename F, typename... A>
+struct is_overload_t<overload_t<F, A...>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_overload_t_v = is_overload_t<std::remove_cvref_t<T>>::value;
 
 namespace detail {
 
@@ -80,11 +88,21 @@ struct unique_wrapper_base {
     std::string py_name_;
 };
 
+// Single-function overload: pass function and nanobind args directly (no overload_t wrapper).
+template <unique_string FuncName, unique_string Namespace = unique_string{"ttnn."}, typename Func, typename... Args>
+    requires(!is_overload_t_v<Func>)
+void bind_function(nb::module_& mod, const char* doc, Func f, Args&&... args) {
+    bind_function<FuncName, Namespace>(mod, doc, overload_t(f, std::forward<Args>(args)...));
+}
+
 // Main binding function - binds a set of C++ function overloads as a callable Python object
 //
-// Usage:
+// Usage (single function, no overload_t):
+//   ttnn::bind_function<"conv1d">(mod, doc, &ttnn::conv1d, nb::kw_only(), nb::arg("input_tensor"), ...)
+//
+// Usage (one or more overloads):
 //   ttnn::bind_function<"split">(mod, doc, ttnn::overload_t(...))
-//   ttnn::bind_function<"some_op", "ttnn.experimental">(mod, doc, ttnn::overload_t(...))
+//   ttnn::bind_function<"softmax">(mod, doc, ttnn::overload_t(...), ttnn::overload_t(...))
 //
 // The FuncName template parameter uses C++20 unique_string to ensure each operation
 // gets a unique type across all translation units, preventing mangled name collisions.
