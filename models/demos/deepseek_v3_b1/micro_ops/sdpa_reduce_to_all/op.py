@@ -145,6 +145,7 @@ class SdpaReduceToAll:
                 r1_01_valid,
                 r1_23_valid,
             )
+            # skip final reduction if data on a single device
             if final_reduction:
                 l_final = l_final / s_final.expand(-1, l_final.shape[1])
             l_final_cores.append(l_final)
@@ -182,8 +183,6 @@ class SdpaReduceToAll:
         forwarder_cores = input_forwarder_cores
         forwarder_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in forwarder_cores])
 
-        # Position tensor setup (optional conditional reduction)
-        # Position tensor will be passed to kernel via CB (no host-side extraction)
         position_enabled = position_tensor_mesh is not None
 
         input_l_per_device = ttnn.get_device_tensors(input_tensor_l_mesh)
@@ -382,7 +381,7 @@ class SdpaReduceToAll:
                     tiles_per_l_chunk,
                     num_l_chunks,
                     cb_position,  # Position CB index
-                    1 if position_enabled else 0,  # Enable/disable conditional reduction
+                    1 if position_enabled else 0,
                     final_reduction,
                 ]
 
@@ -533,7 +532,7 @@ class SdpaReduceToAll:
                     ],
                 )
 
-                # Position CB (aliased from position tensor if enabled, otherwise dummy)
+                # Position CB (aliased from position tensor)
                 if position_enabled:
                     cb_position_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_position, position_device)
                 else:
@@ -623,8 +622,7 @@ class SdpaReduceToAll:
                         self.r1_worker_count = 0
                         self.r2_worker_count = 0
 
-                # Reader args - need to be set per-core for position indices
-                # Set base args first (common to all cores)
+                # Reader args are identical for all worker cores.
                 for core in shard_cores:
                     reader_rt_args[core.x][core.y] = [
                         r1_recv_sem_addr,
@@ -648,6 +646,7 @@ class SdpaReduceToAll:
 
                     for worker_idx, core in enumerate(cores_for_link):
                         is_type_a = ((row + worker_idx) % 2) == 0
+
                         r1_cfg = fwd_cfg if is_type_a else bwd_cfg
                         r2_cfg = bwd_cfg if is_type_a else fwd_cfg
 
@@ -724,7 +723,6 @@ class SdpaReduceToAll:
                                     r2_neighbor_r1_neighbor_idx,
                                 ]
                             )
-                        # If position is disabled, no runtime args needed (compute kernel uses defaults)
 
                         # Append scatter runtime args (only when scatter is enabled)
                         if scatter_enabled:
