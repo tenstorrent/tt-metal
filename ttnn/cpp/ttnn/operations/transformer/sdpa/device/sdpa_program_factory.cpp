@@ -273,7 +273,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
 
     // log all values
@@ -921,24 +921,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
         std::vector<uint32_t> reader_args;
         reader_args.reserve(is_causal ? 17 : 29);
-        reader_args.emplace_back(q_addr);
-        reader_args.emplace_back(k_addr);
-        reader_args.emplace_back(v_addr);
-        reader_args.emplace_back(mask_addr);
-        reader_args.emplace_back(is_chunked ? page_table.value().buffer()->address() : 0);
-        reader_args.emplace_back(attention_sink_addr);
-        reader_args.emplace_back(
+        reader_args.push_back(q_addr);
+        reader_args.push_back(k_addr);
+        reader_args.push_back(v_addr);
+        reader_args.push_back(mask_addr);
+        reader_args.push_back(is_chunked ? page_table.value().buffer()->address() : 0);
+        reader_args.push_back(attention_sink_addr);
+        reader_args.push_back(
             flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0);
-        reader_args.emplace_back(i);
-        reader_args.emplace_back(local_batch_start);
-        reader_args.emplace_back(local_batch_end);
-        reader_args.emplace_back(local_nh_start);
-        reader_args.emplace_back(local_nh_end);
-        reader_args.emplace_back(local_q_start);
-        reader_args.emplace_back(local_q_end);
-        reader_args.emplace_back(num_phases);
-        reader_args.emplace_back(chunked_q_chunk_offset);
-        reader_args.emplace_back(read_offset);
+        reader_args.push_back(i);
+        reader_args.push_back(local_batch_start);
+        reader_args.push_back(local_batch_end);
+        reader_args.push_back(local_nh_start);
+        reader_args.push_back(local_nh_end);
+        reader_args.push_back(local_q_start);
+        reader_args.push_back(local_q_end);
+        reader_args.push_back(num_phases);
+        reader_args.push_back(chunked_q_chunk_offset);
+        reader_args.push_back(read_offset);
 
         // Add chain metadata for non-causal case
         if (!is_causal) {
@@ -1017,14 +1017,14 @@ void SDPAProgramFactory::override_runtime_arguments(
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
 
-    auto *q_buffer = tensor_args.q.buffer();
-    auto *k_buffer = tensor_args.k.buffer();
-    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
-    auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
-    auto *attention_sink_buffer =
+    auto* q_buffer = tensor_args.q.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
+    auto* v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
+    auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
+    auto* attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
 
-    auto *out0_buffer = tensor_return_value.buffer();
+    auto* out0_buffer = tensor_return_value.buffer();
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
