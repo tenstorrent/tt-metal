@@ -311,7 +311,7 @@ def run_generation_exactly_like_test_end2end(
             kv_cache=tt_kv_cache,
         )
 
-        # decode_forward_text returns (logits, log_probs) tuple when read_from_device=True
+        # decode_forward returns (logits, log_probs) tuple when read_from_device=True
         if isinstance(decode_output, tuple):
             logits, _ = decode_output
         else:
