@@ -8,12 +8,21 @@
 // This kernel runs on the SENDER core (0,0) on RISCV_0.
 // It handles ONLY weight reading from DRAM + multicast to all cores.
 // X reading is handled by the X reader kernel on RISCV_1 (concurrent).
+// ============================================================================
 //
-// Loop structure (must match compute kernel and X reader):
-//   for r in max_rows_for_sync:
-//     Phase A: for p_block: for k_block: mcast W1, mcast W3
-//     Phase B: idle (SiLU is compute-only)
-//     Phase C: for c_block: for k_block: mcast W2
+// ========================= Sender kernel structure ===========================
+// for r in max_rows_for_sync:
+//   # Phase A: Mcast W1, W3 for all p_blocks × k_blocks
+//   for p_block in p_blocks:
+//     for k_block in k_blocks:
+//       read W1[p_block, k_block], W3[p_block, k_block] from DRAM
+//       mcast W1 batch to all cores; mcast W3 batch to all cores
+//   # Phase B: Idle (SiLU is compute-only)
+//   # Phase C: Mcast W2 for all c_blocks × k_blocks
+//   for c_block in c_blocks:
+//     for k_block in k_blocks:
+//       read W2[k_block, c_block] from DRAM
+//       mcast W2 batch to all cores
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"

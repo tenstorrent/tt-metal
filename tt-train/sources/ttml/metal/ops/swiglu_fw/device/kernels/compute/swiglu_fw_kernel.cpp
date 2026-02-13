@@ -27,6 +27,24 @@
 // Phase C: Y accumulate across k_blocks using L1 acc directly into cb_y
 //          (no cb_y_partial needed)
 // ----------------------------------------------------------------------
+//
+// ========================= Compute kernel structure =========================
+// for r in max_rows_for_sync:
+//   # Phase A: XW1[r,:], XW3[r,:] with L1 acc over p_blocks × k_blocks
+//   for p_block in p_blocks:
+//     for k_block in k_blocks:
+//       XW1[r, k_block] += X[r, p_block] @ W1[p_block, k_block]
+//       XW3[r, k_block] += X[r, p_block] @ W3[p_block, k_block]
+//   # Phase B: M[r, :] = SiLU(XW1[r, :]) * XW3[r, :]
+//   for k_block in k_blocks:
+//     for k in k_block:
+//       M[r, k] = SiLU(XW1[r, k]) * XW3[r, k]
+//   # Phase C: Y[r, c_block] with L1 acc over k_blocks
+//   for c_block in c_blocks:
+//     for k_block in k_blocks:
+//       Y[r, c_block] += M[r, k_block] @ W2[k_block, c_block]
+//     push Y[r, c_block]
+// ============================================================================
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t max_rows_for_sync = get_compile_time_arg_val(1);
@@ -178,7 +196,7 @@ inline void compute_M_for_r() {
             tile_regs_acquire();
             compute_silu_tile(k_block_start + k, 0U);
             tile_regs_commit();
-            pack_and_push_block(cb_m_idx, 1U);
+            pack_and_push(0U, cb_m_idx);
         }
 
         // Pad to block_size: pack garbage from regs 0..pad_count-1 (never read by matmul)

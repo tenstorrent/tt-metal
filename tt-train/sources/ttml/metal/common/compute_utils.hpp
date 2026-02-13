@@ -12,18 +12,6 @@
 #include "api/compute/tile_move_copy.h"
 
 /**
- * Pack a block of num_tiles from regs 0..num_tiles-1 into an already-reserved CB. No reserve or push.
- * Call after tile_regs_commit() and tile_regs_wait(); releases at the end.
- */
-inline void pack_no_push_block(uint32_t cb_idx, uint32_t num_tiles) {
-    pack_reconfig_data_format(cb_idx);
-    for (uint32_t i = 0U; i < num_tiles; ++i) {
-        pack_tile(i, cb_idx);
-    }
-    tile_regs_release();
-}
-
-/**
  * Pack one tile from reg to cb, reserve+wait+pack+push.
  * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
  * (they affect different threads). Commit releases the lock for math so pack can start; wait
@@ -48,7 +36,11 @@ inline void pack_and_push(uint32_t reg, uint32_t cb) {
 inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
     cb_reserve_back(cb_output, block_size);
     tile_regs_wait();
-    pack_no_push_block(cb_output, block_size);
+    pack_reconfig_data_format(cb_output);
+    for (uint32_t i = 0U; i < block_size; ++i) {
+        pack_tile(i, cb_output);
+    }
+    tile_regs_release();
     cb_push_back(cb_output, block_size);
 }
 

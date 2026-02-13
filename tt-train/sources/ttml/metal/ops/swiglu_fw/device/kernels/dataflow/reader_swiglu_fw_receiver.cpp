@@ -8,12 +8,19 @@
 // This kernel runs on RECEIVER cores (all cores except sender 0,0) on RISCV_0.
 // It handles ONLY weight receiving via multicast.
 // X reading and Y writing are handled by the X reader kernel on RISCV_1 (concurrent).
+// ============================================================================
 //
-// Loop structure (must match sender and compute):
-//   for r in max_rows_for_sync:
-//     Phase A: for p_block: for k_block: receive W1, receive W3
-//     Phase B: idle (SiLU is compute-only)
-//     Phase C: for c_block: for k_block: receive W2
+// ========================= Receiver kernel structure =========================
+// for r in max_rows_for_sync:
+//   # Phase A: Receive W1, W3 for all p_blocks × k_blocks
+//   for p_block in p_blocks:
+//     for k_block in k_blocks:
+//       receive W1 batch; receive W3 batch
+//   # Phase B: Idle (SiLU is compute-only)
+//   # Phase C: Receive W2 for all c_blocks × k_blocks
+//   for c_block in c_blocks:
+//     for k_block in k_blocks:
+//       receive W2 batch
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"

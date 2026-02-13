@@ -18,6 +18,16 @@
 // This matches the tt-metal matmul 1D mcast architecture where in0
 // (activations) are read on RISCV_1 and in1 (weights) on RISCV_0.
 // ============================================================================
+//
+// ========================= Reader/Writer kernel structure ===================
+// for r in start_row .. start_row + max_rows_for_sync:
+//   # Phase A: Read X[r, :] (padding rows: read last valid row for sync)
+//   read X[r, p_blocks] → cb_input
+//   # Phase B: Nothing (SiLU is compute-only)
+//   # Phase C: Write Y[r, :] (actual rows only; padding rows skip write)
+//   if not padding_row:
+//     write cb_y → Y[r, c_blocks]
+// ============================================================================
 
 #include <algorithm>
 
