@@ -9,6 +9,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <random>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -645,6 +646,154 @@ TEST_F(HDSocketFixture, D2HSocketLatencyBenchmark) {
             uint64_t max_c = cycles.back();
             uint64_t p50_c = cycles[num_iterations / 2];
             uint64_t p99_c = cycles[(num_iterations * 99) / 100];
+            double avg_c = 0;
+            for (auto c : cycles) {
+                avg_c += c;
+            }
+            avg_c /= num_iterations;
+
+            double avg_us = avg_c / 1350.0;
+            double min_us = static_cast<double>(min_c) / 1350.0;
+            double max_us = static_cast<double>(max_c) / 1350.0;
+            double p50_us = static_cast<double>(p50_c) / 1350.0;
+            double p99_us = static_cast<double>(p99_c) / 1350.0;
+
+            std::cout << page_size << "," << fifo_size << "," << num_iterations << "," << avg_us << "," << min_us << ","
+                      << max_us << "," << p50_us << "," << p99_us << "," << avg_c << "," << min_c << "," << max_c << ","
+                      << sender_coord << std::endl;
+            std::cout.flush();
+        }
+    }
+}
+
+// D2H Ping: pure signaling round-trip, no data DMA.
+std::vector<uint64_t> benchmark_d2h_ping(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    uint32_t num_iterations,
+    const MeshCoreCoord& sender_core) {
+    auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
+    output_socket.set_page_size(page_size);
+
+    const ReplicatedBufferConfig buffer_config{.size = page_size};
+    auto shard_params =
+        ShardSpecBuffer(CoreRangeSet(sender_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig data_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto sender_data_buffer = MeshBuffer::create(buffer_config, data_local_config, mesh_device.get());
+
+    uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
+    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
+    const DeviceLocalBufferConfig meas_local_config{
+        .page_size = measurement_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+
+    auto send_program = CreateProgram();
+    CreateKernel(
+        send_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_ping.cpp",
+        sender_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(sender_data_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(measurement_buffer->address()),
+                static_cast<uint32_t>(num_iterations),
+            }});
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
+    mesh_workload.add_program(devices, std::move(send_program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    constexpr uint32_t WARMUP_ITERS = 5;
+    uint32_t page_size_words = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> dst_vec(page_size_words);
+    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+        output_socket.read(dst_vec.data(), 1);
+    }
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        output_socket.read(dst_vec.data(), 1);
+    }
+    output_socket.barrier();
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::vector<uint64_t> cycles(num_iterations);
+    cluster.read_core(
+        cycles.data(),
+        measurement_buffer_size,
+        tt_cxy_pair(
+            mesh_device->get_device(sender_core.device_coord)->id(),
+            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
+        measurement_buffer->address());
+
+    return cycles;
+}
+
+TEST_F(HDSocketFixture, D2HSocketPingBenchmark) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    std::vector<std::size_t> page_sizes = {64};
+    std::vector<std::size_t> fifo_sizes = {4096};
+    uint32_t num_iterations = 100;
+
+    std::optional<MeshCoordinate> ping_sender_opt;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
+            ping_sender_opt = coord;
+            break;
+        }
+    }
+    ASSERT_TRUE(ping_sender_opt.has_value()) << "No MMIO-mapped device found";
+    auto sender_coord = ping_sender_opt.value();
+    MeshCoreCoord sender_core = {sender_coord, CoreCoord(0, 0)};
+
+    std::cout << "page_size,socket_fifo_size,num_iterations,"
+              << "avg_us,min_us,max_us,p50_us,p99_us,"
+              << "avg_cycles,min_cycles,max_cycles,device_coord" << std::endl;
+
+    bool dumped_iterations = false;
+    for (auto fifo_size : fifo_sizes) {
+        for (auto page_size : page_sizes) {
+            if (page_size > fifo_size) {
+                continue;
+            }
+
+            auto cycles = benchmark_d2h_ping(mesh_device_, fifo_size, page_size, num_iterations, sender_core);
+
+            // Dump per-iteration data for the first config
+            if (!dumped_iterations) {
+                std::ofstream iter_file("tests/tt_metal/distributed/ping_iterations.csv");
+                iter_file << "iteration,latency_us,cycles" << std::endl;
+                for (uint32_t i = 0; i < num_iterations; i++) {
+                    double lat_us = static_cast<double>(cycles[i]) / 1350.0;
+                    iter_file << i << "," << lat_us << "," << cycles[i] << std::endl;
+                }
+                iter_file.close();
+                dumped_iterations = true;
+            }
+
+            auto sorted_cycles = cycles;
+            std::sort(sorted_cycles.begin(), sorted_cycles.end());
+            uint64_t min_c = sorted_cycles.front();
+            uint64_t max_c = sorted_cycles.back();
+            uint64_t p50_c = sorted_cycles[num_iterations / 2];
+            uint64_t p99_c = sorted_cycles[(num_iterations * 99) / 100];
             double avg_c = 0;
             for (auto c : cycles) {
                 avg_c += c;

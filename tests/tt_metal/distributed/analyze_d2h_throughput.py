@@ -424,6 +424,148 @@ def run_latency(path):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  PING  (pure signaling round-trip, no data DMA)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def ping_print_report(df):
+    print(f"\n{'='*70}\n  D2H Pure Ping (notify+barrier only)  ({len(df)} rows)\n{'='*70}")
+    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
+    print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
+    print(f"  Iterations : {int(df.num_iterations.iloc[0])}")
+
+    print(
+        f"\n  Overall: p50 median={df.p50_us.median():.2f} us, "
+        f"min={df.min_us.min():.2f} us, max-of-max={df.max_us.max():.2f} us"
+    )
+
+    fifos = sorted(df.socket_fifo_size.unique())
+    hdr = f"  {'page':>6}" + "".join(f"{human_bytes(f):>10}" for f in fifos)
+    print(f"\n  p50 (us):\n{hdr}\n  {'-'*(len(hdr)-2)}")
+    for ps in sorted(df.page_size.unique()):
+        row = f"  {human_bytes(ps):>6}"
+        for fs in fifos:
+            c = df[(df.page_size == ps) & (df.socket_fifo_size == fs)]
+            row += f"{c.p50_us.values[0]:>10.2f}" if len(c) else f"{'--':>10}"
+        print(row)
+
+
+def ping_plot(df, out="d2h_ping.png"):
+    """Ping latency vs page_size — should be flat. One line per FIFO."""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for fs in sorted(df.socket_fifo_size.unique()):
+        g = df[df.socket_fifo_size == fs].sort_values("page_size")
+        color = ax.plot(g.page_size, g.p50_us, "o-", label=f"FIFO={human_bytes(fs)}", ms=5, lw=2)[0].get_color()
+        ax.plot(g.page_size, g.min_us, "--", color=color, lw=0.8, alpha=0.5)
+        ax.plot(g.page_size, g.max_us, "--", color=color, lw=0.8, alpha=0.5)
+    ax.set(
+        xscale="log",
+        xlabel="Page Size (bytes)",
+        ylabel="Latency (us)",
+        title="D2H Pure Ping: notify→barrier round-trip (p50 solid, min/max dashed)",
+    )
+    ax.set_xticks(t := sorted(df.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=9)
+    med = df.p50_us.median()
+    ax.axhline(med, color="gray", ls=":", lw=1, alpha=0.6)
+    ax.annotate(f"median {med:.2f} us", xy=(df.page_size.min(), med), fontsize=8, color="gray", va="bottom")
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def ping_plot_comparison(ping_df, latency_csv=None, out="d2h_ping_vs_latency.png"):
+    """If latency CSV provided, overlay ping vs data_ping at largest common FIFO."""
+    if latency_csv is None:
+        return
+    try:
+        lat_df = load_latency_csv(latency_csv)
+    except Exception:
+        return
+
+    common_fifos = set(ping_df.socket_fifo_size) & set(lat_df.socket_fifo_size)
+    if not common_fifos:
+        return
+    fs = max(f for f in common_fifos if f <= 65536) if any(f <= 65536 for f in common_fifos) else max(common_fifos)
+
+    p = ping_df[ping_df.socket_fifo_size == fs].sort_values("page_size")
+    d = lat_df[lat_df.socket_fifo_size == fs].sort_values("page_size")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(d.page_size, d.p50_us, "s-", label="Data ping (DMA + protocol)", ms=6, lw=2, color="C0")
+    ax.plot(p.page_size, p.p50_us, "o-", label="Pure ping (protocol only)", ms=6, lw=2, color="C1")
+
+    # Shade the DMA cost
+    merged = (
+        p.set_index("page_size")[["p50_us"]]
+        .join(d.set_index("page_size")[["p50_us"]], lsuffix="_ping", rsuffix="_data")
+        .dropna()
+    )
+    ax.fill_between(merged.index, merged.p50_us_ping, merged.p50_us_data, alpha=0.15, color="C0", label="DMA cost")
+
+    ax.set(
+        xscale="log",
+        yscale="log",
+        xlabel="Page Size (bytes)",
+        ylabel="Latency (us)",
+        title=f"D2H Latency Breakdown: Protocol vs DMA (FIFO={human_bytes(fs)})",
+    )
+    ax.set_xticks(t := sorted(d.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def ping_export_csv(df, out="d2h_ping_summary.csv"):
+    """For ping, export the per-iteration timeseries instead of aggregated stats."""
+    try:
+        iters = pd.read_csv("ping_iterations.csv")
+        iters.to_csv(out, index=False, float_format="%.4f")
+        print(f"  Saved {out} ({len(iters)} iterations)")
+    except FileNotFoundError:
+        print(f"  Warning: ping_iterations.csv not found, skipping summary CSV")
+
+
+def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.png"):
+    """Plot iteration-by-iteration latency."""
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(df.iteration, df.latency_us, "o-", ms=3, lw=1, alpha=0.7)
+    ax.axhline(df.latency_us.median(), color="red", ls="--", lw=1.5, label=f"p50 = {df.latency_us.median():.2f} us")
+    ax.axhline(df.latency_us.mean(), color="orange", ls=":", lw=1.5, label=f"avg = {df.latency_us.mean():.2f} us")
+    ax.set(
+        xlabel="Iteration",
+        ylabel="Latency (us)",
+        title=f"D2H Pure Ping: Per-Iteration Latency (page={df.iteration.count()} iters)",
+    )
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def run_ping(path, latency_csv=None):
+    df = load_latency_csv(path)  # same CSV format
+    ping_print_report(df)
+    ping_plot(df)
+    ping_plot_comparison(df, latency_csv)
+    ping_plot_timeseries()
+    ping_export_csv(df)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CLI
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -432,10 +574,14 @@ if __name__ == "__main__":
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--throughput", action="store_true", help="Analyze throughput benchmark")
     mode.add_argument("--latency", action="store_true", help="Analyze latency benchmark")
+    mode.add_argument("--ping", action="store_true", help="Analyze pure ping benchmark")
     p.add_argument("csv", help="Path to benchmark CSV")
+    p.add_argument("--latency-csv", help="(ping mode) Overlay data_ping latency for comparison")
     args = p.parse_args()
 
     if args.throughput:
         run_throughput(args.csv)
-    else:
+    elif args.latency:
         run_latency(args.csv)
+    else:
+        run_ping(args.csv, args.latency_csv)
