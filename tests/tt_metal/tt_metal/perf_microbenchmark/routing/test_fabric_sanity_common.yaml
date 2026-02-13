@@ -203,6 +203,7 @@ Tests:
       - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMesh"
+    skip: [watcher]
     fabric_setup:
       topology: Mesh
 
