@@ -29,6 +29,7 @@
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/new_dprint.h"
 #include "internal/debug/stack_usage.h"
 
 // clang-format on
@@ -363,6 +364,7 @@ int main() {
 
     risc_init();
     device_setup();
+    NEW_DPRINT_INITIALIZE_LOCK();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;

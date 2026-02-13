@@ -132,6 +132,8 @@
         dprint_detail::locking::release_lock();                                                                        \
     }
 
+#define NEW_DPRINT_INITIALIZE_LOCK() dprint_detail::locking::initialize_lock();
+
 namespace dprint_detail {
 
 template <typename BufferType>
@@ -942,8 +944,6 @@ using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 }  // namespace formatting
 
 namespace locking {
-
-// TODO: IMPORTANT!!! We need to initialize dprint sync register to 0 during startup (probably on brisc).
 
 void acquire_lock() {
     volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();

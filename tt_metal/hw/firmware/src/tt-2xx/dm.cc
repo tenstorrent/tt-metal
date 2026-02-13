@@ -8,6 +8,7 @@
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/new_dprint.h"
 #include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
@@ -125,6 +126,7 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        NEW_DPRINT_INITIALIZE_LOCK();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         wait_subordinates();
