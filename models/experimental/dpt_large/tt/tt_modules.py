@@ -500,8 +500,6 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
-            if qkv_pc is not None and not _ttnn_is_sharded(x4):
-                qkv_pc = None
             qkv4 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self._wqkv_tt,
@@ -574,8 +572,6 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
-            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
-                proj_pc = None
             out_tt4 = _ttnn_linear_with_optional_program_config(
                 x=ctx_tt4,
                 w=self._proj_w_tt,
@@ -661,10 +657,6 @@ class TTMLP:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
-            if ff1_pc is not None and not _ttnn_is_sharded(x4):
-                ff1_pc = None
-            if ff2_pc is not None and not _ttnn_is_sharded(x4):
-                ff2_pc = None
             y1 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self.w1_tt,
