@@ -198,6 +198,9 @@ Instrumented all matmul kernels with cycle counters at every wait site. Key find
 2. If Mode A is fixed and Mode B also doesn't recur, this confirms the causal link
 3. Run the instrumented version with the fix -- latency profiles should be unchanged (the stall is nearly free when packer is idle)
 
+### Isolated C++ Test (WIP -- needs debugging)
+The test at `vit_n300/test_packer_l1acc_race.cpp` is built as part of `unit_tests_llk` but **hangs on execution**. See "Test Development Status" section below for details on what's blocking and how to resume.
+
 ---
 
 ## AI-Driven ND Failure Analysis Methodology
@@ -261,12 +264,55 @@ Instrumented all matmul kernels with cycle counters at every wait site. Key find
 | DPRINT | Not useful | Crashes machine, too much overhead |
 | Device Profiler | Not useful | No kernel-internal capture |
 
+## Test Development Status (Feb 13, 2026)
+
+### C++ Isolated Test (`test_packer_l1acc_race.cpp`)
+
+**Status: COMPILES but HANGS on execution.**
+
+The test is built into `unit_tests_llk` via `tests/tt_metal/tt_metal/llk/sources.cmake`. It compiles and the device kernel JIT-compiles successfully. However, the kernel hangs on the device even with just 10 tiles.
+
+**Build/Run requirements:**
+- Build: `./build_metal.sh --build-tests` (full build needed for firmware JIT sources)
+- Run: `cd /tt-metal && TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Release/test/tt_metal/unit_tests_llk --gtest_filter="MeshDeviceFixture.TensixPackerL1AccRace*"`
+- **MUST run from `/tt-metal/` directory** (not `build_Release/`), otherwise the JIT compiler resolves `root_dir` to `build_Release/` which lacks firmware sources. The CWD fallback checks for `tt_metal/` subdirectory.
+
+**Issues resolved during development:**
+1. `bfloat16::to_float()` doesn't exist → use `static_cast<float>(bfloat16(val))`
+2. `TEST_F(MeshDeviceFixture, ...)` must be **inside** `namespace tt::tt_metal {}`
+3. Compute kernel includes: use `"api/compute/compute_kernel_api.h"`, `"api/compute/common.h"`, etc. (not bare `"compute_kernel_api.h"`)
+4. Dataflow kernel includes: use `"api/dataflow/dataflow_api.h"` (not bare `"dataflow_api.h"`)
+5. Unused variable warning → add `[[maybe_unused]]` attribute
+6. `PACKER_L1_ACC` must be passed as a **define** in `ComputeConfig{.defines = {{"PACKER_L1_ACC", "1"}}}`, not just referenced in kernel code
+7. After killing a hung test, must run `tt-smi -r 0` to reset the device before running again
+
+**Current kernel hang diagnosis:**
+The simplified kernel (just copy in_cb→out_cb with `pack_reconfig_l1_acc(t & 1)` toggling) hangs even with 10 tiles. Possible causes to investigate:
+- The `copy_tile_to_dst_init_short()` may not properly initialize the packer pipeline for the L1_ACC path
+- The `PACKER_L1_ACC` define may change how the packer is initialized (different init codepath) and may require additional init calls
+- The `namespace NAMESPACE { void MAIN }` syntax (deprecated) may interact poorly with PACKER_L1_ACC defines
+- **Best approach**: Look at an existing test that uses L1_ACC (e.g., `test_copy_block_matmul_partials.cpp`) and replicate its kernel structure exactly, then add the L1_ACC toggle
+
+### Python Test (`test_l1acc_race_matmul.py`)
+
+**Status: RUNS but doesn't detect the race.**
+
+Uses `ttnn.linear(a, b, bias=bias)` which goes through the full matmul path with FUSE_BIAS + PACKER_L1_ACC. Runs 1000 iterations comparing PCC against a baseline. Initial false-positive with constant inputs (PCC=0 for constant arrays) was fixed by using random inputs.
+
+The race is too rare to trigger through the high-level Python API in a reasonable number of iterations.
+
 ## Files
 
 - `vit_n300/ND_failure.log` -- CI failure log (Mode B: global deadlock)
 - `vit_n300/ND_failure2.log` -- CI failure log (Mode A: single-core packer stall)
 - `vit_n300/scripts/parse_latency.py` -- Watcher ring buffer analysis
 - `vit_n300/scripts/loop_vit_ci_test.sh` -- CI test loop runner
+- `vit_n300/test_packer_l1acc_race.cpp` -- C++ test: hammers L1_ACC reconfig→pack race (GTest, **hangs**)
+- `vit_n300/kernels/compute_l1acc_hammer.cpp` -- Compute kernel: copy with L1_ACC toggle
+- `vit_n300/kernels/reader_l1acc_hammer.cpp` -- Reader kernel: generates constant 1.0 tiles
+- `vit_n300/kernels/writer_l1acc_hammer.cpp` -- Writer kernel: writes results to DRAM (unused, replaced by `direct_writer_unary.cpp`)
+- `vit_n300/test_l1acc_race_matmul.py` -- Python test: uses ttnn.linear path (runs, no detection)
+- `tests/tt_metal/tt_metal/llk/sources.cmake` -- Modified to include test_packer_l1acc_race.cpp
 - Kernel instrumentation in `ttnn/.../matmul/device/kernels/` (3 files)
 
 ## Key Source Files

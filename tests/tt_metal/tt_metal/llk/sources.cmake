@@ -20,4 +20,5 @@ set(UNIT_TESTS_LLK_SRC
     test_transpose.cpp
     test_unary_broadcast.cpp
     test_untilize_tilize.cpp
+    ${PROJECT_SOURCE_DIR}/vit_n300/test_packer_l1acc_race.cpp
 )
