@@ -90,5 +90,5 @@ void kernel_main() {
     }
 
     // Ensure write and semaphore have left the core before continuing
-    noc_async_posted_atomic_barrier();
+    // noc_async_posted_atomic_barrier();
 }
