@@ -6,15 +6,15 @@
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
 // Implements: CCL Broadcast + RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2 + Matmul3 + RoPE +
-// GatherHeads
+// CreateQHeads
 // - NCRISC: CCL Broadcast Reader + RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on
 // matmul cores),
 //           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores),
-//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), GatherHeads sender (on qnope/qrope cores)
+//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), CreateQHeads sender (on qnope/qrope cores)
 // - BRISC: CCL Broadcast Writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
 // Gather receiver (on
 //          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
-//          GatherHeads receiver (on sdpa input cores)
+//          CreateQHeads receiver (on sdpa input cores) - matching gather pattern: NCRISC sender, BRISC receiver
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
 //          Matmul2 compute (on matmul2 cores), Matmul3 compute (on qnope cores), RoPE compute (on qrope cores)
 //
@@ -33,7 +33,7 @@
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../unified_kernels/gather_reduce.hpp"
 #include "../../../unified_kernels/kn_sliced_matmul.hpp"
-#include "../../../unified_kernels/gather_heads.hpp"
+#include "../../../unified_kernels/create_q_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
 
@@ -48,7 +48,7 @@ struct Core {
     // Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
     static constexpr bool is_qnope_core = get_named_compile_time_arg_val("is_qnope_core") == 1;
     static constexpr bool is_qrope_core = get_named_compile_time_arg_val("is_qrope_core") == 1;
-    // SDPA Input core: receives interleaved QNOPE/QROPE gather heads (4×2 grid = 8 cores)
+    // SDPA Input core: receives interleaved QNOPE/QROPE, runs create q heads (4×2 grid = 8 cores)
     static constexpr bool is_sdpa_input_core = get_named_compile_time_arg_val("is_sdpa_input_core") == 1;
 
     // DKV Matmul core: 9x2 grid, each core handles 1 head of 32 dim
@@ -75,8 +75,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_is_sender"),
         get_named_compile_time_arg_val("bcast_core_noc_x"),
         get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+        get_named_compile_time_arg_val("bcast_is_secondary_sender")>;
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
@@ -145,11 +144,42 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
 
     // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
-    using QRopeCTArgs =
-        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+    using QRopeCTArgs = deepseek_b1_ops::Rope::
+        ReaderCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
 
     // Qrope reader args (NCRISC is no-op)
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+
+    // NCRISC: Sender args for QNOPE/QROPE cores
+    // Senders write to intermediate CB, then compute tilizes to output CB
+    // 3-phase synchronization: nope_phase1, nope_phase2, rope semaphores
+    constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
+    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_args{
+        0,  // sender_grid_start_x (logical 0)
+        0,  // sender_grid_start_y (logical 0)
+        get_named_compile_time_arg_val("cqh_qnope_data_size_bytes"),
+        get_named_compile_time_arg_val("cqh_qrope_head_size_bytes"),
+        get_named_compile_time_arg_val("cqh_head_stride_bytes"),
+        get_named_compile_time_arg_val("cqh_qnope_cols"),
+        get_named_compile_time_arg_val("cqh_qnope_src_cb"),
+        get_named_compile_time_arg_val("cqh_qrope_src_cb"),
+        Core::is_qnope_core ? get_named_compile_time_arg_val("cqh_qnope_src_num_pages")
+                            : get_named_compile_time_arg_val("cqh_qrope_src_num_pages"),
+        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
+        {
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row0"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row1"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row2"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row3"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row4"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row5"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
+        },
+        get_write_ptr(cqh_receiver_in_cb),
+    };
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -211,12 +241,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_core_noc_y"),
         get_named_compile_time_arg_val("bcast_is_secondary_sender"),
         get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
         get_named_compile_time_arg_val("bcast_range_hops_forward"),
         get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward"),
-        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
 
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
@@ -291,6 +319,19 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
+    // BRISC: Receiver args for SDPA input cores
+    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_args{
+        get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_rope_semaphore_id"),
+        get_named_compile_time_arg_val("cqh_num_nope_senders"),
+        get_named_compile_time_arg_val("cqh_num_rope_senders"),
+        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
+        get_named_compile_time_arg_val("cqh_out_cb"),
+        get_named_compile_time_arg_val("cqh_nope_tiles"),
+        get_named_compile_time_arg_val("cqh_rope_tiles"),
+    };
+
     // Matmul2 writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul2_args{};
 
@@ -322,34 +363,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast2_src_num_pages"),
         get_read_ptr(mcast2_src_cb),  // Read from rmsnorm2_output_cb
         get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
-    };
-
-    // BRISC: Sender args for QNOPE/QROPE cores
-    // Senders write directly to output CB (allocated on sender+receiver cores)
-    constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
-    deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
-        0,  // sender_grid_start_x (logical 0)
-        0,  // sender_grid_start_y (logical 0)
-        get_named_compile_time_arg_val("qnope_data_size_bytes"),
-        get_named_compile_time_arg_val("qrope_data_size_bytes"),
-        get_named_compile_time_arg_val("head_stride_bytes"),
-        get_named_compile_time_arg_val("qnope_grid_cols"),
-        get_named_compile_time_arg_val("qnope_src_cb"),
-        get_named_compile_time_arg_val("qrope_src_cb"),
-        Core::is_qnope_core ? get_named_compile_time_arg_val("qnope_src_num_pages")
-                            : get_named_compile_time_arg_val("qrope_src_num_pages"),
-        get_named_compile_time_arg_val("receiver_semaphore_id"),
-        {
-            get_named_compile_time_arg_val("target_noc_coords_row0"),
-            get_named_compile_time_arg_val("target_noc_coords_row1"),
-            get_named_compile_time_arg_val("target_noc_coords_row2"),
-            get_named_compile_time_arg_val("target_noc_coords_row3"),
-            get_named_compile_time_arg_val("target_noc_coords_row4"),
-            get_named_compile_time_arg_val("target_noc_coords_row5"),
-            get_named_compile_time_arg_val("target_noc_coords_row6"),
-            get_named_compile_time_arg_val("target_noc_coords_row7"),
-        },
-        get_write_ptr(receive_cb),  // Write directly to output CB
     };
 
     // Matmul writer args (BRISC is no-op)
@@ -474,22 +487,27 @@ void kernel_main() {
 
     // Qrope CTArgs type alias
     using QRopeCTArgs = deepseek_b1_ops::Rope::
-        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+        ComputeCTArgs<get_named_compile_time_arg_val("qrope_Wt"), get_named_compile_time_arg_val("qrope_Ht")>;
 
     // Qrope compute args (from compile-time args)
     deepseek_b1_ops::Rope::ComputeArgs qrope_args{
-        get_named_compile_time_arg_val("in_cb"),  // Input from matmul2 output
-        get_named_compile_time_arg_val("cos_cb"),
-        get_named_compile_time_arg_val("sin_cb"),
-        get_named_compile_time_arg_val("trans_mat_cb"),
-        get_named_compile_time_arg_val("rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("cos_interm_cb"),
-        get_named_compile_time_arg_val("sin_interm_cb"),
-        get_named_compile_time_arg_val("out_cb"),
+        get_named_compile_time_arg_val("qrope_in_cb"),  // Input from matmul2 output
+        get_named_compile_time_arg_val("qrope_cos_cb"),
+        get_named_compile_time_arg_val("qrope_sin_cb"),
+        get_named_compile_time_arg_val("qrope_trans_mat_cb"),
+        get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
+        get_named_compile_time_arg_val("qrope_cos_interm_cb"),
+        get_named_compile_time_arg_val("qrope_sin_interm_cb"),
+        get_named_compile_time_arg_val("qrope_output_cb"),
     };
 
-    // Gather heads compute args (no-op for TRISC)
-    deepseek_b1_ops::GatherHeads::ComputeArgs gather_heads_args{};
+    // CreateQHeads compute args (tilization on SDPA input cores)
+    deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_args{
+        get_named_compile_time_arg_val("cqh_receiver_in_cb"),
+        get_named_compile_time_arg_val("cqh_out_cb"),
+        get_named_compile_time_arg_val("cqh_nope_tiles"),
+        get_named_compile_time_arg_val("cqh_rope_tiles"),
+    };
 
     // DKV Matmul compute args
     using DKV_MatmulCTArgs =
@@ -528,7 +546,7 @@ void kernel_main() {
     constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
     constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
     constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
-    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
     constexpr uint32_t krope_cos_interm_cb = get_named_compile_time_arg_val("krope_cos_interm_cb");
     constexpr uint32_t krope_sin_interm_cb = get_named_compile_time_arg_val("krope_sin_interm_cb");
@@ -539,7 +557,7 @@ void kernel_main() {
         .in_cb = krope_input_cb,
         .cos_cb = krope_cos_cb,
         .sin_cb = krope_sin_cb,
-        .trans_mat_cb = trans_mat_cb,
+        .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
         .cos_interm_cb = krope_cos_interm_cb,
         .sin_interm_cb = krope_sin_interm_cb,
@@ -590,10 +608,10 @@ void kernel_main() {
 
     if constexpr (Core::is_qrope_core) {
         // Qrope CB indices and parameters from named compile-time args
-        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("cos_cb");
-        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("sin_cb");
-        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("qrope_cos_cb");
+        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("qrope_sin_cb");
+        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("qrope_Wt");
 
         // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
         // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
@@ -603,14 +621,6 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
         unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
     }
-
-    // NCRISC: Receiver args for SDPA input cores
-    deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
-        get_named_compile_time_arg_val("receiver_semaphore_id"),
-        get_named_compile_time_arg_val("num_senders"),
-        get_named_compile_time_arg_val("receive_cb"),  // Output CB
-        get_named_compile_time_arg_val("dst_num_pages"),
-    };
 
     if constexpr (Core::is_dkv_matmul_core) {
         // Matmul weights (in1)
@@ -795,24 +805,23 @@ void kernel_main() {
         }
 
         // ========================================================================
-        // GatherHeads: QNOPE/QROPE -> SDPA interleaved transfer
-        // QNOPE cores (cols 0-7): send [1, 512] to SDPA at offset = head_idx * 576
-        // QROPE cores (cols 8-11): send 2x [1, 64] to SDPA at offsets:
-        //   - head_idx * 576 + 512
-        //   - (head_idx + 1) * 576 + 512
+        // CreateQHeads: 3-phase QNOPE/QROPE -> SDPA transfer with tilization
+        // Phase 1: QNOPE first 256 elements → [8, 256] row-major → 8 tiles
+        // Phase 2: QNOPE second 256 elements → [8, 256] row-major → 8 tiles
+        // Phase 3: QROPE 64 elements per head → [8, 64] row-major → 2 tiles
+        // Senders write to intermediate CB, TRISC tilizes to output CB
+        // NCRISC sends from qnope/qrope cores, BRISC receives on sdpa input cores, TRISC no-op
         // ========================================================================
         {
-            DeviceZoneScopedN("GATHER_HEADS");
-            // GatherHeads Op configuration:
+            DeviceZoneScopedN("CREATE_Q_HEADS");
+            // CreateQHeads Op configuration:
             // - IsSenderCore: is_qnope_core || is_qrope_core
             // - IsReceiverCore: is_sdpa_input_core
-            // - setup_sharded_input: false (data already in CB from previous compute)
             // - pop_src: true (pop source CB after sending)
-            // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back, writes directly to output tensor)
-            constexpr bool is_gather_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-            deepseek_b1_ops::GatherHeads::Op<is_gather_heads_sender, Core::is_sdpa_input_core, false, true, true>
-                gather_heads;
-            gather_heads(gather_heads_args);
+            constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+            deepseek_b1_ops::CreateQHeads::Op<is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
+                create_q_heads;
+            create_q_heads(create_q_heads_args);
         }
     }
     {

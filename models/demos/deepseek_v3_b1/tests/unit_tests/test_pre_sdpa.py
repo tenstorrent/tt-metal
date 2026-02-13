@@ -13,14 +13,12 @@ Tests pre-SDPA fused operation with full pipeline:
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.utils import shuffle_weights_for_interleaved_qnope_qrope
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def create_fabric_router_config(max_payload_size):
@@ -39,9 +37,8 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
-@pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
-@pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
+@pytest.mark.parametrize("num_iters", [(30)])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -63,14 +60,14 @@ def test_pre_sdpa(
     use_fp32,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
-    skip_ccl,
     num_iters,
-    num_warmup_iter,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
 
     num_devices = mesh_rows * mesh_cols
+    skip_ccl = False
+    if num_devices == 1:
+        skip_ccl = True
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -81,12 +78,6 @@ def test_pre_sdpa(
 
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
-    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
     # ========================================================================
     # Configuration
@@ -381,19 +372,21 @@ def test_pre_sdpa(
     )
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
-    # Each SDPA Input core receives 8 interleaved heads: 8 × (512 + 64) = 8 × 576 = 4608 elements
+    # After 3-phase CreateQHeads tilization:
+    #   Each SDPA Input core receives 8 heads, tilized as [8, 576] with [8, 32] tiles
+    #   Total: 8 cores × 8 heads = 64 rows, 576 elements per head
     # SDPA Input grid: 4×2 rectangle at logical (0,1)-(3,2)
     SDPA_INPUT_GRID_COLS = 4
     SDPA_INPUT_GRID_ROWS = 2
     SDPA_INPUT_NUM_CORES = SDPA_INPUT_GRID_COLS * SDPA_INPUT_GRID_ROWS  # 8 cores
     COMBINED_HEAD_SIZE = QNOPE_OUT_DIM + QROPE_HEAD_DIM  # 512 + 64 = 576
-    SDPA_INPUT_ELEMENTS_PER_CORE = HEADS_PER_ROW * COMBINED_HEAD_SIZE  # 8 * 576 = 4608
 
     sdpa_input_grid = ttnn.CoreRange(
         ttnn.CoreCoord(0, 1), ttnn.CoreCoord(SDPA_INPUT_GRID_COLS - 1, 1 + SDPA_INPUT_GRID_ROWS - 1)
     )
-    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)  # [8, 4608] total
-    sdpa_input_output_shard_shape = (1, SDPA_INPUT_ELEMENTS_PER_CORE)  # [1, 4608] per core
+    sdpa_tile = ttnn.Tile([8, 32])  # Tilize tile shape for CreateQHeads output
+    sdpa_input_output_shape = (SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, COMBINED_HEAD_SIZE)  # [64, 576] total
+    sdpa_input_output_shard_shape = (HEADS_PER_ROW, COMBINED_HEAD_SIZE)  # [8, 576] per core
     sdpa_input_output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({sdpa_input_grid}),
         sdpa_input_output_shard_shape,
@@ -409,7 +402,7 @@ def test_pre_sdpa(
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=sdpa_input_output_mem_config,
-        tile=tile,
+        tile=sdpa_tile,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
@@ -443,7 +436,7 @@ def test_pre_sdpa(
     cos_replicated = cos_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
     sin_replicated = sin_selected.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 64]
 
-    ttnn_cos = ttnn.from_torch(
+    ttnn_qrope_cos = ttnn.from_torch(
         cos_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -453,7 +446,7 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    ttnn_sin = ttnn.from_torch(
+    ttnn_qrope_sin = ttnn.from_torch(
         sin_replicated,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -578,72 +571,6 @@ def test_pre_sdpa(
     # ========================================================================
     logger.info("Running pre-SDPA operation...")
 
-    profiler = BenchmarkProfiler()
-
-    # Compile Run
-    logger.info("Compiling model")
-    ttnn_sdpa_input_result = PreSDPA.op(
-        input_tensor_mesh,
-        intermediate_tensor_mesh,
-        ttnn_gamma,
-        ttnn_matmul_weights,
-        ttnn_rmsnorm2_gamma,
-        ttnn_matmul2_weights,
-        ttnn_matmul3_weights,
-        ttnn_sin,
-        ttnn_cos,
-        ttnn_trans_mat,
-        ttnn_krope_cos,
-        ttnn_krope_sin,
-        ttnn_dkv_matmul_weights,
-        ttnn_dkv_rmsnorm_gamma,
-        ttnn_sdpa_input_output,
-        sender_coord,
-        semaphores=semaphores,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
-        epsilon=epsilon,
-        fp32_dest_acc_en=use_fp32,
-        skip_ccl=skip_ccl,
-    )
-    ttnn.synchronize_device(submesh)
-
-    # Capture warmup trace
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_warmup_iter):
-        ttnn_sdpa_input_result = PreSDPA.op(
-            input_tensor_mesh,
-            intermediate_tensor_mesh,
-            ttnn_gamma,
-            ttnn_matmul_weights,
-            ttnn_rmsnorm2_gamma,
-            ttnn_matmul2_weights,
-            ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
-            ttnn_trans_mat,
-            ttnn_krope_cos,
-            ttnn_krope_sin,
-            ttnn_dkv_matmul_weights,
-            ttnn_dkv_rmsnorm_gamma,
-            ttnn_sdpa_input_output,
-            sender_coord,
-            semaphores=semaphores,
-            cluster_axis=cluster_axis,
-            secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=skip_ccl,
-        )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    # Capture main trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
     for i in range(num_iters):
         ttnn_sdpa_input_result = PreSDPA.op(
             input_tensor_mesh,
@@ -653,8 +580,8 @@ def test_pre_sdpa(
             ttnn_rmsnorm2_gamma,
             ttnn_matmul2_weights,
             ttnn_matmul3_weights,
-            ttnn_sin,
-            ttnn_cos,
+            ttnn_qrope_sin,
+            ttnn_qrope_cos,
             ttnn_trans_mat,
             ttnn_krope_cos,
             ttnn_krope_sin,
@@ -665,33 +592,11 @@ def test_pre_sdpa(
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
         )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
-
-    # Execute warmup trace
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-pre-sdpa-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-pre-sdpa-warmup")
-
-    # Execute main trace with signposts for profiling
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-pre-sdpa-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-pre-sdpa-trace")
-    signpost("stop")
 
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
@@ -703,13 +608,13 @@ def test_pre_sdpa(
     # ========================================================================
     logger.info("Computing golden reference...")
 
-    # Golden uses shuffled weights to produce same interleaved output
+    # Golden uses unshuffled weights (sequential output: all QNOPE, then all QROPE)
     _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
         torch_rmsnorm2_gamma,
-        torch_matmul2_weights_shuffled,  # Use shuffled weights
+        torch_matmul2_weights_unshuffled,  # Use unshuffled weights
         torch_matmul3_weights,
         torch_sin,
         torch_cos,
@@ -727,7 +632,7 @@ def test_pre_sdpa(
     )
 
     slice_size = sdpa_input_output_shape[0]
-    expected_width = 4608
+    expected_width = COMBINED_HEAD_SIZE  # 576
 
     for device_idx in range(mesh_rows * mesh_cols):
         start = device_idx * slice_size
@@ -735,13 +640,13 @@ def test_pre_sdpa(
         # Trim to expected width for comparison
         received = sdpa_input_output_torch[start:end, :expected_width]
 
-        # Golden SDPA Input shape: [8, 8, 576] -> reshape to [8, 4608] to match device output
-        # The 4×2 grid with ROW_MAJOR orientation gives indices 0-7 matching source rows 0-7
-        # Each combined head is (qnope[512], qrope[64]) where qrope has been processed by RoPE
-        torch_sdpa_input_expected_flat = torch_sdpa_expected.reshape(SDPA_INPUT_NUM_CORES, SDPA_INPUT_ELEMENTS_PER_CORE)
+        # Golden SDPA Input shape: [64, 576] (already reshaped by golden function)
+        # Each row is one head: [qnope[512], qrope[64]]
+        # 8 cores × 8 heads = 64 rows
+        torch_sdpa_input_expected_flat = torch_sdpa_expected
         if received.shape != torch_sdpa_input_expected_flat.shape:
             logger.error(
-                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_expected.shape}"
+                f"Shape mismatch at device {device_idx}: got {received.shape}, expected {torch_sdpa_input_expected_flat.shape}"
             )
             continue
 
@@ -760,5 +665,3 @@ def test_pre_sdpa(
     # Clean up trace and sub-device state before fixture teardown
     # This ensures profiler data is properly flushed before close_mesh_device
     ttnn.synchronize_device(submesh)
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
