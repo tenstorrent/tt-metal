@@ -983,7 +983,7 @@ def test_demo_text(
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward_text(
+                tt_out_tok, read_event = generator.decode_forward(
                     out_tok,
                     current_pos,
                     enable_trace=is_enable_trace,
