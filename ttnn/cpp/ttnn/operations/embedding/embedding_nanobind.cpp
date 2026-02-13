@@ -49,8 +49,8 @@ void py_module(nb::module_& mod) {
             nb::arg("layout") = nb::none(),
             nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
             nb::arg("dtype").noconvert() = nb::none(),
-            nb::arg("output_tensor").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor").noconvert() = nb::none()));
 }
 
 }  // namespace ttnn::operations::embedding

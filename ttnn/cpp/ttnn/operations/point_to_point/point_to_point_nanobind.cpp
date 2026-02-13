@@ -53,12 +53,12 @@ void bind_point_to_point(nb::module_& mod) {
         ttnn::overload_t(
             &ttnn::point_to_point,
             nb::arg("input_tensor").noconvert(),
-            nb::arg("sender_coord"),
             nb::arg("receiver_coord"),
+            nb::arg("sender_coord"),
             nb::kw_only(),
+            nb::arg("topology").noconvert() = ccl::Topology::Linear,
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("topology").noconvert() = ccl::Topology::Linear));
+            nb::arg("intermediate_tensor") = nb::none()));
     mod.def(
         "p2p_compute_intermediate_tensor_spec",
         operations::point_to_point::p2p_compute_intermediate_tensor_spec,

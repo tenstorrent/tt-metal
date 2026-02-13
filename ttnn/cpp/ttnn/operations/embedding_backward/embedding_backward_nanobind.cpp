@@ -49,8 +49,8 @@ void bind_embedding_backward(nb::module_& mod) {
             nb::arg("output_gradient_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("dtype").noconvert() = nb::none(),
-            nb::arg("output_tensor").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor").noconvert() = nb::none()));
 }
 
 }  // namespace ttnn::operations::embedding_backward

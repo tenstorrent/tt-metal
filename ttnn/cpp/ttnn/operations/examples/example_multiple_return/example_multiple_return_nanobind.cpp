@@ -24,8 +24,8 @@ void bind_example_multiple_return_operation(nb::module_& mod) {
         ttnn::overload_t(
             &ttnn::composite_example_multiple_return,
             nb::arg("input_tensor"),
-            nb::arg("return_output1"),
-            nb::arg("return_output2")));
+            nb::arg("return_output1") = true,
+            nb::arg("return_output2") = true));
 }
 
 }  // namespace ttnn::operations::examples
