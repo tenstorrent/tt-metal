@@ -45,14 +45,6 @@ repos:
       args: ["--style=file"]
 - repo: local
   hooks:
-    - id: clang-tidy
-      name: clang-tidy (C/C++)
-      entry: bash scripts/run_clang_tidy_before_commit.sh
-      language: system
-      types_or: [c++, c]
-      pass_filenames: true
-- repo: local
-  hooks:
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
