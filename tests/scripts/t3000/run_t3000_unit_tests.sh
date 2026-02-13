@@ -279,15 +279,15 @@ run_t3000_llama3.2-11b_tests() {
   fi
 }
 
-run_t3000_llama3.1-70b_tests() {
+run_t3000_llama3.3-70b_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
+  echo "LOG_METAL: Running run_t3000_llama3.3-70b_tests"
 
-  # Llama3.1-70B weights
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  # Llama3.3-70B weights
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
   HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest --timeout 900 models/tt_transformers/tests/test_attention.py ; fail+=$?
@@ -301,7 +301,7 @@ run_t3000_llama3.1-70b_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3.1-70b_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3.3-70b_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -752,8 +752,8 @@ run_t3000_tests() {
   # Run llama3.2-11B tests
   run_t3000_llama3.2-11b_tests
 
-  # Run llama3.1-70B tests
-  run_t3000_llama3.1-70b_tests
+  # Run llama3.3-70B tests
+  run_t3000_llama3.3-70b_tests
 
   # Run llama3.2-90B tests
   run_t3000_llama3.2-90b_tests
