@@ -42,7 +42,7 @@ void bind_isin_operation(nb::module_& mod) {
                bool assume_unique,
                bool invert,
                const std::optional<Tensor>& out) {
-                return ttnn::operations::experimental::IsInOperation::invoke(elements, test_elements, assume_unique, invert, out);
+                return ttnn::experimental::isin(elements, test_elements, assume_unique, invert, out);
             },
             nb::arg("elements").noconvert(),
             nb::arg("test_elements").noconvert(),

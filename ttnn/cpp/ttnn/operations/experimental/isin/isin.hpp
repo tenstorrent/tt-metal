@@ -4,24 +4,21 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
 
 namespace ttnn {
-namespace operations::experimental {
 
 using namespace tt;
 
-struct IsInOperation {
-    static Tensor invoke(
-        const Tensor& elements,
-        const Tensor& test_elements,
-        bool assume_unique = false,
-        bool invert = false,
-        const std::optional<Tensor>& opt_out = std::nullopt);
-};
+namespace experimental {
 
-}  // namespace operations::experimental
+Tensor isin(
+    const Tensor& elements,
+    const Tensor& test_elements,
+    bool assume_unique = false,
+    bool invert = false,
+    const std::optional<Tensor>& opt_out = std::nullopt);
+
+}  // namespace experimental
 
 }  // namespace ttnn

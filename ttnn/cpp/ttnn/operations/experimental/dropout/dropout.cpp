@@ -6,9 +6,9 @@
 #include "device/dropout_device_operation.hpp"
 #include "dropout.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 
-Tensor DropoutOperation::invoke(
+Tensor dropout(
     const Tensor& input_tensor,
     float prob,
     float scale,
@@ -27,4 +27,4 @@ Tensor DropoutOperation::invoke(
         optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental
