@@ -259,7 +259,11 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {}
+        config_(config) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
+    }
 
     ~DataMovementKernel() override = default;
 
@@ -335,7 +339,11 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args),
-        config_(config) {}
+        config_(config) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+    }
 
     ~ComputeKernel() override = default;
 
