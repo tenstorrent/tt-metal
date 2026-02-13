@@ -725,7 +725,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32;
+                            c_data_format == tt::DataFormat::Float32 ||
+                            (a_data_format == tt::DataFormat::Float32 && b_data_format == tt::DataFormat::Float32) ||
+                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
