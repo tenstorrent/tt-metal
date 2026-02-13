@@ -115,6 +115,7 @@ runs:
       run: |
         echo "Enabling TT Metal kernel ccache"
         echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+        echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
         echo "TT_METAL_RUNTIME_ROOT=/work" >> $GITHUB_ENV
