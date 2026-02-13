@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <memory>
 #include "tt-metalium/mesh_event.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
 #include "tt-metalium/device.hpp"
-#include "tt-metalium/event.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 
 namespace ttnn {
@@ -18,11 +16,6 @@ namespace ttnn {
 using MeshEvent = tt::tt_metal::distributed::MeshEvent;
 
 namespace events {
-
-// Multi Device APIs
-struct MultiDeviceEvent {
-    std::vector<std::shared_ptr<tt::tt_metal::Event>> events;
-};
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,

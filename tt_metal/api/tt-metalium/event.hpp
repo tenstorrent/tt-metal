@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 
 class IDevice;
 
-struct Event {
+struct [[deprecated("Event is deprecated. Use distributed::MeshEvent instead.")]] Event {
     IDevice* device = nullptr;
     uint32_t cq_id = -1;
     uint32_t event_id = -1;
