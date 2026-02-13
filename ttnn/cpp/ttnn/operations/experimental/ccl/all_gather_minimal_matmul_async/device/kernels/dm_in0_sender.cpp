@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -118,49 +118,18 @@ void kernel_main() {
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
 
 #ifdef USE_MUX
-    // Backward Mux
-    bool mux_connection_valid_backward =
-        ((get_arg_val<uint32_t>(argidx++) == 1) && (in0_core_order_index == in0_core_order_size - 2));
-    const bool is_termination_master_backward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_x_backward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_y_backward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_channel_base_address_backward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_connection_info_address_backward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_connection_handshake_address_backward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_flow_control_address_backward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_buffer_index_address_backward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_channel_id_backward = get_arg_val<uint32_t>(argidx++);
+    uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
+    uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
 
-    uint32_t termination_sync_address_backward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_fabric_mux_status_address_backward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_flow_control_address_backward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_teardown_address_backward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_buffer_index_address_backward = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    auto mux_backward =
+        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+            argidx, in0_core_order_index, backward_in0_core_order_index);
+    auto mux_forward =
+        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+            argidx, in0_core_order_index, forward_in0_core_order_index);
 
-    uint32_t termination_master_noc_x_backward = get_arg_val<uint32_t>(argidx++);
-    uint32_t termination_master_noc_y_backward = get_arg_val<uint32_t>(argidx++);
-
-    // Forward Mux
-    bool mux_connection_valid_forward =
-        ((get_arg_val<uint32_t>(argidx++) == 1) && (in0_core_order_index == in0_core_order_size - 1));
-    const bool is_termination_master_forward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_x_forward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_y_forward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_channel_base_address_forward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_connection_info_address_forward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_connection_handshake_address_forward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_flow_control_address_forward = get_arg_val<uint32_t>(argidx++);
-    const size_t fabric_mux_buffer_index_address_forward = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_channel_id_forward = get_arg_val<uint32_t>(argidx++);
-
-    uint32_t termination_sync_address_forward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_fabric_mux_status_address_forward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_flow_control_address_forward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_teardown_address_forward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    uint32_t local_buffer_index_address_forward = get_semaphore(get_arg_val<uint32_t>(argidx++));
-
-    uint32_t termination_master_noc_x_forward = get_arg_val<uint32_t>(argidx++);
-    uint32_t termination_master_noc_y_forward = get_arg_val<uint32_t>(argidx++);
+    auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
+    auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
 #endif
 
     // Tensor accessor for input tensor
@@ -171,75 +140,6 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
-#endif
-
-#ifdef USE_MUX
-    // Setup mux connections
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_backward;
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection_backward;
-
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_forward;
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection_forward;
-    if (mux_connection_valid_backward) {
-        mux_connection_backward =
-            tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-                fabric_mux_x_backward,
-                fabric_mux_y_backward,
-                fabric_mux_channel_id_backward,
-                fabric_mux_num_buffers_per_channel,
-                fabric_mux_channel_buffer_size_bytes,
-                fabric_mux_channel_base_address_backward,
-                fabric_mux_connection_info_address_backward,
-                fabric_mux_connection_handshake_address_backward,
-                fabric_mux_flow_control_address_backward,
-                fabric_mux_buffer_index_address_backward,
-                local_flow_control_address_backward,
-                local_teardown_address_backward,
-                local_buffer_index_address_backward);
-        mux_connection_handle_backward = &mux_connection_backward;
-    } else {
-        mux_connection_handle_backward = nullptr;
-    }
-
-    if (mux_connection_valid_backward) {
-        // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x_backward,
-            fabric_mux_y_backward,
-            fabric_mux_status_address,
-            local_fabric_mux_status_address_backward);
-        tt::tt_fabric::fabric_client_connect(*mux_connection_handle_backward);
-    }
-
-    if (mux_connection_valid_forward) {
-        mux_connection_forward = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-            fabric_mux_x_forward,
-            fabric_mux_y_forward,
-            fabric_mux_channel_id_forward,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_channel_base_address_forward,
-            fabric_mux_connection_info_address_forward,
-            fabric_mux_connection_handshake_address_forward,
-            fabric_mux_flow_control_address_forward,
-            fabric_mux_buffer_index_address_forward,
-            local_flow_control_address_forward,
-            local_teardown_address_forward,
-            local_buffer_index_address_forward);
-        mux_connection_handle_forward = &mux_connection_forward;
-    } else {
-        mux_connection_handle_forward = nullptr;
-    }
-
-    if (mux_connection_valid_forward) {
-        // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x_forward,
-            fabric_mux_y_forward,
-            fabric_mux_status_address,
-            local_fabric_mux_status_address_forward);
-        tt::tt_fabric::fabric_client_connect(*mux_connection_handle_forward);
-    }
 #endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
@@ -293,77 +193,16 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
 #ifdef USE_MUX
-    // pre-populate packet headers
-    auto pkt_scatter_hdr_backward = PacketHeaderPool::allocate_header();
-    auto pkt_unicast_hdr_backward = PacketHeaderPool::allocate_header();
-    auto pkt_hdr_sem_inc_backward = PacketHeaderPool::allocate_header();
-    // only initialize if we're actually going to send something over fabric
-    if (detail::valid_targets(1)) {
-        uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
-        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr_backward,
-            static_cast<uint8_t>(unicast_route_info_backward.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            page_size * num_tiles_to_write_per_packet);
+    auto pkt_hdrs_backward = allocate_and_init_packet_headers(
+        detail::valid_targets(1),
+        unicast_route_info_backward,
+        in0_reader,
+        num_tiles_to_write_per_packet,
+        in3_tile_size);
 
-        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-            pkt_unicast_hdr_backward,
-            static_cast<uint8_t>(unicast_route_info_backward.distance_in_hops),
-            nullptr,
-            in3_tile_size);
-
-        fabric_unicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            pkt_hdr_sem_inc_backward,
-            static_cast<uint8_t>(unicast_route_info_backward.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,  // ignore
-                static_cast<uint32_t>(1)});
-
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_backward, unicast_route_info_backward);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr_backward, unicast_route_info_backward);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc_backward, unicast_route_info_backward);
-    }
-    auto pkt_scatter_hdr_forward = PacketHeaderPool::allocate_header();
-    auto pkt_unicast_hdr_forward = PacketHeaderPool::allocate_header();
-    auto pkt_hdr_sem_inc_forward = PacketHeaderPool::allocate_header();
-    // only initialize if we're actually going to send something over fabric
-    if (detail::valid_targets(0)) {
-        uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
-        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
-        uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr_forward,
-            static_cast<uint8_t>(unicast_route_info_forward.distance_in_hops),
-            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
-            page_size * num_tiles_to_write_per_packet);
-
-        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-            pkt_unicast_hdr_forward,
-            static_cast<uint8_t>(unicast_route_info_forward.distance_in_hops),
-            nullptr,
-            in3_tile_size);
-
-        fabric_unicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-            pkt_hdr_sem_inc_forward,
-            static_cast<uint8_t>(unicast_route_info_forward.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,  // ignore
-                static_cast<uint32_t>(1)});
-
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr_forward, unicast_route_info_forward);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr_forward, unicast_route_info_forward);
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc_forward, unicast_route_info_forward);
-    }
+    auto pkt_hdrs_forward = allocate_and_init_packet_headers(
+        detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
 #endif
-
-    uint32_t remote_block_core_order_size = 1;
-    uint32_t local_block_core_order_size = 1;
 
     /**
      * This is a Row-Major output block ordering.
@@ -488,19 +327,12 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    uint32_t real_in0_core_order_size = 0;
                     bool forward_slice = false;
-                    if (k_block_iter < (K_num_blocks / num_devices)) {
-                        // local k_block (write left half backwards, right half forwards)
-                        real_in0_core_order_size = local_block_core_order_size;
-                        forward_slice = true;
-                    } else if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
-                        // remote k block
-                        real_in0_core_order_size = remote_block_core_order_size;
+                    if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
                         forward_slice = true;
                     }
                     if (forward_slice) {
-                        if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size)) {
+                        if (in0_core_order_index >= forward_in0_core_order_index) {
                             // If forward, send backward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
@@ -512,14 +344,12 @@ void kernel_main() {
                                 padded_K_tiles,
                                 in0_reader,
                                 mux_connection_handle_forward,
-                                pkt_scatter_hdr_backward,
-                                pkt_unicast_hdr_backward,
-                                pkt_hdr_sem_inc_backward,
+                                pkt_hdrs_backward,
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_forward_in_pkt,
                                 true,
                                 M_tiles);
-                        } else if (in0_core_order_index >= (in0_core_order_size - real_in0_core_order_size * 2)) {
+                        } else if (in0_core_order_index >= backward_in0_core_order_index) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
@@ -531,9 +361,7 @@ void kernel_main() {
                                 padded_K_tiles,
                                 in0_reader,
                                 mux_connection_handle_backward,
-                                pkt_scatter_hdr_forward,
-                                pkt_unicast_hdr_forward,
-                                pkt_hdr_sem_inc_forward,
+                                pkt_hdrs_forward,
                                 in0_tile_size,
                                 out_ready_sem_injector_noc_addr_backward_in_pkt,
                                 false,
@@ -586,42 +414,29 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
 #ifdef USE_MUX
-    if (mux_connection_valid_backward) {
-        tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle_backward);
-        if (is_termination_master_backward) {
-            auto* termination_sync_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address_backward);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(
-                fabric_mux_x_backward, fabric_mux_y_backward, fabric_mux_termination_signal_address);
-        } else {
-            uint64_t dest_addr = safe_get_noc_addr(
-                termination_master_noc_x_backward,
-                termination_master_noc_y_backward,
-                termination_sync_address_backward,
-                0);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
-        }
+    if (mux_backward.connection_valid) {
+        close_mux(
+            mux_connection_handle_backward,
+            mux_backward.is_termination_master,
+            mux_backward.termination_sync_address,
+            num_mux_clients,
+            mux_backward.fabric_mux_x,
+            mux_backward.fabric_mux_y,
+            fabric_mux_termination_signal_address,
+            mux_backward.termination_master_noc_x,
+            mux_backward.termination_master_noc_y);
     }
-    if (mux_connection_valid_forward) {
-        tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle_forward);
-
-        if (is_termination_master_forward) {
-            auto* termination_sync_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address_forward);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(
-                fabric_mux_x_forward, fabric_mux_y_forward, fabric_mux_termination_signal_address);
-        } else {
-            uint64_t dest_addr = safe_get_noc_addr(
-                termination_master_noc_x_forward,
-                termination_master_noc_y_forward,
-                termination_sync_address_forward,
-                0);
-            noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
-        }
+    if (mux_forward.connection_valid) {
+        close_mux(
+            mux_connection_handle_forward,
+            mux_forward.is_termination_master,
+            mux_forward.termination_sync_address,
+            num_mux_clients,
+            mux_forward.fabric_mux_x,
+            mux_forward.fabric_mux_y,
+            fabric_mux_termination_signal_address,
+            mux_forward.termination_master_noc_x,
+            mux_forward.termination_master_noc_y);
     }
 #endif
 
