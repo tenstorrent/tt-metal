@@ -8,7 +8,7 @@
  * fast_tilize_block(block) use the same dest bank algorithm as fast_tilize_test:
  * - remaining_tiles > 2*dest_size: process dest_size tiles
  * - remaining_tiles > dest_size: split evenly (even_remainder)
- * - else: handle 3-tile odd case or single sequence
+ * - else: handle 3-tile odd case or single sequence (not yet implemented for 16xN)
  */
 
 #include "../../../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
