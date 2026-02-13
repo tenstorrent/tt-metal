@@ -231,7 +231,7 @@ void kernel_main() {
     copy_tile_init(cb_r2c_w);
     copy_tile(cb_r2c_w, bias_tile_index, 2);
     add_bias_init();
-    add_bias(0, 2);
+    add_bias(0);
 
     //-------------------------------------------------------------------------
     // Sum of top2 scores for this group

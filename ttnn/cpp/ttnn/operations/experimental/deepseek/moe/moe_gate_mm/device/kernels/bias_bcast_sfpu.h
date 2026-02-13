@@ -61,7 +61,7 @@ inline void _add_bias_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
-inline void _add_bias_(uint32_t bias_index) {
+inline void _add_bias_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Let us load in the bias values
@@ -138,9 +138,9 @@ inline void _llk_math_add_bias_init_() {
         ckernel::sfpu::_add_bias_configure_addrmod_);
 }
 
-inline void _llk_math_add_bias_(uint32_t input_index, uint32_t bias_index) {
+inline void _llk_math_add_bias_(uint32_t input_index) {
     _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_add_bias_, input_index, VectorMode::RC_custom, bias_index);
+        ckernel::sfpu::_add_bias_, input_index, VectorMode::RC_custom);
 }
 
 #endif
@@ -150,6 +150,6 @@ inline void _llk_math_add_bias_(uint32_t input_index, uint32_t bias_index) {
  */
 inline void add_bias_init() { MATH((_llk_math_add_bias_init_())); }
 
-ALWI void add_bias(uint32_t input_index, uint32_t bias_index) { MATH((_llk_math_add_bias_(input_index, bias_index))); }
+ALWI void add_bias(uint32_t input_index) { MATH((_llk_math_add_bias_(input_index))); }
 
 }  // namespace ckernel
