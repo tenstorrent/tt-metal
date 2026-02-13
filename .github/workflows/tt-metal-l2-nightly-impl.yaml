@@ -58,6 +58,10 @@ on:
         required: false
         type: boolean
         default: true
+      run_sdpa_tests:
+        required: false
+        type: boolean
+        default: true
       run_ttnn-bos-tests:
         required: false
         type: boolean
@@ -511,6 +515,61 @@ jobs:
           owner: U082L4RSULT # Denys Makoviichuk
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+  ttnn-sdpa-nightly-tests:
+    if: ${{ inputs.run_sdpa_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    name: tt-sdpa-nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: tt-sdpa-nightly tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          pytest tests/ttnn/nightly/unit_tests/operations/sdpa \
+            --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
+            --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
+            -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03FJB5TM5Y # Colman Glagovich
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
   ttnn-sdpa-stress-tests:
     if: ${{ inputs.run_sdpa_stress_tests }}
     container:
@@ -549,7 +608,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: tt-sdpa-stress tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/nightly/single_card/sdpa --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: |
+          pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
+                 tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
+                 -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

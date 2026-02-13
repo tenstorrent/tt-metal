@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -162,8 +162,11 @@ def test_ring_distributed_sdpa_main(device, q_chunk_size, k_chunk_size, s):
     if s % (2 * ring_size) != 0:
         pytest.skip(f"Sequence length {s} not divisible by 2 * ring_size ({2 * ring_size})")
 
-    if s / (2 * ring_size) < q_chunk_size:
+    per_device_seq_len = s // (2 * ring_size)
+    if per_device_seq_len < q_chunk_size:
         pytest.skip(f"Sequence length {s} not compatible with ring size {ring_size} and q_chunk_size {q_chunk_size}")
+    if per_device_seq_len % q_chunk_size != 0:
+        pytest.skip(f"Per-device sequence length {per_device_seq_len} not divisible by q_chunk_size {q_chunk_size}")
     run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chunk_size)
 
 
