@@ -20,8 +20,7 @@ namespace ttnn::operations::rotate {
 namespace {
 
 void bind_rotate(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    auto doc = R"doc(
         Rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
         The rotate operation performs spatial transformation by rotating each pixel position
@@ -61,23 +60,12 @@ void bind_rotate(nb::module_& mod) {
             >>>
             >>> # Rotate around custom center (x=128, y=64) with white fill
             >>> output_custom = ttnn.rotate(input_tensor, 30.0, center=(128, 64), fill=1.0)
-        )doc",
-        ttnn::rotate.base_name(),
-        ttnn::rotate.python_fully_qualified_name());
+        )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"rotate">(
         mod,
-        ttnn::rotate,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("angle"),
-            nb::kw_only(),
-            nb::arg("center") = nb::none(),
-            nb::arg("fill") = 0.0f,
-            nb::arg("expand") = false,
-            nb::arg("interpolation_mode") = "nearest",
-            nb::arg("memory_config") = nb::none()});
+        ttnn::overload_t(&ttnn::rotate, nb::arg("input_tensor"), nb::arg("angle"), nb::kw_only(), nb::arg("center") = nb::none(), nb::arg("fill") = 0.0f, nb::arg("expand") = false, nb::arg("interpolation_mode") = "nearest", nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace

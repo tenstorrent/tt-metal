@@ -123,20 +123,10 @@ void bind_grid_sample_op(nb::module_& mod) {
             >>> print(output_precomputed.shape)  # [1, 4, 4, 32]
         )doc";
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"grid_sample">(
         mod,
-        ttnn::grid_sample,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("grid"),
-            nb::kw_only(),
-            nb::arg("mode") = nb::str("bilinear"),
-            nb::arg("padding_mode") = nb::str("zeros"),
-            nb::arg("align_corners") = false,
-            nb::arg("use_precomputed_grid") = false,
-            nb::arg("batch_output_channels") = false,
-            nb::arg("memory_config") = nb::none()});
+        ttnn::overload_t(&ttnn::grid_sample, nb::arg("input_tensor"), nb::arg("grid"), nb::kw_only(), nb::arg("mode") = nb::str("bilinear"), nb::arg("padding_mode") = nb::str("zeros"), nb::arg("align_corners") = false, nb::arg("use_precomputed_grid") = false, nb::arg("batch_output_channels") = false, nb::arg("memory_config") = nb::none()));
 }
 
 void bind_prepare_grid_sample_grid(nb::module_& mod) {

@@ -65,17 +65,10 @@ void bind_upsample(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"upsample">(
         mod,
-        ttnn::upsample,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("scale_factor"),
-            nb::kw_only(),
-            nb::arg("mode") = "nearest",
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        ttnn::overload_t(&ttnn::upsample, nb::arg("input_tensor"), nb::arg("scale_factor"), nb::kw_only(), nb::arg("mode") = "nearest", nb::arg("memory_config") = nb::none(), nb::arg("compute_kernel_config") = nb::none()));
 }
 
 }  // namespace

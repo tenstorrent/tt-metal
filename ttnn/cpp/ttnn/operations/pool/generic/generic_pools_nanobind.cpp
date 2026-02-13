@@ -22,9 +22,8 @@
 namespace ttnn::operations::pool {
 
 void bind_max_pool2d_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"max_pool2d">(
         mod,
-        ttnn::max_pool2d,
         R"doc(
         Applies a max pool convolution to the input tensor. The resulting output Tensor will contain the maximum
         value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
@@ -54,9 +53,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::max_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
+        ttnn::overload_t{
+            [](const ttnn::Tensor& input_tensor,
                uint32_t batch_size,
                uint32_t input_h,
                uint32_t input_w,
@@ -75,7 +73,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                const DataType dtype,
                const Layout output_layout,
                bool config_tensor_in_dram) -> nb::object {
-                auto result = self(
+                auto result = ttnn::max_pool2d(
                     input_tensor,
                     batch_size,
                     input_h,
@@ -125,9 +123,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
 }
 
 void bind_avg_pool2d_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"avg_pool2d">(
         mod,
-        ttnn::avg_pool2d,
         R"doc(
         Applies an average pool convolution to the input tensor. The resulting output Tensor will contain the average
         value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
@@ -158,9 +155,8 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::avg_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
+        ttnn::overload_t{
+            [](const ttnn::Tensor& input_tensor,
                uint32_t batch_size,
                uint32_t input_h,
                uint32_t input_w,
@@ -180,7 +176,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                const DataType dtype,
                const Layout output_layout,
                bool config_tensor_in_dram) -> ttnn::Tensor {
-                return self(
+                return ttnn::avg_pool2d(
                     input_tensor,
                     batch_size,
                     input_h,

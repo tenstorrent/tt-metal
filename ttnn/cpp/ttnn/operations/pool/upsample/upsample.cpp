@@ -76,7 +76,7 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec);
 }
 
-ttnn::Tensor ExecuteUpSample::invoke(
+ttnn::Tensor upsample(
     const ttnn::Tensor& input_tensor,
     std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,
