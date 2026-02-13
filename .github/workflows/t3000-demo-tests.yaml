@@ -16,6 +16,7 @@ on:
           - llama3_vision
           - llama3_90b_vision
           - llama3.3-70b
+          - llama3.3-70b-DP
           - resnet50
           - sentence_bert
           - sd35_large
