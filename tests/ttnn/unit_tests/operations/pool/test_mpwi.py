@@ -251,7 +251,6 @@ def test_mpwi_general(device, ttnn_dtype, sharding_scheme, input_spec):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
-@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
     (
         in_n,
