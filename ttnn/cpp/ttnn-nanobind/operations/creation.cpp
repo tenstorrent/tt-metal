@@ -267,9 +267,6 @@ void py_module(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: A tensor filled with 1.0.
-
-        Note:
-            
         )doc";
 
         ttnn::bind_function<"ones">(
@@ -383,9 +380,6 @@ void py_module(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: A tensor filled with 1.0.
-
-        Note:
-            
         )doc";
 
         ttnn::bind_function<"ones_like">(
