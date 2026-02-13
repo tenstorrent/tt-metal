@@ -150,7 +150,6 @@ class WanAttentionBlock(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
-
         if self.parallel_config.width_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
@@ -226,9 +225,7 @@ class WanAttentionBlock(Module):
                 out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
             )
 
-        result_BTHWC = out_BTHWC + residual_BTHWC
-
-        return result_BTHWC
+        return out_BTHWC + residual_BTHWC
 
 
 class WanCausalConv3d(Module):
@@ -289,7 +286,9 @@ class WanCausalConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,  # Do not use HiFi4.
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if ttnn.float32
+            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -504,7 +503,9 @@ class WanResidualBlock(Module):
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,  # Do not use HiFi4.
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if dtype == ttnn.float32
+            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -603,6 +604,11 @@ class WanMidBlock(Module):
         dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
+
+        self.dim = dim
+        self.mesh_device = mesh_device
+        resnets = ModuleList()
+        attentions = ModuleList()
 
         resnets.append(
             WanResidualBlock(

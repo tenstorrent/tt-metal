@@ -544,10 +544,6 @@ def test_wan_conv3d_float32(
     tt_f32_out = ttnn.to_torch(tt_output_f32, mesh_composer=composer)
     tt_f32_out = conv_unpad_height(tt_f32_out, logical_h).permute(0, 4, 1, 2, 3)[:, :C_out]
 
-    # Compare both against float32 torch reference
-    _print_conv3d_error_analysis(torch_ref, tt_bf16_out, label="TT_bf16 vs torch_f32")
-    _print_conv3d_error_analysis(torch_ref, tt_f32_out, label="TT_f32  vs torch_f32")
-
     diff_bf16 = (torch_ref - tt_bf16_out).abs()
     diff_f32 = (torch_ref - tt_f32_out).abs()
     improved = (diff_f32 < diff_bf16).float().mean()
