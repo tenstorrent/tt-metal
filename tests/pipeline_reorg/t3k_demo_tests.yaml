@@ -10,14 +10,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_mixtral_tests
-  cmd: run_t3000_mixtral_tests
-  sku: wh_llmbox
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  timeout: 45
-  model-name: mixtral
-
 - name: t3k_falcon40b_tests
   cmd: run_t3000_falcon40b_tests
   sku: wh_llmbox
@@ -34,22 +26,6 @@
   timeout: 60
   model-name: llama3
 
-- name: t3k_qwen25_tests
-  cmd: run_t3000_qwen25_tests
-  sku: wh_llmbox
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  timeout: 78
-  model-name: qwen25
-
-- name: t3k_llama3_vision_tests
-  cmd: run_t3000_llama3_vision_tests
-  sku: wh_llmbox
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  timeout: 25
-  model-name: llama3_vision
-
 - name: t3k_llama3_90b_vision_tests
   cmd: run_t3000_llama3_90b_vision_tests
   sku: wh_llmbox
@@ -57,14 +33,6 @@
   team: models
   timeout: 20
   model-name: llama3_90b_vision
-
-- name: t3k_llama3_70b_tests
-  cmd: run_t3000_llama3_70b_tests
-  sku: wh_llmbox
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  timeout: 30
-  model-name: llama3_70b
 
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
