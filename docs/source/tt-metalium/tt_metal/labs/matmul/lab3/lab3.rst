@@ -660,78 +660,8 @@ Perform the following steps to complete the exercise:
    After several watcher messages, terminate the program (using ``Ctrl + C``) and inspect
    the log file in ``generated/watcher/watcher.log``.
 
-   First, review the legend in the log file to understand the meaning of the subsequent lines.
-   Key takeaways:
-
-   * Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
-     RISC-V 0 through RISC-V 4 in the Tensix Core figure in Lab 1.
-     BRISC is referred to as the primary processor, and the other RISC-V processors are referred
-     to as subordinate processors.
-   * State of each RISC-V processor is indicated either through a single-character code
-     (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code,
-     (e.g., ``NRW`` = "NOC Read Wait", ``NSW`` = "NOC Semaphore Wait").
-     If you're unusure what some of the codes mean, you can `grep` for the corresponding
-     waypoint string in the source code. For example:
-
-     .. code-block:: bash
-
-        grep -rn "." --include=\*.{cpp,h,hpp} -e 'WAYPOINT("CWFW")'
-
-        ./tt_metal/hw/inc/api/dataflow/dataflow_api.h:476:    WAYPOINT("CWFW");
-
-     You can then examine the code around line ``476`` to better understand the ``CWFW`` waypoint.
-
-   * ``rmsg`` shows basic info about the state of the Tensix core with respect to code being dispatched to this core.
-     The first field indicates whether the kernels were dispatched to this Tensix core
-     by the host (H) or by another core on the device (D). The second field indicates the NOC ID used by the
-     primary processor (BRISC). Note that NCRISC uses the other NOC by convention.
-     The third field indicates the state of the Tensix core with respect to code being dispatched to it:
-     initialization (``I``), running/go (``G``) or done (``D``). This is followed by the ``|`` separator and then codes
-     for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e. there
-     is a kernel running on it), while lowercase letters means it is disabled (i.e. there is no kernel running on it).
-     For example, ``BNT`` means that BRISC, NCRISC, and TRISCs are all enabled, whereas ``Bnt`` means that only BRISC is enabled.
-   * ``smsg`` shows the run state of the subordinate processors, using the same ``I/G/D`` codes mentioned above.
-   * ``k_ids`` are numbers identifying which kernel (by ID) is loaded on each of the five processors on this core.
-     The five values correspond to BRISC, NCRISC, TRISC0, TRISC1, and TRISC2.
-
-   Let us examine an example line of the log file to better understand how to interpret the information:
-
-   .. code-block:: text
-
-      Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2):  NSW,CWFW,   K,MWDD,   K  rmsg:D0G|BNT h_id:  0 smsg:GGGG k_ids:  5|  6|  7|  7|  7
-
-   Breaking this apart:
-
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | Field                    | Value                   | Meaning                                                      |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                                   |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                      |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `NSW`                    | BRISC status            | **N**\ OC **S**\ emaphore **W**\ ait                         |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `CWFW`                   | NCRISC status           | **C**\ B **W**\ ait **F**\ or **W**\ rite                    |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `K`                      | TRISC0 status           | In **K**\ ernel                                              |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `MWDD`                   | TRISC1 status           | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency            |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `K`                      | TRISC2 status           | In **K**\ ernel                                              |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `rmsg:D0G\|BNT`          | Run message             | Device dispatch, NOC0, Go state; BRISC/NCRISC/TRISCs enabled |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `h_id:  0`               | Host assigned ID        | Internal ID used for profiling                               |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)   |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-   | `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                              |
-   +--------------------------+-------------------------+--------------------------------------------------------------+
-
-   Kernels are identified by their IDs (``k_ids``). The mapping from kernel ID to source file name for a given section
-   is listed at the end of that section.
-
-   Idle cores where the program hasn't created any kernels can easily be identified by their ``k_ids`` fields all set to 0.
+   The log file contains a lot of diagnostic information useful for troubleshooting.
+   You can find the detailed explanation of the format of the log file in Appendix A of this lab.
 
    To help us identify the source of the hang, we analyze the **first column of the status** (BRISC status) for the
    cores running our kernels and observe that they are all stuck at ``NSW`` (**N**OC **S**emaphore **W**ait).
@@ -740,7 +670,7 @@ Perform the following steps to complete the exercise:
 
    With simple bugs like the one we introduced, this information may be sufficient to diagnose the problem.
    However, in more complex cases, we may need to add additional instrumentation to the kernels to help us diagnose the problem.
-   This could be either by adding additional waypoints, or by adding DPRINT statements to the code.
+   This could be done either by adding additional waypoints, or by adding DPRINT statements to the code.
 
 #. Revert the receiver change by uncommenting the ``noc_semaphore_inc`` line in ``mcast_receiver.cpp``.
    Reset the device using ``tt-smi -r``, then rerun the multicast example
@@ -1173,8 +1103,90 @@ Additional information about features used in this lab can be found in the follo
 Appendix A: Watcher Log File Format
 ***********************************
 
-The Watcher log file format is as follows:
+The Watcher log file contains information about Tensix core and its RISC-V processors.
+Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
+RISC-V 0 through RISC-V 4 in the Tensix Core figure in Lab 1.
+BRISC is referred to as the primary processor, and the other RISC-V processors are referred
+to as subordinate processors.
+
+The format is best explained by analyzing an example line:
 
 .. code-block:: text
 
-   Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+   Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2):  NSW,CWFW,   K,MWDD,   K  rmsg:D0G|BNT h_id:  0 smsg:GGGG k_ids:  5|  6|  7|  7|  7
+
+The meaning of the fields is as follows:
+
+* First field identifies device number (in case of multi-device cards) and logical and device (a.k.a. virtual) coordinates of the core.
+
+* State of each RISC-V processor is indicated either through a single-character code
+  (e.g., ``W`` = Waiting, ``R`` = Running, ``D`` = Done), or through a multi-character code,
+  (e.g., ``NRW`` = "NOC Read Wait", ``NSW`` = "NOC Semaphore Wait").
+  These codes correspond to the last waypoint string encountered in that core's execution.
+  If you're unsure what some of the codes mean, you can `grep` for the corresponding
+  waypoint string in the source code. For example:
+
+  .. code-block:: bash
+
+     grep -rn "." --include=\*.{cpp,h,hpp} -e 'WAYPOINT("CWFW")'
+
+     ./tt_metal/hw/inc/api/dataflow/dataflow_api.h:476:    WAYPOINT("CWFW");
+
+  You can then examine the code around line ``476`` to better understand the ``CWFW`` waypoint.
+
+* The ``rmsg`` field shows basic info about the state of the Tensix core with respect to code being dispatched to this core.
+  The first field indicates whether the kernels were dispatched to this Tensix core
+  by the host (H) or by another core on the device (D). The second field indicates the NOC ID used by the
+  primary processor (BRISC). Note that NCRISC uses the other NOC by convention.
+  The third field indicates the state of the Tensix core with respect to code being dispatched to it:
+  initialization (``I``), running/go (``G``) or done (``D``). This is followed by the ``|`` separator and then codes
+  for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e. there
+  is a kernel running on it), while lowercase letters means it is disabled (i.e. there is no kernel running on it).
+  For example, ``BNT`` means that BRISC, NCRISC, and TRISCs are all enabled, whereas ``Bnt`` means that only BRISC is enabled.
+* The ``smsg`` field shows the run state of the subordinate processors, using the same ``I/G/D`` codes mentioned above.
+* The ``k_ids`` field shows the ID of the kernel (by ID) loaded on each of the five processors on this core.
+  The five values correspond to BRISC, NCRISC, TRISC0, TRISC1, and TRISC2, respectively.
+
+Based on this, we can summarize the above line in the following table:
+
++--------------------------+-------------------------+--------------------------------------------------------------+
+| Field                    | Value                   | Meaning                                                      |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `core(x= 1,y= 0)`        | Logical coords          | This is logical core (1,0)                                   |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `virtual(x= 2,y= 2)`     | Device/Virtual coords   | Used for NOC addressing                                      |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `NSW`                    | BRISC status            | **N**\ OC **S**\ emaphore **W**\ ait                         |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `CWFW`                   | NCRISC status           | **C**\ B **W**\ ait **F**\ or **W**\ rite                    |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `K`                      | TRISC0 status           | In **K**\ ernel                                              |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `MWDD`                   | TRISC1 status           | **M**\ ath **W**\ ait **D**\ ata **D**\ ependency            |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `K`                      | TRISC2 status           | In **K**\ ernel                                              |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `rmsg:D0G\|BNT`          | Run message             | Device dispatch, NOC0, Go state; BRISC/NCRISC/TRISCs enabled |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `h_id:  0`               | Host assigned ID        | Internal ID used for profiling                               |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `smsg:GGGG`              | Subordinate message     | NCRISC, TRISC0, TRISC1, TRISC2 in **G**\ o state (running)   |
++--------------------------+-------------------------+--------------------------------------------------------------+
+| `k_ids: 5\|6\|7\|7\|7`   | Kernel IDs              | BRISC=5, NCRISC=6, TRISC0/1/2=7                              |
++--------------------------+-------------------------+--------------------------------------------------------------+
+
+Kernels are identified by their IDs (``k_ids``). The mapping from kernel ID to source file name for a given section
+is listed at the end of that section. For example:
+
+.. code-block:: text
+
+   k_id[  0]: blank
+   k_id[  1]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+   k_id[  2]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+   k_id[  3]: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+   k_id[  4]: ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp
+   k_id[  5]: ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp
+   k_id[  6]: ttnn/examples/lab_multicast/kernels/dataflow/write_tiles.cpp
+   k_id[  7]: ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp
+
+Idle cores, where the program hasn't created any kernels, can easily be identified by their ``k_ids`` fields all set to 0.
