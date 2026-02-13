@@ -300,11 +300,19 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
 uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
+
 # Patch activate for POSIX sh (Docker/CI use /bin/sh; relocatable activate uses $BASH_SOURCE)
-PATCH_OUTPUT=$("${SCRIPT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" 2>&1) || true
-if echo "$PATCH_OUTPUT" | grep -q "Skip"; then
-  echo "INFO: patch_activate_posix.sh skipped (venv activate not relocatable or already patched)"
+# Use 'if' to prevent set -e from exiting on patch failure
+if PATCH_OUTPUT=$("${SCRIPT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" 2>&1); then
+  if echo "$PATCH_OUTPUT" | grep -q "Skip"; then
+    echo "INFO: patch_activate_posix.sh skipped (venv activate not relocatable or already patched)"
+  else
+    echo "INFO: $PATCH_OUTPUT"
+  fi
+else
+  echo "WARNING: patch_activate_posix.sh failed (rc=$?): $PATCH_OUTPUT" >&2
 fi
+
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # Install uv into the venv at the same version as the invoking uv
