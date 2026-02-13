@@ -41,7 +41,7 @@ def get_current_run(conn, github_run_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def get_previous_run(conn, run_contents: str, card_type: str, current_run_id: int) -> Optional[dict]:
+def get_previous_run(conn, run_contents: str, card_type: str, git_branch: str, current_run_id: int) -> Optional[dict]:
     """Find previous run of same type for comparison."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -52,11 +52,12 @@ def get_previous_run(conn, run_contents: str, card_type: str, current_run_id: in
             FROM sweep_run
             WHERE run_contents = %s
               AND card_type = %s
+              AND git_branch = %s
               AND run_id < %s
             ORDER BY run_id DESC
             LIMIT 1
             """,
-            (run_contents, card_type, current_run_id),
+            (run_contents, card_type, git_branch, current_run_id),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -296,6 +297,7 @@ def main():
             conn,
             current_run["run_contents"],
             current_run["card_type"],
+            current_run["git_branch"],
             current_run_id,
         )
 
