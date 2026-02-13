@@ -631,38 +631,23 @@ void sub_exp_block_bcast_cols_no_push(
                     iterations>(dst_index++, vector_mode_exp);
             }
         }
-        PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
-    }
 
-    {
-        SDPA_DeviceZoneScopedN_1("PACK SUB_EXP");
-
-        uint32_t dst_index = 0;
+        // Pack inout0_cb: one pack_tile per row, MOP=SBW handles all columns in the row.
+        dst_index = 0;
         for (uint32_t i = 0; i < SBH; i++) {
-            for (uint32_t j = 0; j < SBW; ++j) {
-                uint32_t in0_tile_index =
-                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for inout0_cb
-                pack_tile<true>(dst_index++, inout0_cb, in0_tile_index);  // Pack back to original position in inout0_cb
-            }
+            uint32_t in0_tile_index = (global_row_base + i) * cols + global_col_base;
+            pack_tile<true>(dst_index, inout0_cb, in0_tile_index);
+            dst_index += SBW;
         }
 
+        // Reduce: L1-accumulate all SBW column tiles into one tile per row.
+        // One pack_tile per row; MOP=SBW packs SBW tiles to the same L1 address, accumulating.
         if constexpr (do_reduce) {
             dst_index = 0;
+            PACK((llk_pack_reconfig_l1_acc(1)));
             for (uint32_t i = 0; i < SBH; i++) {
-                // While we have results in DST, take advantage of L1 accumulation
-                // to reduce row x cols tiles to rows x 1 tiles.
-                if (global_col_base > 0) {
-                    // If on the same row, keep accumulating
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-                for (uint32_t j = 0; j < SBW; ++j) {
-                    // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
-                    pack_tile<true>(dst_index++, reduce_cb, global_row_base + i);
-                    if (global_col_base == 0 && j == 0) {
-                        // If this was the first tile of a row, start accumulating
-                        PACK((llk_pack_reconfig_l1_acc(1)));
-                    }
-                }
+                pack_tile<true>(dst_index, reduce_cb, global_row_base + i);
+                dst_index += SBW;
             }
         }
     }
@@ -671,7 +656,7 @@ void sub_exp_block_bcast_cols_no_push(
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 
     tile_regs_release();
-    if constexpr (do_reduce) {  // todo: move up?
+    if constexpr (do_reduce) {
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
 }
@@ -772,7 +757,7 @@ void reduce_c_row_group_no_push(
 
 /**
  * 1x8 blocked matmul: init hoisted to caller, packs 1 tile per row (MOP-based 8-wide packing).
- * Used for Q@KT with qkt_subblock_w=8.
+ * Used for Q@KT with qkt_subblock_w=8. Assumes MOP=SUBBLOCK_W is set by caller.
  * Push: None.
  */
 template <
@@ -802,7 +787,7 @@ void blocked_1x8_matmul_and_pack(
     }
     tile_regs_commit();
 
-    // --- Pack phase ---
+    // --- Pack phase: relies on ambient MOP=SUBBLOCK_W ---
     tile_regs_wait();
     uint32_t dst_idx = 0;
     for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
@@ -1182,7 +1167,7 @@ void sdpa_inner_loop(
                 MATH(
                     DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ", SALAD for row " << salad_row
                            << ENDL());
-                DeviceZoneScopedN("Softmax(Q@KT)@V");
+                // DeviceZoneScopedN("Softmax(Q@KT)@V");
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
                 // 1. Compute exp_max_diff for PREVIOUS row — SFPU EXP will overlap with matmul
@@ -1221,12 +1206,22 @@ void sdpa_inner_loop(
                     }
                 }
 
-                // 3. Rest of SALAD for PREVIOUS row — fused single DST pass
+                // 3. Rest of SALAD for PREVIOUS row
                 {
-                    SDPA_DeviceZoneScopedN_5("SALAD");
-                    MATH(DPRINT << "Fused SALAD rescale for Q[" << salad_row << "]" << ENDL());
-                    salad_rescale_fused<sbh, head_dim_t>(
-                        alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
+                    MATH(DPRINT << "Mul tiles bcast cols for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_MUL_TILES");
+                    mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
+                }
+                {
+                    MATH(DPRINT << "Add tiles inplace for Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_ADD_TILES");
+                    add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
+                }
+                {
+                    MATH(DPRINT << "Element-wise mul of Q[" << salad_row << "]" << ENDL());
+                    SDPA_DeviceZoneScopedN_2("S_MUL_BLOCK");
+                    mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
+                        alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
                 }
 
                 // 4. Push completed row for PREVIOUS subblock.
@@ -1245,13 +1240,15 @@ void sdpa_inner_loop(
             {
                 constexpr uint32_t salad_row = qktv_q_num_subblocks - 1;
                 MATH(DPRINT << "Pipeline drain: SALAD for row " << salad_row << ENDL());
-                DeviceZoneScopedN("SALAD drain");
+                // DeviceZoneScopedN("SALAD drain");
 
                 sub_exp_first_col_blocks_no_push<scale_fp32, sbh>(
                     alias_prev_max, alias_cur_max, cb_exp_max_diff, salad_row);
                 cb_push_back_hold_wr_ptr(cb_exp_max_diff, sbh);
-                salad_rescale_fused<sbh, head_dim_t>(
-                    alias_prev_sum, alias_prev_out, cb_exp_max_diff, alias_cur_sum, alias_cur_out, salad_row);
+                mul_tiles_bcast_cols_inplace_no_push<sbh>(alias_prev_sum, cb_exp_max_diff, salad_row);
+                add_block_inplace_no_push<sbh>(alias_cur_sum, alias_prev_sum, salad_row);
+                mul_block_bcast_cols_acc_no_push<sbh, head_dim_t>(
+                    alias_prev_out, cb_exp_max_diff, alias_cur_out, salad_row);
 
                 // alias_cur_out: SALAD drain packed tiles for last row.
                 // Held push — signals UNPACK but keeps wr_ptr at CB base (same as SALAD loop pushes).
