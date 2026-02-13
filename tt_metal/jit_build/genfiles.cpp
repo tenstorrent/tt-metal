@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -263,7 +264,7 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) { return static_cast<int>(f); };
+    auto as_int = [](DataFormat f) { return static_cast<std::underlying_type_t<DataFormat>>(f); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -412,8 +413,7 @@ void emit_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, 
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
-        "#define DST_SYNC_MODE DstSync::Sync{}\n"
-        "#include \"llk_defs.h\"\n\n"
+        "#define DST_SYNC_MODE DstSync::Sync{}\n\n"
         "constexpr ckernel::MathFidelity MATH_FIDELITY = static_cast<ckernel::MathFidelity>({});\n"
         "constexpr bool APPROX = {};\n",
         options.fp32_dest_acc_en,
@@ -434,6 +434,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     }
 
     out << "#pragma once\n\n";
+    out << "#include \"llk_defs.h\"\n\n";
 
     emit_data_format_descriptors(out, options, env.get_arch(), max_cbs);
     emit_unpack_tile_dims(out, desc, max_cbs);
