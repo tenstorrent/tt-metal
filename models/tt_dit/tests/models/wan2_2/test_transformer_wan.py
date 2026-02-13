@@ -311,3 +311,92 @@ def test_wan_transformer_model(
     torch_spatial_out = torch_spatial_out[0]
 
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        # WH (ring) on 4x8
+        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        # BH (ring) on 4x8
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_wan_transformer_inner_step(
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+) -> None:
+    """Test inner_step against the torch reference, mimicking the pipeline denoising loop."""
+    B = 1
+    T, H, W = 8, 40, 50
+    prompt_seq_len = 118
+
+    MIN_PCC = 0.992_000
+    MAX_RMSE = 0.15
+
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+    # Load pretrained torch model and truncate to 1 layer
+    torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
+    torch_model.eval()
+
+    # Create 1-layer TT model with matching weights
+    tt_model = _make_wan_transformer(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        num_layers=1,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    # Create inputs
+    torch.manual_seed(0)
+    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+
+    # Prepare cached inputs on device (like the pipeline does once before the denoising loop)
+    spatial_host, N = tt_model.preprocess_spatial_input_host(spatial_input)
+    rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
+    prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
+
+    # Run TT inner_step
+    logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
+    tt_output_1BNI = tt_model.inner_step(
+        spatial_1BNI_torch=spatial_host,
+        prompt_1BLP=prompt_1BLP,
+        rope_cos_1HND=rope_cos_1HND,
+        rope_sin_1HND=rope_sin_1HND,
+        trans_mat=trans_mat,
+        N=N,
+        timestep_torch=timestep_input,
+    )
+    tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
+    del tt_model
+
+    # Run torch reference
+    logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
+    with torch.no_grad():
+        torch_output = torch_model(
+            hidden_states=spatial_input,
+            encoder_hidden_states=prompt_input,
+            timestep=timestep_input,
+            return_dict=False,
+        )
+    torch_output = torch_output[0]
+
+    assert_quality(torch_output, tt_output, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
