@@ -356,6 +356,38 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
+void emit_data_format_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch, uint32_t max_cbs) {
+    // assuming all cores within a op have the same desc
+    const tt_hlk_desc& desc = options.hlk_desc;
+
+    // Determine dst format under ambiguous conditions (either or both l1 input & output formats are Float32)
+    ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
+    DataFormat unpack_conditional_dst_format =
+        (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
+    if (options.fp32_dest_acc_en &&
+        (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
+        unpack_conditional_dst_format = DataFormat::Tf32;
+    }
+
+    tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
+    auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+
+    auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+
+    // equalize "upack src" and "pack dst" data format vectors
+    // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
+    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be
+    // DataFromat::Invalid if the other is set) if both formats are DataFormat::Invalid then this CB is not used this
+    // allows any CB to be used as both in & out in non-compute kernels (readers/writers)
+    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to
+    // propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
+    equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
+    emit_unpack_data_formats(out, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs, max_cbs);
+    emit_pack_data_formats(out, pack_src_formats_all_cbs, pack_dst_formats_all_cbs, max_cbs);
+}
+
 void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t max_cbs) {
     emit_formats_array(out, "constexpr uint8_t", "unpack_tile_num_faces", max_cbs, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_partial_face", max_cbs, desc.buf_partial_face_arr);
@@ -392,35 +424,7 @@ void emit_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, 
 
 void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
     const uint32_t max_cbs = env.get_max_cbs();
-    const tt::ARCH arch = env.get_arch();
     const tt_hlk_desc& desc = options.hlk_desc;
-
-    // Determine dst format under ambiguous conditions (either or both l1 input & output formats are Float32)
-    ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
-    DataFormat unpack_conditional_dst_format =
-        (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
-
-    if (options.fp32_dest_acc_en &&
-        (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
-        unpack_conditional_dst_format = DataFormat::Tf32;
-    }
-
-    tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
-
-    auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
-
-    auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
-
-    // equalize "upack src" and "pack dst" data format vectors
-    // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
-    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be
-    // DataFromat::Invalid if the other is set) if both formats are DataFormat::Invalid then this CB is not used this
-    // allows any CB to be used as both in & out in non-compute kernels (readers/writers)
-    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to
-    // propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
-    equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 
     const string descriptors_path = options.path + "chlkc_descriptors.h";
     jit_build::utils::FileRenamer tmp(descriptors_path);
@@ -431,8 +435,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
     out << "#pragma once\n\n";
 
-    emit_unpack_data_formats(out, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs, max_cbs);
-    emit_pack_data_formats(out, pack_src_formats_all_cbs, pack_dst_formats_all_cbs, max_cbs);
+    emit_data_format_descriptors(out, options, env.get_arch(), max_cbs);
     emit_unpack_tile_dims(out, desc, max_cbs);
     emit_pack_tile_dims(out, desc, max_cbs);
     emit_scalar_descriptors(out, options, desc);
