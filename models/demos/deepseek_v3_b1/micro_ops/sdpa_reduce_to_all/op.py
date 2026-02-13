@@ -310,7 +310,11 @@ class SdpaReduceToAll:
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=shard_grid,
                     compile_time_args=reader_ct_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_1,
+                        noc=ttnn.NOC.RISCV_1_default,
+                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    ),
                 )
 
                 writer_kernel = ttnn.KernelDescriptor(
@@ -318,7 +322,11 @@ class SdpaReduceToAll:
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=shard_grid,
                     compile_time_args=writer_ct_args,
-                    config=ttnn.WriterConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_1,
+                        noc=ttnn.NOC.RISCV_1_default,
+                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    ),
                 )
 
                 compute_kernel = ttnn.KernelDescriptor(

@@ -262,7 +262,11 @@ class UnifiedKernelDescriptor:
             defines=self.defines,
             common_runtime_args=self.ncrisc_common_runtime_args,
             runtime_args=ncrisc_runtime_args,
-            config=ttnn.ReaderConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1,
+                noc=ttnn.NOC.RISCV_1_default,
+                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            ),
         )
 
         # Writer kernel (BRISC)
@@ -275,7 +279,11 @@ class UnifiedKernelDescriptor:
             defines=self.defines,
             common_runtime_args=self.brisc_common_runtime_args,
             runtime_args=brisc_runtime_args,
-            config=ttnn.WriterConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0,
+                noc=ttnn.NOC.RISCV_0_default,
+                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            ),
         )
 
         # Compute kernel (TRISC)
@@ -395,7 +403,11 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
                     runtime_args=ncrisc_runtime_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_1,
+                        noc=ttnn.NOC.RISCV_1_default,
+                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    ),
                 )
             )
 
@@ -410,7 +422,11 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
                     runtime_args=brisc_runtime_args,
-                    config=ttnn.WriterConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_0,
+                        noc=ttnn.NOC.RISCV_0_default,
+                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    ),
                 )
             )
 
