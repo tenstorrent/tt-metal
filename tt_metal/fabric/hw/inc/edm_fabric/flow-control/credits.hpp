@@ -158,16 +158,10 @@ VC0:
    |-------------------
  */
 
-constexpr uint32_t MAX_ACK_CREDITS_PER_OVERLAY_REGISTER = 2;
-// Max credits are stored in each L1 word that is read by the sender channel to
-// understand acks received
-constexpr uint32_t MAX_ACK_CREDITS_PER_L1_WORD = 4;
+constexpr uint32_t MAX_ACK_CREDITS_PER_OVERLAY_REGISTER = 4;
 
 // Max credits packed in the overlay register signalled to the receiver channel
-constexpr uint32_t MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER = 2;
-// Max credits the receiver will pack into each local memory word
-// for internal book-keeping
-constexpr uint32_t MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD = 4;
+constexpr uint32_t MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER = 4;
 
 namespace tt::tt_fabric {
 
@@ -748,7 +742,6 @@ public:
         if constexpr (NUM_CHANNELS == 1) {
             return static_cast<uint8_t>(packed.value & CREDIT_MASK);
         }
-        static_assert(credits_are_byte_aligned);
         if constexpr (credits_are_byte_aligned) {
             // Byte-aligned optimization
             if constexpr (NUM_CHANNELS == 1) {
@@ -1108,14 +1101,16 @@ struct MultiOverlayRegStorage {
     static constexpr std::array<size_t, NUM_REGISTERS> STREAM_IDS = {stream_ids...};
 
     static_assert(NUM_REGISTERS == 2, "Currently only 2 registers supported for multi-register storage");
-    static_assert(NUM_CHANNELS >= 4 && NUM_CHANNELS <= 5, "Multi-register storage for 4-5 channels");
+    static_assert(
+        NUM_CHANNELS >= (MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER + 1) && NUM_CHANNELS <= 8,
+        "Multi-register storage requires more channels than fit in single register");
 
     static constexpr uint32_t TOTAL_BITS = NUM_CHANNELS * CREDIT_WIDTH;
     // Use uint64_t for storage when total bits > 32
     using storage_type = std::conditional_t<(TOTAL_BITS <= 32), uint32_t, uint64_t>;
 
 private:
-    // Channel assignment: reg0 gets 2 channels, reg1 gets the rest
+    // Channel assignment: reg0 gets CHANNELS_IN_REG0 channels, reg1 gets the rest
     static constexpr uint8_t CHANNELS_IN_REG0 = MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER;
     static constexpr uint8_t CHANNELS_IN_REG1 = NUM_CHANNELS - CHANNELS_IN_REG0;
     static constexpr storage_type reg0_mask = (static_cast<storage_type>(1) << (CHANNELS_IN_REG0 * CREDIT_WIDTH)) - 1;

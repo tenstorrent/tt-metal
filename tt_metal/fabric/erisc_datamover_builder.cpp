@@ -662,7 +662,9 @@ bool is_packed_credit_mode_enabled(const FabricEriscDatamoverConfig& config) {
     tt::ARCH arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     switch (arch) {
         case tt::ARCH::BLACKHOLE:
-            return config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus;
+            return config.topology == tt::tt_fabric::Topology::Ring ||
+                   config.topology == tt::tt_fabric::Topology::Mesh ||
+                   config.topology == tt::tt_fabric::Topology::Torus;
         case tt::ARCH::WORMHOLE_B0:
             return config.topology == tt::tt_fabric::Topology::Ring; // packed credits not fully enabled/tested for Torus on WH yet due to different credit mechanics
         default:

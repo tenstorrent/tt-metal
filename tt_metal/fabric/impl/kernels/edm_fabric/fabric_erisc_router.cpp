@@ -1774,15 +1774,20 @@ FORCE_INLINE
             sender_channel_from_receiver_credits
                 .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE, sender_channel_index>();
         if constexpr (multi_txq_enabled) {
-            // this is redundant actually
-            new_acks_for_this_channel = new_acks_for_this_channel & (0xFF << (sender_channel_index * 8));
+            // Mask to this channel's credit field (redundant but defensive)
+            constexpr uint8_t CW = receiver_credits_config::CREDIT_WIDTH;
+            new_acks_for_this_channel =
+                new_acks_for_this_channel & (receiver_credits_config::CREDIT_MASK << (sender_channel_index * CW));
         }
         if (new_acks_for_this_channel != 0) {
-            constexpr uint8_t CHANNELS_IN_REG0 = multi_txq_enabled ? MAX_ACK_CREDITS_PER_L1_WORD : MAX_ACK_CREDITS_PER_OVERLAY_REGISTER;
-            constexpr uint32_t shift = multi_txq_enabled ? sender_channel_index * 8
+            constexpr uint8_t CW = receiver_credits_config::CREDIT_WIDTH;
+            constexpr uint8_t CHANNELS_IN_REG0 =
+                multi_txq_enabled ? static_cast<uint8_t>(receiver_credits_config::CREDITS_PER_L1_WORD)
+                                  : MAX_ACK_CREDITS_PER_OVERLAY_REGISTER;
+            constexpr uint32_t shift = multi_txq_enabled ? sender_channel_index * CW
                                        : sender_channel_index < CHANNELS_IN_REG0
-                                           ? sender_channel_index * 8
-                                           : (sender_channel_index - CHANNELS_IN_REG0) * 8;
+                                           ? sender_channel_index * CW
+                                           : (sender_channel_index - CHANNELS_IN_REG0) * CW;
 
             uint32_t new_acks_unpacked = new_acks_for_this_channel >> shift;
             // increment_num_processed_acks expects UNPACKED value (not packed!)
@@ -1878,6 +1883,8 @@ void stateful_send_batched_credits_to_sender_over_ethernet() {
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
 }
 
+size_t batched_send_counter = 0;
+size_t batched_send_counter_limit = 4;
 // static bool has_credits_to_send = false;
 template <
     uint8_t receiver_channel,
@@ -1900,6 +1907,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
+    constexpr bool enable_batched_credit_transfer = multi_txq_enabled;
     // Stateless credit view/updater - zero cost instantiation
     using CreditsViewT = ReceiverPacketCreditsViewFor<receiver_channel, to_receiver_pkts_sent_id>;
     using CreditsUpdaterT = ReceiverPacketCreditsUpdaterFor<receiver_channel, to_receiver_pkts_sent_id>;
@@ -2019,7 +2027,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             receiver_channel_response_credit_sender.template send_packed_ack_credits<
                 decltype(credits_view)::NUM_CHANNELS_VALUE,
                 ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK,
-                !multi_txq_enabled>(packed_num_packets);
+                !enable_batched_credit_transfer>(packed_num_packets);
             // if constexpr (multi_txq_enabled) {
             //     has_credits_to_send = true;
             // }
@@ -2051,8 +2059,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // WATCHER_RING_BUFFER_PUSH(0xcc100000);
             // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
             // stateful_send_batched_credits_to_sender_over_ethernet
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(
-                receiver_channel_response_credit_sender);
+            receiver_send_completion_ack<
+                ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK,
+                !enable_batched_credit_transfer>(receiver_channel_response_credit_sender);
         } else {
             // Unpacked mode: sender-channel-based, must pass src_id
             uint8_t src_ch_id;
@@ -2064,8 +2073,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // WATCHER_RING_BUFFER_PUSH(0xcc200000 | src_ch_id);
             // don't send credit here if multi_txq_enabled, because we send all credits back one-shot in
             // stateful_send_batched_credits_to_sender_over_ethernet
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK, !multi_txq_enabled>(
-                receiver_channel_response_credit_sender, src_ch_id);
+            receiver_send_completion_ack<
+                ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK,
+                !enable_batched_credit_transfer>(receiver_channel_response_credit_sender, src_ch_id);
         }
         // if constexpr (multi_txq_enabled) {
         //     has_credits_to_send = true;
@@ -2076,14 +2086,18 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 
     // send batched credits to sender side - because they are all unbounded counters, this is safe to
     // do whenever
-    if constexpr (multi_txq_enabled) {
+    if constexpr (enable_batched_credit_transfer) {
         // don't need to check for busy because all txq registers are always the same (same src, dest, size)
         // because the credits are all unbounded counters and located contiguously in memory and we do this
         // unconditionally. In the worst case, txq will drop this request during this specific call/iteraton
         // but we are guaranteed to come back to it eventually
         // if (has_credits_to_send) {
         //     while (internal_::eth_txq_is_busy(receiver_txq_id)) {}
+        // batched_send_counter++;
+        // if (batched_send_counter = batched_send_counter_limit) {
         stateful_send_batched_credits_to_sender_over_ethernet();
+        // batched_send_counter = 0;
+        // }
         // has_credits_to_send = false;
         // }
     }
