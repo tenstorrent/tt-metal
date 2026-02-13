@@ -170,6 +170,18 @@ def _program_config_fuses_activation(program_config) -> bool:
         return True
 
 
+def _ttnn_is_sharded(x) -> bool:
+    try:
+        if hasattr(ttnn, "is_sharded"):
+            return bool(ttnn.is_sharded(x))
+    except Exception:
+        pass
+    try:
+        return bool(x.is_sharded())
+    except Exception:
+        return False
+
+
 class TTLinear:
     def __init__(
         self,
@@ -327,7 +339,8 @@ class TTLayerNorm:
             }
             pc = self.program_config
             ln_pc = getattr(pc, "ln_program_config", None) if pc is not None else None
-            if ln_pc is not None:
+            # Perf LN program configs typically assume a sharded input tensor.
+            if ln_pc is not None and _ttnn_is_sharded(x):
                 kwargs["program_config"] = ln_pc
 
             cc = getattr(pc, "ln_compute_config", None) if pc is not None else None
@@ -487,6 +500,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
+            if qkv_pc is not None and not _ttnn_is_sharded(x4):
+                qkv_pc = None
             qkv4 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self._wqkv_tt,
@@ -559,6 +574,8 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
+            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
+                proj_pc = None
             out_tt4 = _ttnn_linear_with_optional_program_config(
                 x=ctx_tt4,
                 w=self._proj_w_tt,
@@ -644,6 +661,10 @@ class TTMLP:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
+            if ff1_pc is not None and not _ttnn_is_sharded(x4):
+                ff1_pc = None
+            if ff2_pc is not None and not _ttnn_is_sharded(x4):
+                ff2_pc = None
             y1 = _ttnn_linear_with_optional_program_config(
                 x=x4,
                 w=self.w1_tt,
