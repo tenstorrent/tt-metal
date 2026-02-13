@@ -109,7 +109,7 @@
         volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                       \
         /* Check if we need to wrap buffer and wait for enough space in it */                                          \
         constexpr auto message_size = dprint_detail::serialization::get_total_message_size(__VA_ARGS__);               \
-        dprint_detail::locking::wait_for_space(dprint_buffer, message_size);                                           \
+        auto write_position = dprint_detail::locking::wait_for_space(dprint_buffer, message_size);                     \
         /* Generate dprint message header */                                                                           \
         dprint_detail::structures::DPrintHeader header = {};                                                           \
         header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                       \
@@ -120,13 +120,12 @@
             "Too many DPRINT calls, exceeds limit");                                                                   \
         header.info_id = dprint_info_index;                                                                            \
         auto header_value = header.value;                                                                              \
-        /* Get write pointer in dprint buffer */                                                                       \
-        auto write_position = dprint_buffer->aux.wpos;                                                                 \
-        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;                                           \
         /* Serialize message */                                                                                        \
+        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;                                           \
         dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value); \
         dprint_detail::serialization::serialize_arguments(dprint_buffer_ptr, __VA_ARGS__);                             \
         /* Move write pointer in dprint buffer */                                                                      \
+        asm volatile("" ::: "memory");                                                                                 \
         dprint_buffer->aux.wpos = write_position + message_size;                                                       \
         /* Release buffer lock */                                                                                      \
         dprint_detail::locking::release_lock();                                                                        \
@@ -945,6 +944,8 @@ using arg_reorder_seq_t = typename arg_reorder_seq<Args...>::type;
 
 namespace locking {
 
+uint32_t wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size);
+
 void acquire_lock() {
     volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
 
@@ -976,6 +977,30 @@ void acquire_lock() {
             break;  // Successfully acquired lock
         }
     }
+
+    // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
+    invalidate_l1_cache();
+
+    // TODO: Once kernel is being started, we should update kernel_printed to 0.
+
+    // Check if we should print kernel id
+    volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();
+    if (!dprint_buffer->aux.kernel_printed[PROCESSOR_INDEX]) {
+        uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+        tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
+        auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+        dprint_detail::structures::DPrintHeader new_kernel_message = {};
+        new_kernel_message.is_kernel = 1;
+        new_kernel_message.risc_id = PROCESSOR_INDEX;
+        new_kernel_message.message_payload = dprint_detail::structures::DPrintHeader::max_message_payload_size;
+        new_kernel_message.info_id = kernel_id;
+        auto header_value = new_kernel_message.value;
+        wait_for_space(dprint_buffer, sizeof(new_kernel_message));
+        auto write_position = dprint_buffer->aux.wpos;
+        auto dprint_buffer_ptr = &(dprint_buffer->data[0]) + write_position;
+        dprint_detail::formatting::dprint_type<decltype(header_value)>::serialize(dprint_buffer_ptr, 0, header_value);
+        dprint_buffer->aux.kernel_printed[PROCESSOR_INDEX] = 1;
+    }
 }
 
 void release_lock() {
@@ -993,15 +1018,16 @@ void initialize_lock() {
     asm volatile("" ::: "memory");
 }
 
-void wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size) {
+uint32_t wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, uint32_t message_size) {
     // Check if we are wrapped around
-    if (dprint_buffer->aux.wpos > dprint_buffer->aux.rpos) {
+    auto write_position = dprint_buffer->aux.wpos;
+    auto read_position = dprint_buffer->aux.rpos;
+    if (write_position > read_position) {
         // We are writing in front of the read position. Check if we need to wrap around.
-        if (dprint_buffer->aux.wpos + message_size >= sizeof(dprint_buffer->data)) {
+        if (write_position + message_size >= sizeof(dprint_buffer->data)) {
             // There is not enough space for our message until end of buffer.
             // Check if we should add wrap around message in the buffer.
-            if (dprint_buffer->aux.wpos <
-                sizeof(dprint_buffer->data) - sizeof(dprint_detail::structures::DPrintHeader::value)) {
+            if (write_position < sizeof(dprint_buffer->data) - sizeof(dprint_detail::structures::DPrintHeader::value)) {
                 // We can fit a wrap around message, write it now so reader can process it while we wait for space.
                 dprint_detail::structures::DPrintHeader wrap_header = {};
                 wrap_header.is_kernel = 0;
@@ -1009,34 +1035,34 @@ void wait_for_space(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, ui
                 wrap_header.message_payload = 0;
                 wrap_header.info_id = dprint_detail::structures::DPrintHeader::max_info_id_value;
                 auto value = wrap_header.value;
-                *reinterpret_cast<dprint_buffer_ptr<decltype(value)>>(dprint_buffer->data + dprint_buffer->aux.wpos) =
-                    value;
+                *reinterpret_cast<dprint_buffer_ptr<decltype(value)>>(dprint_buffer->data + write_position) = value;
             }
             // Wrap around to the beginning of the buffer and continue waiting for space there.
-            dprint_buffer->aux.wpos = 0;
+            write_position = dprint_buffer->aux.wpos = 0;
         } else {
             // There is enough space in the buffer.
-            return;
+            return write_position;
         }
     }
 
     // Check if there is enough space between wpos and rpos
-    if (dprint_buffer->aux.wpos < dprint_buffer->aux.rpos) {
+    if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
-        while (dprint_buffer->aux.wpos < dprint_buffer->aux.rpos &&
-               dprint_buffer->aux.rpos < dprint_buffer->aux.wpos + message_size) {
+        while (write_position < read_position && read_position < write_position + message_size) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-                return;
+                return 0;
             };  // wait for host to catch up to wpos with it's rpos
+            read_position = dprint_buffer->aux.rpos;
         }
         WAYPOINT("DPD");
     }
+    return write_position;
 }
 
 }  // namespace locking

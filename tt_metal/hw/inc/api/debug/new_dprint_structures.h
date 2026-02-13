@@ -18,6 +18,7 @@ struct DPrintStringInfo {
 
 struct DPrintHeader {
     static constexpr uint16_t max_info_id_value = 65535;
+    static constexpr uint16_t max_message_payload_size = 1023;  // 10 bits for message_payload
     union {
         struct {
             uint8_t is_kernel : 1;  // 0 = firmware, 1 = kernel
