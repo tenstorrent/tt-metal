@@ -10,7 +10,7 @@ from dataclasses import dataclass
 class SamplingParams:
     """
     Used in Generator decode forward functions for greedy decoding / sampling on device.
-    The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
+    The same data class exists in vLLM at vllm/v1/worker/tt_model_runner.py.
     """
 
     temperature: float | list[float]

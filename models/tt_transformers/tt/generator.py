@@ -319,7 +319,11 @@ class Generator(WarmupForwardMixin):
 
         # we need this here becuase of tt-metal tests
         if warmup_prefill:
-            self.warmup_model_prefill(kv_cache, enable_trace, False, False)
+            sampling_on_device_enabled = (
+                getattr(self.model[0], "_supports_on_device_sampling", False)
+                and getattr(self.model[0], "sampling", None) is not None
+            )
+            self.warmup_model_prefill(kv_cache, enable_trace, sampling_on_device_enabled, sampling_on_device_enabled)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
