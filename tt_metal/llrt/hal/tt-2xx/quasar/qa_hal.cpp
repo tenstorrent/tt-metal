@@ -201,50 +201,52 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
-        objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
+        objs.emplace_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
         if (params.is_fw) {
-            objs.push_back(fmt::format("{}/{}-crt0.o", dir, cpu));
+            objs.emplace_back(fmt::format("{}/{}-crt0.o", dir, cpu));
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back(fmt::format("{}/{}-noc.o", dir, cpu));
+            objs.emplace_back(fmt::format("{}/{}-noc.o", dir, cpu));
         }
-        objs.push_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
+        objs.emplace_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
         return objs;
     }
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        includes.reserve(13);
 
         // Common includes for all core types
-        includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
-        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/internal");
-        includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
-        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
-        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
-        includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
-        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
+        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/common");
+        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
+        includes.emplace_back("tt_metal/hw/inc/internal");
+        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx");
+        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
+        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
+        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
+        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
+        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
+        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
                 switch (params.processor_class) {
                     case HalProcessorClassType::COMPUTE:
-                        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_api");
-                        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu");
+                        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/llk_api");
+                        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu");
                         break;
                     case HalProcessorClassType::DM: break;
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH: {
-                includes.push_back("tt_metal/hw/inc/ethernet");
+                includes.emplace_back("tt_metal/hw/inc/ethernet");
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
@@ -252,13 +254,13 @@ public:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
         }
-        includes.push_back("tt_metal/hw/firmware/src/tt-2xx");
+        includes.emplace_back("tt_metal/hw/firmware/src/tt-2xx");
         return includes;
     }
 
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
-        defines.push_back("ARCH_QUASAR");
+        defines.emplace_back("ARCH_QUASAR");
         return defines;
     }
 
@@ -266,9 +268,9 @@ public:
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (params.is_fw) {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+                srcs.emplace_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
             } else {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+                srcs.emplace_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
             }
         }
         return srcs;
@@ -349,14 +351,10 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->core_info_.reserve(this->core_info_.size() + 3);
+    this->core_info_.emplace_back(quasar::create_tensix_mem_map());
+    this->core_info_.emplace_back(quasar::create_active_eth_mem_map());
+    this->core_info_.emplace_back(quasar::create_idle_eth_mem_map());
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));

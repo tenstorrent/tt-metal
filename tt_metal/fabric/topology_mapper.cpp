@@ -693,6 +693,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         // Log pinnings
         std::vector<std::string> pinning_strs;
+        pinning_strs.reserve(mesh_pinnings.size());
         for (const auto& [fabric_node, positions] : mesh_pinnings) {
             if (positions.size() == 1) {
                 pinning_strs.push_back(fmt::format(
