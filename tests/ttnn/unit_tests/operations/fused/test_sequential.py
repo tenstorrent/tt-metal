@@ -1639,6 +1639,149 @@ class TestMatmulDescriptor:
 
         assert found_named_args, "At least one kernel should have named compile-time args"
 
+    def test_matmul_core_range_respected(self, device, matmul_tensors):
+        """Test matmul on a non-origin core range to verify core_range_set is respected."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        # Use core (2,0) — not the origin core
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
+        desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"], core_range_set=cores)
+
+        # Verify kernel core ranges contain only the requested core
+        for kernel in desc.descriptor.kernels:
+            for cr in kernel.core_ranges.ranges():
+                assert cr.start.x >= 2, f"Kernel core range starts before requested: {cr}"
+                assert cr.end.x <= 2, f"Kernel core range extends beyond requested: {cr}"
+
+        # Verify execution produces correct output
+        outputs = composite.launch([desc])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        torch_golden = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul core_range_respected PCC: {pcc}")
+        assert passing, f"PCC check failed: {pcc}"
+
+    def test_matmul_restricted_core_composite(self, device, matmul_tensors, test_tensors):
+        """Test matmul on non-origin core + layernorm on another core via composite."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors import composite
+
+        # Matmul on core (2,0), layernorm on core (0,0) — non-overlapping
+        mm_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
+        ln_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        mm_desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"], core_range_set=mm_cores)
+        ln_desc = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=ln_cores,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+
+        outputs = composite.launch([mm_desc, ln_desc])
+        assert len(outputs) == 2
+
+        # Verify matmul output
+        torch_mm_out = ttnn.to_torch(outputs[0][0])
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing1, pcc1 = comp_pcc(golden_mm, torch_mm_out, pcc=0.99)
+        print(f"Matmul restricted composite PCC: {pcc1}")
+        assert passing1, f"Matmul PCC: {pcc1}"
+
+        # Verify layernorm output
+        torch_ln_out = ttnn.to_torch(outputs[1][0])
+        golden_ln = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        passing2, pcc2 = comp_pcc(golden_ln, torch_ln_out, pcc=0.99)
+        print(f"LayerNorm restricted composite PCC: {pcc2}")
+        assert passing2, f"LayerNorm PCC: {pcc2}"
+
+    def test_matmul_multi_core_range(self, device, matmul_tensors):
+        """Test matmul distributed across 2 cores with multi-core program config."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        # Use cores (3,0)-(4,0) — 2 non-origin cores
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 0))})
+
+        # A: [1,1,32,64] @ B: [1,1,64,128] -> C: [1,1,32,128]
+        # M=1, N=4, K=2 tile blocks
+        # per_core_N=2 → 2 output blocks across 2 cores
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 1),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=2,
+        )
+
+        desc = matmul_desc(
+            matmul_tensors["tt_a"], matmul_tensors["tt_b"], core_range_set=cores, program_config=program_config
+        )
+
+        outputs = composite.launch([desc])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        torch_golden = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul multi-core PCC: {pcc}")
+        assert passing, f"PCC check failed: {pcc}"
+
+    def test_matmul_large_core_range(self, device):
+        """Test matmul distributed across a large 4x2 = 8 core range."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+
+        # A [1,1,256,256] @ B [1,1,256,256] -> C [1,1,256,256]
+        # M=8, N=8, K=8 tile blocks
+        torch_a = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
+
+        tt_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # 8 cores in a row
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+
+        # per_core_N must equal N for MatmulMultiCoreReuseProgramConfig
+        # per_core_M=1, per_core_N=N=8 → (8/1)*(8/8) = 8 output blocks → 1 per core
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=8,
+        )
+
+        desc = matmul_desc(tt_a, tt_b, core_range_set=cores, program_config=program_config)
+
+        outputs = composite.launch([desc])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        torch_golden = torch_a @ torch_b
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul large core range (8 cores) PCC: {pcc}")
+        assert passing, f"PCC check failed: {pcc}"
+
 
 # =============================================================================
 # Stress Tests
