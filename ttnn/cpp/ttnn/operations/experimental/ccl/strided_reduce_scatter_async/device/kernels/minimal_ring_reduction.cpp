@@ -19,14 +19,12 @@ void kernel_main() {
     constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(7);
     constexpr uint32_t mm_block_ht = get_compile_time_arg_val(8);
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
-    constexpr uint32_t N_block_wt = get_compile_time_arg_val(10);
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(11);
     constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(12);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 
     uint32_t arg_idx = 0;
-    uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx += 2;  // skip unused: start_tiles_read, start_tiles_to_read
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
@@ -50,8 +48,6 @@ void kernel_main() {
     DPRINT << "slice_Wt: " << slice_Wt << ENDL();
     DPRINT << "tile_granularity: " << tile_granularity << ENDL();
     DPRINT << "direction: " << (uint32_t)direction << ENDL();
-    DPRINT << "start_tiles_read: " << start_tiles_read << ENDL();
-    DPRINT << "start_tiles_to_read: " << start_tiles_to_read << ENDL();
     DPRINT << "worker_id: " << worker_id << ENDL();
     DPRINT << "num_workers: " << num_workers << ENDL();
     DPRINT << "batch_size: " << batch_size << ENDL();
@@ -62,7 +58,6 @@ void kernel_main() {
     DPRINT << "mm_block_ht: " << mm_block_ht << ENDL();
     DPRINT << "mm_cores_y: " << mm_cores_y << ENDL();
     DPRINT << "chunk_width_in_tiles: " << chunk_width_in_tiles << ENDL();
-    DPRINT << "N_block_wt: " << N_block_wt << ENDL();
 
     DPRINT << "The reduction kernel running its loop." << ENDL();
 

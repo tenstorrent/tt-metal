@@ -35,12 +35,9 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
 constexpr uint32_t dim = get_compile_time_arg_val(15);
 constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(16);
@@ -86,11 +83,8 @@ void kernel_main() {
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
-    const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    arg_idx += 5;  // skip unused: chunks_per_sync, start_pages_read_in_row, start_row_offset, start_tiles_read,
+                   // start_tiles_to_read
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -251,21 +245,13 @@ void kernel_main() {
         DPRINT << "input_tensor_B: " << input_tensor_B << ENDL();
         DPRINT << "input_tensor_Wt: " << input_tensor_Wt << ENDL();
         DPRINT << "slice_C: " << slice_C << ENDL();
-        DPRINT << "slice_Ht: " << slice_Ht << ENDL();
         DPRINT << "slice_Wt: " << slice_Wt << ENDL();
         DPRINT << "dim: " << dim << ENDL();
-        DPRINT << "start_pages_read_in_row: " << start_pages_read_in_row << ENDL();
-        DPRINT << "start_row_offset: " << start_row_offset << ENDL();
-        DPRINT << "start_tiles_read: " << start_tiles_read << ENDL();
-        DPRINT << "start_tiles_to_read: " << start_tiles_to_read << ENDL();
         DPRINT << "chunk_width_in_tiles: " << chunk_width_in_tiles << ENDL();
         DPRINT << "direction: " << (uint32_t)direction << ENDL();
-        DPRINT << "chunks_per_sync: " << chunks_per_sync << ENDL();
         DPRINT << "worker_id: " << worker_id << ENDL();
         DPRINT << "num_workers: " << num_workers << ENDL();
         DPRINT << "batch_size: " << input_tensor_B << ENDL();
-
-        DPRINT << " start_row_offset: " << start_row_offset << ENDL();
 
         for (uint32_t b = 0; b < batch_size; b++) {
             DPRINT << "================================================" << ENDL();
