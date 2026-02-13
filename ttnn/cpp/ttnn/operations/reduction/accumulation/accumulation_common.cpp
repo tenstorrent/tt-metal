@@ -121,6 +121,9 @@ Tensor accumulation_invoke(
         op);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
+        // TODO(#37807):
+        // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
+        // or pass in optional_out as a reference.
         optional_out->tensor_attributes->get_storage() = wip_tensor.tensor_attributes->get_storage();
     }
     return wip_tensor;
