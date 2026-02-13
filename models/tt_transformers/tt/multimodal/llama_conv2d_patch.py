@@ -2,23 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-
-_conv2d_collected = set()
-if os.path.exists("llama_conv2d_patch_1d_performance.csv"):
-    with open("llama_conv2d_patch_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _conv2d_collected.add(",".join(row))
 
 
 class TtLlamaConv2dPatch(LightweightModule):
@@ -45,12 +33,11 @@ class TtLlamaConv2dPatch(LightweightModule):
         kernel_size: int,
         stride: int,
         bias,
-        model_name: str = "unknown",
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self._model_name = model_name
+        self.num_devices = self.mesh_device.get_num_devices()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -96,26 +83,6 @@ class TtLlamaConv2dPatch(LightweightModule):
         )
 
     def forward(self, x: torch.Tensor):
-        _file_exists = os.path.exists("llama_conv2d_patch_1d_performance.csv")
-        with open("llama_conv2d_patch_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "in_channels,out_channels,kernel_size,stride,"
-                    "linear_weight_shape_0,linear_weight_shape_1,linear_weight_shape_2,linear_weight_shape_3,"
-                    "linear_weight_dtype,has_bias,device_shape_x,device_shape_y,model_name\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _entry = (
-                f"{x.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{self.in_channels},{self.out_channels},{self.kernel_size},{self.stride},"
-                f"{self._linear_weight.shape[0]},{self._linear_weight.shape[1]},{self._linear_weight.shape[2]},{self._linear_weight.shape[3]},"
-                f"{self._linear_weight.dtype},{self.bias is not None},{_dev_shape[0]},{_dev_shape[1]},{self._model_name}"
-            )
-            if _entry not in _conv2d_collected:
-                _conv2d_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         x = self._unfold(x)
         x = x.permute(0, 2, 1)
 

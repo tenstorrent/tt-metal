@@ -2,23 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-
-_img_attn_collected = set()
-if os.path.exists("llama_image_attention_1d_performance.csv"):
-    with open("llama_image_attention_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _img_attn_collected.add(",".join(row))
 
 
 class TtLlamaImageAttention(LightweightModule):
@@ -216,33 +204,6 @@ class TtLlamaImageAttention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
     def forward(self, x_11SH, mask=None):
-        _file_exists = os.path.exists("llama_image_attention_1d_performance.csv")
-        with open("llama_image_attention_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "wqkv_shape_0,wqkv_shape_1,wqkv_dtype,"
-                    "wo_shape_0,wo_shape_1,wo_dtype,"
-                    "hidden_size,n_heads,head_dim,n_kv_heads,device_shape_x,device_shape_y,"
-                    "has_wqkv_bias,has_bo,mask_shape,mask_dtype,model_name\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _mask_shape = (
-                f"{mask.shape[0]}x{mask.shape[1]}x{mask.shape[2]}x{mask.shape[3]}" if mask is not None else "None"
-            )
-            _mask_dtype = str(mask.dtype) if mask is not None else "None"
-            _entry = (
-                f"{x_11SH.dtype},{x_11SH.shape[0]},{x_11SH.shape[1]},{x_11SH.shape[2]},{x_11SH.shape[3]},"
-                f"{self.wqkv.shape[0]},{self.wqkv.shape[1]},{self.wqkv.dtype},"
-                f"{self.wo.shape[0]},{self.wo.shape[1]},{self.wo.dtype},"
-                f"{self.hidden_size},{self.n_heads},{self.head_dim},{self.n_kv_heads},{_dev_shape[0]},{_dev_shape[1]},"
-                f"{self.wqkv_bias is not None},{self.bo is not None},{_mask_shape},{_mask_dtype},"
-                f"{self.configuration.model_name}"
-            )
-            if _entry not in _img_attn_collected:
-                _img_attn_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         seq_len = x_11SH.shape[-2]
 
         MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ

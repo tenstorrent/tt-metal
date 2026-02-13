@@ -2,22 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-import os
-
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-_mixtral_mlp_collected = set()
-if os.path.exists("mixtral_mlp_1d_performance.csv"):
-    with open("mixtral_mlp_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _mixtral_mlp_collected.add(",".join(row))
 
 
 class TtMixtralMLP(LightweightModule):
@@ -76,30 +64,6 @@ class TtMixtralMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        _file_exists = os.path.exists("mixtral_mlp_1d_performance.csv")
-        with open("mixtral_mlp_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "cluster_shape_x,cluster_shape_y,x_dtype,w1_dtype,w2_dtype,w3_dtype,"
-                    "x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "w1_shape_0,w1_shape_1,w1_shape_2,w1_shape_3,"
-                    "w2_shape_0,w2_shape_1,w2_shape_2,w2_shape_3,"
-                    "w3_shape_0,w3_shape_1,w3_shape_2,w3_shape_3,"
-                    "model_name,mode\n"
-                )
-            _entry = (
-                f"{self.model_args.cluster_shape[0]},{self.model_args.cluster_shape[1]},"
-                f"{x.dtype},{self.w1.dtype},{self.w2.dtype},{self.w3.dtype},"
-                f"{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{self.w1.shape[0]},{self.w1.shape[1]},{self.w1.shape[2]},{self.w1.shape[3]},"
-                f"{self.w2.shape[0]},{self.w2.shape[1]},{self.w2.shape[2]},{self.w2.shape[3]},"
-                f"{self.w3.shape[0]},{self.w3.shape[1]},{self.w3.shape[2]},{self.w3.shape[3]},"
-                f"{self.model_args.model_name},{mode}"
-            )
-            if _entry not in _mixtral_mlp_collected:
-                _mixtral_mlp_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         if mode == "prefill":
             seq_len = x.shape[-2]
             original_shape = x.shape

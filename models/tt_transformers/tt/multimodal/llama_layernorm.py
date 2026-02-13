@@ -1,20 +1,8 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import csv
-import os
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-_layernorm_collected = set()
-if os.path.exists("llama_layernorm_1d_performance.csv"):
-    with open("llama_layernorm_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _layernorm_collected.add(",".join(row))
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -32,12 +20,10 @@ class TtLayerNorm(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         model_config=None,
         eps: float = 1e-05,
-        model_name: str = "unknown",
     ):
         super().__init__()
         self.device = device
         self.eps = eps
-        self._model_name = model_name
 
         torch_weight = (
             state_dict[f"{state_dict_prefix}weight"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
@@ -97,23 +83,6 @@ class TtLayerNorm(LightweightModule):
             self.sharded_output_config = self.sharded_input_config
 
     def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
-        _file_exists = os.path.exists("llama_layernorm_1d_performance.csv")
-        with open("llama_layernorm_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "device_shape_x,device_shape_y,x_dtype,x_shape_0,x_shape_1,x_shape_2,weight_shape_0,weight_shape_1,weight_shape_2,weight_dtype,eps,in_sharded,out_sharded,model_name\n"
-                )
-            _dev_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
-            _entry = (
-                f"{_dev_shape[0]},{_dev_shape[1]},"
-                f"{x.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},"
-                f"{self.weight.shape[0]},{self.weight.shape[1]},{self.weight.shape[2]},{self.weight.dtype},"
-                f"{self.eps},{in_sharded},{out_sharded},{self._model_name}"
-            )
-            if _entry not in _layernorm_collected:
-                _layernorm_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         if in_sharded:
             x = ttnn.layer_norm(
                 x,

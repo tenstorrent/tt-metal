@@ -2,24 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import itertools
-import os
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-
-_tile_pos_collected = set()
-if os.path.exists("llama_tile_position_embedding_1d_performance.csv"):
-    with open("llama_tile_position_embedding_1d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for row in reader:
-            if row:
-                _tile_pos_collected.add(",".join(row))
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):
@@ -43,12 +32,11 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         num_tiles: int,
         width: int,
         gated=False,
-        model_name: str = "unknown",
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self._model_name = model_name
+        self.num_devices = self.mesh_device.get_num_devices()
 
         self.num_tiles = num_tiles
         self.width = width
@@ -105,31 +93,6 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         return torch.cat(padded_embeds, dim=0), ar_mapping
 
     def forward(self, x: ttnn.Tensor, ar: torch.Tensor, num_tiles: int = None):
-        _file_exists = os.path.exists("llama_tile_position_embedding_1d_performance.csv")
-        with open("llama_tile_position_embedding_1d_performance.csv", "a") as _f:
-            if not _file_exists:
-                _f.write(
-                    "x_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "padded_emb_shape_0,padded_emb_shape_1,padded_emb_shape_2,padded_emb_shape_3,"
-                    "num_tiles_cfg,width,gated,device_shape_x,device_shape_y,"
-                    "num_tiles,ar_shape,ar_dtype,aspect_ratios,model_name\n"
-                )
-            _dev_shape = list(self.mesh_device.shape) if hasattr(self.mesh_device, "shape") else [1, 1]
-            _num_tiles_arg = num_tiles if num_tiles is not None else self.num_tiles
-            _ar_shape = "x".join(str(d) for d in ar.shape)
-            _ar_str = ";".join(
-                f"{h.item() if hasattr(h, 'item') else h}x{w.item() if hasattr(w, 'item') else w}" for h, w in ar
-            )
-            _entry = (
-                f"{x.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{self.padded_embeddings.shape[0]},{self.padded_embeddings.shape[1]},{self.padded_embeddings.shape[2]},{self.padded_embeddings.shape[3]},"
-                f"{self.num_tiles},{self.width},{self.gated},{_dev_shape[0]},{_dev_shape[1]},"
-                f"{_num_tiles_arg},{_ar_shape},{ar.dtype},{_ar_str},{self._model_name}"
-            )
-            if _entry not in _tile_pos_collected:
-                _tile_pos_collected.add(_entry)
-                _f.write(f"{_entry}\n")
-
         if num_tiles is None:
             num_tiles = self.num_tiles
         elif num_tiles > self.num_tiles:

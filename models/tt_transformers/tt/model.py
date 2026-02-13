@@ -69,7 +69,6 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
-            model_name=args.model_name if hasattr(args, "model_name") else "unknown",
         )
 
         if args.rope_theta_local:
@@ -80,7 +79,6 @@ class Transformer(LightweightModule):
                 args.max_seq_len,
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
-                model_name=args.model_name if hasattr(args, "model_name") else "unknown",
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()

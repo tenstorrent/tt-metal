@@ -1250,8 +1250,8 @@ def test_demo_text(
         is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
     if any(is_special_tokens_produced):
         logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
-        # if is_ci_env:
-        #     assert False, "model produced special tokens"
+        if is_ci_env:
+            assert False, "model produced special tokens"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
