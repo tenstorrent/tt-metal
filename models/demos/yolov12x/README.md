@@ -28,36 +28,27 @@ Use the following command to run the Yolo12x model with pre-trained weights :
 ```sh
 pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]
 ```
+**Current PCC Results:** PCC (threshold: 0.99): 0.9974655
 
 ### Model performant running with Trace+2CQ
 
 #### Single Device (BS=1):
 
-- For `640x640`, end-2-end perf is `33` FPS :
+- For `640x640`, end-2-end perf is `32` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
+  _Note: Original FPS: 33_
 
 #### Multi Device (DP=2, N300):
 
-- For `640x640`, end-2-end perf is `54` FPS : #need to update
+- For `640x640`, end-2-end perf is `61` FPS
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
-
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|----------------------|-------------------------|-------------|
-| 640x640    | 0.9974655            | 32                      | Passed      |
-
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|----------------------|-------------------------|-------------|
-| 640x640    | 0.9974655            | 61                      | Passed      |
-
+  _Note: Original FPS: 54_
 
 ### Demo with Trace+2CQ:
 

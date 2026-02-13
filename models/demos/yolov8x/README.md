@@ -27,29 +27,22 @@ python_env/bin/python -m pip install ultralytics
 ```
 pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
 ```
+**Current PCC Results:** PCC (threshold: 0.99): 0.9988843
 
-## Model performant running with Trace+2CQ (The current fps is mentioned in the below table)
+## Model performant running with Trace+2CQ
 ### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `66` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- For `640x640`, end-2-end perf is `63.7` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant
   ```
+  _Note: Original FPS: 66_
 
 ### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `124` FPS:
+- For `640x640`, end-2-end perf is `113.4` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|----------- |----------------------|-------------------------|-------------|
-| 640x640    | 0.9988843            | 63.2                    | Passed      |
-
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|----------------------|-------------------------|-------------|
-| 640x640    | 0.9989218            | 113.4                   | Passed      |
+  _Note: Original FPS: 124_
 
 ### Demo
 Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder.

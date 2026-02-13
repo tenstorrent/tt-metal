@@ -26,30 +26,22 @@ Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/yolov11m/tests/pcc/test_ttnn_yolov11.py::test_yolov11
 ```
+**Current PCC Results:** PCC (threshold: 0.99): 0.9992749
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `95` FPS :
+- For `640x640`, end-2-end perf is `90` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
 pytest --disable-warnings models/demos/yolov11m/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
+_Note: Original FPS: 95_
 
 ### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `157` FPS :
+- For `640x640`, end-2-end perf is `158` FPS :
   ```
   pytest --disable-warnings models/demos/yolov11m/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
-|------------|----------------------|-------------------------|-------------|
-| 640x640    | 0.9992749            | 90                      | Passed      |
-
-| Resolution | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
-|------------|----------------------|-------------------------|-------------|
-| 640x640    | 0.9992749            | 158                     | Passed      |
 
 ### Demo with Trace+2CQ
 Note: Output images will be saved in the `models/demos/yolov11m/demo/runs` folder.

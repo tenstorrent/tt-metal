@@ -29,6 +29,7 @@ Use the following command to run the Yolov10x model:
 ```
 pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x
 ```
+**Current PCC Results:** PCC (threshold: 0.999): 0.9999193
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
@@ -39,21 +40,12 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `91` FPS.
+- For `640x640`, end-2-end perf is `89` FPS.
 
   ```bash
   pytest --disable-warnings models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | PCC (threshold:0.999) | Performance (FPS, N150) | Demo Status |
-|------------|-----------------------|-------------------------|-------------|
-| 640x640    | 0.9999193             | 48                      | Passed      |
-
-| Resolution | PCC (threshold:0.999) | Performance (FPS, N300) | Demo Status |
-|------------|-----------------------|--------------------------|------------|
-| 640x640    | 0.9999193             | 89                       | Passed     |
+  _Note: Original FPS: 91_
 
 ### Demo
 

@@ -32,6 +32,7 @@ Use the following command to run the Yolov9c model:
   ```
   pytest --disable-warnings models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py
   ```
+**Current PCC Results:** Segmentation PCC (threshold: 0.99): 0.9993999, Detection PCC (threshold: 0.99): 0.9993025
 
 ### Demo with Trace+2CQs
 #### Single Device (BS=1)
@@ -89,10 +90,11 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640` - `Segmentation`, end-2-end perf is `87` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- For `640x640` - `Segmentation`, end-2-end perf is `86` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```
+  _Note: Original FPS: 87_
 
 - For `640x640` - `Detection`, end-2-end perf is `98` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```bash
@@ -100,27 +102,15 @@ Note: To test the demo with your own images, replace images with `models/demos/y
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640` - `Segmentation`, end-2-end perf is `153` FPS.
+- For `640x640` - `Segmentation`, end-2-end perf is `152` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant_dp
   ```
 
-- For `640x640` - `Detection`, end-2-end perf is `173` FPS.
+- For `640x640` - `Detection`, end-2-end perf is `172` FPS.
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-| Resolution | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
-|------------|----------------------------------|-------------------------------|---------------------------------------|------------------------|-----------|
-| 640x640    |  0.9993999                        |0.9993025                      | 85                                    | 98                                | Passed      |
-
-
-| Resolution | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |
-|------------|-----------------------------------|------------------------------|---------------------------------------|----------------------------------|----------|
-| 640x640    | 0.9993999                         | 0.9993025                    |152                                    |172                               | Passed      |
-
 
 ### Web Demo
 - Try the interactive web demo at [yolov9c/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov9c/web_demo/README.md)

@@ -143,7 +143,7 @@ def run_perf_e2e_yolov4(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 166), ((640, 640), 74)],
+    [((320, 320), 183), ((640, 640), 86)],
 )
 def test_e2e_performant(
     device,

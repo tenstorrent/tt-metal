@@ -28,6 +28,7 @@ Use the following command to run the model :
 ```
 pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 ```
+**Current PCC Results:** PCC (threshold: 0.999): 0.9998796
 
 ### Model Performant with Trace+2CQ
 
@@ -41,25 +42,12 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 
 #### Multi Device (DP=2, N300) :
 
-- For `640x640`, end-2-end perf is `181` FPS.
+- For `640x640`, end-2-end perf is `184` FPS.
 
   ```
   pytest --disable-warnings models/demos/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l_dp
   ```
-
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N150)  | Demo Status |
-|-------------|------------------------|--------------------------|-------------|
-| 640x640     | 0.9998796              | 104                      | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.999) | Performance (FPS, N300)  | Demo Status |
-|-------------|------------------------|--------------------------|-------------|
-| 640x640     | 0.9998796              | 184                      | Passed      |
+  _Note: Original FPS: 181_
 
 ### Demo:
 

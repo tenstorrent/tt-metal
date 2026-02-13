@@ -29,33 +29,22 @@ Use the following command(s) to run the model:
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
 ```
+**Current PCC Results:** PCC (threshold: 0.99): 0.9992724
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- end-2-end perf is `215` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf is `221` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_inference
 ```
+_Note: Original FPS: 215_
 
 #### Multi Device (DP=2, n300):
-- end-2-end perf is `368` FPS
+- end-2-end perf is `348` FPS
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
 ```
-
-## Current Model Performance Summary
-
-**Note:** Performance numbers are measured on **N150 AND N300** platform.
-
-**N150**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9992724             | 217                      | Passed      |
-
-**N300**
-| Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
-|-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9992221             | 348                      | Passed      |
+_Note: Original FPS: 368_
 
 ### Demo
 Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.
