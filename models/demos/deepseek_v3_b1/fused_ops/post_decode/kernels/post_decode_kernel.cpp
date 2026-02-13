@@ -1,27 +1,34 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Post-Decode Unified Kernel: Mcast + Matmul for LM Head Vocab Projection
+// Post-Decode Unified Kernel: CCL Broadcast + Mcast + Matmul for LM Head Vocab Projection
 //
 // Single .cpp compiled for all three RISC processors (NCRISC, BRISC, TRISC).
-// Compile-time role flags (is_input_core, is_mcast_receiver_core, is_matmul_core)
+// Compile-time role flags (is_input_core, is_mcast_receiver_core, is_matmul_core, skip_ccl)
 // enable dead code elimination via `if constexpr`, so each core only runs its assigned path.
 //
 // Data flow:
-//   1. Mcast:  Sender core broadcasts input [1, K] to all cores in the device grid
-//   2. Matmul: Each matmul core computes [1, K] x [K, N_per_core] -> [1, N_per_core]
+//   1. CCL Broadcast (multi-device only): Sender device broadcasts input [1, K] to all
+//      devices in the mesh via the fabric interconnect. Skipped when skip_ccl=true.
+//   2. Mcast:  Sender core multicasts input [1, K] to all cores in the device grid
+//   3. Matmul: Each matmul core computes [1, K] x [K, N_per_core] -> [1, N_per_core]
 //
 // RISC responsibilities:
-//   NCRISC: Mcast receiver (semaphore wait + CB push) and sharded buffer setup
-//           (mcast_src on sender core, weight shards on matmul cores)
-//   BRISC:  Mcast sender (reads mcast_src CB, NOC multicasts to all receiver cores)
+//   NCRISC: CCL broadcast reader (on sender device) + mcast receiver (semaphore wait +
+//           CB push) + sharded buffer setup (mcast_src on sender core, weight shards on
+//           matmul cores)
+//   BRISC:  CCL broadcast writer (fabric multicast to remote devices) + mcast sender
+//           (reads mcast_src CB, NOC multicasts to all receiver cores)
 //   TRISC:  Matmul compute (reads in0 from mcast_dst CB, in1 from weights CB, writes to out CB)
 //
-// CB layout (see op.py PostDecode class constants for index definitions):
-//   CB 0  (mcast_src):   Input tensor on sender core (tensor-backed)
+// CB layout (see op.py PostDecode class for index definitions):
+//   CB 0  (mcast_src):   Input tensor on sender core (tensor-backed).
+//                         In multi-device mode, backed by intermediate_tensor (CCL broadcast
+//                         destination). In single-device mode, backed by input_tensor directly.
 //   CB 1  (mcast_dst):   Mcast destination / matmul in0 on all cores (intermediate)
 //   CB 2  (matmul_in1):  Vocab weights on matmul cores (tensor-backed)
 //   CB 16 (matmul_out):  Matmul output on matmul cores (tensor-backed)
+//   CB 30 (bcast_pkt):   CCL broadcast packet buffer (multi-device mode only)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -43,10 +50,10 @@ void kernel_main() {
 // ============================================================================
 // Per-RISC compile-time arg setup
 // Each RISC receives different named compile-time args from op.py and
-// constructs the appropriate Mcast/Matmul arg structs for its role.
+// constructs the appropriate Broadcast/Mcast/Matmul arg structs for its role.
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // --- NCRISC: Mcast receiver + sharded buffer setup ---
+    // --- NCRISC: CCL broadcast reader + mcast receiver + sharded buffer setup ---
 
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
@@ -80,7 +87,8 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
-    // Sender core: register mcast_src CB (CB 0) backed by input_tensor
+    // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
+    // or intermediate_tensor (CCL mode, where broadcast placed the data)
     if constexpr (Core::is_input_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
@@ -95,7 +103,7 @@ void kernel_main() {
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    // --- BRISC: Mcast sender ---
+    // --- BRISC: CCL broadcast writer + mcast sender ---
 
     // CCL Broadcast CTArgs type alias
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
@@ -191,13 +199,20 @@ void kernel_main() {
     };
 #endif
 
+    // ========================================================================
+    // Phase 0 (multi-device only): CCL Broadcast — replicate input from sender
+    // device to all devices in the mesh via the fabric interconnect.
+    // Only the input core participates (reader on NCRISC, writer on BRISC).
+    // After this phase, every device has the input in its intermediate tensor
+    // (which backs CB 0 / mcast_src).
+    // ========================================================================
     if constexpr (!Core::skip_ccl) {
         deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
         bcast(bcast_args);
     }
 
     // ========================================================================
-    // Phase 1: Mcast — broadcast input from sender core to all device cores
+    // Phase 1: Mcast — multicast input from sender core to all device cores
     //
     // Template params: <CTArgs, IsSender, IsMcastGridCore, IsReceiverCore, PopSrc>
     //   IsMcastGridCore: participates in semaphore-based sync (all receivers)
