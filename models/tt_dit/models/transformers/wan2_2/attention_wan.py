@@ -14,7 +14,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.substate import rename_substate
+from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 
 
@@ -39,6 +39,7 @@ class WanAttention(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        is_self: bool = True,
     ) -> None:
         super().__init__()
 
@@ -52,6 +53,7 @@ class WanAttention(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.is_self = is_self
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -70,34 +72,27 @@ class WanAttention(Module):
         self.norm_q = DistributedRMSNorm(**rms_kwargs)
         self.norm_k = DistributedRMSNorm(**rms_kwargs)
 
-        # Unfused qkv because this might be cross attention
-        self.to_q = ColParallelLinear(
-            dim,
-            dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
-        )
-        self.to_k = ColParallelLinear(
-            dim,
-            dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
-        )
-        self.to_v = ColParallelLinear(
-            dim,
-            dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            fsdp_mesh_axis=fsdp_mesh_axis,
-            ccl_manager=ccl_manager,
-        )
+        col_parallel_kwargs = {
+            "bias": True,
+            "mesh_device": mesh_device,
+            "mesh_axis": parallel_config.tensor_parallel.mesh_axis,
+            "fsdp_mesh_axis": fsdp_mesh_axis,
+            "ccl_manager": ccl_manager,
+        }
+
+        if is_self:
+            # Fused QKV for self-attention: single matmul split into 3 outputs
+            self.to_qkv = ColParallelLinear(
+                dim,
+                3 * dim,
+                chunks=3,
+                **col_parallel_kwargs,
+            )
+        else:
+            # Separate Q, K, V for cross-attention (different inputs for Q vs K/V)
+            self.to_q = ColParallelLinear(dim, dim, **col_parallel_kwargs)
+            self.to_k = ColParallelLinear(dim, dim, **col_parallel_kwargs)
+            self.to_v = ColParallelLinear(dim, dim, **col_parallel_kwargs)
 
         self.to_out = ColParallelLinear(
             dim,
@@ -165,6 +160,38 @@ class WanAttention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
 
+        if self.is_self:
+            # Merge separate to_q, to_k, to_v weights into fused to_qkv
+            # Rearrange so that column-parallel fracturing assigns the correct heads per device
+            q_state = pop_substate(state, "to_q")
+            k_state = pop_substate(state, "to_k")
+            v_state = pop_substate(state, "to_v")
+
+            def _merge_tensors(q, k, v):
+                n_dev = self.parallel_config.tensor_parallel.factor
+                # Weights are in [out, in] PyTorch convention; transpose to [in, out]
+                q, k, v = q.T, k.T, v.T
+                # Reshape out dim to [in, n_dev, n_local_heads, head_dim]
+                q = q.reshape(q.shape[0], n_dev, self.n_local_heads, self.head_dim)
+                k = k.reshape(k.shape[0], n_dev, self.n_local_heads, self.head_dim)
+                v = v.reshape(v.shape[0], n_dev, self.n_local_heads, self.head_dim)
+                # Concatenate Q, K, V on the heads dim so each device shard gets its own Q, K, V heads
+                qkv = torch.cat([q, k, v], dim=2)  # [in, n_dev, 3*n_local_heads, head_dim]
+                qkv = qkv.reshape(qkv.shape[0], 3 * self.num_heads * self.head_dim)
+                # Transpose back to [out, in] PyTorch convention
+                qkv = qkv.T
+                return qkv
+
+            weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
+            state["to_qkv.weight"] = weight
+
+            if "bias" in q_state:
+                bias = _merge_tensors(
+                    q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)
+                )
+                bias = bias.squeeze(-1)
+                state["to_qkv.bias"] = bias
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -199,12 +226,15 @@ class WanAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-
-        # Project spatial
-        q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
-        k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
-        v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+        if self.is_self:
+            # Fused QKV matmul with split output for self-attention
+            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        else:
+            # Separate projections for cross-attention (Q from spatial, K/V from prompt)
+            kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
+            q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(

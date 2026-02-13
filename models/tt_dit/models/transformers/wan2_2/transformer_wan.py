@@ -109,6 +109,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            is_self=True,
         )
 
         self.attn2 = WanAttention(
@@ -119,6 +120,7 @@ class WanTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            is_self=False,
         )
 
         self.norm2 = (
