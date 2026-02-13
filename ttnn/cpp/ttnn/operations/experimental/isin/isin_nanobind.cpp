@@ -8,7 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::experimental::isin::detail {
 void bind_isin_operation(nb::module_& mod) {
@@ -33,17 +33,16 @@ void bind_isin_operation(nb::module_& mod) {
                 >>> # output is [[False, True, True], [False, True, False], [True, False, False]], use the `invert=True` flag to invert this effect
         )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"isin", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::isin,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("elements").noconvert(),
-            nb::arg("test_elements").noconvert(),
-            nb::kw_only(),
-            nb::arg("assume_unique") = false,
-            nb::arg("invert") = false,
-            nb::arg("out") = nb::none()});
+        &ttnn::experimental::isin,
+        nb::arg("elements").noconvert(),
+        nb::arg("test_elements").noconvert(),
+        nb::kw_only(),
+        nb::arg("assume_unique") = false,
+        nb::arg("invert") = false,
+        nb::arg("out") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::isin::detail

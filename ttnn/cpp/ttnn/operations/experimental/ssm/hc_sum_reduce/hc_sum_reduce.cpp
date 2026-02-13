@@ -8,9 +8,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteHCSumReduce::invoke(
+ttnn::Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
@@ -18,4 +18,4 @@ ttnn::Tensor ExecuteHCSumReduce::invoke(
     return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental
