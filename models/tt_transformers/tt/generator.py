@@ -21,7 +21,7 @@ from models.common.llama_models import (
 )
 from models.common.sampling.generator import format_sampling_params
 from models.common.sampling.sampling_params import SamplingParams
-from models.common.warmup import DecodeWarmupMixin
+from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -90,7 +90,7 @@ def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
 
-class Generator(DecodeWarmupMixin):
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
