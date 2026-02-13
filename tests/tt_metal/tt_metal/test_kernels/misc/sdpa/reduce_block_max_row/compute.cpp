@@ -8,7 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
-#include "api/compute/reduce_custom.h"
+#include "api/compute/experimental/reduce_custom.h"
 #include "api/compute/binary_max_min.h"
 
 void kernel_main() {
