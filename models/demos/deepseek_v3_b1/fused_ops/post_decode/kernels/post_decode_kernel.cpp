@@ -4,7 +4,7 @@
 // Post-Decode Unified Kernel: Mcast + Matmul for LM Head Vocab Projection
 //
 // Single .cpp compiled for all three RISC processors (NCRISC, BRISC, TRISC).
-// Compile-time role flags (is_mcast_sender_core, is_mcast_receiver_core, is_matmul_core)
+// Compile-time role flags (is_input_core, is_mcast_receiver_core, is_matmul_core)
 // enable dead code elimination via `if constexpr`, so each core only runs its assigned path.
 //
 // Data flow:
@@ -27,14 +27,16 @@
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
+#include "../../../unified_kernels/broadcast.hpp"
 
 // Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
 // Each flag is specialized per core group at compile time, enabling if constexpr
 // to eliminate dead code paths (e.g., sender-only code on receiver cores).
 struct Core {
-    static constexpr bool is_mcast_sender_core = get_named_compile_time_arg_val("is_mcast_sender_core") == 1;
+    static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
+    static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
 };
 
 void kernel_main() {
@@ -45,6 +47,28 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // --- NCRISC: Mcast receiver + sharded buffer setup ---
+
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_common_arg_val<uint32_t>(0),  // tensor_address0
+            get_common_arg_val<uint32_t>(1),  // tile_id_start
+            get_common_arg_val<uint32_t>(2),  // tile_id_end
+        };
+    }
+
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
@@ -58,7 +82,7 @@ void kernel_main() {
 
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register mcast_src CB (CB 0) backed by input_tensor
-    if constexpr (Core::is_mcast_sender_core) {
+    if constexpr (Core::is_input_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
@@ -73,6 +97,48 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_BRISC)
     // --- BRISC: Mcast sender ---
+
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward"),
+        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // tile_id_start
+            get_common_arg_val<uint32_t>(3),   // tile_id_end
+            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(9),   // barrier_sem
+            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(12),  // ring_index
+            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
+        };
+    }
+
     // Template params: <num_cores, is_sender_in_receiver_grid, loopback>
     // loopback=false because sender does not consume its own multicast data
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
@@ -102,6 +168,10 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
+    // CCL Broadcast CTArgs (no-op for TRISC)
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+
     // Mcast is a no-op on TRISC (data movement handled by NCRISC/BRISC)
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
@@ -124,6 +194,11 @@ void kernel_main() {
     };
 #endif
 
+    if constexpr (!Core::skip_ccl) {
+        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+        bcast(bcast_args);
+    }
+
     // ========================================================================
     // Phase 1: Mcast — broadcast input from sender core to all device cores
     //
@@ -133,7 +208,7 @@ void kernel_main() {
     //   PopSrc:          sender pops mcast_src CB after send (frees tensor-backed buffer)
     // ========================================================================
     deepseek_b1_ops::Mcast::
-        Op<McastCTArgs, Core::is_mcast_sender_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
+        Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
     mcast.init(mcast_args);
     mcast(mcast_args);
