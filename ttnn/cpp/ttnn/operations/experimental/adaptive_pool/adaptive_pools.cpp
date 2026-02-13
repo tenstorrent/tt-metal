@@ -10,7 +10,7 @@
 namespace ttnn::operations::experimental::adaptive_pool {
 
 // Reusing the generic pool2d functionality from the regular pool operations
-Tensor AdaptiveAvgPool2DOp::invoke(
+Tensor adaptive_avg_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -54,7 +54,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         false);              // config_tensor_in_dram - using default
 }
 
-Tensor AdaptiveMaxPool2DOp::invoke(
+Tensor adaptive_max_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,

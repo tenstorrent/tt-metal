@@ -65,7 +65,16 @@ void bind_rotate(nb::module_& mod) {
     ttnn::bind_function<"rotate">(
         mod,
         doc,
-        ttnn::overload_t(&ttnn::rotate, nb::arg("input_tensor"), nb::arg("angle"), nb::kw_only(), nb::arg("center") = nb::none(), nb::arg("fill") = 0.0f, nb::arg("expand") = false, nb::arg("interpolation_mode") = "nearest", nb::arg("memory_config") = nb::none()));
+        ttnn::overload_t(
+            &ttnn::rotate,
+            nb::arg("input_tensor"),
+            nb::arg("angle"),
+            nb::kw_only(),
+            nb::arg("center") = nb::none(),
+            nb::arg("fill") = 0.0f,
+            nb::arg("expand") = false,
+            nb::arg("interpolation_mode") = "nearest",
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace
