@@ -32,6 +32,7 @@ blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_interleaved_tensor_accessor_args
 
 
 class HostInterface:
@@ -39,20 +40,23 @@ class HostInterface:
         self,
         h2d_socket,
         d2h_socket,
-        page_size,
+        h2d_page_size,
+        d2h_page_size,
         core_to_core_socket_buffer_size=1024,
         h2d_downstream_core=ttnn.CoreCoord(0, 0),
         d2h_upstream_core=ttnn.CoreCoord(0, 0),
+        embedding_tensor=None,
         loopback_mode=False,
     ):
         self.h2d_socket = h2d_socket
         self.d2h_socket = d2h_socket
-        self.page_size = page_size
-        self.h2d_socket.set_page_size(self.page_size)
-        self.d2h_socket.set_page_size(self.page_size)
+        self.h2d_page_size = h2d_page_size
+        self.d2h_page_size = d2h_page_size
+        self.h2d_socket.set_page_size(self.h2d_page_size)
+        self.d2h_socket.set_page_size(self.d2h_page_size)
         self.loopback_mode = loopback_mode
         self.core_to_core_socket_buffer_size = core_to_core_socket_buffer_size
-
+        self.embedding_tensor = embedding_tensor
         # Validate single-core, single-chip constraint
         # Current implementation only supports host communication with one core on one chip
         if len(h2d_socket.get_active_cores()) != 1 or len(d2h_socket.get_active_cores()) != 1:
@@ -101,30 +105,59 @@ class HostInterface:
                 self.mesh_device, self.mesh_device, upstream_socket_config
             )
 
+        if self.embedding_tensor is not None:
+            self.embedding_page_size = self.embedding_tensor.spec.compute_page_size_bytes()
+            assert self.h2d_page_size == 64
+            assert self.d2h_page_size == self.embedding_page_size
+            assert self.embedding_tensor.shape == (1, 1, 12980, 7168)
+            assert self.embedding_tensor.dtype == ttnn.bfloat16
+            assert self.embedding_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+            assert self.embedding_page_size == 14336, (
+                f"Expected embedding page size of 14336 bytes (14 KB), " f"got {self.embedding_page_size} bytes"
+            )
+
     def run(self):
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.h2d_socket.get_mesh_device()
         )
 
         intermed_cb_index = 0
+        embedding_cb_index = 2
+        has_embedding = self.embedding_tensor is not None
+
         h2d_socket_kernel_ct_args = [
-            self.h2d_socket.get_config_buffer_address(),
-            ttnn.get_global_semaphore_address(self.termination_semaphore),
-            self.page_size,
-            self.h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL,
-            self.loopback_mode,
+            self.h2d_socket.get_config_buffer_address(),  # 0
+            ttnn.get_global_semaphore_address(self.termination_semaphore),  # 1
+            self.h2d_page_size,  # 2
+            self.h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL,  # 3
+            self.loopback_mode,  # 4
             # Use a local CB if doing loopback, otherwise communicate with downstream over sockets
-            intermed_cb_index if self.loopback_mode else self.downstream_socket_pair[0].get_config_buffer_address(),
+            intermed_cb_index
+            if self.loopback_mode
+            else self.downstream_socket_pair[0].get_config_buffer_address(),  # 5
+            has_embedding,  # 6
+            embedding_cb_index,  # 7
+            self.embedding_page_size if has_embedding else 0,  # 8
         ]
+        # TensorAccessor args for embedding tensor (index 9+)
+        if has_embedding:
+            h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))
 
         d2h_socket_kernel_ct_args = [
             self.d2h_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
-            self.page_size,
+            self.d2h_page_size,
             self.loopback_mode,
             # Use a local CB if doing loopback, otherwise communicate with downstream over sockets
             intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[0].get_config_buffer_address(),
         ]
+
+        # Runtime args for H2D kernel: embedding buffer address
+        h2d_rtargs = ttnn.RuntimeArgs()
+        h2d_runtime_args = [
+            self.embedding_tensor.buffer_address() if has_embedding else 0,
+        ]
+        h2d_rtargs.append(self.mesh_core_coord.core_coord, h2d_runtime_args)
 
         h2d_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_receiver.cpp",
@@ -133,6 +166,7 @@ class HostInterface:
                 [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
             ),
             compile_time_args=h2d_socket_kernel_ct_args,
+            runtime_args=h2d_rtargs,
             config=ttnn.WriterConfigDescriptor(),
         )
         d2h_kernel = ttnn.KernelDescriptor(
@@ -155,11 +189,29 @@ class HostInterface:
                     ttnn.CBFormatDescriptor(
                         buffer_index=intermed_cb_index,
                         data_format=ttnn.uint32,
-                        page_size=self.page_size,
+                        page_size=self.d2h_page_size,
                     )
                 ],
             )
             cb_descriptors.append(intermed_cb_desc)
+
+        # CB for embedding DRAM reads
+        if has_embedding:
+            embedding_cb_desc = ttnn.CBDescriptor(
+                total_size=self.embedding_page_size,
+                core_ranges=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
+                ),
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=embedding_cb_index,
+                        data_format=ttnn.bfloat16,
+                        page_size=self.embedding_page_size,
+                    )
+                ],
+            )
+            cb_descriptors.append(embedding_cb_desc)
+
         program = ttnn.ProgramDescriptor(
             kernels=[h2d_kernel, d2h_kernel],
             semaphores=[],
@@ -171,7 +223,7 @@ class HostInterface:
         ] = program
 
         io_tensors = [
-            dummy_tensor,
+            self.embedding_tensor if has_embedding else dummy_tensor,
             dummy_tensor,
         ]
 

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "api/tensor/tensor_accessor.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -25,6 +26,14 @@ void kernel_main() {
     constexpr bool pull_from_host = get_compile_time_arg_val(3);
     constexpr bool loopback_mode = get_compile_time_arg_val(4);
     constexpr uint32_t downstream_interface_index = get_compile_time_arg_val(5);
+    constexpr bool has_embedding = get_compile_time_arg_val(6);
+    constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t embedding_page_size = get_compile_time_arg_val(8);
+    // TensorAccessorArgs for embedding tensor at CT arg index 9
+    constexpr auto embedding_args = TensorAccessorArgs<9>();
+
+    uint32_t embedding_addr = get_arg_val<uint32_t>(0);
+    auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr, embedding_page_size);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = {};
@@ -34,6 +43,8 @@ void kernel_main() {
         set_sender_socket_page_size(sender_socket, page_size);
     }
     set_receiver_socket_page_size(receiver_socket, page_size);
+
+    // Read first page of embedding tensor from DRAM into CB
 
     uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
     uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
@@ -59,11 +70,31 @@ void kernel_main() {
                 page_size);
             noc_async_read_barrier();
         }
+
+        if constexpr (has_embedding) {
+            // DPRINT << "Has embedding" << ENDL();
+            volatile tt_l1_ptr uint32_t* token_id_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+            // DPRINT << "GOt token ID: " << token_id_ptr[0] << ENDL();
+            cb_reserve_back(embedding_cb_index, 1);
+            uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
+            uint64_t noc_addr = embedding_accessor.get_noc_addr(0);  // Read page 0
+            // DPRINT << "Embedding Noc Address: " << noc_addr << ENDL();
+            // DPRINT << "Read " << embedding_page_size << " bytes" << ENDL();
+            noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
+            noc_async_read_barrier();
+            // DPRINT << "Done read" << ENDL();
+            cb_push_back(embedding_cb_index, 1);
+        }
+
         if constexpr (loopback_mode) {
+            // DPRINT << "Reserve CB" << ENDL();
             cb_reserve_back(downstream_interface_index, 1);
+            // DPRINT << "Write to CB" << ENDL();
             noc_async_write(
                 receiver_socket.read_ptr, get_noc_addr(get_write_ptr(downstream_interface_index)), page_size);
             noc_async_write_barrier();
+            // DPRINT << "Done write" << ENDL();
             cb_push_back(downstream_interface_index, 1);
         } else {
             socket_reserve_pages(sender_socket, 1);
@@ -79,8 +110,10 @@ void kernel_main() {
             socket_notify_receiver(sender_socket);
             noc_async_writes_flushed();
         }
+        // DPRINT << "Pop pages" << ENDL();
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
+        // DPRINT << "Notify sender" << ENDL();
         socket_notify_sender(receiver_socket);
         invalidate_l1_cache();
     }
@@ -92,5 +125,5 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    DPRINT << "End H2D Main Loop" << ENDL();
+    // DPRINT << "End H2D Main Loop" << ENDL();
 }

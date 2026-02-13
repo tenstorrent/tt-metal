@@ -237,6 +237,7 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_pages = data_span.size() / page_size;
+                std::cout << "Reading " << num_pages << " pages" << std::endl;
                 self.read(data_span.data(), num_pages, notify_sender);
             },
             nb::arg("tensor"),

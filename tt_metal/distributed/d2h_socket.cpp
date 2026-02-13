@@ -250,6 +250,7 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
     auto* socket_data_ptr = host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
+    std::cout << "waiting for " << num_bytes << " bytes" << std::endl;
     this->wait_for_bytes(num_bytes);
     std::memcpy(data, socket_data_ptr, num_bytes);
     this->pop_bytes(num_bytes);

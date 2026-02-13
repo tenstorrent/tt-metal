@@ -160,6 +160,7 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
         uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
                                         (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
         noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        DPRINT << "Num bytes sent: " << socket.bytes_sent << ENDL();
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             noc_index, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
     } else {

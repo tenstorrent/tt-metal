@@ -395,6 +395,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("dtype", &TensorSpec::data_type, "Dtype of a tensor")
         .def_prop_ro("tile", &TensorSpec::tile, "Tile of a tensor")
         .def_prop_ro("memory_config", &TensorSpec::memory_config, "Memory config of a tensor")
+        .def("compute_page_size_bytes", &TensorSpec::compute_page_size_bytes, "Compute page size in bytes")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 

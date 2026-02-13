@@ -41,6 +41,7 @@ void kernel_main() {
     SocketSenderInterface sender_socket = create_sender_socket_interface(send_socket_config_addr);
     SocketReceiverInterface receiver_socket = {};
 
+    DPRINT << "Receiver page size: " << page_size << ENDL();
     if constexpr (!loopback_mode) {
         receiver_socket = create_receiver_socket_interface(upstream_interface_index);
         set_receiver_socket_page_size(receiver_socket, page_size);
@@ -56,12 +57,16 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
     while (true) {
         // Wait for space in D2H socket
+        DPRINT << "Rserving Pages" << ENDL();
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "Reserved Pages" << ENDL();
         if constexpr (loopback_mode) {
             // Wait for data in CB with termination checks
+            DPRINT << "Waiting for pages in CB" << ENDL();
             if (!cb_wait_for_pages_with_termination(upstream_interface_index, 1, termination_semaphore)) {
                 break;
             }
+            DPRINT << "Got pages in CB" << ENDL();
             uint32_t read_addr = get_read_ptr(upstream_interface_index);
             noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
                 NOC_INDEX,
@@ -73,6 +78,7 @@ void kernel_main() {
                 1);
             noc_async_writes_flushed();
             cb_pop_front(upstream_interface_index, 1);
+            DPRINT << "Popped pages from CB" << ENDL();
         } else {
             // Wait for pages in receiver socket with timeout and termination checks
             if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
@@ -92,8 +98,11 @@ void kernel_main() {
             socket_notify_sender(receiver_socket);
         }
 
+        DPRINT << "Pushing pages" << ENDL();
         socket_push_pages(sender_socket, 1);
+        DPRINT << "Pushed pages" << ENDL();
         socket_notify_receiver(sender_socket);
+        DPRINT << "Notified receiver" << ENDL();
         invalidate_l1_cache();
     }
 
