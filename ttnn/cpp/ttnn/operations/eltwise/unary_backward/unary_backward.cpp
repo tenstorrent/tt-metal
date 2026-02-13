@@ -43,21 +43,18 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(ttnn::multiply(grad, minT, std::nullopt, output_mem_config));
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(ttnn::multiply(grad, maxT, std::nullopt, output_mem_config));
         return grad_tensor;
     }
     Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(ttnn::multiply(grad, result, std::nullopt, output_memory_config));
     return grad_tensor;
 }
 
@@ -74,21 +71,18 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(in_grad);
+        grad_tensor.emplace_back(ttnn::multiply(grad, minT, std::nullopt, output_mem_config));
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(in_grad);
+        grad_tensor.emplace_back(ttnn::multiply(grad, maxT, std::nullopt, output_mem_config));
         return grad_tensor;
     }
     Tensor minT = ttnn::le(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::ge(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(ttnn::multiply(grad, result, std::nullopt, output_memory_config));
     return grad_tensor;
 }
 
@@ -120,12 +114,11 @@ std::vector<Tensor> ExecuteUnaryBackwardHardtanh::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = ttnn::where(
+    grad_tensor.emplace_back(ttnn::where(
         ttnn::le(input, min, std::nullopt, output_mem_config),
         0.f,
         ttnn::where(ttnn::ge(input, max, std::nullopt, output_mem_config), 0.f, grad),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -139,12 +132,11 @@ std::vector<Tensor> ExecuteUnaryBackwardThreshold::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::where(
+    grad_tensor.emplace_back(ttnn::where(
         ttnn::gtz(ttnn::add(input, -threshold, std::nullopt, output_mem_config), output_mem_config),
         grad,
         0.f,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -239,8 +231,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
         }
         grad_tensor.emplace_back(result);
     } else {
-        Tensor result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
     }
     return grad_tensor;
 }
@@ -383,8 +374,8 @@ std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -400,8 +391,7 @@ std::vector<Tensor> ExecuteUnaryBackwardTrunc::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -425,8 +415,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLogSigmoid::invoke(
     Tensor mul_sign = ttnn::multiply(in_sign, mul_z, std::nullopt, output_mem_config);
     Tensor sub_max = ttnn::subtract(max_deriv, mul_sign, std::nullopt, output_mem_config);
 
-    Tensor grad_result = ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    grad_tensor.emplace_back(ttnn::multiply(grad, sub_max, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -434,8 +423,7 @@ std::vector<Tensor> ExecuteUnaryBackwardFillZero::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -446,9 +434,7 @@ std::vector<Tensor> ExecuteUnaryBackwardI0::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor i1_input = ttnn::i1(input, output_mem_config);
-    Tensor result = ttnn::multiply(grad, i1_input, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(ttnn::multiply(grad, ttnn::i1(input, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -456,13 +442,15 @@ std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor tan_result = ttnn::tan(input, output_mem_config);
-    Tensor result = ttnn::multiply(
+    grad_tensor.emplace_back(ttnn::multiply(
         grad,
-        ttnn::add(ttnn::square(tan_result, output_mem_config), 1.0f, std::nullopt, output_mem_config),
+        ttnn::add(
+            ttnn::square(ttnn::tan(input, output_mem_config), output_mem_config),
+            1.0f,
+            std::nullopt,
+            output_mem_config),
         std::nullopt,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -475,8 +463,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
     Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
-    Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(prod_term_2);
+    grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -529,8 +516,8 @@ std::vector<Tensor> ExecuteUnaryBackwardRelu::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(
+        ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -555,7 +542,7 @@ std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_a = ttnn::where(
+    grad_tensor.emplace_back(ttnn::where(
         ttnn::logical_or(
             ttnn::le(input, -3, std::nullopt, output_mem_config),
             ttnn::ge(input, 3, std::nullopt, output_mem_config),
@@ -563,8 +550,7 @@ std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(
             output_mem_config),
         0.f,
         ttnn::multiply(grad, 1.0 / 6),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_a);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -574,12 +560,11 @@ std::vector<Tensor> ExecuteUnaryBackwardCos::invoke(
     const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(
+    grad_tensor.emplace_back(ttnn::multiply(
         grad,
         (ttnn::neg(ttnn::sin(input_tensor, output_mem_config), output_mem_config)),
         std::nullopt,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -671,9 +656,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAtan::invoke(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RECIP}};
-    Tensor grad_a =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_a);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -681,9 +665,8 @@ std::vector<Tensor> ExecuteUnaryBackwardRad2deg::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    float M_180_PI = 180 / M_PI;
-    Tensor grad_result = ttnn::multiply(grad, M_180_PI, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    constexpr float M_180_PI = 180 / M_PI;
+    grad_tensor.emplace_back(ttnn::multiply(grad, M_180_PI, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -726,9 +709,8 @@ std::vector<Tensor> ExecuteUnaryBackwardSquare::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = ttnn::multiply(
-        ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    grad_tensor.emplace_back(ttnn::multiply(
+        ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -736,9 +718,11 @@ std::vector<Tensor> ExecuteUnaryBackwardHardshrink::invoke(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
-    Tensor result = where(ttnn::eqz(hardshrink_result, output_mem_config), 0.0f, grad, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(where(
+        ttnn::eqz(ttnn::hardshrink(input_tensor, lambd, output_mem_config), output_mem_config),
+        0.0f,
+        grad,
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -748,7 +732,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftshrink::invoke(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::where(
+    grad_tensor.emplace_back(ttnn::where(
         ttnn::logical_or(
             ttnn::lt(input_tensor, -lambd, std::nullopt, output_mem_config),
             ttnn::gt(input_tensor, lambd, std::nullopt, output_mem_config),
@@ -756,8 +740,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftshrink::invoke(
             output_mem_config),
         grad,
         0.f,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -770,12 +753,11 @@ std::vector<Tensor> ExecuteUnaryBackwardLeakyRelu::invoke(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = where(
+    grad_tensor.emplace_back(where(
         ttnn::gtz(input, output_mem_config),
         grad,
         ttnn::multiply(grad, negative_slope, std::nullopt, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -785,7 +767,7 @@ std::vector<Tensor> ExecuteUnaryBackwardElu::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_result = where(
+    grad_tensor.emplace_back(where(
         ttnn::gtz(input, output_mem_config),
         grad,
         ttnn::multiply(
@@ -793,8 +775,7 @@ std::vector<Tensor> ExecuteUnaryBackwardElu::invoke(
             ttnn::multiply(ttnn::exp(input, false, output_mem_config), alpha, std::nullopt, output_mem_config),
             std::nullopt,
             output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -807,13 +788,11 @@ std::vector<Tensor> ExecuteUnaryBackwardCelu::invoke(
     float div_alpha = (1.0 / alpha);
     Tensor div_result = ttnn::multiply(input, div_alpha, std::nullopt, output_mem_config);
     Tensor exp_result = ttnn::exp(div_result, false, output_mem_config);
-    Tensor grad_result = where(
+    grad_tensor.emplace_back(where(
         ttnn::gt(input, 0.0, std::nullopt, output_mem_config),
         grad,
         ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config),
-        output_mem_config);
-
-    grad_tensor.emplace_back(grad_result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -839,8 +818,7 @@ std::vector<Tensor> ExecuteUnaryBackwardFloor::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor t_zero = ttnn::zeros_like(grad);
-    grad_tensor.emplace_back(t_zero);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad));
     return grad_tensor;
 }
 
@@ -848,8 +826,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRound::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor t_zero = ttnn::zeros_like(grad);
-    grad_tensor.emplace_back(t_zero);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad));
     return grad_tensor;
 }
 
@@ -898,8 +875,8 @@ std::vector<Tensor> _abs_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1081,9 +1058,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAsinh::invoke(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
-    Tensor grad_result =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1093,9 +1069,8 @@ std::vector<Tensor> ExecuteUnaryBackwardSin::invoke(
     const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor grad_input =
-        ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_input);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::cos(input_tensor, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1182,7 +1157,7 @@ std::vector<Tensor> ExecuteUnaryBackwardErfc::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(
+    grad_tensor.emplace_back(ttnn::multiply(
         ttnn::multiply(
             ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
             grad,
@@ -1190,8 +1165,7 @@ std::vector<Tensor> ExecuteUnaryBackwardErfc::invoke(
             output_mem_config),
         -M_2_SQRTPI,
         std::nullopt,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -1199,8 +1173,7 @@ std::vector<Tensor> ExecuteUnaryBackwardCeil::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor zero_grad = ttnn::zeros_like(grad);
-    grad_tensor.emplace_back(zero_grad);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad));
     return grad_tensor;
 }
 
@@ -1340,8 +1313,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSign::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor zero_grad = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
+    grad_tensor.emplace_back(ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1350,12 +1322,11 @@ std::vector<Tensor> ExecuteUnaryBackwardDivNoNan::invoke(
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
     Tensor val = ttnn::full_like(input, scalar, input.dtype(), input.layout(), std::nullopt, output_mem_config);
-    Tensor result = where(
+    grad_tensor.emplace_back(where(
         ttnn::eq(val, 0, std::nullopt, output_mem_config),
         0.f,
         ttnn::multiply(grad, 1 / scalar, std::nullopt, output_mem_config),
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -1367,8 +1338,7 @@ std::vector<Tensor> ExecuteUnaryBackwardExp2::invoke(
     grad_tensor.reserve(1);
     Tensor exp_result = ttnn::exp2(input, output_mem_config);
     exp_result = ttnn::multiply(exp_result, M_LN2, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1377,10 +1347,8 @@ std::vector<Tensor> ExecuteUnaryBackwardExpm1::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor eresult = ttnn::expm1(input, output_mem_config);
-    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    Tensor rp1 = ttnn::add(ttnn::expm1(input, output_mem_config), 1.0f, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(ttnn::multiply(grad, rp1, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1442,8 +1410,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAbs::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
+    grad_tensor.emplace_back(
+        ttnn::multiply(grad, ttnn::sign(input, output_mem_config), std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1591,7 +1559,7 @@ std::vector<Tensor> ExecuteUnaryBackwardErf::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor result = ttnn::multiply(
+    grad_tensor.emplace_back(ttnn::multiply(
         ttnn::multiply(
             ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
             grad,
@@ -1599,8 +1567,7 @@ std::vector<Tensor> ExecuteUnaryBackwardErf::invoke(
             output_mem_config),
         M_2_SQRTPI,
         std::nullopt,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
+        output_mem_config));
     return grad_tensor;
 }
 
@@ -1608,9 +1575,8 @@ std::vector<Tensor> ExecuteUnaryBackwardDeg2rad::invoke(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    float M_PI_180 = M_PI / 180;
-    Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    constexpr float M_PI_180 = M_PI / 180;
+    grad_tensor.emplace_back(ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
@@ -1712,8 +1678,8 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
-        Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(zero_tensor);
+        grad_tensor.emplace_back(
+            ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config));
         return grad_tensor;
     }
     if (shape[0] > 1) {
@@ -1721,14 +1687,13 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
+        grad_tensor.emplace_back(ttnn::moreh_sum(
             grad,
             dim,
             true,
             ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
             output_memory_config,
-            std::nullopt);
-        grad_tensor.emplace_back(result);
+            std::nullopt));
         return grad_tensor;
     }
     if (shape[1] > 1) {
@@ -1736,14 +1701,13 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
+        grad_tensor.emplace_back(ttnn::moreh_sum(
             grad,
             dim,
             true,
             ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
             output_memory_config,
-            std::nullopt);
-        grad_tensor.emplace_back(result);
+            std::nullopt));
         return grad_tensor;
     }
     return grad_tensor;
@@ -1788,9 +1752,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(all_dimension_result);
+        grad_tensor.emplace_back(ttnn::multiply(
+            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config));
         return grad_tensor;
     }
 
@@ -1836,15 +1799,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
     if (*dim == 3 || *dim == -1) {
-        Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
+        grad_tensor.emplace_back(
+            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config));
         return grad_tensor;
     }
     if (*dim == 2 || *dim == -2) {
-        Tensor grad_result =
-            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
-        grad_tensor.emplace_back(grad_result);
+        grad_tensor.emplace_back(
+            ttnn::bcast(reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config));
         return grad_tensor;
     }
     if (*dim == 1 || *dim == -3) {

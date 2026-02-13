@@ -443,33 +443,29 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
                 const CoreRange& intersection = intersection_opt.value();
 
                 if (remaining.start_coord.x < intersection.start_coord.x) {
-                    CoreRange left{
-                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y}};
-                    new_remaining.push_back(left);
+                    new_remaining.emplace_back(
+                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y});
                 }
 
                 if (remaining.end_coord.x > intersection.end_coord.x) {
-                    CoreRange right{
-                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord};
-                    new_remaining.push_back(right);
+                    new_remaining.emplace_back(
+                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord);
                 }
 
                 if (remaining.start_coord.y < intersection.start_coord.y) {
-                    CoreRange bottom{
+                    new_remaining.emplace_back(
                         CoreCoord{
                             std::max(remaining.start_coord.x, intersection.start_coord.x), remaining.start_coord.y},
                         CoreCoord{
-                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1}};
-                    new_remaining.push_back(bottom);
+                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1});
                 }
 
                 if (remaining.end_coord.y > intersection.end_coord.y) {
-                    CoreRange top{
+                    new_remaining.emplace_back(
                         CoreCoord{
                             std::max(remaining.start_coord.x, intersection.start_coord.x),
                             intersection.end_coord.y + 1},
-                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y}};
-                    new_remaining.push_back(top);
+                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y});
                 }
             }
             current_remaining = new_remaining;
