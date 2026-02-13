@@ -61,10 +61,10 @@ ALWI void tilize(
     // Compile-time validation
     static_assert(input_cb != output_cb,
         "Tilize cannot be done in-place: input_cb and output_cb must be different");
-    static_assert(input_cb < 32,
-        "Invalid input_cb: must be less than 32");
-    static_assert(output_cb < 32,
-        "Invalid output_cb: must be less than 32");
+    static_assert(input_cb < NUM_CIRCULAR_BUFFERS,
+        "Invalid input_cb: must be less than NUM_CIRCULAR_BUFFERS");
+    static_assert(output_cb < NUM_CIRCULAR_BUFFERS,
+        "Invalid output_cb: must be less than NUM_CIRCULAR_BUFFERS");
 
     // Runtime parameter validation
     ASSERT(block_width_tiles > 0);
@@ -129,6 +129,21 @@ ALWI void tilize(
 
     // Validate CB capacity: output CB must hold at least block_width_tiles
     ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles);
+    // Validate input CB capacity for the maximum single wait
+    if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
+        if (asymmetric_cb_pages) {
+            ASSERT(get_cb_num_pages(input_cb) >= total_input_pages);
+        } else {
+            ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles * num_blocks);
+        }
+    } else if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
+        if (asymmetric_cb_pages) {
+            // Each block waits for up to 32 pages; last block may wait for fewer
+            ASSERT(get_cb_num_pages(input_cb) >= (total_input_pages < 32 ? total_input_pages : 32));
+        } else {
+            ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles);
+        }
+    }
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {

@@ -79,10 +79,10 @@ ALWI void untilize(uint32_t num_blocks) {
         "Untilize cannot be done in-place: input_cb and output_cb must be different");
     static_assert(block_width_tiles > 0,
         "block_width_tiles must be greater than 0");
-    static_assert(input_cb < 32,
-        "Invalid input_cb: must be less than 32");
-    static_assert(output_cb < 32,
-        "Invalid output_cb: must be less than 32");
+    static_assert(input_cb < NUM_CIRCULAR_BUFFERS,
+        "Invalid input_cb: must be less than NUM_CIRCULAR_BUFFERS");
+    static_assert(output_cb < NUM_CIRCULAR_BUFFERS,
+        "Invalid output_cb: must be less than NUM_CIRCULAR_BUFFERS");
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
@@ -122,10 +122,14 @@ ALWI void untilize(uint32_t num_blocks) {
 
     // Validate CB capacity
     ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles);
-    if constexpr (use_block_based_pack) {
-        ASSERT(get_cb_num_pages(input_cb) >= sub_block_width);
-    } else {
-        ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles);
+    if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
+        ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles * num_blocks);
+    } else if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
+        if constexpr (use_block_based_pack) {
+            ASSERT(get_cb_num_pages(input_cb) >= sub_block_width);
+        } else {
+            ASSERT(get_cb_num_pages(input_cb) >= block_width_tiles);
+        }
     }
 
     // =================================================================
