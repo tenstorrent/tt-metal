@@ -341,21 +341,24 @@ def build_cancelled_block() -> list[dict]:
 
 
 def build_superset_link_block() -> dict:
-    """Build the Superset dashboard link block.
+    """Build the run links block with both Superset and GitHub links.
 
-    Uses gh_run_number (GITHUB_RUN_ID) since it's available immediately,
+    Uses gh_run_number (GITHUB_RUN_ID) for Superset since it's available immediately,
     whereas run_id (database PK) requires Airflow ingestion first.
     """
+    links = []
     if GITHUB_RUN_ID:
-        # Use GitHub run ID - works immediately, dashboard shows data after ingestion
-        url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_ID}"
-        text = f"<{url}|View in Superset>"
+        superset_url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_ID}"
+        github_url = GITHUB_ACTIONS_URL
+        links.append(f"<{superset_url}|View in Superset>")
+        links.append(f"<{github_url}|View in GitHub Actions>")
     else:
-        text = f"<{GITHUB_ACTIONS_URL}|View in GitHub Actions>"
+        links.append("Superset link unavailable (missing run ID)")
+        links.append("GitHub Actions link unavailable (missing run ID)")
 
     return {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": text},
+        "text": {"type": "mrkdwn", "text": " | ".join(links)},
     }
 
 
