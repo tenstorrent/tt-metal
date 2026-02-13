@@ -259,6 +259,7 @@ class WanCausalConv3d(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.dtype = dtype
 
         padding = _ntuple(padding, 3)
         external_padding = list(padding)
@@ -692,6 +693,7 @@ class WanConv2d(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.dtype = dtype
 
         padding = _ntuple(padding, 3)
         external_padding = list(padding)

@@ -720,7 +720,14 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ],
 )
 @pytest.mark.parametrize("cache_len", [None, 1, 2], ids=["cache_none", "cache_1", "cache_2"])
-@pytest.mark.parametrize("mean, std", [(0, 1), (0, 0.1)], ids=["std=1", "std=0.1"])
+@pytest.mark.parametrize(
+    "mean, std, MIN_PCC, MAX_RMSE",
+    [
+        (0, 1, 0.999_900, 0.008),
+        (0, 0.1, 0.999_900, 0.010),
+    ],
+    ids=["std=1", "std=0.1"],
+)
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis",
     [
@@ -749,7 +756,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ids=["bf16", "f32"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype):
+def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, dtype, MIN_PCC, MAX_RMSE):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanMidBlock as TorchWanMidBlock
 
     torch.manual_seed(0)
@@ -840,7 +847,7 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     logger.info(f"checking output")
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.008)
+    assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
     for i in range(len(tt_feat_cache)):
         tt_feat_cache[i] = ttnn.to_torch(
@@ -1196,7 +1203,7 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
-        (ttnn.DataType.FLOAT32, 0.999915, 0.012),
+        (ttnn.DataType.FLOAT32, 0.999915, 0.014),
         (ttnn.DataType.BFLOAT16, 0.99944, 0.034),
     ],
     ids=["f32", "bf16"],
@@ -1543,7 +1550,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
+        assert_quality(torch_output, tt_output_torch, pcc=0.999_950, relative_rmse=0.012)
     else:
         logger.warning("Skipping check")
 

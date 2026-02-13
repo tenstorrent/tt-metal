@@ -353,7 +353,7 @@ void kernel_main() {
                         const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
-                        {DeviceZoneScopedN("SDPA-RD-K");
+                        DeviceZoneScopedN("SDPA-RD-K");
                         // K: either read locally (injector or not participant) or receive from previous core
                         uint32_t cb_k_start_address = 0;
                         bool should_forward_k = false;
@@ -364,7 +364,6 @@ void kernel_main() {
                                                (nb == chain_batch && nq == chain_head) && (q_iter < next_core_q_chunks);
                             should_receive_k =
                                 is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
-                        }
                         }
 
                         if (should_receive_k) {
@@ -463,26 +462,7 @@ void kernel_main() {
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
                         }
 
-<<<<<<< HEAD
                         { DeviceZoneScopedN("SDPA-RD-V");
-                        if constexpr (is_chunked) {
-                            // Use page table to read V chunk
-                            const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                            read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                                v_reader,
-                                cb_v_in,
-                                kv_head,
-                                k_chunk_start_row_num,
-                                k_row_tile_count,
-                                vDHt,
-                                Sk_chunk_t,
-                                vDHt,
-                                v_tile_bytes,
-                                barrier_threshold,
-                                page_table_ptr,
-                                false,
-                                DHt - vDHt /* src_skip_cols */);
-=======
                         // Complete K forward: flush write and signal receiver
                         if (should_forward_k) {
                             noc_async_writes_flushed();
@@ -509,7 +489,6 @@ void kernel_main() {
                             noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                             noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                             cb_push_back(cb_v_in, v_chunk_tiles);
->>>>>>> main
                         } else {
                             // Read V chunk from DRAM
                             if constexpr (is_chunked) {
