@@ -8,9 +8,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
+ttnn::Tensor repeat_and_interleave_eltwise_mul(
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
@@ -19,4 +19,4 @@ ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
     return ttnn::prim::repeat_and_interleave_eltwise_mul(a, b, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental
