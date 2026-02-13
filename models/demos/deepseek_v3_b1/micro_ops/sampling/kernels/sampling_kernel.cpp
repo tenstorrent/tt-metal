@@ -66,6 +66,85 @@ FORCE_INLINE bool is_better_candidate(
     return bfloat16_greater(candidate_score, best_score) ||
            ((candidate_score == best_score) && (candidate_index < best_index));
 }
+
+FORCE_INLINE void reduce_local_values(
+    volatile tt_l1_ptr uint16_t* scores_ptr,
+    volatile tt_l1_ptr uint32_t* indices_ptr,
+    uint32_t num_values,
+    uint16_t& best_score,
+    uint32_t& best_index) {
+    best_score = NEG_INF_BFLOAT16;
+    best_index = 0xFFFFFFFF;
+    for (uint32_t i = 0; i < num_values; ++i) {
+        const uint16_t score = scores_ptr[i];
+        if (bfloat16_greater(score, best_score)) {
+            best_score = score;
+            best_index = indices_ptr[i];
+        }
+    }
+}
+
+FORCE_INLINE void send_local_winner_to_final(
+    uint32_t src_slot_addr,
+    uint32_t dst_slot_addr,
+    uint32_t final_noc_x,
+    uint32_t final_noc_y,
+    uint32_t semaphore_id,
+    uint32_t winner_page_bytes) {
+    const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
+    const uint64_t dst_data_noc_addr = final_noc_base | static_cast<uint64_t>(dst_slot_addr);
+    const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(get_semaphore(semaphore_id));
+    noc_async_write_one_packet<true, true>(src_slot_addr, dst_data_noc_addr, winner_page_bytes);
+    noc_semaphore_inc(dst_sem_noc_addr, 1);
+    noc_async_posted_writes_flushed();
+    noc_async_atomic_barrier();
+}
+
+FORCE_INLINE void wait_and_reset_semaphore(volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t expected_count) {
+    noc_semaphore_wait(sem_ptr, expected_count);
+    noc_semaphore_set(sem_ptr, 0);
+}
+
+FORCE_INLINE void reduce_device_winners(
+    uint32_t gather_addr,
+    uint32_t num_senders,
+    uint32_t winner_page_bytes,
+    uint16_t& global_best_score,
+    uint32_t& global_best_index) {
+    global_best_score = NEG_INF_BFLOAT16;
+    global_best_index = 0xFFFFFFFF;
+    for (uint32_t slot = 0; slot < num_senders; ++slot) {
+        const uint32_t slot_addr = gather_addr + slot * winner_page_bytes;
+        auto slot_u16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot_addr);
+        auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
+        const uint16_t score = slot_u16_ptr[0];
+        if (bfloat16_greater(score, global_best_score)) {
+            global_best_score = score;
+            global_best_index = slot_u32_ptr[1];
+        }
+    }
+}
+
+FORCE_INLINE void reduce_mesh_stage_slots(
+    uint32_t scratch_addr,
+    uint32_t stage_slot_base_offset,
+    uint32_t stage_num_slots,
+    uint32_t winner_page_bytes,
+    uint16_t& stage_best_score,
+    uint32_t& stage_best_index) {
+    stage_best_score = NEG_INF_BFLOAT16;
+    stage_best_index = 0xFFFFFFFF;
+    for (uint32_t slot = 0; slot < stage_num_slots; ++slot) {
+        uint16_t candidate_score = NEG_INF_BFLOAT16;
+        uint32_t candidate_index = 0xFFFFFFFF;
+        read_winner_slot(
+            scratch_addr + stage_slot_base_offset + slot * winner_page_bytes, candidate_score, candidate_index);
+        if (is_better_candidate(candidate_score, candidate_index, stage_best_score, stage_best_index)) {
+            stage_best_score = candidate_score;
+            stage_best_index = candidate_index;
+        }
+    }
+}
 #endif
 
 void kernel_main() {
@@ -113,72 +192,43 @@ void kernel_main() {
     if constexpr (Core::is_active_core) {
         auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
         auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_addr);
-
         uint16_t best_score = NEG_INF_BFLOAT16;
         uint32_t best_index = 0xFFFFFFFF;
-
-        for (uint32_t i = 0; i < num_values; ++i) {
-            const uint16_t score = scores_ptr[i];
-
-            if (bfloat16_greater(score, best_score)) {
-                best_score = score;
-                best_index = indices_ptr[i];
-            }
-        }
+        reduce_local_values(scores_ptr, indices_ptr, num_values, best_score, best_index);
 
         if constexpr (Core::is_final_core) {
             write_winner_slot(gather_addr + slot_offset, best_score, best_index);
         } else {
             const uint32_t local_slot_addr = gather_addr + slot_offset;
             write_winner_slot(local_slot_addr, best_score, best_index);
-            const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
-            const uint64_t dst_data_noc_addr = final_noc_base | (uint64_t)(gather_addr + slot_offset);
-            const uint64_t dst_sem_noc_addr = final_noc_base | (uint64_t)(get_semaphore(semaphore_id));
-            noc_async_write_one_packet<true, true>(local_slot_addr, dst_data_noc_addr, winner_page_bytes);
-            noc_semaphore_inc(dst_sem_noc_addr, 1);
-            noc_async_posted_writes_flushed();
-            noc_async_atomic_barrier();
+            send_local_winner_to_final(
+                local_slot_addr, gather_addr + slot_offset, final_noc_x, final_noc_y, semaphore_id, winner_page_bytes);
         }
     }
 
     if constexpr (Core::is_final_core) {
         auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(semaphore_id));
-        noc_semaphore_wait(recv_sem_ptr, expected_remote_incs);
-        noc_semaphore_set(recv_sem_ptr, 0);
+        wait_and_reset_semaphore(recv_sem_ptr, expected_remote_incs);
 
         uint16_t global_best_score = NEG_INF_BFLOAT16;
         uint32_t global_best_index = 0xFFFFFFFF;
-
-        for (uint32_t slot = 0; slot < num_senders; ++slot) {
-            const uint32_t slot_addr = gather_addr + slot * winner_page_bytes;
-            auto slot_u16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot_addr);
-            auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
-            const uint16_t score = slot_u16_ptr[0];
-            if (bfloat16_greater(score, global_best_score)) {
-                global_best_score = score;
-                global_best_index = slot_u32_ptr[1];
-            }
-        }
+        reduce_device_winners(gather_addr, num_senders, winner_page_bytes, global_best_score, global_best_index);
 
         if constexpr (mesh_mode) {
             // Stage 1 receiver: combine local winner with remote winners from all non-target rows.
             if constexpr (stage1_receiver) {
                 write_winner_slot(scratch_addr + stage1_local_slot_offset, global_best_score, global_best_index);
                 auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_sem_addr);
-                noc_semaphore_wait(global_sem_ptr, stage1_expected_remote_incs);
-                noc_semaphore_set(global_sem_ptr, 0);
-
+                wait_and_reset_semaphore(global_sem_ptr, stage1_expected_remote_incs);
                 uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                 uint32_t stage1_best_index = 0xFFFFFFFF;
-                for (uint32_t slot = 0; slot < stage1_num_slots; ++slot) {
-                    uint16_t s = NEG_INF_BFLOAT16;
-                    uint32_t i = 0xFFFFFFFF;
-                    read_winner_slot(scratch_addr + stage1_slot_base_offset + slot * winner_page_bytes, s, i);
-                    if (is_better_candidate(s, i, stage1_best_score, stage1_best_index)) {
-                        stage1_best_score = s;
-                        stage1_best_index = i;
-                    }
-                }
+                reduce_mesh_stage_slots(
+                    scratch_addr,
+                    stage1_slot_base_offset,
+                    stage1_num_slots,
+                    winner_page_bytes,
+                    stage1_best_score,
+                    stage1_best_index);
                 global_best_score = stage1_best_score;
                 global_best_index = stage1_best_index;
             }
@@ -199,20 +249,16 @@ void kernel_main() {
             if constexpr (stage2_receiver) {
                 write_winner_slot(scratch_addr + stage2_local_slot_offset, global_best_score, global_best_index);
                 auto global_stage2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_stage2_sem_addr);
-                noc_semaphore_wait(global_stage2_sem_ptr, stage2_expected_remote_incs);
-                noc_semaphore_set(global_stage2_sem_ptr, 0);
-
+                wait_and_reset_semaphore(global_stage2_sem_ptr, stage2_expected_remote_incs);
                 uint16_t stage2_best_score = NEG_INF_BFLOAT16;
                 uint32_t stage2_best_index = 0xFFFFFFFF;
-                for (uint32_t slot = 0; slot < stage2_num_slots; ++slot) {
-                    uint16_t s = NEG_INF_BFLOAT16;
-                    uint32_t i = 0xFFFFFFFF;
-                    read_winner_slot(scratch_addr + stage2_slot_base_offset + slot * winner_page_bytes, s, i);
-                    if (is_better_candidate(s, i, stage2_best_score, stage2_best_index)) {
-                        stage2_best_score = s;
-                        stage2_best_index = i;
-                    }
-                }
+                reduce_mesh_stage_slots(
+                    scratch_addr,
+                    stage2_slot_base_offset,
+                    stage2_num_slots,
+                    winner_page_bytes,
+                    stage2_best_score,
+                    stage2_best_index);
                 global_best_score = stage2_best_score;
                 global_best_index = stage2_best_index;
                 auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_addr);
