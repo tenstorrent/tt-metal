@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "index_fill.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::index_fill {
 
@@ -63,17 +63,17 @@ void bind_index_fill_operation(nb::module_& mod) {
                 -  The value must be a float or int and must match the dtype of the input tensor.
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"index_fill">(
         mod,
-        ttnn::index_fill,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::index_fill,
             nb::arg("input"),
             nb::arg("dim"),
             nb::arg("index"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::index_fill
