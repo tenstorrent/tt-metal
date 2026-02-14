@@ -351,6 +351,17 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     if disable_attn_pc:
         split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
+    # When tokens are sharded across a 2D core grid, some attention matmul
+    # program configs require per-core tile counts that depend on the shard
+    # spec. To keep Stage-2 bring-up stable on N300, disable these for now and
+    # rely on the default sharded kernels (Stage 3 will tune these).
+    if config.device.endswith("n300"):
+        qkv_pc = None
+        proj_pc = None
+    else:
+        qkv_pc = prog_cfgs.get("query_key_value_matmul_program_config")
+        proj_pc = prog_cfgs.get("self_output_matmul_program_config")
+
     return TTLayerConfig(
         grid=grid,
         math_fidelity=math,
@@ -372,16 +383,16 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         ),
         split_heads_memcfg=split_mem,
         attn_island_memcfg=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
-        qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
+        qkv_program_config=qkv_pc,
         qk_program_config=qk_pc,
         softmax_program_config=softmax_pc,
         av_program_config=av_pc,
-        proj_program_config=prog_cfgs.get("self_output_matmul_program_config"),
+        proj_program_config=proj_pc,
         ff1_program_config=(mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config")),
         ff2_program_config=(mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")),
         ln_program_config=prog_cfgs.get("layernorm_before_program_config"),
         ln_compute_config=prog_cfgs.get("ln_compute_config"),
-        use_default_attention_programs=disable_attn_pc,
+        use_default_attention_programs=(True if config.device.endswith("n300") else disable_attn_pc),
         mlp_core_grid=mlp_grid,
     )
 
