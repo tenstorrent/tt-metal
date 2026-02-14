@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import fcntl
 import json
+import multiprocessing as mp
 
 import pytest
 import torch
@@ -36,6 +38,13 @@ def _make_cache_key(name: str = "weight1", hf_config: dict | None = None) -> Cac
         postprocessor=_identity,
     )
     return CacheKey(fingerprint=manifest.get_fingerprint(), manifest=manifest)
+
+
+def _hold_lock(path: str, ready: mp.Event, release: mp.Event) -> None:
+    with open(path, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        ready.set()
+        release.wait(timeout=5)
 
 
 @pytest.fixture
@@ -347,6 +356,42 @@ def test_on_disk_cache_storage_writes_manifest_payload(tmp_path, device):
     assert payload["fingerprint"] == cache_key.fingerprint
     assert payload.get("name") == cache_key.manifest.name
     assert payload.get("created_at") == payload.get("last_modified")
+
+
+def test_on_disk_cache_storage_lock_timeout_skips_write(tmp_path, device):
+    tensor = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    cache_key = _make_cache_key(name="weight1")
+    storage = OnDiskCacheStorage(tmp_path, device, lock_timeout_s=0.0, lock_poll_s=0.01)
+
+    lock_path = storage._lock_path(cache_key)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    ctx = mp.get_context("spawn")
+    ready = ctx.Event()
+    release = ctx.Event()
+    proc = ctx.Process(target=_hold_lock, args=(str(lock_path), ready, release))
+    proc.start()
+    try:
+        assert ready.wait(timeout=5)
+        storage.set(cache_key, tensor)
+    finally:
+        release.set()
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.terminate()
+
+    assert proc.exitcode == 0
+
+    safe_name = _safe_name_from_manifest(cache_key.manifest)
+    tensor_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.tensorbin"
+    manifest_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.manifest.json"
+    assert not tensor_path.exists()
+    assert not manifest_path.exists()
 
 
 def test_on_disk_cache_storage_manifest_includes_mesh_mapper(
