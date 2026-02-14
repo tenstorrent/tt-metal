@@ -2620,14 +2620,6 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
 
-                // Blackhole Z-channels must be assigned the Z Routing Direction.
-                // All other channels must avoid using the Z-direction (they are used for routing along the X/Y
-                // directions). This is to ensure that logical and physical channel assignments are consistent.
-                bool is_z_direction = (port_direction == RoutingDirection::Z);
-                if (should_assign_z != is_z_direction) {
-                    continue;
-                }
-
                 // Override direction to Z BEFORE creating port_id if needed
                 RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
