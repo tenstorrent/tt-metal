@@ -164,6 +164,12 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 
+TEST(MeshGraphDescriptorTests, ParsesBhGalaxySp4TorusXY) {
+    const std::filesystem::path text_proto_file_path =
+        "tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
+}
+
 TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
     std::string text_proto = R"proto(
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
