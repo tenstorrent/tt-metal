@@ -1,0 +1,95 @@
+name: AI Assistant (IMPL)
+
+on:
+  workflow_call:
+    secrets:
+      AY_KEY:
+        required: true
+      AI_GH_TOKEN:
+        required: true
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: print context
+        run: |
+          echo "yay"
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Dump job context
+        env:
+          JOB_CONTEXT: ${{ toJson(job) }}
+        run: echo "$JOB_CONTEXT"
+      - name: Dump steps context
+        env:
+          STEPS_CONTEXT: ${{ toJson(steps) }}
+        run: echo "$STEPS_CONTEXT"
+      - name: Dump runner context
+        env:
+          RUNNER_CONTEXT: ${{ toJson(runner) }}
+        run: echo "$RUNNER_CONTEXT"
+      - name: Dump strategy context
+        env:
+          STRATEGY_CONTEXT: ${{ toJson(strategy) }}
+        run: echo "$STRATEGY_CONTEXT"
+      - name: Dump matrix context
+        env:
+          MATRIX_CONTEXT: ${{ toJson(matrix) }}
+        run: echo "$MATRIX_CONTEXT"
+      
+  claude-code-action:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@tt-ai')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@tt-ai')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@tt-ai')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@tt-ai'))
+    runs-on: [arch-wormhole_b0, in-service, n300]
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 500
+
+      - name: Install unzip
+        run: |
+          # Check if unzip is available, install if missing
+          if ! command -v unzip &> /dev/null; then
+            echo "Installing unzip..."
+            sudo apt-get update && sudo apt-get install -y unzip
+          else
+            echo "unzip is already installed"
+          fi
+
+      - name: Install GitHub CLI
+        run: |
+          # Install GitHub CLI
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+          # Verify installation
+          gh --version
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.AY_KEY }}
+          github_token: ${{ secrets.AI_GH_TOKEN }}
+          custom_instructions: "Be direct and technical. No emojis, compliments, or flowery language."
+          trigger_phrase: "@tt-ai"
+          allowed_tools: |
+           - Bash(./build_metal.sh --debug -c --without-distributed)
+           - Bash(gh issue create:*)
+           - Bash(gh issue edit:*)
+           - Bash(gh issue close:*)
+           - Bash(gh issue view:*)
+          timeout_minutes: "30"
