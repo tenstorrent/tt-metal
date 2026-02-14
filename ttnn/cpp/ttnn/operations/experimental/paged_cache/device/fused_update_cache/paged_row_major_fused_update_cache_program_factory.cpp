@@ -73,7 +73,7 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().mesh_buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+        index_is_dram = update_idxs_tensor.value().memory_config().buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
 
@@ -97,7 +97,7 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table.value().buffer()->aligned_page_size();
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+        page_table_is_dram = page_table_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
     }
 
     const uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;

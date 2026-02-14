@@ -33,7 +33,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool output_sharded = is_sharded(output.buffer()->buffer_layout());
+    bool output_sharded = is_sharded(output.memory_config().memory_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();

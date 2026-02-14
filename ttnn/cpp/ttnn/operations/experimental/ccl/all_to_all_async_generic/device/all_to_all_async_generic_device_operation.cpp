@@ -85,9 +85,9 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor for all_to_all_async must be on device");
         TT_FATAL(
-            output_tensor.buffer()->buffer_type() == BufferType::DRAM,
+            output_tensor.memory_config().buffer_type() == BufferType::DRAM,
             "Output tensor for all_to_all_async must be in DRAM, but is in {}",
-            output_tensor.buffer()->buffer_type());
+            output_tensor.memory_config().buffer_type());
         TT_FATAL(output_tensor.layout() == Layout::TILE, "Unsupported output layout {}.", output_tensor.layout());
 
         TT_FATAL(output_tensor.dtype() == input_tensor.dtype(), "Output tensor dtype must match input tensor dtype");

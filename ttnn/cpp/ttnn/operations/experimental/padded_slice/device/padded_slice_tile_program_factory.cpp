@@ -415,14 +415,14 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
     uint32_t max_read_size = 4096;
 
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "Output row size {} must be aligned to the destination buffer {} alignment {}",
         output_row_size_bytes,
-        output.buffer()->buffer_type(),
+        output.memory_config().buffer_type(),
         dst_buffer_alignment);
     // Input is tiled, and so channels would always be aligned to TILE_WIDTH.
     // So the non aligned copy is needed if the output alignment is less than TILE_WIDTH * element_size.

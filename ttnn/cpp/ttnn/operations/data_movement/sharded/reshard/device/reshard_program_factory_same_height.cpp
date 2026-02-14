@@ -61,7 +61,7 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
         program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     uint32_t remote_address = remote_tensor.mesh_buffer()->address();
-    auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
+    auto remote_buffer_type = remote_tensor.memory_config().buffer_type();
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =

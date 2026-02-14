@@ -48,9 +48,9 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
         input_tensor.device()->compute_with_storage_grid_size().y);
 
     TT_FATAL(
-        input_tensor.buffer()->buffer_type() == BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == BufferType::DRAM,
         "AllToAllAsync: Input tensor must be in DRAM, but is in {}",
-        input_tensor.buffer()->buffer_type());
+        input_tensor.memory_config().buffer_type());
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Unsupported input layout {}.", input_tensor.layout());
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -85,9 +85,9 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
         intermediate_buffer.storage_type() == StorageType::DEVICE,
         "Intermediate buffer for all_to_all_async must be on device");
     TT_FATAL(
-        intermediate_buffer.buffer()->buffer_type() == BufferType::DRAM,
+        intermediate_buffer.memory_config().buffer_type() == BufferType::DRAM,
         "Intermediate buffer for all_to_all_async must be in DRAM, but is in {}",
-        intermediate_buffer.buffer()->buffer_type());
+        intermediate_buffer.memory_config().buffer_type());
     TT_FATAL(intermediate_buffer.layout() == Layout::TILE, "Unsupported intermediate buffer layout.");
     TT_FATAL(
         intermediate_buffer.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -98,9 +98,9 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         output_buffer.storage_type() == StorageType::DEVICE, "Output buffer for all_to_all_async must be on device");
     TT_FATAL(
-        output_buffer.buffer()->buffer_type() == BufferType::DRAM,
+        output_buffer.memory_config().buffer_type() == BufferType::DRAM,
         "Output buffer for all_to_all_async must be in DRAM, but is in {}",
-        output_buffer.buffer()->buffer_type());
+        output_buffer.memory_config().buffer_type());
     TT_FATAL(output_buffer.layout() == Layout::TILE, "Unsupported output buffer layout.");
     TT_FATAL(
         output_buffer.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -149,13 +149,13 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_hit(
     TT_FATAL(
         output_buffer.storage_type() == StorageType::DEVICE, "Output buffer for all_to_all_async must be on device");
     TT_FATAL(
-        intermediate_buffer.buffer()->buffer_type() == BufferType::DRAM,
+        intermediate_buffer.memory_config().buffer_type() == BufferType::DRAM,
         "Intermediate buffer for all_to_all_async must be in DRAM, but is in {}",
-        intermediate_buffer.buffer()->buffer_type());
+        intermediate_buffer.memory_config().buffer_type());
     TT_FATAL(
-        output_buffer.buffer()->buffer_type() == BufferType::DRAM,
+        output_buffer.memory_config().buffer_type() == BufferType::DRAM,
         "Output buffer for all_to_all_async must be in DRAM, but is in {}",
-        output_buffer.buffer()->buffer_type());
+        output_buffer.memory_config().buffer_type());
     TT_FATAL(intermediate_buffer.layout() == Layout::TILE, "Unsupported intermediate buffer layout.");
     TT_FATAL(output_buffer.layout() == Layout::TILE, "Unsupported output buffer layout.");
     TT_FATAL(

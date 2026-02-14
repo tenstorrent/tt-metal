@@ -155,7 +155,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
 
     if (dim == TransposeOpDim::HC) {
         if (row_major) {
-            auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+            auto BUFFER_ALIGNMENT = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                         ? hal::get_dram_alignment()
                                         : hal::get_l1_alignment();
             TT_FATAL(

@@ -79,7 +79,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "When mask is provided to SDPA, it must be in BF16, BFP8, or BFP4 dataformat");
 
             TT_FATAL(
-                mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                mask.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "When mask is provided to SDPA, it must be in DRAM");
 
             const auto& mask_shape = mask.logical_shape();
@@ -313,7 +313,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     attention_sink.dtype() == DataType::BFLOAT4_B,
                 "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
             TT_FATAL(
-                attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Attention sink must be in DRAM");
 
             const auto& sink_shape = attention_sink.logical_shape();

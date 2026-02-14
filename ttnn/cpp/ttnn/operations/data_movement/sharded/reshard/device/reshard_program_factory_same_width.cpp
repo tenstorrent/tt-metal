@@ -106,7 +106,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     uint32_t remote_core_idx = 0;
     uint32_t remote_core_units_rem = remote_units_per_shard;
     uint32_t remote_address = remote_tensor.mesh_buffer()->address();
-    auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
+    auto remote_buffer_type = remote_tensor.memory_config().buffer_type();
     auto bank_id =
         device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
 

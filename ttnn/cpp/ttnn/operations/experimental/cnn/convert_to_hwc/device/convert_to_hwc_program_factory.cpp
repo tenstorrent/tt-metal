@@ -221,7 +221,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     // DRAM/L1 configuration
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
     config.remote_address = input.mesh_buffer()->address();
-    config.remote_buffer_type = input.buffer()->buffer_type();
+    config.remote_buffer_type = input.memory_config().buffer_type();
     config.remote_core_type = input.buffer()->core_type();
 
     // Shard specifications

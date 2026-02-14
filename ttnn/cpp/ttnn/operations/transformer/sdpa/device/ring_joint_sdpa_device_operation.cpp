@@ -88,7 +88,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 

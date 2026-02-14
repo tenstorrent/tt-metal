@@ -70,7 +70,8 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks =
+        input_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),

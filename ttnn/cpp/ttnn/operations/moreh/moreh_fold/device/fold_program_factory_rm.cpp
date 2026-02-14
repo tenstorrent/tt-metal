@@ -75,7 +75,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
 
     // For DRAM reads, we need DRAM-aligned size
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
     uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);

@@ -97,10 +97,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(
-            input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            input_tensors.at(i).memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Input tensor {} buffer type must be DRAM but got {}",
             i,
-            input_tensors.at(i).buffer()->buffer_type());
+            input_tensors.at(i).memory_config().buffer_type());
     }
     // Output memconfig must be height sharded or DRAM
     if (operation_attributes.output_mem_config.is_sharded()) {

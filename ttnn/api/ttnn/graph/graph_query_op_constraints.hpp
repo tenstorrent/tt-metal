@@ -162,7 +162,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
 
     size_t l1_output_buffer_per_core = 0;
     for (const auto& output : outputs) {
-        if (!output.buffer()->is_dram()) {
+        if (!output.memory_config().is_dram()) {
             l1_output_buffer_per_core +=
                 extract_l1_output_buffer_allocation_size_per_core(output, interleaved_storage_cores);
         }

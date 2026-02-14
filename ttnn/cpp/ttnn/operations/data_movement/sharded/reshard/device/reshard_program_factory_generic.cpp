@@ -634,8 +634,8 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
+    auto grid = input.memory_config().buffer_type() == BufferType::DRAM ? device->dram_grid_size()
+                                                                        : device->compute_with_storage_grid_size();
     auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores =

@@ -16,7 +16,7 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
-    auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto BUFFER_ALIGNMENT = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding

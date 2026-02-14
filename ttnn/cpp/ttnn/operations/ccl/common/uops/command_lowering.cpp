@@ -116,7 +116,7 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     // Only page aligned for now since tensor slice is page based at the moment
     // Future work to migrate tensor slice to be element based and then at that
     // point we can
-    switch (tensor.buffer()->buffer_layout()) {
+    switch (tensor.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: {
             auto address_generator = build_sharded_addr_gen<TensorMemoryLayout::BLOCK_SHARDED>(
                 coord_lookup,
