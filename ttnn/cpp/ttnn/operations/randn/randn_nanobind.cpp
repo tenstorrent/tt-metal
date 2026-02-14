@@ -18,25 +18,36 @@ void bind_randn_operation(nb::module_& mod) {
         R"doc(
         Generates a tensor with the given shape, filled with random values from a standard normal distribution.
         Internally, this operation uses the Box-Muller transform to generate normally distributed random values.
-        based on the specified data type:
-
-        - DataType.float32 / bfloat16
-
-        - Integer data types:
-            Not supported for standard normal random generation.
 
         Args:
-            shape (list[int]) - a list of integers defining the shape of the output tensor.
+            shape (list[int]): a list of integers defining the shape of the output tensor.
 
-        Keyword args:
+        Keyword Args:
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
-            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to ttnn.bfloat16.
-            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
-            seed (int, optional): An optional seed to initialize the random number generator for reproducible results. Defaults to None.
+            seed (int, optional): An optional seed to initialize the random number generator for reproducible results. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            The output tensor supports the following data types and layouts:
+
+            .. list-table:: Output Tensor
+                :header-rows: 1
+
+                * - dtype
+                - layout
+                * - FLOAT32
+                - ROW_MAJOR, TILE
+                * - BFLOAT16
+                - ROW_MAJOR, TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Height, Width, Block, and ND Sharded: DRAM and L1
         )doc";
 
     using OperationType = decltype(ttnn::randn);
