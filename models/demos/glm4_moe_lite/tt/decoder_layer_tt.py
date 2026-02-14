@@ -1171,7 +1171,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # traced, so only use packed prefill for genuine prefill (tokens > 32).
     _PACKED_PREFILL_MIN_TOKENS = 33
     use_packed_prefill = packed_prefill and tokens >= _PACKED_PREFILL_MIN_TOKENS
-    use_dense_prefill = dense_prefill and not use_packed_prefill and tokens > 1
+    use_dense_prefill = dense_prefill and not use_packed_prefill and tokens >= 33
     moe_decode_mc = getattr(moe_runtime, "decode_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
     # Pad tokens dim for sparse expert kernels (decode tokens are often 1).

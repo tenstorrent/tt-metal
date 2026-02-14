@@ -40,6 +40,28 @@ from models.demos.glm4_moe_lite.tt.tt_embedding import (
 from models.demos.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
+@dataclass
+class _DecodeTraceSamplingState:
+    """Per-bucket state for batch-bucketed decode traces."""
+    trace_id: Any | None = None
+    batch: int = 0
+    page_table_width: int = 0
+    # Persistent inputs
+    tokens_tt: ttnn.Tensor | None = None
+    positions_tt: ttnn.Tensor | None = None
+    rot_idxs_tt: ttnn.Tensor | None = None
+    cos_batch_tt: ttnn.Tensor | None = None
+    sin_batch_tt: ttnn.Tensor | None = None
+    trans_matrix_tt: ttnn.Tensor | None = None
+    page_table_tt: ttnn.Tensor | None = None
+    rope_sharded_mem_config: Any | None = None
+    rot_idxs_padded_batch: int = 0
+    # Persistent outputs
+    logits_tt: ttnn.Tensor | None = None
+    top1_values_tt: ttnn.Tensor | None = None
+    top1_indices_tt: ttnn.Tensor | None = None
+
+
 def _torch_dtype_to_ttnn(dtype: torch.dtype) -> ttnn.DataType:
     # NOTE: vLLM passes a torch dtype for sizing/accounting, but TT kernels
     # often prefer BF8 KV caches for both memory and kernel constraints.
@@ -162,25 +184,10 @@ class Glm4MoeLiteDenseOnlyTT:
     enable_moe: bool
     moe_runtime: Any | None
     # ---- Decode trace state (vLLM trace_mode=all) ----
-    # We start with the on-device greedy sampling path, which is what vLLM uses
-    # in `sample_on_device_mode=decode_only`. Trace capture/replay removes the
-    # per-op host overhead for 47-layer decode.
-    _decode_trace_id_sampling: Any | None = field(init=False, default=None)
-    _trace_tokens_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_x_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_positions_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_rot_idxs_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_cos_batch_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_sin_batch_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_trans_matrix_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_rope_sharded_mem_config: Any | None = field(init=False, default=None)
-    _trace_rot_idxs_padded_batch: int = field(init=False, default=0)
-    _trace_page_table_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_logits_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_top1_values_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_top1_indices_tt: ttnn.Tensor | None = field(init=False, default=None)
-    _trace_batch: int = field(init=False, default=0)
-    _trace_page_table_width: int = field(init=False, default=0)
+    # Batch-bucketed traces: one _DecodeTraceSamplingState per batch bucket.
+    # At runtime, decode pads to the nearest bucket instead of MAX_NUM_SEQS,
+    # giving small batches more cores/seq and lower ITL.
+    _decode_trace_states: dict[int, _DecodeTraceSamplingState] = field(init=False, default_factory=dict)
 
     @classmethod
     def create(
@@ -392,21 +399,8 @@ class Glm4MoeLiteDenseOnlyTT:
         # without the trace being released, we catch it, release the trace,
         # and retry.
         preserve_trace = os.environ.get("GLM4_MOE_LITE_PRESERVE_TRACE", "").strip() == "1"
-        if self._decode_trace_id_sampling is not None and not preserve_trace:
-            ttnn.synchronize_device(self.device)
-            ttnn.release_trace(self.device, self._decode_trace_id_sampling)
-            self._decode_trace_id_sampling = None
-            # Deallocate trace OUTPUT tensors (allocated inside the trace region).
-            for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
-                if t is not None:
-                    try:
-                        ttnn.deallocate(t, force=True)
-                    except Exception:
-                        pass
-            self._trace_logits_tt = None
-            self._trace_top1_values_tt = None
-            self._trace_top1_indices_tt = None
-            ttnn.synchronize_device(self.device)
+        if self._decode_trace_states and not preserve_trace:
+            self._release_all_decode_traces()
 
         if tokens.ndim != 2:
             raise ValueError(f"expected tokens [B,S], got {tuple(tokens.shape)}")
@@ -425,22 +419,32 @@ class Glm4MoeLiteDenseOnlyTT:
             preserve_trace=preserve_trace,
         )
 
-    def _release_decode_trace(self) -> None:
-        """Release the decode trace and deallocate trace output tensors."""
-        if self._decode_trace_id_sampling is not None:
-            ttnn.synchronize_device(self.device)
-            ttnn.release_trace(self.device, self._decode_trace_id_sampling)
-            self._decode_trace_id_sampling = None
-            for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
+    def _release_all_decode_traces(self) -> None:
+        """Release ALL bucket decode traces and deallocate trace output tensors."""
+        if not self._decode_trace_states:
+            return
+        ttnn.synchronize_device(self.device)
+        for bucket, state in list(self._decode_trace_states.items()):
+            if state.trace_id is not None:
+                try:
+                    ttnn.release_trace(self.device, state.trace_id)
+                except Exception:
+                    pass
+                state.trace_id = None
+            for t in (state.logits_tt, state.top1_values_tt, state.top1_indices_tt):
                 if t is not None:
                     try:
                         ttnn.deallocate(t, force=True)
                     except Exception:
                         pass
-            self._trace_logits_tt = None
-            self._trace_top1_values_tt = None
-            self._trace_top1_indices_tt = None
-            ttnn.synchronize_device(self.device)
+            state.logits_tt = None
+            state.top1_values_tt = None
+            state.top1_indices_tt = None
+        ttnn.synchronize_device(self.device)
+
+    def _release_decode_trace(self) -> None:
+        """Release ALL bucket decode traces (compat alias)."""
+        self._release_all_decode_traces()
 
     def _prefill_compute(
         self,
@@ -462,20 +466,18 @@ class Glm4MoeLiteDenseOnlyTT:
                 seq_pad_multiple=seq_pad_multiple,
             )
         except Exception as e:
-            if preserve_trace and self._decode_trace_id_sampling is not None:
-                err_str = str(e).lower()
-                if "out of memory" in err_str or "oom" in err_str or "allocation" in err_str:
-                    logger.warning(
-                        "Prefill OOM with preserved trace; releasing trace and retrying: {}", e
-                    )
-                    self._release_decode_trace()
-                    return self._prefill_compute_inner(
-                        tokens=tokens,
-                        prompt_lens=prompt_lens,
-                        page_table=page_table,
-                        kv_cache=kv_cache,
-                        seq_pad_multiple=seq_pad_multiple,
-                    )
+            if preserve_trace and any(s.trace_id is not None for s in self._decode_trace_states.values()):
+                logger.warning(
+                    "Prefill failed with preserved trace; releasing trace and retrying: {}", e
+                )
+                self._release_decode_trace()
+                return self._prefill_compute_inner(
+                    tokens=tokens,
+                    prompt_lens=prompt_lens,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    seq_pad_multiple=seq_pad_multiple,
+                )
             raise
 
     def _prefill_compute_inner(
@@ -1250,8 +1252,8 @@ class Glm4MoeLiteDenseOnlyTT:
 
         return logits
 
-    def _ensure_decode_trace_inputs(self, *, batch: int, page_table_width: int) -> None:
-        """Allocate persistent decode inputs for trace capture/replay."""
+    def _get_or_create_trace_state(self, *, batch: int, page_table_width: int) -> _DecodeTraceSamplingState:
+        """Get or create a per-bucket decode trace state with persistent inputs."""
         batch = int(batch)
         page_table_width = int(page_table_width)
         if batch <= 0:
@@ -1259,73 +1261,62 @@ class Glm4MoeLiteDenseOnlyTT:
         if page_table_width <= 0:
             raise ValueError("trace page_table_width must be > 0")
 
+        state = self._decode_trace_states.get(batch)
         if (
-            self._trace_tokens_tt is not None
-            and self._trace_positions_tt is not None
-            and self._trace_rot_idxs_tt is not None
-            and self._trace_cos_batch_tt is not None
-            and self._trace_sin_batch_tt is not None
-            and self._trace_trans_matrix_tt is not None
-            and self._trace_rope_sharded_mem_config is not None
-            and self._trace_page_table_tt is not None
-            and int(self._trace_batch) == batch
-            and int(self._trace_page_table_width) == page_table_width
+            state is not None
+            and state.tokens_tt is not None
+            and state.positions_tt is not None
+            and state.rot_idxs_tt is not None
+            and state.cos_batch_tt is not None
+            and state.sin_batch_tt is not None
+            and state.trans_matrix_tt is not None
+            and state.rope_sharded_mem_config is not None
+            and state.page_table_tt is not None
+            and int(state.page_table_width) == page_table_width
         ):
-            return
+            return state
 
-        # Shapes changed. Drop any previous trace and free associated buffers.
-        if self._decode_trace_id_sampling is not None:
-            # Ensure no in-flight trace replay/capture uses these buffers.
+        # New bucket or page_table_width changed. Create fresh state.
+        # Release old trace for this bucket if it exists.
+        if state is not None and state.trace_id is not None:
             try:
                 ttnn.synchronize_device(self.device)
             except Exception:
                 pass
             try:
-                ttnn.release_trace(self.device, self._decode_trace_id_sampling)
+                ttnn.release_trace(self.device, state.trace_id)
             except Exception:
-                # Best-effort: if release fails (e.g. trace id already gone),
-                # we still want to proceed with re-capture.
                 pass
-        self._decode_trace_id_sampling = None
-        for t in (self._trace_logits_tt, self._trace_top1_values_tt, self._trace_top1_indices_tt):
-            if t is not None:
-                try:
-                    ttnn.deallocate(t, force=False)
-                except Exception:
-                    pass
-        self._trace_logits_tt = None
-        self._trace_top1_values_tt = None
-        self._trace_top1_indices_tt = None
+            state.trace_id = None
+            for t in (state.logits_tt, state.top1_values_tt, state.top1_indices_tt):
+                if t is not None:
+                    try:
+                        ttnn.deallocate(t, force=False)
+                    except Exception:
+                        pass
+            state.logits_tt = None
+            state.top1_values_tt = None
+            state.top1_indices_tt = None
 
-        # Free old persistent inputs before re-allocating them. These are kept
-        # alive across trace replays; without explicit deallocation, repeated
-        # shape changes can leak device buffers and eventually OOM.
-        for t in (
-            self._trace_tokens_tt,
-            self._trace_positions_tt,
-            self._trace_rot_idxs_tt,
-            self._trace_cos_batch_tt,
-            self._trace_sin_batch_tt,
-            self._trace_trans_matrix_tt,
-            self._trace_page_table_tt,
-        ):
-            if t is not None:
-                try:
-                    ttnn.deallocate(t, force=False)
-                except Exception:
-                    pass
-        self._trace_tokens_tt = None
-        self._trace_positions_tt = None
-        self._trace_rot_idxs_tt = None
-        self._trace_cos_batch_tt = None
-        self._trace_sin_batch_tt = None
-        self._trace_trans_matrix_tt = None
-        self._trace_page_table_tt = None
+        # Free old persistent inputs if they exist.
+        if state is not None:
+            for t in (
+                state.tokens_tt, state.positions_tt, state.rot_idxs_tt,
+                state.cos_batch_tt, state.sin_batch_tt, state.trans_matrix_tt,
+                state.page_table_tt,
+            ):
+                if t is not None:
+                    try:
+                        ttnn.deallocate(t, force=False)
+                    except Exception:
+                        pass
+
+        state = _DecodeTraceSamplingState(batch=batch, page_table_width=page_table_width)
 
         is_mesh_device = _is_mesh_device(self.device)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
 
-        self._trace_tokens_tt = ttnn.from_torch(
+        state.tokens_tt = ttnn.from_torch(
             torch.zeros((batch, 1), dtype=torch.int32),
             device=self.device,
             dtype=ttnn.uint32,
@@ -1333,7 +1324,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        self._trace_positions_tt = ttnn.from_torch(
+        state.positions_tt = ttnn.from_torch(
             torch.zeros((batch,), dtype=torch.int32),
             device=self.device,
             dtype=ttnn.int32,
@@ -1343,7 +1334,7 @@ class Glm4MoeLiteDenseOnlyTT:
         )
         rope_dim = int(self.hparams.qk_rope_head_dim)
         padded_batch = ((batch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        self._trace_rot_idxs_tt = ttnn.from_torch(
+        state.rot_idxs_tt = ttnn.from_torch(
             torch.zeros((1, padded_batch), dtype=torch.int32),
             device=self.device,
             dtype=ttnn.uint32,
@@ -1351,31 +1342,31 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        self._trace_rot_idxs_padded_batch = int(padded_batch)
+        state.rot_idxs_padded_batch = int(padded_batch)
 
         grid_size = self.device.compute_with_storage_grid_size()
         user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
-        self._trace_rope_sharded_mem_config = ttnn.create_sharded_memory_config(
+        state.rope_sharded_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, int(rope_dim)),
             core_grid=user_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self._trace_cos_batch_tt = ttnn.from_torch(
+        state.cos_batch_tt = ttnn.from_torch(
             torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
             device=self.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self._trace_rope_sharded_mem_config,
+            memory_config=state.rope_sharded_mem_config,
             mesh_mapper=mapper,
         )
-        self._trace_sin_batch_tt = ttnn.from_torch(
+        state.sin_batch_tt = ttnn.from_torch(
             torch.zeros((1, batch, 1, rope_dim), dtype=torch.bfloat16),
             device=self.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self._trace_rope_sharded_mem_config,
+            memory_config=state.rope_sharded_mem_config,
             mesh_mapper=mapper,
         )
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
@@ -1387,7 +1378,7 @@ class Glm4MoeLiteDenseOnlyTT:
         )
         trans_mat_torch = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
         trans_mat_torch = trans_mat_torch.repeat(1, 1, int(batch), 1).contiguous()
-        self._trace_trans_matrix_tt = ttnn.from_torch(
+        state.trans_matrix_tt = ttnn.from_torch(
             trans_mat_torch,
             device=self.device,
             dtype=ttnn.bfloat16,
@@ -1395,7 +1386,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=trans_mat_mem_config,
             mesh_mapper=mapper,
         )
-        self._trace_page_table_tt = ttnn.from_torch(
+        state.page_table_tt = ttnn.from_torch(
             torch.zeros((batch, page_table_width), dtype=torch.int32),
             device=self.device,
             dtype=ttnn.int32,
@@ -1403,33 +1394,34 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        self._trace_batch = batch
-        self._trace_page_table_width = page_table_width
+        self._decode_trace_states[batch] = state
+        return state
 
     def _copy_decode_trace_inputs(
         self,
         *,
+        state: _DecodeTraceSamplingState,
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
     ) -> None:
-        """Copy host decode inputs into persistent device tensors."""
+        """Copy host decode inputs into persistent device tensors for a bucket state."""
         if (
-            self._trace_tokens_tt is None
-            or self._trace_positions_tt is None
-            or self._trace_rot_idxs_tt is None
-            or self._trace_cos_batch_tt is None
-            or self._trace_sin_batch_tt is None
-            or self._trace_trans_matrix_tt is None
-            or self._trace_page_table_tt is None
+            state.tokens_tt is None
+            or state.positions_tt is None
+            or state.rot_idxs_tt is None
+            or state.cos_batch_tt is None
+            or state.sin_batch_tt is None
+            or state.trans_matrix_tt is None
+            or state.page_table_tt is None
         ):
             raise RuntimeError("trace inputs not allocated")
         batch = int(tokens.shape[0])
-        if int(self._trace_batch) != batch:
-            raise RuntimeError(f"trace batch mismatch: allocated={int(self._trace_batch)} got={batch}")
-        if int(self._trace_page_table_width) != int(page_table.shape[1]):
+        if int(state.batch) != batch:
+            raise RuntimeError(f"trace batch mismatch: allocated={int(state.batch)} got={batch}")
+        if int(state.page_table_width) != int(page_table.shape[1]):
             raise RuntimeError(
-                f"trace page_table_width mismatch: allocated={int(self._trace_page_table_width)} got={int(page_table.shape[1])}"
+                f"trace page_table_width mismatch: allocated={int(state.page_table_width)} got={int(page_table.shape[1])}"
             )
 
         # Debug-only: print the page table and positions at KV block boundaries.
@@ -1475,7 +1467,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens_tt)
+        ttnn.copy_host_to_device_tensor(host_tokens, state.tokens_tt)
 
         host_pos = ttnn.from_torch(
             start_pos.to(torch.int32),
@@ -1485,14 +1477,14 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pos, self._trace_positions_tt)
+        ttnn.copy_host_to_device_tensor(host_pos, state.positions_tt)
 
         # Trace-mode RoPE: copy rot_idxs (positions) to device and generate cos/sin
         # *inside* the trace graph. Copying host-side RoPE slices directly into
         # sharded tensors is not layout-safe and can corrupt decode.
         pos_clamped = start_pos.to(torch.int32).clamp_min(0)
         pos_clamped = torch.clamp(pos_clamped, 0, max(0, int(self.max_seq_len) - 1)).to(torch.int32)
-        padded_batch = int(self._trace_rot_idxs_padded_batch)
+        padded_batch = int(state.rot_idxs_padded_batch)
         if padded_batch < batch:
             raise RuntimeError(f"trace rot_idxs padded batch too small: padded={padded_batch} batch={batch}")
         if padded_batch != batch:
@@ -1512,7 +1504,7 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt)
 
         host_pt = ttnn.from_torch(
             page_table.to(torch.int32),
@@ -1522,27 +1514,27 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_pt, self._trace_page_table_tt)
+        ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt)
 
-    def _decode_step_tt_logits(self, *, kv_cache: list[ttnn.Tensor]) -> ttnn.Tensor:
-        """Decode step using persistent TT inputs, producing device logits."""
-        assert self._trace_tokens_tt is not None
-        assert self._trace_positions_tt is not None
-        assert self._trace_rot_idxs_tt is not None
-        assert self._trace_cos_batch_tt is not None
-        assert self._trace_sin_batch_tt is not None
-        assert self._trace_trans_matrix_tt is not None
-        assert self._trace_rope_sharded_mem_config is not None
-        assert self._trace_page_table_tt is not None
+    def _decode_step_tt_logits(self, *, state: _DecodeTraceSamplingState, kv_cache: list[ttnn.Tensor]) -> ttnn.Tensor:
+        """Decode step using persistent TT inputs from a bucket state, producing device logits."""
+        assert state.tokens_tt is not None
+        assert state.positions_tt is not None
+        assert state.rot_idxs_tt is not None
+        assert state.cos_batch_tt is not None
+        assert state.sin_batch_tt is not None
+        assert state.trans_matrix_tt is not None
+        assert state.rope_sharded_mem_config is not None
+        assert state.page_table_tt is not None
 
-        batch = int(self._trace_batch)
+        batch = int(state.batch)
 
         # Generate RoPE cos/sin inside the trace from rot_idxs, then shard into
         # the decode layout expected by rotary_embedding_llama(is_decode_mode=True).
         rope_dim = int(self.hparams.qk_rope_head_dim)
-        padded_batch = int(self._trace_rot_idxs_padded_batch)
-        cos_rows = ttnn.embedding(self._trace_rot_idxs_tt, self.rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
-        sin_rows = ttnn.embedding(self._trace_rot_idxs_tt, self.rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+        padded_batch = int(state.rot_idxs_padded_batch)
+        cos_rows = ttnn.embedding(state.rot_idxs_tt, self.rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
+        sin_rows = ttnn.embedding(state.rot_idxs_tt, self.rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
         cos_batch_view = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
         sin_batch_view = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
         if padded_batch != batch:
@@ -1552,19 +1544,19 @@ class Glm4MoeLiteDenseOnlyTT:
         sin_batch_rm = ttnn.clone(sin_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cos_decode = ttnn.transpose(cos_batch_rm, 1, 2)  # [1,B,1,D]
         sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)  # [1,B,1,D]
-        cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, self._trace_rope_sharded_mem_config)
-        sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, self._trace_rope_sharded_mem_config)
-        ttnn.copy(cos_decode_sharded, self._trace_cos_batch_tt)
-        ttnn.copy(sin_decode_sharded, self._trace_sin_batch_tt)
-        cos_batch = self._trace_cos_batch_tt
-        sin_batch = self._trace_sin_batch_tt
-        trans_matrix = self._trace_trans_matrix_tt
+        cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, state.rope_sharded_mem_config)
+        sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, state.rope_sharded_mem_config)
+        ttnn.copy(cos_decode_sharded, state.cos_batch_tt)
+        ttnn.copy(sin_decode_sharded, state.sin_batch_tt)
+        cos_batch = state.cos_batch_tt
+        sin_batch = state.sin_batch_tt
+        trans_matrix = state.trans_matrix_tt
         hidden = int(self.hparams.hidden_size)
         # Match DeepSeek trace pattern: embed tokens *inside* the trace graph.
         # This avoids device allocations outside trace replay and keeps input
         # staging limited to host->device copies.
         x = ttnn.embedding(
-            self._trace_tokens_tt,
+            state.tokens_tt,
             self.embed_w,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1580,20 +1572,16 @@ class Glm4MoeLiteDenseOnlyTT:
             x_next = run_decoder_layer_decode_one_step_update_cache_tt(
                 device=self.device,
                 x_embed_tok=x,
-                tt_positions=self._trace_positions_tt,
-                page_table_tt=self._trace_page_table_tt,
+                tt_positions=state.positions_tt,
+                page_table_tt=state.page_table_tt,
                 kvpe_cache=kv_cache[layer_idx],
                 cos_batch=cos_batch,
                 sin_batch=sin_batch,
                 trans_matrix=trans_matrix,
-                # Trace inputs store RoPE tensors already sharded in decode layout
-                # ([1, B, 1, D] height-sharded). Reuse them directly to avoid
-                # re-preparing RoPE inputs in every layer and to keep the trace
-                # capture path free of layout transforms (e.g. transpose).
                 cos_decode=cos_batch,
                 sin_decode=sin_batch,
                 trans_decode=trans_matrix,
-                rope_sharded_cfg=self._trace_rope_sharded_mem_config,
+                rope_sharded_cfg=state.rope_sharded_mem_config,
                 w=w,
                 hparams=self.hparams,
                 moe_runtime=self.moe_runtime,
@@ -1616,10 +1604,10 @@ class Glm4MoeLiteDenseOnlyTT:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         kv_cache: list[ttnn.Tensor],
-    ) -> None:
+    ) -> _DecodeTraceSamplingState:
         batch = int(tokens.shape[0])
         page_table_width = int(page_table.shape[1])
-        self._ensure_decode_trace_inputs(batch=batch, page_table_width=page_table_width)
+        state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
 
         # Warm-up compile run (no trace) to keep compilation out of capture.
         _ = self.decode(
@@ -1632,12 +1620,12 @@ class Glm4MoeLiteDenseOnlyTT:
         )
         ttnn.synchronize_device(self.device)
 
-        self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
         ttnn.synchronize_device(self.device)
 
         # Warm-up the trace path itself (not captured) so ops like `ttnn.embedding`
         # do any one-time compilation/program uploads outside trace capture.
-        logits_warm = self._decode_step_tt_logits(kv_cache=kv_cache)
+        logits_warm = self._decode_step_tt_logits(state=state, kv_cache=kv_cache)
         # Warm-up any sampling ops we plan to run inside the trace. After trace
         # capture, allocating device buffers becomes unsafe, so sampling must be
         # fully trace-contained.
@@ -1666,11 +1654,11 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Re-copy inputs since the warm-up decode step updated KV cache and may
         # have consumed the previous values.
-        self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
         ttnn.synchronize_device(self.device)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-        logits_tt = self._decode_step_tt_logits(kv_cache=kv_cache)
+        logits_tt = self._decode_step_tt_logits(state=state, kv_cache=kv_cache)
         # Capture greedy sampling inside the trace to avoid allocating any
         # device buffers while an active trace exists.
         logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
@@ -1691,10 +1679,11 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.device)
 
-        self._decode_trace_id_sampling = trace_id
-        self._trace_logits_tt = logits_tt
-        self._trace_top1_values_tt = top1_values_tt
-        self._trace_top1_indices_tt = top1_indices_tt
+        state.trace_id = trace_id
+        state.logits_tt = logits_tt
+        state.top1_values_tt = top1_values_tt
+        state.top1_indices_tt = top1_indices_tt
+        return state
 
     def _decode_trace_sampling(
         self,
@@ -1704,39 +1693,25 @@ class Glm4MoeLiteDenseOnlyTT:
         page_table: torch.Tensor,
         kv_cache: list[ttnn.Tensor],
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
-        # vLLM pads decode batches up to max_num_seqs. If the padded batch or
-        # page table width changes (e.g., max_num_seqs differs between runs),
-        # we must drop and re-capture the trace to avoid shape mismatches.
-        self._ensure_decode_trace_inputs(batch=int(tokens.shape[0]), page_table_width=int(page_table.shape[1]))
-        if self._decode_trace_id_sampling is None:
-            self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
-        assert self._decode_trace_id_sampling is not None
-        assert self._trace_logits_tt is not None
-        assert self._trace_top1_indices_tt is not None
+        batch = int(tokens.shape[0])
+        page_table_width = int(page_table.shape[1])
+        state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
+        if state.trace_id is None:
+            state = self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
+        assert state.trace_id is not None
+        assert state.logits_tt is not None
+        assert state.top1_indices_tt is not None
 
-        self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
         if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
-            # Debug-only: enforce that host->device copies of decode inputs
-            # (tokens/positions/page_table) are visible before trace replay.
             ttnn.synchronize_device(self.device)
-        # NOTE: Keep trace replay blocking for correctness.
-        #
-        # Our vLLM integration currently reads decode outputs back to host
-        # synchronously (v1 runner uses `read_from_device=True`), and the prefill
-        # fallback path (`decode_loop_trace`) can call traced decode in a tight
-        # loop while discarding the sampled ids. A non-blocking replay would
-        # allow the next iteration to overwrite persistent trace inputs and/or
-        # race KV cache updates, which manifests as gibberish output.
-        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
 
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
-            # Fully trace-contained greedy sampling: return device token ids.
-            return self._trace_top1_indices_tt
+            return state.top1_indices_tt
 
-        # Vocab-sharded LM head: return per-shard (max, argmax). Host reduction is
-        # performed by the vLLM model wrapper after async readback completes.
-        assert self._trace_top1_values_tt is not None
-        return (self._trace_top1_values_tt, self._trace_top1_indices_tt)
+        assert state.top1_values_tt is not None
+        return (state.top1_values_tt, state.top1_indices_tt)
 
     def _decode_trace_logits(
         self,
@@ -1746,29 +1721,24 @@ class Glm4MoeLiteDenseOnlyTT:
         page_table: torch.Tensor,
         kv_cache: list[ttnn.Tensor],
     ) -> torch.Tensor:
-        """Execute the decode trace and return logits on host [B,1,vocab] float32.
+        """Execute the decode trace and return logits on host [B,1,vocab] float32."""
+        batch = int(tokens.shape[0])
+        page_table_width = int(page_table.shape[1])
+        state = self._get_or_create_trace_state(batch=batch, page_table_width=page_table_width)
+        if state.trace_id is None:
+            state = self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
+        assert state.trace_id is not None
+        assert state.logits_tt is not None
 
-        This path avoids any post-trace device allocations by composing sharded
-        logits on the host (no device all-gather).
-        """
-        self._ensure_decode_trace_inputs(batch=int(tokens.shape[0]), page_table_width=int(page_table.shape[1]))
-        if self._decode_trace_id_sampling is None:
-            self._capture_decode_trace_sampling(tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache)
-        assert self._decode_trace_id_sampling is not None
-        assert self._trace_logits_tt is not None
-
-        self._copy_decode_trace_inputs(tokens=tokens, start_pos=start_pos, page_table=page_table)
+        self._copy_decode_trace_inputs(state=state, tokens=tokens, start_pos=start_pos, page_table=page_table)
         if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
             ttnn.synchronize_device(self.device)
-        ttnn.execute_trace(self.device, self._decode_trace_id_sampling, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
 
-        logits_tt = self._trace_logits_tt
+        logits_tt = state.logits_tt
         vocab = int(self.hparams.vocab_size)
-        batch = int(tokens.shape[0])
 
         if not _is_mesh_device(self.device) or not self.lm_head_sharded_vocab:
-            # Bring-up contract: in mesh-replicated mode, read back device 0.
-            # (ttnn.to_torch(mesh_tensor) requires an explicit mesh composer.)
             logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)[..., :vocab]
             logits_flat = logits_torch.reshape(-1, vocab)
             return logits_flat.reshape(batch, 1, vocab).to(dtype=torch.float32).cpu()
