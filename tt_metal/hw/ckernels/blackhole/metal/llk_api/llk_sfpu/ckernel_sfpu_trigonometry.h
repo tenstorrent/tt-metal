@@ -30,13 +30,13 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat s = a * a;
 
     // tan(x) for x in [-PI/4, PI/4]
-    sfpi::vFloat t = 4.38117981e-3f;  // 0x1.1f2000p-8
-    t = t * s + 8.94600598e-5f;  // 0x1.773902p-14
-    t = t * s + 1.08341556e-2f;  // 0x1.63037cp-7
-    t = t * s + 2.12811474e-2f;  // 0x1.5cab9ap-6
-    t = t * s + 5.40602170e-2f;  // 0x1.badc7ep-5
-    t = t * s + 1.33326918e-1f;  // 0x1.110db4p-3
-    t = t * s + 3.33333433e-1f;  // 0x1.110db4p-3
+    sfpi::vFloat t = 0x1.fa9f82p-9f;
+    t = t * s + 0x1.2b404p-10f;
+    t = t * s + 0x1.4787dp-7f;
+    t = t * s + 0x1.620abcp-6f;
+    t = t * s + 0x1.ba5716p-5f;
+    t = t * s + 0x1.111072p-3f;
+    t = t * s + 0x1.555556p-2f;
     t = t * s;
 
     sfpi::vFloat r = t * a + a;
