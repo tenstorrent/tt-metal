@@ -29,7 +29,7 @@ mypy==1.9.0
 -r ../../tests/sweep_framework/requirements-sweeps.txt
 
 # For Mistral-7B-v0.3 demo tests
-protobuf==3.20.2
+protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
 transformers == 4.53.0
