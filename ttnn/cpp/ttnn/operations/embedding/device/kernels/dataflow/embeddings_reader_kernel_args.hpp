@@ -13,19 +13,18 @@ struct EmbeddingsReaderKernelArgs {
     std::uint32_t input_buffer_src_addr;
     std::uint32_t weight_buffer_src_addr;
     std::uint32_t output_buffer_src_addr;
-    std::uint32_t start_shard_id;
-    std::uint32_t next_shard_offset;
-    std::uint32_t num_shards;  // total shards across all cores
-    std::uint32_t index_idx;
+    std::uint32_t input_page_id;
+    std::uint32_t num_of_pages;
 };
 
 struct CompileTimeEmbeddingsReaderKernelArgs {
     uint32_t cb_id_index;
     uint32_t input_page_size;
     uint32_t weight_stick_size;
-    uint32_t elems_per_page;  // Input elems per block
+    uint32_t elems_per_page;
     uint32_t input_block_size_bytes;
-    std::uint32_t input_buf_alignment;
+    uint32_t input_buf_alignment;
+    uint32_t output_cb_index;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<EmbeddingsReaderKernelArgs>);

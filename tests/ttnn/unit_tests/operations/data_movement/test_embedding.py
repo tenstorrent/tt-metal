@@ -7,6 +7,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
+import numpy as np
 
 
 def test_base_case(device):
@@ -548,10 +549,11 @@ def test_embedding_oom(
     [
         ((4,), (2,)),  # 1d
         ((4, 8), (2, 2)),  # 2d small shard shape to test alignment
-        ((4, 8), (2, 4)),  # 2d
-        ((8, 32, 32), (4, 8, 16)),  # 3d
-        ((4, 8, 32, 32), (2, 4, 8, 16)),  # 4d
+        ((4, 64), (2, 32)),  # 2d
+        ((8, 64, 64), (4, 32, 32)),  # 3d
+        ((4, 2, 64, 64), (2, 2, 32, 32)),  # 4d
         ((4, 4, 8, 8, 8), (2, 2, 4, 4, 4)),  # 5d
+        ((8, 32, 32), (8, 16)),  # shard_shape dim < input_shape dim
     ],
 )
 @pytest.mark.parametrize(
@@ -569,17 +571,30 @@ def test_embedding_oom(
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),  # col
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3))]),  # row with offset
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),  # grid
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)), ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(3, 2))]),  # non-contiguous row
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(3, 2)),
+            ]
+        ),  # non-contiguous row
     ],
 )
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("tensors_nd_sharded", ["input_only", "output_only", "input_and_output"])
 def test_nd_sharded_embedding(
     device,
     input_shape,
     input_shard_shape,
     shard_orientation,
     shard_core_grid,
+    output_layout,
+    tensors_nd_sharded,
 ):
-    # Should we use different shard_orientation for input and output NDShardSpec? Not supported by now
+    if output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Tile layout is not supported for ND-sharded tensors")
+        if input_shard_shape[-1] % ttnn.TILE_SIZE != 0:
+            pytest.skip(f"Input shard shape {input_shard_shape} is not a multiple of tile width {ttnn.TILE_SIZE}")
+
     torch.manual_seed(1234)
 
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -589,35 +604,42 @@ def test_nd_sharded_embedding(
     if not compute_grid.contains(shard_core_grid):
         pytest.skip(f"Need {shard_core_grid} grid size to run this test but core grid is {compute_grid}")
 
-    vocabulary_size = 4096
+    vocabulary_size = 32
     # We can test real word scenarios in separate test, but this one is for testing ND tensors
-    hidden_embedding_dim = (
-        16  # 128 is real data, but I reduced it to 16 for testing to reduce memory usage and test ND tensors
-    )
+    hidden_embedding_dim = 16
 
     weights_shape = (vocabulary_size, hidden_embedding_dim)
     output_shape = input_shape + (weights_shape[-1],)
 
     out_shard_shape = input_shard_shape + (hidden_embedding_dim,)  # don't shard width for output tensor yet
 
-    torch_input_tensor = torch.randint(0, weights_shape[0] - 1, input_shape)
-    print("torch_input_tensor.shape: ", torch_input_tensor.shape)
-    torch_weights = torch.randint(0, weights_shape[0], weights_shape).to(torch.bfloat16)
+    numel = int(np.prod(input_shape))
+    torch_input_tensor = (torch.arange(numel, dtype=torch.long) % weights_shape[0]).reshape(input_shape)
+
+    numel = int(np.prod(weights_shape))
+    torch_weights = torch.arange(numel, dtype=torch.int16).reshape(weights_shape).to(torch.bfloat16)
+
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
-    in_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.L1,
-        nd_shard_spec=ttnn.NdShardSpec(input_shard_shape, shard_core_grid, shard_orientation),
-    )
+    if tensors_nd_sharded == "input_only" or tensors_nd_sharded == "input_and_output":
+        in_mem_config = ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(input_shard_shape, shard_core_grid, shard_orientation),
+        )
+    else:
+        in_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    output_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.L1,
-        nd_shard_spec=ttnn.NdShardSpec(
-            out_shard_shape,
-            shard_core_grid,
-            shard_orientation,
-        ),
-    )
+    if tensors_nd_sharded == "output_only" or tensors_nd_sharded == "input_and_output":
+        output_mem_config = ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(
+                out_shard_shape,
+                shard_core_grid,
+                shard_orientation,
+            ),
+        )
+    else:
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=in_mem_config
@@ -630,109 +652,13 @@ def test_nd_sharded_embedding(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    for i in range(1):  # it used to be 2 times operation to check that cache is working
-        output_tensor = ttnn.embedding(
-            input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config
-        )
+
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=output_layout, memory_config=output_mem_config)
+    output_tensor.deallocate(True)  # For some shapes, there isn’t enough L1 memory to store the output tensors.
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=output_layout, memory_config=output_mem_config)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == output_shape
     assert_with_pcc(output_tensor, torch_output_tensor)
-
-
- 
-@pytest.mark.parametrize(
-    "input_shape, input_shard_shape",
-    [
-        ((4, 64), (2, 32)), # 2d small shard shape to test alignment
-        ((8, 64, 64), (4, 32, 32)), # 3d
-        ((4,2, 64, 64), (2,2, 32, 32)), # 4d
-    ],
-)
-@pytest.mark.parametrize(
-    "shard_orientation",
-    [
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
-    ],
-)
-@pytest.mark.parametrize(
-    "shard_core_grid",
-    [
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]), # single core
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))]), # row
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]), # col
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3))]), # row with offset
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]), # grid 
-    ],
-)
-def test_nd_sharded_embedding_tile(
-    device,
-    input_shape,
-    input_shard_shape,
-    shard_orientation,
-    shard_core_grid,
-):
-    # Should we use different shard_orientation for input and output NDShardSpec? Not supported by now
-    torch.manual_seed(1234)
-
-    compute_grid_size = device.compute_with_storage_grid_size()
-    compute_grid = ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-    )
-    if not compute_grid.contains(shard_core_grid):
-        pytest.skip(f"Need {shard_core_grid} grid size to run this test but core grid is {compute_grid}")
-
-    vocabulary_size = 4096
-    # We can test real word scenarios in separate test, but this one is for testing ND tensors
-    # hidden_embedding_dim = 8 causing AssertionError: data are invalid
-    hidden_embedding_dim = (
-        16  # 128 is real data, but I reduced it to 16 for testing to reduce memory usage and test ND tensors
-    )
-
-    weights_shape = (vocabulary_size, hidden_embedding_dim)
-    output_shape = input_shape + (weights_shape[-1],)
-
-    out_shard_shape = input_shard_shape + (hidden_embedding_dim,)  # don't shard width for output tensor yet
-
-    torch_input_tensor = torch.randint(0, weights_shape[0] - 1, input_shape)
-    torch_weights = torch.randint(0, weights_shape[0], weights_shape).to(torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
-
-    in_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.L1,
-        nd_shard_spec=ttnn.NdShardSpec(input_shard_shape, shard_core_grid, shard_orientation),
-    )
-
-    output_mem_config = ttnn.MemoryConfig(
-        buffer_type=ttnn.BufferType.L1,
-        nd_shard_spec=ttnn.NdShardSpec(
-            out_shard_shape,
-            shard_core_grid,
-            shard_orientation,
-        ),
-    )
-
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=in_mem_config
-    )
-
-    weights = ttnn.as_tensor(
-        torch_weights,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    for i in range(1):  # it used to be 2 times operation to check that cache is working
-        output_tensor = ttnn.embedding(
-            input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config
-        )
-    print("output_tensor.layout: ", output_tensor.layout)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert output_tensor.shape == output_shape
-    assert_with_pcc(output_tensor, torch_output_tensor)
-
-   
+    assert device.num_program_cache_entries() == 1
