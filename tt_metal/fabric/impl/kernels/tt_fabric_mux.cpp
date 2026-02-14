@@ -16,6 +16,8 @@
 #include <array>
 // clang-format on
 
+//#include "debug/ring_buffer.h"
+
 constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
 constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
 constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
@@ -84,7 +86,7 @@ void setup_channel(
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<ConnectionTypePtr>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
@@ -177,7 +179,7 @@ void kernel_main() {
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
     // this approach stalls
-/*
+
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
         full_size_channel_worker_interface_zero;
 
@@ -187,6 +189,8 @@ void kernel_main() {
     } tmp;
     tmp.addr = get_stream_scratch_register_address<0>();
 
+    *(reinterpret_cast<volatile tt_reg_ptr uint32_t*>(connection_handshake_address)) = tmp.uladdr;
+
     setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
         &full_size_channels[0],
         &full_size_channel_worker_interface_zero,
@@ -195,13 +199,11 @@ void kernel_main() {
         BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
         channel_base_address,
         connection_info_address,
-        tmp.uladdr,
+        connection_handshake_address,
         sender_flow_control_address,
         StreamId{channel_stream_ids[0]});
 
-    connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
-*/
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
+    for (uint8_t i = 1; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
             &full_size_channel_worker_interfaces[i],
@@ -269,7 +271,6 @@ void kernel_main() {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 // this approach stalls
-/*
                 forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
                     full_size_channels[0],
                     full_size_channel_worker_interface_zero,
@@ -277,8 +278,8 @@ void kernel_main() {
                     full_size_channel_connection_established[0],
                     StreamId{channel_stream_ids[0]},
                     0);
-*/
-                for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
+
+                for (uint8_t channel_id = 1; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
                     forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
                         full_size_channels[channel_id],
                         full_size_channel_worker_interfaces[channel_id],
