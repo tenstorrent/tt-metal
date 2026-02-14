@@ -533,9 +533,15 @@ class TTAttention:
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] tensors
-            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                qkv3, num_heads=H, transpose_key=False
-            )
+            split_kwargs = dict(num_heads=H, transpose_key=False)
+            try:
+                cfg = getattr(self, "program_config", None)
+                split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
+                if split_memcfg is not None:
+                    split_kwargs["memory_config"] = split_memcfg
+            except Exception:
+                pass
+            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, **split_kwargs)
             scale = 1.0 / math.sqrt(D)
             sdpa_kwargs = dict(is_causal=False, scale=scale)
             if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:

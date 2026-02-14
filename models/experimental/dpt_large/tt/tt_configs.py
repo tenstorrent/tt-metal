@@ -274,8 +274,10 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Single-card N300 often exposes a harvested 8x7 worker grid.
-        grid = (8, 7)
+        # Prefer a grid whose Y dimension divides the padded sequence tile count
+        # (DPT-Large @384 pads to 640 tokens => 20 tiles). This enables simple
+        # block-sharded layouts without per-core M remainders.
+        grid = (8, 4)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -349,10 +351,10 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         use_fused_ops=True,
         activation_fused=True,
         l1_resident=True,
-        use_block_sharded=False,
+        use_block_sharded=True,
         sdpa_grid=grid,
-        qkv_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
-        proj_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        qkv_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        proj_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None),
         # When MLP resharding is enabled in tt_modules.py, we run FC1/FC2 with
         # block-sharded activations for better matmul utilization (N300).
         mlp_memcfg=(

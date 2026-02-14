@@ -380,6 +380,24 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
         tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
+        # Stage 2: prefer a sharded token layout in perf mode so program configs
+        # can be enabled for QKV/MLP matmuls and activations can stay in L1.
+        if pad_seq and self.tt_layer_cfg is not None and hasattr(ttnn, "create_sharded_memory_config"):
+            try:
+                grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
+                core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                shape_for_shard = getattr(tokens_tt, "padded_shape", None) or getattr(tokens_tt, "shape", None)
+                shard_mc = ttnn.create_sharded_memory_config(
+                    shape_for_shard,
+                    core_grid=core_grid,
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                tokens_tt = ttnn.to_memory_config(tokens_tt, memory_config=shard_mc, dtype=ttnn.bfloat16)
+            except Exception:
+                # Surface in perf runs (runner asserts fallback counters are zero).
+                inc_vit_backbone_fallback()
+
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
         if pad_seq and orig_len < seq_len:
             mm_opts["valid_seq_len"] = int(orig_len)
@@ -419,6 +437,16 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                         shape = (int(b), 1, int(n), int(c))
                     if len(shape) != 4 or int(shape[1]) != 1:
                         raise RuntimeError(f"Unexpected TT token shape: {shape}")
+
+                    # Readout path expects interleaved tensors (slice/permute are
+                    # not guaranteed to be supported for all shard specs).
+                    if hasattr(ttnn, "to_memory_config") and hasattr(ttnn, "DRAM_MEMORY_CONFIG"):
+                        try:
+                            tokens_tt4 = ttnn.to_memory_config(
+                                tokens_tt4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+                            )
+                        except Exception:
+                            pass
 
                     b, _one, n_total, c = shape
                     if pad_seq and int(orig_len) < int(n_total):
