@@ -15,6 +15,7 @@
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
+#include "ttnn/operations/experimental/scaleout/blitz_decode_pipeline_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.hpp"
@@ -114,6 +115,7 @@ void py_module(nb::module_& mod) {
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);
+    scaleout::detail::bind_blitz_decode_pipeline(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
