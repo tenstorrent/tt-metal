@@ -564,12 +564,9 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(
             tt_logits,
             use_multicore=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
-
-        if not self.args.is_galaxy:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
 
