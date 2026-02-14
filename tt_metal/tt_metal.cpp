@@ -796,17 +796,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    std::unordered_set<CoreCoord> not_done_cores;
-    const auto& hal = MetalContext::instance().hal();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal.get_core_type(index);
-        for (const auto& logical_core : logical_cores) {
-            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            not_done_cores.insert(physical_core);
-        }
-    }
-    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }

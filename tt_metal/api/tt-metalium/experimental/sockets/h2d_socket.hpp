@@ -119,6 +119,12 @@ public:
      */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
+    std::vector<MeshCoreCoord> get_active_cores() const;
+
+    MeshDevice* get_mesh_device() const;
+
+    H2DMode get_h2d_mode() const;
+
 private:
     // Helper struct for pinned buffer NOC address info
     struct PinnedBufferInfo {

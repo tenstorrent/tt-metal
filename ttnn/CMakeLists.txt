@@ -468,6 +468,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/global_semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/hd_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/program_descriptors.cpp
