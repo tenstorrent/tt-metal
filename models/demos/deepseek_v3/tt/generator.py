@@ -1098,8 +1098,9 @@ class DeepseekGenerator:
             batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
         )
 
-        num_layers = self.hf_config.num_hidden_layers
-        return tuple(ttnn.clone(page_table_tt) for _ in range(num_layers))
+        # All layers share the same page table reference for memory efficiency.
+        # This is safe as long as the page table is not modified in-place during layer execution.
+        return tuple(page_table_tt for _ in range(num_layers))
 
     def _convert_vllm_page_table_for_batch(
         self, page_table: torch.Tensor, device: ttnn.Device | ttnn.MeshDevice | None
@@ -1129,6 +1130,8 @@ class DeepseekGenerator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # All layers share the same page table reference for memory efficiency.
+        # This is safe as long as the page table is not modified in-place during layer execution.
         return tuple(page_table_tt for _ in range(self.hf_config.num_hidden_layers))
 
 
