@@ -87,17 +87,23 @@ throws and falls back silently. In perf runs, `program_config_fallback_total` mu
 
 ## Memory Layout & Sharding Strategy (Stage 2)
 
-The encoder uses a hybrid layout strategy to balance sharding benefits with current TTNN op constraints:
+The encoder uses a hybrid layout strategy to balance sharding benefits with current TTNN op constraints.
 
-- **Tokens are block-sharded across transformer blocks** in perf mode (`tt_perf_encoder=True`).
-- **Attention "island"**: TTNN SDPA (`ttnn.transformer.scaled_dot_product_attention`) currently requires
-  **interleaved** operands (it rejects sharded tensors). The attention path therefore:
-  - runs fused QKV and output projection on sharded tokens where possible
-  - converts just-in-time to interleaved for SDPA
-  - converts back to sharded tokens immediately after attention
+- **Tokens are block-sharded between transformer blocks** in perf mode (`tt_perf_encoder=True`).
+- **Transformer-block interleaved island (current bring-up)**: on the current runtime, sharded LayerNorm can
+  hit runtime assertions and/or static circular-buffer vs L1 allocation clashes. To keep perf/trace runs
+  stable and device-only (no CPU fallback), each transformer block:
+  - converts its sharded input tokens to interleaved DRAM
+  - (when safe) deallocates the sharded input buffer to reduce L1 pressure
+  - runs LN + attention + MLP interleaved
+  - re-shards the block output back to the encoder sharding spec
 
-The perf JSON exposes `attn_island_interleave_*` and `attn_island_reshard_*` counters so the conversion
-overhead is visible and measurable.
+This is a Stage-2 bring-up baseline. Stage 3 work will remove this block-level island by enabling stable
+sharded LayerNorm/attention program configs and minimizing layout churn.
+
+The perf JSON exposes `attn_island_interleave_*` / `attn_island_reshard_*` counters for any SDPA-specific
+interleave/reshard conversions. When the transformer-block island is active, attention-specific counters
+may remain `0` because the whole block already runs interleaved.
 
 ## Fused Ops Used
 
