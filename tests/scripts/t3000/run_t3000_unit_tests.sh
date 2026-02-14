@@ -138,7 +138,7 @@ run_t3000_ttnn_udm_tests() {
 }
 
 run_t3000_tt_metal_multiprocess_tests() {
-  local mpi_args="--allow-run-as-root --tag-output"
+  local mpi_args="--allow-run-as-root"
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests
@@ -154,7 +154,7 @@ run_t3000_tt_metal_multiprocess_tests() {
 }
 
 run_t3000_ttnn_multiprocess_tests() {
-  local mpi_args="--allow-run-as-root --tag-output"
+  local mpi_args="--allow-run-as-root"
 
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
 

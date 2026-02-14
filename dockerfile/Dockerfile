@@ -2,11 +2,26 @@
 
 #############################################################
 
-# Accept an argument to specify the Ubuntu version
+# Global build arguments (defined before FROM to be available in all stages)
 ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ARG PYTHON_VERSION
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/bin:$PATH"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
+# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
+# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+RUN umask 000 && uv python install "$PYTHON_VERSION"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -14,13 +29,12 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 #############################################################
 
 FROM base AS ci-build
+
+ARG PYTHON_VERSION
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -72,14 +86,18 @@ RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_
     chmod +x /usr/local/bin/yq
 
 # Set up virtual environment using uv
-# Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
 ENV PYTHON_ENV_DIR=/opt/venv
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN umask 000 && \
+    uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+
+# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh; activate uses $BASH_SOURCE otherwise)
+COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -89,7 +107,8 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
-RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools==80
+# bundle uv with the venv for portable usage
+RUN umask 000 && uv pip install --no-cache-dir uv build numpy setuptools==80
 
 RUN git config --global --add safe.directory '*'
 
@@ -111,7 +130,7 @@ ENV PATH="/usr/local/bin:$PATH"
 
 FROM ci-build AS ci-test
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
@@ -151,8 +170,7 @@ RUN umask 000 && \
 
 FROM ci-test AS dev
 
-
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -214,13 +232,19 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 FROM base AS release
 
+ARG PYTHON_VERSION
+
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+
+# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
+COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -234,11 +258,13 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN uv pip install $WHEEL_FILENAME
+RUN umask 000 && uv pip install $WHEEL_FILENAME
 
 #############################################################
 
 FROM base AS release-models
+
+ARG PYTHON_VERSION
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -263,8 +289,8 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
-    && source $PYTHON_ENV_DIR/bin/activate \
+    && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && source "$PYTHON_ENV_DIR/bin/activate" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
 
 # Ensure the virtual environment is used for all Python-related commands
