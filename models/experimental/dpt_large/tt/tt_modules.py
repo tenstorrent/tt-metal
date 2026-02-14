@@ -206,6 +206,9 @@ def _ttnn_matmul_with_optional_program_config(
         inc_program_config_fallback = None
         strict_program_config_enabled = lambda: False  # type: ignore
 
+    if program_config is None:
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
+
     try:
         return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config, program_config=program_config)
     except TypeError:
@@ -231,30 +234,27 @@ def _ttnn_attention_softmax_with_optional_program_config(
         inc_program_config_fallback = None
         strict_program_config_enabled = lambda: False  # type: ignore
 
+    kwargs = dict(attention_mask=attention_mask, head_size=int(head_size))
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+
+    if program_config is None:
+        return ttnn.transformer.attention_softmax_(x, **kwargs)
+
     try:
-        return ttnn.transformer.attention_softmax_(
-            x,
-            attention_mask=attention_mask,
-            head_size=int(head_size),
-            program_config=program_config,
-            memory_config=memory_config,
-        )
+        return ttnn.transformer.attention_softmax_(x, program_config=program_config, **kwargs)
     except TypeError:
         if callable(inc_program_config_fallback):
             inc_program_config_fallback(op=op_name, reason="kwarg_unsupported")
         if strict_program_config_enabled():
             raise
-        return ttnn.transformer.attention_softmax_(
-            x, attention_mask=attention_mask, head_size=int(head_size), memory_config=memory_config
-        )
+        return ttnn.transformer.attention_softmax_(x, **kwargs)
     except Exception:
         if callable(inc_program_config_fallback):
             inc_program_config_fallback(op=op_name, reason="runtime_rejected")
         if strict_program_config_enabled():
             raise
-        return ttnn.transformer.attention_softmax_(
-            x, attention_mask=attention_mask, head_size=int(head_size), memory_config=memory_config
-        )
+        return ttnn.transformer.attention_softmax_(x, **kwargs)
 
 
 def _ttnn_is_sharded(x) -> bool:
