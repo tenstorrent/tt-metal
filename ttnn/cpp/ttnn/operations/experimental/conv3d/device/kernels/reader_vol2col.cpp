@@ -32,6 +32,26 @@ inline void zeroPad(uint32_t cb_write_addr) {
     }
 }
 
+template <bool IsSharded, typename Reader>
+FORCE_INLINE uint64_t
+get_input_noc_addr(const Reader& reader, uint32_t in_page_idx, uint32_t c_in_offset_bytes, uint32_t in_row_size_bytes) {
+    if constexpr (!IsSharded) {
+        return reader.get_noc_addr(in_page_idx, c_in_offset_bytes);
+    } else {
+        // For width/block sharded RowMajor tensors, a "row" is split into multiple pages of size in_row_size_bytes.
+        // TensorAccessor expects page_id to be flattened over (row_idx, col_page_idx).
+        const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+        const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+
+        const auto& dspec = reader.dspec();
+        const uint32_t width_in_pages = dspec.tensor_shape()[dspec.rank() - 1];
+        ASSERT(col_page_idx < width_in_pages);
+
+        const uint32_t in_page_id = in_page_idx * width_in_pages + col_page_idx;
+        return reader.get_noc_addr(in_page_id, in_offset_bytes);
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
     constexpr uint32_t N = get_compile_time_arg_val(1);
@@ -147,8 +167,12 @@ void kernel_main() {
                                                         static_cast<uint32_t>(t_idx) * H_in_W_in +
                                                         static_cast<uint32_t>(h_idx) * W_in +
                                                         static_cast<uint32_t>(w_idx);
-                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(
-                                                        in_page_idx, c_in_offset_bytes /*offset*/);
+                                                    const uint64_t in_noc_addr =
+                                                        get_input_noc_addr<decltype(in_args)::is_sharded>(
+                                                            in_reader,
+                                                            in_page_idx,
+                                                            c_in_offset_bytes,
+                                                            in_row_size_bytes);
                                                     noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
 
                                                     cb_write_addr += C_in_block_bytes;

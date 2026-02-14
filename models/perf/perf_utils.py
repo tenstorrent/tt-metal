@@ -27,7 +27,9 @@ def merge_perf_files(fname, perf_fname, expected_cols):
     repo = git.Repo(search_parent_directories=True)
 
     merge_res = open(fname, "w")
-    if not repo.head.is_detached:
+    if repo.head.is_detached:
+        merge_res.write("branch: detached \n")
+    else:
         merge_res.write(f"branch: {repo.active_branch} \n")
     else:
         merge_res.write(f"branch: detached HEAD \n")
