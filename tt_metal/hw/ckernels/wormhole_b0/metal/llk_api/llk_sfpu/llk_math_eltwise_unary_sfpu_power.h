@@ -15,7 +15,7 @@ inline void llk_math_eltwise_unary_sfpu_power_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROXIMATE>(ckernel::sfpu::sfpu_unary_pow_init);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_power(
     uint dst_index, uint32_t exponent = 0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
