@@ -105,7 +105,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
         input_page_size,

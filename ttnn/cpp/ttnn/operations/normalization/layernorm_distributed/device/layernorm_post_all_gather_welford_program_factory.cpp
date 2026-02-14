@@ -124,11 +124,11 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto stats_addr = stats.mesh_buffer()->address();
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
+    auto dst_addr = output.mesh_buffer()->address();
 
     uint32_t cb_length = Wt;
 
@@ -544,13 +544,13 @@ void LayerNormPostAllGatherWelfordProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto stats_addr = tensor_args.stats.buffer()->address();
+    const auto input_addr = tensor_args.input.mesh_buffer()->address();
+    const auto stats_addr = tensor_args.stats.mesh_buffer()->address();
     const bool has_gamma = tensor_args.gamma.has_value();
     const bool has_beta = tensor_args.beta.has_value();
-    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().buffer()->address() : 0;
-    const auto beta_addr = has_beta ? tensor_args.beta.value().buffer()->address() : 0;
-    const auto output_addr = output.buffer()->address();
+    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().mesh_buffer()->address() : 0;
+    const auto beta_addr = has_beta ? tensor_args.beta.value().mesh_buffer()->address() : 0;
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);

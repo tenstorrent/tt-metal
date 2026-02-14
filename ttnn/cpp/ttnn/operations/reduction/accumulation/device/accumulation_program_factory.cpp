@@ -192,8 +192,8 @@ void AccumulationProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = cached_program.shared_variables.accumulation_writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto output_buffer_address = tensor_return_value.buffer()->address();
+    auto input_buffer_address = tensor_args.input_tensor.mesh_buffer()->address();
+    auto output_buffer_address = tensor_return_value.mesh_buffer()->address();
     for (const auto& core : cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

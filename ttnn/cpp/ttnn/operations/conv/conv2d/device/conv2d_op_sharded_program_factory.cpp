@@ -471,7 +471,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
     // weight
-    const uint32_t weight_dram_addr = b.buffer()->address();
+    const uint32_t weight_dram_addr = b.mesh_buffer()->address();
 
     // bias
     tt::tt_metal::Buffer* bias_buffer = nullptr;

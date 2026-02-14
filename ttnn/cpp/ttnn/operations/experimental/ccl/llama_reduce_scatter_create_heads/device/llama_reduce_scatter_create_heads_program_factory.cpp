@@ -360,9 +360,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto* input_tensor_buffer = input_tensor.buffer();
 
-    uint32_t q_base_addr = q_output_tensor.buffer()->address();
-    uint32_t k_base_addr = k_output_tensor.buffer()->address();
-    uint32_t v_base_addr = v_output_tensor.buffer()->address();
+    uint32_t q_base_addr = q_output_tensor.mesh_buffer()->address();
+    uint32_t k_base_addr = k_output_tensor.mesh_buffer()->address();
+    uint32_t v_base_addr = v_output_tensor.mesh_buffer()->address();
 
     // cores for q
     const uint32_t q_num_cores = q_output_grid.num_cores();  // number of cores of the output
@@ -869,9 +869,9 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         auto& output_tensor_k = output_tensors.at(1);
         auto& output_tensor_v = output_tensors.at(2);
 
-        uint32_t q_base_addr = output_tensor_q.buffer()->address();
-        uint32_t k_base_addr = output_tensor_k.buffer()->address();
-        uint32_t v_base_addr = output_tensor_v.buffer()->address();
+        uint32_t q_base_addr = output_tensor_q.mesh_buffer()->address();
+        uint32_t k_base_addr = output_tensor_k.mesh_buffer()->address();
+        uint32_t v_base_addr = output_tensor_v.mesh_buffer()->address();
 
         auto* input_tensor_buffer = input_tensor.buffer();
         auto* packet_buffer = intermediate_packet_buffer.buffer();

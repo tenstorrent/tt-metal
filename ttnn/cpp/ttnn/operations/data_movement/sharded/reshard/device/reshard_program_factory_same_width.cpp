@@ -105,7 +105,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
 
     uint32_t remote_core_idx = 0;
     uint32_t remote_core_units_rem = remote_units_per_shard;
-    uint32_t remote_address = remote_tensor.buffer()->address();
+    uint32_t remote_address = remote_tensor.mesh_buffer()->address();
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
     auto bank_id =
         device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
@@ -162,7 +162,7 @@ void ReshardSameWidthFactory<is_reader>::override_runtime_arguments(
     const auto& output = output_tensor;
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
-    uint32_t remote_addr = remote_tensor.buffer()->address();
+    uint32_t remote_addr = remote_tensor.mesh_buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
     for (auto core : cached_program.shared_variables.local_cores) {

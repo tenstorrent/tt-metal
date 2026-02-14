@@ -479,7 +479,7 @@ bool RingTopology::is_last_device_in_line(bool in_clockwise_direction) const {
 }
 
 CclOpTensorConfig::CclOpTensorConfig(const Tensor& tensor) :
-    buffer_start_address(tensor.buffer()->address()),
+    buffer_start_address(tensor.mesh_buffer()->address()),
     df(tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype())) {
     if (tensor.layout() == Layout::TILE) {
         this->tile = tensor.tensor_spec().tile();

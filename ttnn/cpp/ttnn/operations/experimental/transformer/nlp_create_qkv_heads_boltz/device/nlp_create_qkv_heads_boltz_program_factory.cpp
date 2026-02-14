@@ -241,7 +241,7 @@ void NlpCreateHeadsBoltzDeviceOperation::Interleaved::override_runtime_arguments
 
     uint32_t src_kv_buffer_addr = 0;
     if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
+        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().mesh_buffer()->address();
     }
 
     auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();
@@ -339,10 +339,10 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
         num_kv_heads / (read_from_input_tensor_kv ? input_tensor_kv.value().shard_spec().value().num_cores()
                                                   : input_tensor.shard_spec().value().num_cores());
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_base_addr = input_tensor.mesh_buffer()->address();
     uint32_t k_base_addr = 0;
     if (read_from_input_tensor_kv) {
-        k_base_addr = input_tensor_kv.value().buffer()->address();
+        k_base_addr = input_tensor_kv.value().mesh_buffer()->address();
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
@@ -495,10 +495,10 @@ void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_v_output, *dst_buffer_value);
 
-    uint32_t q_base_addr = tensor_args.input_tensor_q.buffer()->address();
+    uint32_t q_base_addr = tensor_args.input_tensor_q.mesh_buffer()->address();
     uint32_t k_base_addr = 0;
     if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        k_base_addr = tensor_args.input_tensor_kv.value().buffer()->address();
+        k_base_addr = tensor_args.input_tensor_kv.value().mesh_buffer()->address();
     } else {
         k_base_addr = q_base_addr + cached_program.shared_variables.per_core_in_q_heads *
                                         cached_program.shared_variables.head_tiles *

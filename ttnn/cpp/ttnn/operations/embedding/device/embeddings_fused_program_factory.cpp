@@ -240,8 +240,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        (std::uint32_t)a.mesh_buffer()->address(),
+        (std::uint32_t)weights.mesh_buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -252,7 +252,7 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     }
 
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
+        (std::uint32_t)output.mesh_buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -309,8 +309,8 @@ void EmbeddingsFusedProgramFactory::override_runtime_arguments(
 
     auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
+    auto input_buffer_address = tensor_args.input_tensor_arg.mesh_buffer()->address();
+    auto weights_buffer_address = tensor_args.weight_arg.mesh_buffer()->address();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);

@@ -927,10 +927,10 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
-    uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
-    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
-    uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
-    uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().buffer()->address() : 0;
+    uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().mesh_buffer()->address() : 0;
+    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().mesh_buffer()->address() : 0;
+    uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().mesh_buffer()->address() : 0;
+    uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().mesh_buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set rt args
@@ -1090,11 +1090,11 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
 
     const auto& cur_pos_tensor = tensor_args.cur_pos_tensor;
     const auto& page_table_tensor = tensor_args.page_table_tensor;
-    uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
+    uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().mesh_buffer()->address() : 0;
 
-    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
-    uint32_t attn_mask_addr = use_attention_mask ? tensor_args.attn_mask.value().buffer()->address() : 0;
-    uint32_t attention_sink_addr = use_attention_sink ? tensor_args.attention_sink.value().buffer()->address() : 0;
+    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().mesh_buffer()->address() : 0;
+    uint32_t attn_mask_addr = use_attention_mask ? tensor_args.attn_mask.value().mesh_buffer()->address() : 0;
+    uint32_t attention_sink_addr = use_attention_sink ? tensor_args.attention_sink.value().mesh_buffer()->address() : 0;
     auto* page_table_buffer = is_paged_attention ? page_table_tensor.value().buffer() : nullptr;
     uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
 

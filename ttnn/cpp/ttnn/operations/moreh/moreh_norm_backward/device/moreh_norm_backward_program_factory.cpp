@@ -223,9 +223,9 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
 
         // reader
         std::vector<uint32_t> reader_rt_args{
-            input.buffer()->address(),
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
+            input.mesh_buffer()->address(),
+            output.mesh_buffer()->address(),
+            output_grad.mesh_buffer()->address(),
             *reinterpret_cast<uint32_t*>(&decimal),
             num_tiles_per_core,
             tile_offset};
@@ -237,7 +237,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
 
         // writer
         std::vector<uint32_t> writer_runtime_args{
-            input_grad.buffer()->address(),
+            input_grad.mesh_buffer()->address(),
             num_tiles_per_core,
             tile_offset,
         };
@@ -274,15 +274,15 @@ void MorehNormBackwardOperation::ProgramFactory::override_runtime_arguments(
         // readers
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-            runtime_args[1] = tensor_args.output.buffer()->address();
-            runtime_args[2] = tensor_args.output_grad.buffer()->address();
+            runtime_args[0] = tensor_args.input.mesh_buffer()->address();
+            runtime_args[1] = tensor_args.output.mesh_buffer()->address();
+            runtime_args[2] = tensor_args.output_grad.mesh_buffer()->address();
         }
 
         // writer
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
     }
 }

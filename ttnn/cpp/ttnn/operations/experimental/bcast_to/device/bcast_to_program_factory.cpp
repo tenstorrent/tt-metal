@@ -83,7 +83,7 @@ void set_or_update_runtime_arguments(
         uint32_t start_tw = start_t % oWt;
 
         std::array reader_runtime_args = {
-            input.buffer()->address(),
+            (uint32_t)input.mesh_buffer()->address(),
             start_n,
             start_c,
             start_t,
@@ -99,7 +99,7 @@ void set_or_update_runtime_arguments(
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         std::array writer_runtime_args = {
-            output.buffer()->address(),
+            (uint32_t)output.mesh_buffer()->address(),
             start_n,
             start_c,
             start_t,

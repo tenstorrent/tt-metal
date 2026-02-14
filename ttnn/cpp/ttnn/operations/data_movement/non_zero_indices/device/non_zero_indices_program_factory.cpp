@@ -68,9 +68,9 @@ NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::cre
     TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
 
     const std::array run_time_args = {
-        (std::uint32_t)input.buffer()->address(),
-        (std::uint32_t)out_num_indices.buffer()->address(),
-        (std::uint32_t)out_indices.buffer()->address(),
+        (std::uint32_t)input.mesh_buffer()->address(),
+        (std::uint32_t)out_num_indices.mesh_buffer()->address(),
+        (std::uint32_t)out_indices.mesh_buffer()->address(),
         (std::uint32_t)aligned_elements,
         (std::uint32_t)actual_elements,
         (std::uint32_t)input.element_size()};
@@ -105,9 +105,9 @@ void NonZeroIndicesProgramFactory::override_runtime_arguments(
     uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
     uint32_t actual_elements = input.padded_shape()[-1];
     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_id, core);
-    runtime_args[0] = input.buffer()->address();
-    runtime_args[1] = out_num_indices.buffer()->address();
-    runtime_args[2] = out_indices.buffer()->address();
+    runtime_args[0] = input.mesh_buffer()->address();
+    runtime_args[1] = out_num_indices.mesh_buffer()->address();
+    runtime_args[2] = out_indices.mesh_buffer()->address();
     runtime_args[3] = aligned_elements;
     runtime_args[4] = actual_elements;
     runtime_args[5] = input.element_size();

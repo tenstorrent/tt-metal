@@ -57,7 +57,7 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
             .set_globally_allocated_address(*output.buffer());
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
-    uint32_t q_start_addr = input_tensor.buffer()->address();
+    uint32_t q_start_addr = input_tensor.mesh_buffer()->address();
 
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -147,7 +147,7 @@ void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
     auto *dst_buffer_query = output.buffer();
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *dst_buffer_query);
 
-    uint32_t q_start_addr = input_tensor.buffer()->address();
+    uint32_t q_start_addr = input_tensor.mesh_buffer()->address();
 
     auto& reader_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);

@@ -207,7 +207,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
              num_cols_read % Wt,
              num_cols_per_core,
@@ -218,7 +218,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 num_cols_per_core,  // number of tiles to write
                 num_cols_read       // output tile start index
             });

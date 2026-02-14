@@ -277,7 +277,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     }
 
     uint32_t src_addr = src0_buffer->address();
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
+    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().mesh_buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     uint32_t curr_row = 0;
@@ -382,9 +382,9 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     const SoftmaxParams& attributes,
     const SoftmaxInputs& tensor_args,
     Tensor& output_tensor) {
-    auto src_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto mask_buffer_address = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
-    auto dst_buffer_address = output_tensor.buffer()->address();
+    auto src_buffer_address = tensor_args.input_tensor.mesh_buffer()->address();
+    auto mask_buffer_address = tensor_args.mask.has_value() ? tensor_args.mask.value().mesh_buffer()->address() : 0;
+    auto dst_buffer_address = output_tensor.mesh_buffer()->address();
 
     const auto shape = tensor_args.input_tensor.padded_shape();
     const uint32_t W = shape[-1], H = (tensor_args.input_tensor.physical_volume() / (shape[0] * shape[-1])),

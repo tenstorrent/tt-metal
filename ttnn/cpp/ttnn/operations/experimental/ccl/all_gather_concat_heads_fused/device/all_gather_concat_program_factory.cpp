@@ -453,7 +453,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // tensor_address0
+            input_tensor.mesh_buffer()->address(),  // tensor_address0
             operation_attributes.semaphore.address(),
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,            // num_tiles_to_read
@@ -473,7 +473,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         std::vector<uint32_t> writer_rt_args = {
-            temp_tensor.buffer()->address(),           // tensor_address0
+            temp_tensor.mesh_buffer()->address(),      // tensor_address0
             operation_attributes.semaphore.address(),  // out_ready_sem_bank_addr (absolute address)
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,             // num_tiles_to_read
@@ -540,7 +540,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     }
 
     /* rt for concat kernels*/
-    uint32_t q_start_addr = temp_tensor.buffer()->address();
+    uint32_t q_start_addr = temp_tensor.mesh_buffer()->address();
     for (uint32_t i = 0; i < llama_configuration.concat_num_cores; ++i) {
         uint32_t second_half_core = 1;
         if (i % 2 == 0) {
@@ -568,7 +568,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
             std::vector<uint32_t> reader_runtime_args;
             reader_runtime_args.reserve(6 + (2 * in_num_cores));
             reader_runtime_args = {
-                q_start_addr, input_tensor.buffer()->address(), concat_semaphore_id, concat_semaphore_id2};
+                q_start_addr, input_tensor.mesh_buffer()->address(), concat_semaphore_id, concat_semaphore_id2};
 
             reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
             reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
@@ -617,11 +617,11 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
         auto& worker_writer_sender_runtime_args_by_core =
             GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
 
-        uint32_t q_base_addr = temp_tensor.buffer()->address();
+        uint32_t q_base_addr = temp_tensor.mesh_buffer()->address();
         uint32_t q_start_addr = q_base_addr;
         for (const auto& core : shared_vars.sender_worker_cores) {
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
             worker_reader_sender_runtime_args[1] = semaphore.address();
 
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
@@ -633,7 +633,7 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
             const auto& core = shared_vars.cores[i];
             auto& concat_reader_runtime_args = GetRuntimeArgs(program, shared_vars.concat_reader_kernel_id, core);
             concat_reader_runtime_args[0] = q_start_addr;
-            concat_reader_runtime_args[1] = input.buffer()->address();
+            concat_reader_runtime_args[1] = input.mesh_buffer()->address();
         }
     }
 }

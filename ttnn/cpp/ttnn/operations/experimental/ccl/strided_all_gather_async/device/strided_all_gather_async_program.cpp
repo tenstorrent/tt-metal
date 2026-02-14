@@ -175,12 +175,12 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
                 auto out_ready_semaphore = attributes.semaphore.at(dir);
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.mesh_buffer()->address();
                 worker_reader_sender_runtime_args[9] = out_ready_semaphore.address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = output.mesh_buffer()->address();
                 worker_writer_sender_runtime_args[11] = out_ready_semaphore.address();
 
                 core_idx++;
@@ -530,16 +530,16 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),   // input_tensor_address
-                    output_tensor.buffer()->address(),  // output_tensor_address
-                    input_tensor_Wt,                    // width in tiles of the output shard
-                    input_tensor_Ht,                    // height in tiles of the output shard
-                    output_tensor_Wt,                   // width in tiles of entire output
-                    batch_head_size,                    // product of the first two dims
-                    global_worker_id,                   //
-                    tiles_per_core,                     //
-                    ring_size,                          // ring_size
-                    semaphore.at(dir).address(),        // out_ready_semaphore_forward
+                    input_tensor.mesh_buffer()->address(),   // input_tensor_address
+                    output_tensor.mesh_buffer()->address(),  // output_tensor_address
+                    input_tensor_Wt,                         // width in tiles of the output shard
+                    input_tensor_Ht,                         // height in tiles of the output shard
+                    output_tensor_Wt,                        // width in tiles of entire output
+                    batch_head_size,                         // product of the first two dims
+                    global_worker_id,                        //
+                    tiles_per_core,                          //
+                    ring_size,                               // ring_size
+                    semaphore.at(dir).address(),             // out_ready_semaphore_forward
                     mm_block_wt_val,
                     mm_block_ht_val,
                     mm_cores_y_val};
@@ -613,18 +613,18 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),  // output_tensor_address
-                    input_tensor_Wt,                    // width in tiles of the input shard
-                    input_tensor_Ht,                    // height in tiles of the input shard
-                    output_tensor_Wt,                   // width in tiles of entire output
-                    output_tensor_Ht,                   // height in tiles of entire output
-                    batch_head_size,                    // product of the first two dims
-                    global_worker_id,                   //
-                    tiles_per_core,                     //
-                    virtual_core.x,                     // out_ready_sem_noc0_x
-                    virtual_core.y,                     // out_ready_sem_noc0_y
-                    ring_size,                          // ring_size
-                    semaphore.at(dir).address(),        // out_ready_semaphore_forward
+                    output_tensor.mesh_buffer()->address(),  // output_tensor_address
+                    input_tensor_Wt,                         // width in tiles of the input shard
+                    input_tensor_Ht,                         // height in tiles of the input shard
+                    output_tensor_Wt,                        // width in tiles of entire output
+                    output_tensor_Ht,                        // height in tiles of entire output
+                    batch_head_size,                         // product of the first two dims
+                    global_worker_id,                        //
+                    tiles_per_core,                          //
+                    virtual_core.x,                          // out_ready_sem_noc0_x
+                    virtual_core.y,                          // out_ready_sem_noc0_y
+                    ring_size,                               // ring_size
+                    semaphore.at(dir).address(),             // out_ready_semaphore_forward
                     opposite_core_coord.x,
                     opposite_core_coord.y,
                     mm_block_wt_val,

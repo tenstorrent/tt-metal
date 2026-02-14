@@ -483,14 +483,14 @@ JointSDPAProgramFactory::cached_program_t JointSDPAProgramFactory::create(
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
-    uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
+    uint32_t q_addr = input_tensor_q.mesh_buffer()->address();
+    uint32_t k_addr = input_tensor_k.mesh_buffer()->address();
+    uint32_t v_addr = input_tensor_v.mesh_buffer()->address();
+    uint32_t joint_q_addr = joint_tensor_q.mesh_buffer()->address();
+    uint32_t joint_k_addr = joint_tensor_k.mesh_buffer()->address();
+    uint32_t joint_v_addr = joint_tensor_v.mesh_buffer()->address();
+    uint32_t out_addr = output_tensor.mesh_buffer()->address();
+    uint32_t joint_out_addr = joint_output_tensor.mesh_buffer()->address();
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {

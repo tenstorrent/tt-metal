@@ -358,10 +358,10 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
-    std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
+    std::vector<uint32_t> reader_runtime_args = {scores.mesh_buffer()->address(), bias.mesh_buffer()->address(), 0, 0};
     std::vector<uint32_t> compute_runtime_args = {0, 0};
     std::vector<uint32_t> writer_runtime_args = {
-        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0};
+        output_weights.mesh_buffer()->address(), output_indices.mesh_buffer()->address(), 0, 0};
 
     uint32_t start_height_tile = 0;
     uint32_t end_height_tile = 0;
@@ -407,11 +407,11 @@ void DeepseekGroupedGateDeviceOperation::ProgramFactory::override_runtime_argume
     auto& cores = cached_program.shared_variables.cores;
     for (const auto& core : cores) {
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_runtime_args[0] = tensor_args.scores.buffer()->address();
-        reader_runtime_args[1] = tensor_args.bias.buffer()->address();
+        reader_runtime_args[0] = tensor_args.scores.mesh_buffer()->address();
+        reader_runtime_args[1] = tensor_args.bias.mesh_buffer()->address();
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_runtime_args[0] = tensor_return_value[0].buffer()->address();
-        writer_runtime_args[1] = tensor_return_value[1].buffer()->address();
+        writer_runtime_args[0] = tensor_return_value[0].mesh_buffer()->address();
+        writer_runtime_args[1] = tensor_return_value[1].mesh_buffer()->address();
     }
 }
 

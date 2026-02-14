@@ -164,7 +164,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         }
         // reader
         const std::vector<uint32_t> reader_runtime_args{
-            input.buffer()->address(),
+            input.mesh_buffer()->address(),
             static_cast<uint32_t>(is_dram(input)),
             num_units_per_core,
             Wt,
@@ -174,7 +174,11 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
 
         // writer
         const std::vector<uint32_t> writer_runtime_args{
-            output.buffer()->address(), static_cast<uint32_t>(is_dram(output)), num_units_per_core, Wt, tile_offset};
+            output.mesh_buffer()->address(),
+            static_cast<uint32_t>(is_dram(output)),
+            num_units_per_core,
+            Wt,
+            tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
@@ -207,13 +211,13 @@ void MorehNormOperation::ProgramFactoryWOther::override_runtime_arguments(
         // readers
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
+            runtime_args[0] = tensor_args.input.mesh_buffer()->address();
         }
 
         // writer
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
     }
 }

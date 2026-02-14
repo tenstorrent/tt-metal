@@ -445,7 +445,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),  // tensor_address0
+            tensor_args.input_tensor.mesh_buffer()->address(),  // tensor_address0
             in_row_tiles,
             in_col_tiles,
             input_row_device_stride,
@@ -465,8 +465,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         bool wait_output_semaphore = (link == 0) && !enable_async_output;
         bool reset_global_semaphore = (link == 0) && !enable_async_output;
         std::vector<uint32_t> writer_rt_args = {
-            tensor_args.persistent_intermediate_buffer.buffer()->address(),
-            tensor_args.persistent_output_buffer.buffer()->address(),
+            tensor_args.persistent_intermediate_buffer.mesh_buffer()->address(),
+            tensor_args.persistent_output_buffer.mesh_buffer()->address(),
             semaphore.address(),
             out_row_tiles,
             out_col_tiles,
@@ -520,8 +520,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
 
             // Set receiver runtime args
             std::vector<uint32_t> receiver_reader_rt_args = {
-                tensor_args.persistent_intermediate_buffer.buffer()->address(),
-                tensor_args.input_tensor.buffer()->address(),
+                tensor_args.persistent_intermediate_buffer.mesh_buffer()->address(),
+                tensor_args.input_tensor.mesh_buffer()->address(),
                 semaphore.address(),  // Global semaphore for sender i
                 in_row_tiles,
                 in_col_tiles,
@@ -539,7 +539,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
             tt::tt_metal::SetRuntimeArgs(program, receiver_reader_kernel_id, {core}, receiver_reader_rt_args);
 
             std::vector<uint32_t> receiver_writer_rt_args = {
-                tensor_args.persistent_output_buffer.buffer()->address(),
+                tensor_args.persistent_output_buffer.mesh_buffer()->address(),
                 in_row_tiles,
                 in_col_tiles,
                 receiver_input_row_device_stride,
@@ -594,23 +594,23 @@ void AllToAllAsyncProgram::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // Update reader runtime args
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.mesh_buffer()->address();
 
             // Update writer runtime args
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = tensor_args.persistent_intermediate_buffer.buffer()->address();
-            worker_writer_sender_runtime_args[1] = tensor_args.persistent_output_buffer.buffer()->address();
+            worker_writer_sender_runtime_args[0] = tensor_args.persistent_intermediate_buffer.mesh_buffer()->address();
+            worker_writer_sender_runtime_args[1] = tensor_args.persistent_output_buffer.mesh_buffer()->address();
             worker_writer_sender_runtime_args[2] = operation_attributes.semaphore.address();
         }
 
         // Update receiver runtime args
         for (const auto& core : shared_vars.receiver_worker_cores) {
             auto& receiver_writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-            receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.buffer()->address();
+            receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.mesh_buffer()->address();
 
             auto& receiver_reader_runtime_args = receiver_reader_runtime_args_by_core[core.x][core.y];
-            receiver_reader_runtime_args[0] = tensor_args.persistent_intermediate_buffer.buffer()->address();
-            receiver_reader_runtime_args[1] = tensor_args.input_tensor.buffer()->address();
+            receiver_reader_runtime_args[0] = tensor_args.persistent_intermediate_buffer.mesh_buffer()->address();
+            receiver_reader_runtime_args[1] = tensor_args.input_tensor.mesh_buffer()->address();
             receiver_reader_runtime_args[2] = operation_attributes.semaphore.address();
         }
     }

@@ -92,10 +92,10 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
         });
 
     // Calculate runtime arguments for reader kernel
-    uint32_t src_addr = input.buffer()->address();
+    uint32_t src_addr = input.mesh_buffer()->address();
     uint32_t height_per_core = input.logical_shape()[0] / TILE_HEIGHT;
 
-    uint32_t dst_addr = output.buffer()->address();
+    uint32_t dst_addr = output.mesh_buffer()->address();
     uint32_t core_idx = 0;
 
     // Set per-core writer args based on tile responsibility

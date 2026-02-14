@@ -1107,7 +1107,7 @@ void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_ar
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             writer_runtime_args[1] = src_buffer_b->address();
             if (bias_tensor.has_value()) {
-                writer_runtime_args[2] = bias_tensor.value().buffer()->address();
+                writer_runtime_args[2] = bias_tensor.value().mesh_buffer()->address();
             } else {
                 writer_runtime_args[2] = 0;
             }

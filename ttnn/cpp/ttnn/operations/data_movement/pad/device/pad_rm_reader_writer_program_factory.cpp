@@ -40,7 +40,7 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-    auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
+    auto pad_value_const_tensor_addr = pad_value_const_tensor.mesh_buffer()->address();
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -120,7 +120,7 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
         padded_row_diff_size_nbytes,
-        pad_value_const_tensor_addr,
+        (uint32_t)pad_value_const_tensor_addr,
         pad_value_const_buffer_nbytes,
         packed_pad_value,
         start_src_stick_id,

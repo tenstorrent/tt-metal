@@ -239,7 +239,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     log_debug(
         tt::LogOp,
         "Metadata tensor buffer address: {} size: {}",
-        metadata_tensor.buffer()->address(),
+        metadata_tensor.mesh_buffer()->address(),
         metadata_tensor.buffer()->size());
 
     // drain_sync_tilizer_core is resolved in the invoke function (all_to_all_dispatch_metadata.cpp)
@@ -652,13 +652,13 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             .defines = writer_defines});
 
     std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        scores_tensor.buffer()->address(),
-        mapping_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        scores_out_tensor.buffer()->address(),
+        input_tensor.mesh_buffer()->address(),
+        indices_tensor.mesh_buffer()->address(),
+        scores_tensor.mesh_buffer()->address(),
+        mapping_tensor.mesh_buffer()->address(),
+        output_tensor.mesh_buffer()->address(),
+        metadata_tensor.mesh_buffer()->address(),
+        scores_out_tensor.mesh_buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
     };
 
@@ -683,7 +683,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     log_debug(
         tt::LogOp,
         "Address comparison - metadata_tensor: {} (size: {}), cross_device_semaphore: {}, init_semaphore: {}",
-        metadata_tensor.buffer()->address(),
+        metadata_tensor.mesh_buffer()->address(),
         metadata_tensor.buffer()->size(),
         cross_device_semaphore.address(),
         init_semaphore.has_value() ? init_semaphore->address() : 0);
@@ -730,13 +730,13 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         bool is_termination_master = (worker_idx_within_link == 0);
 
         std::vector<uint32_t> writer_runtime_args = {
-            input_tensor.buffer()->address(),
-            indices_tensor.buffer()->address(),
-            scores_tensor.buffer()->address(),
-            mapping_tensor.buffer()->address(),
-            output_tensor.buffer()->address(),
-            metadata_tensor.buffer()->address(),
-            scores_out_tensor.buffer()->address(),
+            input_tensor.mesh_buffer()->address(),
+            indices_tensor.mesh_buffer()->address(),
+            scores_tensor.mesh_buffer()->address(),
+            mapping_tensor.mesh_buffer()->address(),
+            output_tensor.mesh_buffer()->address(),
+            metadata_tensor.mesh_buffer()->address(),
+            scores_out_tensor.mesh_buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             init_semaphore.has_value() ? (uint32_t)init_semaphore->address() : 0,  // 0 when skipping init semaphore
         };
@@ -912,22 +912,22 @@ void AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::ov
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
-            reader_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
-            reader_runtime_args.at(4) = output_tensor.buffer()->address();
-            reader_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(6) = scores_out_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.expert_scores_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(3) = tensor_args.expert_mapping_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(4) = output_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(5) = metadata_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(6) = scores_out_tensor.mesh_buffer()->address();
             reader_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
 
-            writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            writer_runtime_args.at(2) = tensor_args.expert_scores_tensor.buffer()->address();
-            writer_runtime_args.at(3) = tensor_args.expert_mapping_tensor.buffer()->address();
-            writer_runtime_args.at(4) = output_tensor.buffer()->address();
-            writer_runtime_args.at(5) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(6) = scores_out_tensor.buffer()->address();
+            writer_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(2) = tensor_args.expert_scores_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(3) = tensor_args.expert_mapping_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(4) = output_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(5) = metadata_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(6) = scores_out_tensor.mesh_buffer()->address();
             writer_runtime_args.at(7) = (uint32_t)cross_device_semaphore.address();
             // init_semaphore is optional - only update if it exists (not in persistent mode)
             if (shared_variables.init_semaphore.has_value()) {

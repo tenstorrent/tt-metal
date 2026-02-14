@@ -164,7 +164,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             reader_kernel_id,
             core,
             {
-                a.buffer()->address(),
+                a.mesh_buffer()->address(),
                 num_tensor_tiles_per_core,
                 num_tiles_read  // tile index of row to start reading from
             });
@@ -174,7 +174,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
                 num_tiles_read / out_dim_divider              // output tile start index
             });

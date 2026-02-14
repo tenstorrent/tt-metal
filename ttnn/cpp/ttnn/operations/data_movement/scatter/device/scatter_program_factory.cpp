@@ -82,10 +82,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp";
 
     std::vector<uint32_t> compile_time_args{
-        input_tensor.buffer()->address(),
-        index_tensor.buffer()->address(),
-        src_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
+        input_tensor.mesh_buffer()->address(),
+        index_tensor.mesh_buffer()->address(),
+        src_tensor.mesh_buffer()->address(),
+        output_tensor.mesh_buffer()->address(),
         static_cast<uint32_t>(ScatterCB::INPUT),
         static_cast<uint32_t>(ScatterCB::INDEX),
         static_cast<uint32_t>(ScatterCB::SRC),
@@ -180,10 +180,10 @@ void ScatterProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto index_buffer_address = tensor_args.index_tensor.buffer()->address();
-    auto source_buffer_address = tensor_args.src_tensor.buffer()->address();
-    auto output_buffer_address = output_tensor.buffer()->address();
+    auto input_buffer_address = tensor_args.input_tensor.mesh_buffer()->address();
+    auto index_buffer_address = tensor_args.index_tensor.mesh_buffer()->address();
+    auto source_buffer_address = tensor_args.src_tensor.mesh_buffer()->address();
+    auto output_buffer_address = output_tensor.mesh_buffer()->address();
     for (const auto& core : cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

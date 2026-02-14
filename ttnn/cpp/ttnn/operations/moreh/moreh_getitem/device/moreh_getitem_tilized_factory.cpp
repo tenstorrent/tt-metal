@@ -95,7 +95,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
-            index_info[dim].address = index.buffer()->address();
+            index_info[dim].address = index.mesh_buffer()->address();
             index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index.buffer());
             index_info[dim].unit_size = index.element_size();
         }
@@ -229,7 +229,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             std::vector<uint32_t> reader_args = {
                 // buffers
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 index_info[0].address,
                 index_info[1].address,
                 index_info[2].address,
@@ -288,7 +288,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             std::vector<uint32_t> writer_args = {
                 // buffers
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
 
                 // output
                 output_5d_shape_without_padding[1],
@@ -327,7 +327,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
-        index_info[dim].address = index_tensors[i].buffer()->address();
+        index_info[dim].address = index_tensors[i].mesh_buffer()->address();
         index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
@@ -449,7 +449,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         std::vector<uint32_t> reader_args = {
             // buffers
-            input.buffer()->address(),
+            input.mesh_buffer()->address(),
             index_info[0].address,
             index_info[1].address,
             index_info[2].address,
@@ -506,7 +506,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         };
         std::vector<uint32_t> writer_args = {
             // buffers
-            output.buffer()->address(),
+            output.mesh_buffer()->address(),
 
             // output
             output_5d_shape_without_padding[1],
@@ -557,7 +557,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
         auto dim = index_dims[i] + input_dim_offset;
         const auto& index_buffer = index_tensors[i];
 
-        index_info[dim].address = index_buffer.buffer()->address();
+        index_info[dim].address = index_buffer.mesh_buffer()->address();
     }
 
     for (uint32_t icore = 0; icore < num_cores; icore++) {

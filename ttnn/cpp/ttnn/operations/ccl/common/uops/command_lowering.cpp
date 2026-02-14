@@ -95,7 +95,7 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     TT_FATAL(tensor.is_sharded(), "Only tensor slices for sharded tensors are able to be lowered to noc reads/writes");
 
     ttnn::ccl::cmd::HostCclCommandNocTransferBurst noc_transfer_burst;
-    noc_transfer_burst.bank_base_address = tensor.buffer()->address();
+    noc_transfer_burst.bank_base_address = tensor.mesh_buffer()->address();
 
     const auto& tensor_slice = std::get<ttnn::ccl::v2::TensorSlice>(command.command_args);
     auto page_size = tensor.buffer()->page_size();

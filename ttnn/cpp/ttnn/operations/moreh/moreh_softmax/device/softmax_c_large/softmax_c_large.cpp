@@ -140,10 +140,10 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         }
 
         std::vector<uint32_t> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            input.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         std::vector<uint32_t> writer_args = {
-            output.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            output.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -168,11 +168,11 @@ void MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::override_runtime_argument
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
+            runtime_args[0] = tensor_args.input.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
     }
 }

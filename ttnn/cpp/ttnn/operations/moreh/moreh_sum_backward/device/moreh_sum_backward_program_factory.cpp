@@ -204,7 +204,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(output_grad.buffer()->address());
+        reader_rt_args.push_back(output_grad.mesh_buffer()->address());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);
         reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
@@ -214,7 +214,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
+            program, writer_kernel_id, core, {input_grad.mesh_buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

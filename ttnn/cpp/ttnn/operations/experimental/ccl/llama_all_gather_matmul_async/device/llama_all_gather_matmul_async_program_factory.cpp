@@ -293,7 +293,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         {args.semaphore.address(),  // sem_address
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
-         aggregated_tensor.buffer()->address(),
+         aggregated_tensor.mesh_buffer()->address(),
          static_cast<uint32_t>(bbox_physical_start_core.x),
          static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox_physical_end_core.x),
@@ -323,7 +323,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             {args.semaphore.address(),
              i,
              ring_index,
-             aggregated_tensor.buffer()->address(),
+             aggregated_tensor.mesh_buffer()->address(),
              static_cast<uint32_t>(bbox_physical_start_core.x),
              static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox_physical_end_core.x),
@@ -397,17 +397,17 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input0.buffer()->address(),                 // input tensor_address0
-            intermediate_tensor.buffer()->address(),    // output tensor_address0
-            input_tensor_shard_num_pages,               // num_tiles_per_core
-            worker_num_tiles_to_read,                   // num_tiles_to_read
-            input_first_core_tile_start_offset,         // first_core_tile_start_offset
-            intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
-            input_tensor_cores_x.size(),                // num_cores it reads from
-            ring_index,                                 // ring_index
-            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
-            drain_sync_core.x,                          // out_ready_sem_noc0_x
-            drain_sync_core.y,                          // out_ready_sem_noc0_y
+            input0.mesh_buffer()->address(),               // input tensor_address0
+            intermediate_tensor.mesh_buffer()->address(),  // output tensor_address0
+            input_tensor_shard_num_pages,                  // num_tiles_per_core
+            worker_num_tiles_to_read,                      // num_tiles_to_read
+            input_first_core_tile_start_offset,            // first_core_tile_start_offset
+            intermediate_first_core_tile_start_offset,     // intermediate_first_core_tile_start_offset
+            input_tensor_cores_x.size(),                   // num_cores it reads from
+            ring_index,                                    // ring_index
+            args.semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
+            drain_sync_core.x,                             // out_ready_sem_noc0_x
+            drain_sync_core.y,                             // out_ready_sem_noc0_y
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -424,14 +424,14 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
         // Set writer runtime args
         std::vector<uint32_t> writer_rt_args = {
-            intermediate_tensor.buffer()->address(),    // tensor_address0
-            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
-            intermediate_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,                   // num_tiles_to_read
-            intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
-            intermediate_tensor_cores_x.size(),         // num_cores it writes to
-            drain_sync_core.x,                          // out_ready_sem_noc0_x
-            drain_sync_core.y,                          // out_ready_sem_noc0_y
+            intermediate_tensor.mesh_buffer()->address(),  // tensor_address0
+            args.semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
+            intermediate_tensor_shard_num_pages,           // num_tiles_per_core
+            worker_num_tiles_to_read,                      // num_tiles_to_read
+            intermediate_first_core_tile_start_offset,     // first_core_tile_start_offset
+            intermediate_tensor_cores_x.size(),            // num_cores it writes to
+            drain_sync_core.x,                             // out_ready_sem_noc0_x
+            drain_sync_core.y,                             // out_ready_sem_noc0_y
         };
         writer_rt_args.insert(
             writer_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
@@ -516,12 +516,12 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input0.buffer()->address();
-            worker_reader_sender_runtime_args[1] = intermediate_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input0.mesh_buffer()->address();
+            worker_reader_sender_runtime_args[1] = intermediate_tensor.mesh_buffer()->address();
             worker_reader_sender_runtime_args[8] = args.semaphore.address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = intermediate_tensor.buffer()->address();
+            worker_writer_sender_runtime_args[0] = intermediate_tensor.mesh_buffer()->address();
             worker_writer_sender_runtime_args[1] = args.semaphore.address();
         }
 
@@ -530,7 +530,7 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.intermediate_cores_vec) {
             auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
             worker_receiver_runtime_args[0] = args.semaphore.address();
-            worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
+            worker_receiver_runtime_args[3] = aggregated_tensor.mesh_buffer()->address();
         }
 
         ttnn::operations::llama_matmul::override_agmm_fusion_program_parameters(

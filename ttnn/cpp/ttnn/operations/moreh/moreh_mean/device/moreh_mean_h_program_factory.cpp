@@ -154,7 +154,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              (tile_offset / Wt * HtWt) + (tile_offset % Wt),
              tile_offset % Wt,
              units_per_core,
@@ -165,7 +165,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 units_per_core,  // number of tiles to write
                 tile_offset      // output tile start index
             });
@@ -184,8 +184,8 @@ void MorehMeanOperation::MorehMeanHFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = tensor_return_value.buffer()->address();
+    auto src_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto dst_buffer_address = tensor_return_value.mesh_buffer()->address();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};

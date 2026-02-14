@@ -1196,7 +1196,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
 
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.buffer()->address()),
+        static_cast<uint32_t>(input_tensor.mesh_buffer()->address()),
         static_cast<uint32_t>(slices.size()),
         num_pages_per_packet,
         this->op_config.get_page_size()};

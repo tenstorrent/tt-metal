@@ -142,7 +142,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              num_reduce_input_tile,
              num_tiles_per_core,
              tile_offset,
@@ -150,7 +150,8 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
              reduce_tile_size,
              inner_tile_size});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_per_core, tile_offset});
+        SetRuntimeArgs(
+            program, writer_kernel_id, core, {output.mesh_buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

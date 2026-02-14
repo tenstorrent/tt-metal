@@ -190,7 +190,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         }
 
         all_runtime_args = {
-            a.buffer()->address(),
+            a.mesh_buffer()->address(),
             num_pages_per_core,
             input_page_offset,
         };
@@ -204,8 +204,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         all_runtime_args.insert(all_runtime_args.end(), output_id_per_dim.begin(), output_id_per_dim.end());
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args);
-        all_runtime_args[0] = output.buffer()->address();  // change input addr to output addr before setting writer
-                                                           // args
+        all_runtime_args[0] = output.mesh_buffer()->address();  // change input addr to output addr before setting
+                                                                // writer args
         all_runtime_args[2] =
             output_page_offset;  // change input page offset to output page offset before setting writer args
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args);

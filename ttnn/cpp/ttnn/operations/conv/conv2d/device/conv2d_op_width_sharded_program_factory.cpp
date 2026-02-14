@@ -605,7 +605,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
     uint32_t bias_base_address = 0;
     if (bias) {
-        bias_base_address = bias.value().buffer()->address();
+        bias_base_address = bias.value().mesh_buffer()->address();
     }
     auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
     auto total_num_cores = all_reader_cores.size();
@@ -633,7 +633,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
                 weights_kernel_id,
                 CoreCoord(core_x, core_y),
                 {core_index * weight_block_w_ntiles,
-                 b.buffer()->address(),
+                 b.mesh_buffer()->address(),
                  bias_base_address,
                  (uint32_t)(core_index < output_num_cores)});
         }
@@ -673,7 +673,7 @@ void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
         auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
         this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
         if (shared_variables.has_bias) {
-            this_core_weights_kernel_runtime_args[2] = tensor_args.bias.value().buffer()->address();
+            this_core_weights_kernel_runtime_args[2] = tensor_args.bias.value().mesh_buffer()->address();
         }
     }
 

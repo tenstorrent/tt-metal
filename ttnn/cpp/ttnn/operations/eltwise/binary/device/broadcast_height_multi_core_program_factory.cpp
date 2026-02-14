@@ -158,21 +158,21 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
             binary_reader_kernel_id,
             core,
             {
-                a.buffer()->address(),      // 0
-                0,                          // 1
-                0,                          // 2
-                num_tensor_tiles_per_core,  // 3
-                b->buffer()->address(),     // 4
-                0,                          // 5
-                0,                          // 6
-                num_btensor_tiles,          // 7
-                num_tensor_tiles_per_core,  // 8
-                NC,                         // 9
-                Ht_per_core,                // 10
-                Wt,                         // 11
-                bnc1,                       // 12
-                num_Wtiles_read,            // 13
-                Ht * Wt,                    // 14
+                a.mesh_buffer()->address(),  // 0
+                0,                           // 1
+                0,                           // 2
+                num_tensor_tiles_per_core,   // 3
+                b->buffer()->address(),      // 4
+                0,                           // 5
+                0,                           // 6
+                num_btensor_tiles,           // 7
+                num_tensor_tiles_per_core,   // 8
+                NC,                          // 9
+                Ht_per_core,                 // 10
+                Wt,                          // 11
+                bnc1,                        // 12
+                num_Wtiles_read,             // 13
+                Ht * Wt,                     // 14
             });
 
         tt_metal::SetRuntimeArgs(
@@ -190,7 +190,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
             unary_writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 0,
                 0,
                 Ht_per_core,

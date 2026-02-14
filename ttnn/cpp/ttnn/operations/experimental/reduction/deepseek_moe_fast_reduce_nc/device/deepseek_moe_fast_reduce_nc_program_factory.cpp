@@ -245,13 +245,13 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         uint32_t start_pages_read_in_row = start_tiles_read % input_tensor_Wt;
 
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(), start_tiles_read, start_tiles_to_read};
+            input_tensor.mesh_buffer()->address(), start_tiles_read, start_tiles_to_read};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {
             start_tiles_read, start_tiles_to_read, start_slice_row_offset, start_pages_read_in_row};
         for (const ttnn::Tensor& output_tensor : output_tensors) {
-            writer_rt_args.push_back(output_tensor.buffer()->address());
+            writer_rt_args.push_back(output_tensor.mesh_buffer()->address());
         }
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
@@ -280,12 +280,12 @@ void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-        reader_kernel_args[0] = input_tensor.buffer()->address();
+        reader_kernel_args[0] = input_tensor.mesh_buffer()->address();
 
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
         const uint32_t output_tensor_start_idx = 4;
         for (unsigned j = 0; j < output_tensors.size() - 1; ++j) {
-            writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
+            writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).mesh_buffer()->address();
         }
     }
 }

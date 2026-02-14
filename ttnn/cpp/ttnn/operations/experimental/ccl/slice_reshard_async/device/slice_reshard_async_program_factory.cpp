@@ -180,7 +180,7 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
             reader_kernel_ids.push_back(worker_reader_kernel_id);
 
             std::vector<uint32_t> reader_rt_args = {
-                input_tensor.buffer()->address(),                            // input_tensor_address
+                input_tensor.mesh_buffer()->address(),                       // input_tensor_address
                 stick_start_id,                                              // stick_start_id
                 num_sticks_to_read,                                          // num_sticks_to_read
                 input_outer_dim_size,                                        // input_outer_dim_size
@@ -211,8 +211,8 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
             writer_kernel_ids.push_back(worker_writer_kernel_id);
 
             std::vector<uint32_t> writer_rt_args = {
-                input_tensor.buffer()->address(),                                // input_tensor_address
-                output_tensor.buffer()->address(),                               // output_tensor_address
+                input_tensor.mesh_buffer()->address(),                           // input_tensor_address
+                output_tensor.mesh_buffer()->address(),                          // output_tensor_address
                 page_size,                                                       // stick_size
                 stick_start_id,                                                  // stick_start_id
                 num_sticks_to_read,                                              // num_sticks_to_read
@@ -281,13 +281,13 @@ void SliceReshardAsyncProgramFactory::override_runtime_arguments(
 
                 // reader
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_runtime_args[0] = tensor_args.buffer()->address();
+                worker_reader_runtime_args[0] = tensor_args.mesh_buffer()->address();
                 worker_reader_runtime_args[9] = args.final_semaphore.address();
 
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_runtime_args[0] = tensor_args.buffer()->address();
-                worker_writer_runtime_args[1] = output_tensor.buffer()->address();
+                worker_writer_runtime_args[0] = tensor_args.mesh_buffer()->address();
+                worker_writer_runtime_args[1] = output_tensor.mesh_buffer()->address();
                 worker_writer_runtime_args[14] = args.final_semaphore.address();
                 worker_writer_runtime_args[18] = args.barrier_semaphore.address();
 

@@ -155,8 +155,8 @@ void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     for (const auto& core : total_cores) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args.at(0) = input.buffer()->address();
-        runtime_args.at(1) = output.buffer()->address();
+        runtime_args.at(0) = input.mesh_buffer()->address();
+        runtime_args.at(1) = output.mesh_buffer()->address();
     }
 }
 

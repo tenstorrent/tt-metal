@@ -105,16 +105,16 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_addr = tmp_pow_sum.buffer()->address();
-    const auto output_addr = total_norm.buffer()->address();
+    const auto input_addr = tmp_pow_sum.mesh_buffer()->address();
+    const auto output_addr = total_norm.mesh_buffer()->address();
 
     // reader
     const std::array reader_runtime_args{
-        input_addr, static_cast<uint32_t>(num_tiles), *reinterpret_cast<uint32_t*>(&decimal)};
+        (uint32_t)input_addr, static_cast<uint32_t>(num_tiles), *reinterpret_cast<uint32_t*>(&decimal)};
     SetRuntimeArgs(program, reader_kernel_id, single_core, reader_runtime_args);
 
     // writer
-    const std::array writer_runtime_args{output_addr};
+    const std::array writer_runtime_args{(uint32_t)output_addr};
     SetRuntimeArgs(program, writer_kernel_id, single_core, writer_runtime_args);
 
     // compute
@@ -138,8 +138,8 @@ void MorehClipGradNormStep2Operation::ProgramFactory::override_runtime_arguments
     const auto norm_type = operation_attributes.norm_type;
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 
-    const auto input_address = tensor_args.tmp_pow_sum.buffer()->address();
-    const auto output_address = total_norm.buffer()->address();
+    const auto input_address = tensor_args.tmp_pow_sum.mesh_buffer()->address();
+    const auto output_address = total_norm.mesh_buffer()->address();
 
     {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, single_core);

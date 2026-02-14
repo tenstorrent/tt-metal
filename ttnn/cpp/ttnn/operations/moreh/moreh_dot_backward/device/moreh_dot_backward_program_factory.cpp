@@ -147,10 +147,10 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
         if (input_grad_buffer.has_value()) {
-            runtime_args[2] = input_grad_buffer.value().buffer()->address();
+            runtime_args[2] = input_grad_buffer.value().mesh_buffer()->address();
         }
         if (other_grad_buffer.has_value()) {
-            runtime_args[3] = other_grad_buffer.value().buffer()->address();
+            runtime_args[3] = other_grad_buffer.value().mesh_buffer()->address();
         }
     }
 }

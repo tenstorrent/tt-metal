@@ -244,14 +244,14 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_addr = input.buffer()->address();
-    const auto mean_addr = mean.buffer()->address();
-    const auto rstd_addr = rstd.buffer()->address();
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_addr = input.mesh_buffer()->address();
+    const auto mean_addr = mean.mesh_buffer()->address();
+    const auto rstd_addr = rstd.mesh_buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().mesh_buffer()->address() : 0;
 
-    const auto input_grad_addr = input_grad.buffer()->address();
+    const auto input_grad_addr = input_grad.mesh_buffer()->address();
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

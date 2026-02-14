@@ -135,16 +135,16 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
-            input.buffer()->address(),  // rt_arg[0]: input_buffer_address
-            num_sticks,                 // rt_arg[1]: num_sticks
-            sticks_processed,           // rt_arg[2]: start_stick_id
+            input.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+            num_sticks,                      // rt_arg[1]: num_sticks
+            sticks_processed,                // rt_arg[2]: start_stick_id
         };
 
         // Writer runtime args
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-            num_sticks,                         // rt_arg[1]: num_sticks
-            sticks_processed,                   // rt_arg[2]: start_stick_id
+            output_tensor.mesh_buffer()->address(),  // rt_arg[0]: output_buffer_address
+            num_sticks,                              // rt_arg[1]: num_sticks
+            sticks_processed,                        // rt_arg[2]: start_stick_id
         };
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, std::move(reader_runtime_args));

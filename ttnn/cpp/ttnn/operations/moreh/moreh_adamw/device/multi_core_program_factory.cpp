@@ -154,18 +154,18 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t param_in_addr = param_in.buffer()->address();
-    const uint32_t grad_addr = grad.buffer()->address();
-    const uint32_t exp_avg_in_addr = exp_avg_in.buffer()->address();
-    const uint32_t exp_avg_sq_in_addr = exp_avg_sq_in.buffer()->address();
+    const uint32_t param_in_addr = param_in.mesh_buffer()->address();
+    const uint32_t grad_addr = grad.mesh_buffer()->address();
+    const uint32_t exp_avg_in_addr = exp_avg_in.mesh_buffer()->address();
+    const uint32_t exp_avg_sq_in_addr = exp_avg_sq_in.mesh_buffer()->address();
     const uint32_t max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0;
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().mesh_buffer()->address() : 0;
 
-    const uint32_t param_out_addr = param_out.buffer()->address();
-    const uint32_t exp_avg_out_addr = exp_avg_out.buffer()->address();
-    const uint32_t exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
+    const uint32_t param_out_addr = param_out.mesh_buffer()->address();
+    const uint32_t exp_avg_out_addr = exp_avg_out.mesh_buffer()->address();
+    const uint32_t exp_avg_sq_out_addr = exp_avg_sq_out.mesh_buffer()->address();
     const uint32_t max_exp_avg_sq_out_addr =
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0;
+        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().mesh_buffer()->address() : 0;
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
@@ -263,21 +263,21 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const uint32_t param_in_addr = tensor_args.param_in.buffer()->address();
-    const uint32_t grad_addr = tensor_args.grad.buffer()->address();
-    const uint32_t exp_avg_in_addr = tensor_args.exp_avg_in.buffer()->address();
-    const uint32_t exp_avg_sq_in_addr = tensor_args.exp_avg_sq_in.buffer()->address();
+    const uint32_t param_in_addr = tensor_args.param_in.mesh_buffer()->address();
+    const uint32_t grad_addr = tensor_args.grad.mesh_buffer()->address();
+    const uint32_t exp_avg_in_addr = tensor_args.exp_avg_in.mesh_buffer()->address();
+    const uint32_t exp_avg_sq_in_addr = tensor_args.exp_avg_sq_in.mesh_buffer()->address();
     const uint32_t max_exp_avg_sq_in_addr =
-        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().buffer()->address() : 0;
+        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().mesh_buffer()->address() : 0;
 
     const uint32_t param_out_addr =
-        tensor_return_value.at(0).has_value() ? tensor_return_value.at(0).value().buffer()->address() : 0;
+        tensor_return_value.at(0).has_value() ? tensor_return_value.at(0).value().mesh_buffer()->address() : 0;
     const uint32_t exp_avg_out_addr =
-        tensor_return_value.at(1).has_value() ? tensor_return_value.at(1).value().buffer()->address() : 0;
+        tensor_return_value.at(1).has_value() ? tensor_return_value.at(1).value().mesh_buffer()->address() : 0;
     const uint32_t exp_avg_sq_out_addr =
-        tensor_return_value.at(2).has_value() ? tensor_return_value.at(2).value().buffer()->address() : 0;
+        tensor_return_value.at(2).has_value() ? tensor_return_value.at(2).value().mesh_buffer()->address() : 0;
     const uint32_t max_exp_avg_sq_out_addr =
-        operation_attributes.amsgrad ? tensor_return_value.at(3).value().buffer()->address() : 0;
+        operation_attributes.amsgrad ? tensor_return_value.at(3).value().mesh_buffer()->address() : 0;
 
     union {
         float f;

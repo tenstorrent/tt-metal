@@ -161,7 +161,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
             program,
             reader_kernel_id,
             core,
-            {output_grad.buffer()->address(),
+            {output_grad.mesh_buffer()->address(),
              num_tiles,
              Wt,
              num_cols_per_core,
@@ -172,7 +172,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
              static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
 
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {bias_grad.buffer()->address(), num_cols_per_core, tile_offset});
+            program, writer_kernel_id, core, {bias_grad.mesh_buffer()->address(), num_cols_per_core, tile_offset});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(

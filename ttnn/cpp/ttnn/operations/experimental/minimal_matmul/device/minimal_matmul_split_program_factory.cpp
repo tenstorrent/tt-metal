@@ -35,15 +35,15 @@ void MinimalMatmulSplitProgramFactory::override_runtime_arguments(
     const MinimalMatmulSplitParams& /*operation_attributes*/,
     const MinimalMatmulSplitInputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+    auto in0_addr = tensor_args.input_tensor.mesh_buffer()->address();
+    auto in1_addr = tensor_args.weight_tensor.mesh_buffer()->address();
+    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().mesh_buffer()->address() : 0;
     uint32_t in3_addr = 0;  // split variant doesn't use optional_input_tensor
 
     std::vector<uint32_t> output_addrs;
     output_addrs.reserve(tensor_return_value.size());
     for (const auto& output_tensor : tensor_return_value) {
-        output_addrs.push_back(output_tensor.buffer()->address());
+        output_addrs.push_back(output_tensor.mesh_buffer()->address());
     }
 
     override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);

@@ -254,14 +254,14 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_addr = input.buffer()->address();
+    const auto input_addr = input.mesh_buffer()->address();
 
-    const auto output_addr = output.buffer()->address();
-    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
-    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
+    const auto output_addr = output.mesh_buffer()->address();
+    const auto mean_addr = mean_has_value ? mean.value().mesh_buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd.value().mesh_buffer()->address() : 0;
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
-    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().mesh_buffer()->address() : 0;
+    const auto beta_addr = beta_has_value ? beta.value().mesh_buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

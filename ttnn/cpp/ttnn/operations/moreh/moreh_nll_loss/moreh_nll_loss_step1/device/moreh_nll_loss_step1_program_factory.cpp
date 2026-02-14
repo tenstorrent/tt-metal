@@ -134,9 +134,9 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     auto writer_kernel_id =
         CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto target_addr = target.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto output_addr = output.buffer()->address();
+    const auto target_addr = target.mesh_buffer()->address();
+    const auto weight_addr = weight_has_value ? weight.value().mesh_buffer()->address() : 0;
+    const auto output_addr = output.mesh_buffer()->address();
 
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -193,12 +193,12 @@ void MorehNllLossStep1DeviceOperation::Factory::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
+    const uint32_t target_addr = tensor_args.target_tensor.mesh_buffer()->address();
     const uint32_t weight_addr =
-        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
+        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().mesh_buffer()->address() : 0;
     const uint32_t ignore_index = operation_attributes.ignore_index;
 
-    const uint32_t output_addr = tensor_return_value.buffer()->address();
+    const uint32_t output_addr = tensor_return_value.mesh_buffer()->address();
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

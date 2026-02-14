@@ -110,20 +110,20 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
-    const auto clip_coef_clamped_addr = clip_coef_clamped.buffer()->address();
+    const auto clip_coef_clamped_addr = clip_coef_clamped.mesh_buffer()->address();
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
-        const auto input_addr = input.buffer()->address();
+        const auto input_addr = input.mesh_buffer()->address();
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
 
         // reader
-        const std::array reader_runtime_args{input_addr, clip_coef_clamped_addr, num_tiles};
+        const std::array reader_runtime_args{(uint32_t)input_addr, (uint32_t)clip_coef_clamped_addr, num_tiles};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{input_addr, num_tiles};
+        const std::array writer_runtime_args{(uint32_t)input_addr, num_tiles};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute
@@ -153,13 +153,13 @@ void MorehClipGradNormStep3Operation::ProgramFactory::override_runtime_arguments
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = inputs.at(i).buffer()->address();
+            runtime_args[0] = inputs.at(i).mesh_buffer()->address();
             runtime_args[1] = clip_coef_clamped_address;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = inputs.at(i).buffer()->address();
+            runtime_args[0] = inputs.at(i).mesh_buffer()->address();
         }
     }
 }

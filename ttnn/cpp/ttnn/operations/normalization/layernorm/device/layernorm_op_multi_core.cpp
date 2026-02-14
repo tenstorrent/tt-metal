@@ -157,7 +157,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
+    auto dst_addr = output.mesh_buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -208,10 +208,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
-    auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    auto a_addr = a.mesh_buffer()->address();
+    auto b_dram_addr = b ? b.value().mesh_buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
 
     uint32_t num_tile_rows = NC * Ht;
 

@@ -923,9 +923,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             k_addr,
             v_addr,
             mask_addr,
-            is_chunked ? page_table.value().buffer()->address() : 0,
+            is_chunked ? page_table.value().mesh_buffer()->address() : 0,
             attention_sink_addr,
-            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
+            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().mesh_buffer()->address() : 0,
             i,
             local_batch_start,
             local_batch_end,
@@ -1035,12 +1035,12 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunk_start_idx_addr = 0;
     const uint32_t use_chunk_start_idx_tensor = flexible_chunked ? 1 : 0;
     if (is_chunked) {
-        page_table_addr = tensor_args.page_table.value().buffer()->address();
+        page_table_addr = tensor_args.page_table.value().mesh_buffer()->address();
         if (!flexible_chunked) {
             // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
             chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
         } else {
-            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().buffer()->address();
+            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().mesh_buffer()->address();
         }
     }
 

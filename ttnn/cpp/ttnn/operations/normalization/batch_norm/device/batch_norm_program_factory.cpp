@@ -80,7 +80,7 @@ void set_or_update_runtime_arguments(
 
         std::array reader_runtime_args = {
             packed_scalar_eps,
-            input_tensor.buffer()->address(),
+            (uint32_t)input_tensor.mesh_buffer()->address(),
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -95,11 +95,11 @@ void set_or_update_runtime_arguments(
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
         const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
         std::array writer_runtime_args = {
-            batch_mean_tensor.buffer()->address(),  //  batch mean
-            batch_var_tensor.buffer()->address(),   //  batch var
-            weight_addr,                            // weight
-            bias_addr,                              // bias
-            c.buffer()->address(),                  // output
+            (uint32_t)batch_mean_tensor.mesh_buffer()->address(),  //  batch mean
+            (uint32_t)batch_var_tensor.mesh_buffer()->address(),   //  batch var
+            weight_addr,                                           // weight
+            bias_addr,                                             // bias
+            (uint32_t)c.mesh_buffer()->address(),                  // output
             start_tile_id,
             num_tiles_per_core,
             cHtWt,

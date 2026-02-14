@@ -264,7 +264,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             program,
             reader_kernel_id,
             core,
-            {tensor_args.input.buffer()->address(),
+            {tensor_args.input.mesh_buffer()->address(),
              num_reduce_input_tile,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset,
@@ -276,7 +276,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             program,
             writer_kernel_id,
             core,
-            {tensor_return_value.buffer()->address(),
+            {tensor_return_value.mesh_buffer()->address(),
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset});
 

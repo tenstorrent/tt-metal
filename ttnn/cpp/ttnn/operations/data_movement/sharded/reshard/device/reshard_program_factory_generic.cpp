@@ -706,7 +706,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 0,
                 tt::div_up(page_stride_vector.size(), 2));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
@@ -714,7 +714,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         } else {
@@ -724,7 +724,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 0,
                 tt::div_up(page_stride_vector.size(), 2));
             auto output_page_offset =
@@ -734,7 +734,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         };
@@ -755,7 +755,7 @@ void ReshardGenericFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
-    uint32_t input_addr = input.buffer()->address();
+    uint32_t input_addr = input.mesh_buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
     auto& grid = cached_program.shared_variables.grid;

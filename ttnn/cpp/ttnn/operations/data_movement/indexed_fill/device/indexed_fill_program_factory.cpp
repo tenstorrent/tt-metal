@@ -85,15 +85,18 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
         uint32_t local_batch_size_in_sticks = (i < B) ? batch_size_in_sticks : 0;
 
         const std::array reader_runtime_args = {
-            batch_ids.buffer()->address(),
+            (uint32_t)batch_ids.mesh_buffer()->address(),
             local_b,
-            input_a.buffer()->address(),
-            input_b.buffer()->address(),
+            (uint32_t)input_a.mesh_buffer()->address(),
+            (uint32_t)input_b.mesh_buffer()->address(),
             local_batch_size_in_sticks,
             i};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         const std::array writer_runtime_args = {
-            output.buffer()->address(), page_size, local_batch_size_in_sticks, i * local_batch_size_in_sticks};
+            (uint32_t)output.mesh_buffer()->address(),
+            page_size,
+            local_batch_size_in_sticks,
+            i * local_batch_size_in_sticks};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 
@@ -131,16 +134,19 @@ void IndexedFillProgramFactory::override_runtime_arguments(
         uint32_t local_b = (core_id < B) ? b : 0;
         uint32_t local_batch_size_in_sticks = (core_id < B) ? batch_size_in_sticks : 0;
         const std::array reader_runtime_args = {
-            batch_ids.buffer()->address(),
+            (uint32_t)batch_ids.mesh_buffer()->address(),
             local_b,
-            input_a.buffer()->address(),
-            input_b.buffer()->address(),
+            (uint32_t)input_a.mesh_buffer()->address(),
+            (uint32_t)input_b.mesh_buffer()->address(),
             local_batch_size_in_sticks,
             core_id};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         const std::array writer_runtime_args = {
-            output.buffer()->address(), page_size, local_batch_size_in_sticks, core_id * local_batch_size_in_sticks};
+            (uint32_t)output.mesh_buffer()->address(),
+            page_size,
+            local_batch_size_in_sticks,
+            core_id * local_batch_size_in_sticks};
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         core_id++;

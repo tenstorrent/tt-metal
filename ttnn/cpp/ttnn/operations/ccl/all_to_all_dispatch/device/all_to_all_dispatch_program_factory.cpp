@@ -406,11 +406,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .defines = writer_defines});
 
     std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        mapping_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
+        input_tensor.mesh_buffer()->address(),
+        indices_tensor.mesh_buffer()->address(),
+        mapping_tensor.mesh_buffer()->address(),
+        output_tensor.mesh_buffer()->address(),
+        metadata_tensor.mesh_buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
         0,
         0,
@@ -420,11 +420,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t tokens_per_core_start = 0;
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            input_tensor.buffer()->address(),
-            indices_tensor.buffer()->address(),
-            mapping_tensor.buffer()->address(),
-            output_tensor.buffer()->address(),
-            metadata_tensor.buffer()->address(),
+            input_tensor.mesh_buffer()->address(),
+            indices_tensor.mesh_buffer()->address(),
+            mapping_tensor.mesh_buffer()->address(),
+            output_tensor.mesh_buffer()->address(),
+            metadata_tensor.mesh_buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
@@ -488,18 +488,18 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
-            reader_runtime_args.at(3) = output_tensor.buffer()->address();
-            reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(3) = output_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(4) = metadata_tensor.mesh_buffer()->address();
             reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
 
-            writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
-            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
-            writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
-            writer_runtime_args.at(3) = output_tensor.buffer()->address();
-            writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
+            writer_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(3) = output_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(4) = metadata_tensor.mesh_buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }

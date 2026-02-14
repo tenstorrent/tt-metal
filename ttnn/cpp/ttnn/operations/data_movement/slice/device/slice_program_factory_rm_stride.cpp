@@ -115,7 +115,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
 
             if (using_4d_kernels) {
                 reader_args = {
-                    input_tensor.buffer()->address(),
+                    input_tensor.mesh_buffer()->address(),
                     tensor_rank,
                     input_shape[-1],
                     input_shape[-2],
@@ -142,7 +142,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
                     row_start_id};
 
                 writer_args = {
-                    output_tensor.buffer()->address(),
+                    output_tensor.mesh_buffer()->address(),
                     tensor_rank,
                     output_shape[-1],
                     output_shape[-2],
@@ -153,7 +153,7 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
                     row_start_id};
             } else {
                 reader_args = {
-                    input_tensor.buffer()->address(), tensor_rank, element_size, rows_for_this_core, row_start_id};
+                    input_tensor.mesh_buffer()->address(), tensor_rank, element_size, rows_for_this_core, row_start_id};
                 reader_args.insert(reader_args.end(), input_shape.cbegin(), input_shape.cend());
                 reader_args.insert(reader_args.end(), output_shape.cbegin(), output_shape.cend());
                 reader_args.insert(reader_args.end(), slice_start.cbegin(), slice_start.cend());
@@ -161,7 +161,11 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
                 reader_args.insert(reader_args.end(), slice_step.cbegin(), slice_step.cend());
 
                 writer_args = {
-                    output_tensor.buffer()->address(), tensor_rank, element_size, rows_for_this_core, row_start_id};
+                    output_tensor.mesh_buffer()->address(),
+                    tensor_rank,
+                    element_size,
+                    rows_for_this_core,
+                    row_start_id};
                 writer_args.insert(writer_args.end(), output_shape.cbegin(), output_shape.cend());
             }
 
@@ -201,11 +205,11 @@ void SliceRmStrideProgramFactory::override_runtime_arguments(
     for (size_t i = 0; i < cached_program.shared_variables.all_cores_vec.size(); ++i) {
         auto& reader_runtime_args =
             tt::tt_metal::GetRuntimeArgs(program, cached_program.shared_variables.reader_kernel_id, all_cores_vec[i]);
-        reader_runtime_args[0] = src_tensor.buffer()->address();
+        reader_runtime_args[0] = src_tensor.mesh_buffer()->address();
 
         auto& writer_runtime_args =
             tt::tt_metal::GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, all_cores_vec[i]);
-        writer_runtime_args[0] = dst_tensor.buffer()->address();
+        writer_runtime_args[0] = dst_tensor.mesh_buffer()->address();
     }
 }
 

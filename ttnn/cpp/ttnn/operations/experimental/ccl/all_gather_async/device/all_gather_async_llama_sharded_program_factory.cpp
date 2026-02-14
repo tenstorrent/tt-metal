@@ -252,11 +252,11 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         }
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
+            input_tensor.mesh_buffer()->address(),  // tensor_address0
+            input_tensor_shard_num_pages,           // num_tiles_per_core
+            worker_num_tiles_to_read,               // num_tiles_to_read
+            input_first_core_tile_start_offset,     // first_core_tile_start_offset
+            input_tensor_cores_x.size(),            // num_cores
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -271,18 +271,18 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.has_value()         // barrier_sem
+            output_tensor.mesh_buffer()->address(),  // tensor_address0
+            semaphore.address(),                     // out_ready_sem_bank_addr (absolute address)
+            output_tensor_shard_num_pages,           // num_tiles_per_core
+            worker_num_tiles_to_read,                // num_tiles_to_read
+            output_first_core_tile_start_offset,     // first_core_tile_start_offset
+            output_tensor_cores_x.size(),            // num_cores
+            wait_output_semaphore,                   // wait_output_semaphore
+            reset_global_semaphore,                  // reset_global_semaphore
+            drain_sync_core.x,                       // out_ready_sem_noc0_x
+            drain_sync_core.y,                       // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                // out_ready_sem_wait_value
+            barrier_semaphore.has_value()            // barrier_sem
                 ? barrier_semaphore.value().address()
                 : 0,
             barrier_core.x,  // barrier_sem_noc0_x
@@ -346,10 +346,10 @@ void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = output.buffer()->address();
+            worker_writer_sender_runtime_args[0] = output.mesh_buffer()->address();
             worker_writer_sender_runtime_args[1] = semaphore.address();
             if (barrier_semaphore.has_value()) {
                 worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();

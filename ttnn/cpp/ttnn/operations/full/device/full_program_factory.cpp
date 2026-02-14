@@ -110,16 +110,17 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
             uint32_t reader_page_start = page_offset;
             uint32_t num_pages_per_reader = num_pages_per_core / 2;
             std::vector<uint32_t> reader_args = {
-                output.buffer()->address(), u.u32, num_pages_per_reader, reader_page_start};
+                output.mesh_buffer()->address(), u.u32, num_pages_per_reader, reader_page_start};
             SetRuntimeArgs(program, reader_id.value(), core, reader_args);
 
             uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
             uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
             std::vector<uint32_t> writer_args = {
-                output.buffer()->address(), u.u32, num_pages_per_writer, writer_page_start};
+                output.mesh_buffer()->address(), u.u32, num_pages_per_writer, writer_page_start};
             SetRuntimeArgs(program, writer_id, core, writer_args);
         } else {
-            std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
+            std::vector<uint32_t> writer_args = {
+                output.mesh_buffer()->address(), u.u32, num_pages_per_core, page_offset};
             SetRuntimeArgs(program, writer_id, core, writer_args);
         }
         page_offset += num_pages_per_core;
@@ -139,11 +140,11 @@ void FullOperation::ProgramFactory::override_runtime_arguments(
     for (const auto& core : cores) {
         if (reader_kernel_id.has_value()) {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id.value(), core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
     }
 }

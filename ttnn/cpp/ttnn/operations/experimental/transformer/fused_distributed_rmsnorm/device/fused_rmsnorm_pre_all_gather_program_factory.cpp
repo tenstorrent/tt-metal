@@ -101,8 +101,8 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
     log_debug(tt::LogOp, "dst_reg_count: {}", dst_reg_count);
 
-    auto input_addr = input_tensor.buffer()->address();
-    auto output_addr = output_tensor.buffer()->address();
+    auto input_addr = input_tensor.mesh_buffer()->address();
+    auto output_addr = output_tensor.mesh_buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -252,8 +252,8 @@ void FusedRMSNormPreAllGatherProgramFactory::override_runtime_arguments(
     const auto& cores = cached_program.shared_variables.cores;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto input_addr = input_tensor.buffer()->address();
-    const auto output_addr = output_tensor.buffer()->address();
+    const auto input_addr = input_tensor.mesh_buffer()->address();
+    const auto output_addr = output_tensor.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);

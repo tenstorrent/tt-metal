@@ -117,7 +117,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), tile_offset, units_per_core};
+        std::vector<uint32_t> reader_runtime_args = {input.mesh_buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // Each core has its own seed to increase the number of generated random numbers
@@ -126,7 +126,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         std::vector<uint32_t> compute_runtime_args = {seed, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
+        std::vector<uint32_t> writer_runtime_args = {output.mesh_buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         tile_offset += units_per_core;
@@ -151,8 +151,8 @@ void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
 
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = output.buffer()->address();
+    const uint32_t input_addr = tensor_args.input.mesh_buffer()->address();
+    const uint32_t output_addr = output.mesh_buffer()->address();
 
     for (int i = 0; i < cores.size(); ++i) {
         {

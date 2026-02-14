@@ -173,8 +173,8 @@ BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory:
             program,
             binary_reader_kernel_id,
             core,
-            {a.buffer()->address(),  // 0
-             b.buffer()->address(),
+            {a.mesh_buffer()->address(),  // 0
+             b.mesh_buffer()->address(),
              num_tensor_tiles_per_core,
              HtWt,
              num_tiles_read / HtWt * HtWt,
@@ -196,7 +196,7 @@ BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory:
             unary_writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 num_tensor_tiles_per_core,
                 num_tiles_read,
             });

@@ -294,7 +294,7 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         }
 
         std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(),
+            input_tensor.mesh_buffer()->address(),
             num_sticks,
             start_stick_id,
             static_cast<uint32_t>(cos_angle_q16),
@@ -306,7 +306,8 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         if (!any_sharded) {
-            std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(), num_sticks, start_stick_id};
+            std::vector<uint32_t> writer_runtime_args = {
+                output_tensor.mesh_buffer()->address(), num_sticks, start_stick_id};
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 

@@ -136,8 +136,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
         }
 
         std::vector<uint32_t> reader_args = {
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
+            output.mesh_buffer()->address(),
+            output_grad.mesh_buffer()->address(),
             num_tiles_per_core,
             tile_offset,
             outer_stride,
@@ -145,7 +145,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
             dim_size};
 
         std::vector<uint32_t> writer_args = {
-            input_grad.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            input_grad.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -170,12 +170,12 @@ void MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::override_
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.output_tensor.buffer()->address();
-            runtime_args[1] = tensor_args.output_grad_tensor.buffer()->address();
+            runtime_args[0] = tensor_args.output_tensor.mesh_buffer()->address();
+            runtime_args[1] = tensor_args.output_grad_tensor.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = input_grad.buffer()->address();
+            runtime_args[0] = input_grad.mesh_buffer()->address();
         }
     }
 }

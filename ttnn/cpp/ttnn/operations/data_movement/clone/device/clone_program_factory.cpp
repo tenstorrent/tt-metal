@@ -275,8 +275,8 @@ void CloneOperation::ProgramFactory::override_runtime_arguments(
     const auto& write_kernel_id = cached_program.shared_variables.write_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
-    auto input_buffer_address = tensor_args.input.buffer()->address();
-    auto output_buffer_address = output.buffer()->address();
+    auto input_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto output_buffer_address = output.mesh_buffer()->address();
     for (const auto& core : cores) {
         GetRuntimeArgs(program, read_kernel_id, core)[0] = input_buffer_address;
         GetRuntimeArgs(program, write_kernel_id, core)[0] = output_buffer_address;

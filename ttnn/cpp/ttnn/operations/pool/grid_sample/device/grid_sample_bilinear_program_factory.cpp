@@ -293,8 +293,8 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
             // Runtime arguments for sharded reader
             std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
+                input_tensor.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+                i * grid_nsticks_per_core               // rt_arg[1]: grid_stick_offset
             };
 
             tt::tt_metal::SetRuntimeArgs(program, reader0_kernel_id, core, reader_runtime_args);
@@ -314,17 +314,17 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
             // Runtime arguments for interleaved reader - expanded row by row
             std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                grid_tensor.buffer()->address(),   // rt_arg[1]: grid_buffer_address
-                grid_sticks,                       // rt_arg[2]: grid_sticks
-                grid_processed                     // rt_arg[3]: grid_processed
+                input_tensor.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+                grid_tensor.mesh_buffer()->address(),   // rt_arg[1]: grid_buffer_address
+                grid_sticks,                            // rt_arg[2]: grid_sticks
+                grid_processed                          // rt_arg[3]: grid_processed
             };
 
             // Runtime arguments for interleaved writer - expanded row by row
             std::vector<uint32_t> writer_runtime_args = {
-                output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-                output_sticks,                      // rt_arg[1]: output_sticks
-                output_processed                    // rt_arg[2]: output_processed
+                output_tensor.mesh_buffer()->address(),  // rt_arg[0]: output_buffer_address
+                output_sticks,                           // rt_arg[1]: output_sticks
+                output_processed                         // rt_arg[2]: output_processed
             };
 
             tt::tt_metal::SetRuntimeArgs(program, reader0_kernel_id, core, reader_runtime_args);
@@ -374,19 +374,19 @@ void GridSampleBilinearProgramFactory::override_runtime_arguments(
 
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
-            tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
+            tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.mesh_buffer()->address();
             if (enable_split_reader) {
-                tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] = input_tensor.buffer()->address();
+                tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] = input_tensor.mesh_buffer()->address();
             }
         }
     } else {
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core);
-            reader_runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
-            reader_runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
+            reader_runtime_args[0] = input_tensor.mesh_buffer()->address();  // rt_arg[0]: input_buffer_address
+            reader_runtime_args[1] = grid_tensor.mesh_buffer()->address();   // rt_arg[1]: grid_buffer_address
             tt::tt_metal::GetRuntimeArgs(prog, writer_kernel_id, core)[0] =
-                output_tensor.buffer()->address();  // rt_arg[0]: output_buffer_address
+                output_tensor.mesh_buffer()->address();  // rt_arg[0]: output_buffer_address
         }
     }
 }

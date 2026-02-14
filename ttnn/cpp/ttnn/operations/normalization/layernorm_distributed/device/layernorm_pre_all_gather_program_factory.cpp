@@ -96,8 +96,8 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto dst_addr = output.mesh_buffer()->address();
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
@@ -266,8 +266,8 @@ void LayerNormPreAllGatherProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    const auto input_addr = tensor_args.input.mesh_buffer()->address();
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);
@@ -324,8 +324,8 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto dst_addr = output.mesh_buffer()->address();
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
@@ -513,8 +513,8 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    const auto input_addr = tensor_args.input.mesh_buffer()->address();
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);

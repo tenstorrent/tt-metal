@@ -438,15 +438,15 @@ void ReshapeViewTiledProgramFactory::override_runtime_arguments(
                              .to_device(input_tensor.device());
     }
 
-    const auto input_buffer_addr = input_tensor.buffer()->address();
-    const auto output_buffer_addr = output_tensor.buffer()->address();
+    const auto input_buffer_addr = input_tensor.mesh_buffer()->address();
+    const auto output_buffer_addr = output_tensor.mesh_buffer()->address();
     auto& program = cached_program.program;
 
     for (const auto& core : utilized_cores) {
         auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
         reader_runtime_args_core.at(0) = input_buffer_addr;
         if (operation_attributes.recreate_mapping_tensor) {
-            reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
+            reader_runtime_args_core.at(1) = mapping_tensor.mesh_buffer()->address();
         }
 
         auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);

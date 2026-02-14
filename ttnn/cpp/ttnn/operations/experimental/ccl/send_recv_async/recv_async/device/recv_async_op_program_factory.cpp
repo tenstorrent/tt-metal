@@ -204,7 +204,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
             std::vector<uint32_t> writer_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
-                output_tensor.buffer()->address(),           // output_base_addr
+                output_tensor.mesh_buffer()->address(),      // output_base_addr
                 pages_for_this_core,                         // num_pages
                 page_start_offset,                           // page_start_offset
                 num_whole_packets,                           // num_whole_packets
@@ -318,9 +318,9 @@ RecvAsyncMeshWorkloadFactory::create_at(
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, receiver_core_coord, reader_rt_args);
 
             std::vector<uint32_t> writer_rt_args = {
-                output_tensor.buffer()->address(),  // output_base_addr
-                page_start_offset,                  // start_page_index
-                pages_for_this_core,                // num_pages
+                output_tensor.mesh_buffer()->address(),  // output_base_addr
+                page_start_offset,                       // start_page_index
+                pages_for_this_core,                     // num_pages
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
@@ -359,7 +359,7 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-                writer_runtime_args[1] = output_tensor.buffer()->address();
+                writer_runtime_args[1] = output_tensor.mesh_buffer()->address();
             }
         } else {
             for (const auto& receiver_core_coord : receiver_core_coords) {
@@ -367,7 +367,7 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 reader_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-                writer_runtime_args[0] = output_tensor.buffer()->address();
+                writer_runtime_args[0] = output_tensor.mesh_buffer()->address();
             }
         }
     }

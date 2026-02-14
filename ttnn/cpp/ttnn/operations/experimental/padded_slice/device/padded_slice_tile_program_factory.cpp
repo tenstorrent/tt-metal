@@ -141,7 +141,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
     const auto num_tiles_per_full_row = num_output_tiles_per_dim[1] * max_num_tiles_per_row;
 
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr,  // read from nearest aligned address
         num_dims,

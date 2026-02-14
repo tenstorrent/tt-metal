@@ -70,7 +70,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
             TT_FATAL(false, "Core not in specified core ranges");
         }
         std::vector<uint32_t> writer_args = {
-            output.buffer()->address(),
+            output.mesh_buffer()->address(),
             tile_offset,
             num_tiles_per_core,
             *reinterpret_cast<uint32_t*>(&start),
@@ -91,7 +91,7 @@ void MorehArangeOperation::ProgramFactory::override_runtime_arguments(
     const auto& kernel_id = cached_program.shared_variables.kernel_id;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
-    auto src_dram_buffer_address = output.buffer()->address();
+    auto src_dram_buffer_address = output.mesh_buffer()->address();
 
     for (uint32_t icore = 0; icore < num_cores; ++icore) {
         CoreCoord core = {icore / core_h, icore % core_h};

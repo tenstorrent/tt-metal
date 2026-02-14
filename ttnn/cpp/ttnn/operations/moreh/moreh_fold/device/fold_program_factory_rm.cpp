@@ -156,7 +156,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
         aligned = aligned && !is_blackhole;
 
         std::vector<uint32_t> reader_args = {
-            input.buffer()->address(),
+            input.mesh_buffer()->address(),
             N,
             C,
             H,
@@ -179,7 +179,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
             aligned};
 
         std::vector<uint32_t> writer_args = {
-            output.buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core};
+            output.mesh_buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -198,8 +198,8 @@ void MorehFoldOperation::ProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
-    auto input_buffer_address = tensor_args.input.buffer()->address();
-    auto output_buffer_address = output.buffer()->address();
+    auto input_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto output_buffer_address = output.mesh_buffer()->address();
 
     for (const auto& core : cores) {
         {

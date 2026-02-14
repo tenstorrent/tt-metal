@@ -70,8 +70,8 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
             .compile_args = compile_time_args_writer,
         });
 
-    SetCommonRuntimeArgs(program, reader_kernel_id, {input.buffer()->address()});
-    SetCommonRuntimeArgs(program, writer_kernel_id, {output.buffer()->address()});
+    SetCommonRuntimeArgs(program, reader_kernel_id, {input.mesh_buffer()->address()});
+    SetCommonRuntimeArgs(program, writer_kernel_id, {output.mesh_buffer()->address()});
 
     for (const auto& core : cores) {
         SetRuntimeArgs(program, reader_kernel_id, core, {0, 0});
@@ -103,8 +103,8 @@ void NdReshardCopyPagesFactory::override_runtime_arguments(
 
     auto& common_runtime_args_reader = GetCommonRuntimeArgs(program, reader_kernel_id);
     auto& common_runtime_args_writer = GetCommonRuntimeArgs(program, writer_kernel_id);
-    common_runtime_args_reader[0] = input.buffer()->address();
-    common_runtime_args_writer[0] = output.buffer()->address();
+    common_runtime_args_reader[0] = input.mesh_buffer()->address();
+    common_runtime_args_writer[0] = output.mesh_buffer()->address();
 
     auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
     auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);

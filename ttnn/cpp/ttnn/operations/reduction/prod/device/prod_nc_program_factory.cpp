@@ -147,7 +147,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              num_reduce_input_tile,
              num_tiles_per_core,
              input_tile_offset,
@@ -160,7 +160,7 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(),
+            {output.mesh_buffer()->address(),
              num_tiles_per_core,
              tile_offset,
              static_cast<uint32_t>(ttnn::operations::is_dram(output))});

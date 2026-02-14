@@ -131,7 +131,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
             mask_w = tt::constants::TILE_WIDTH;
         }
         const std::vector<uint32_t> reader_args = {
-            input_tensor.buffer()->address(),
+            input_tensor.mesh_buffer()->address(),
             num_tiles_per_core,
             tile_offset,
             Wt,
@@ -139,7 +139,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
             mask_w};
 
         const std::vector<uint32_t> writer_args = {
-            output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
+            output_tensor.mesh_buffer()->address(), num_tiles_per_core, tile_offset, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

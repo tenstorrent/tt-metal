@@ -174,7 +174,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              num_tensor_tiles_per_core,
              tile_offset,  // tile index of row to start reading from
              mask_w});
@@ -184,7 +184,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
                 tile_offset / out_dim_divider                 // output tile start index
             });

@@ -54,8 +54,8 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     dst_cb_sharded_config.set_globally_allocated_address(*output.buffer());
     const CBHandle dst_sharded_cb = tt::tt_metal::CreateCircularBuffer(program, shard_grid, dst_cb_sharded_config);
 
-    const uint32_t input_buffer_address = input.buffer()->address();
-    const uint32_t output_buffer_address = output.buffer()->address();
+    const uint32_t input_buffer_address = input.mesh_buffer()->address();
+    const uint32_t output_buffer_address = output.mesh_buffer()->address();
 
     const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(

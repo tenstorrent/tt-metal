@@ -193,9 +193,9 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         u_one.f = 1.0f;
 
         std::vector<uint32_t> reader_args = {
-            param_in.buffer()->address(),
-            grad.buffer()->address(),
-            momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0,
+            param_in.mesh_buffer()->address(),
+            grad.mesh_buffer()->address(),
+            momentum_buffer_in.has_value() ? momentum_buffer_in.value().mesh_buffer()->address() : 0,
             num_tiles_per_core,
             tile_offset,
             u_lr.u,
@@ -206,8 +206,8 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         };
 
         std::vector<uint32_t> writer_args = {
-            param_out.buffer()->address(),
-            momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0,
+            param_out.mesh_buffer()->address(),
+            momentum_buffer_out.has_value() ? momentum_buffer_out.value().mesh_buffer()->address() : 0,
             num_tiles_per_core,
             tile_offset,
         };

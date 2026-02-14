@@ -74,7 +74,7 @@ void set_runtime_args_wh_tiled(
                 program,
                 reader_kernel_id,
                 core,
-                {input_tensor.buffer()->address(),
+                {input_tensor.mesh_buffer()->address(),
                  num_tiles_per_core,
                  tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
                  h,
@@ -89,13 +89,13 @@ void set_runtime_args_wh_tiled(
                 program,
                 writer_kernel_id,
                 core,
-                {output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_read});
+                {output_tensor.mesh_buffer()->address(), num_tiles_per_core, num_tiles_read});
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             auto& compute_args = cached_compute_args.at(core.x).at(core.y);
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            reader_args[0] = input_tensor.buffer()->address();
+            reader_args[0] = input_tensor.mesh_buffer()->address();
             reader_args[1] = num_tiles_per_core;
             reader_args[2] = tt::round_down(num_tiles_read, HtWt) + h * Wt + w;
             reader_args[3] = h;
@@ -106,7 +106,7 @@ void set_runtime_args_wh_tiled(
 
             compute_args[0] = num_tiles_per_core;
 
-            writer_args[0] = output_tensor.buffer()->address();
+            writer_args[0] = output_tensor.mesh_buffer()->address();
             writer_args[1] = num_tiles_per_core;
             writer_args[2] = num_tiles_read;
         }
@@ -154,7 +154,7 @@ void set_runtime_args_wh_rm(
                 program,
                 reader_kernel_id,
                 core,
-                {input_tensor.buffer()->address(), num_sticks_read, num_hw_blocks_per_core});
+                {input_tensor.mesh_buffer()->address(), num_sticks_read, num_hw_blocks_per_core});
 
             SetRuntimeArgs(program, compute_kernel_id, core, {num_hw_blocks_per_core});
 
@@ -162,19 +162,19 @@ void set_runtime_args_wh_rm(
                 program,
                 writer_kernel_id,
                 core,
-                {output_tensor.buffer()->address(), num_sticks_write, num_hw_blocks_per_core});
+                {output_tensor.mesh_buffer()->address(), num_sticks_write, num_hw_blocks_per_core});
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             auto& compute_args = cached_compute_args.at(core.x).at(core.y);
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            reader_args[0] = input_tensor.buffer()->address();
+            reader_args[0] = input_tensor.mesh_buffer()->address();
             reader_args[1] = num_sticks_read;
             reader_args[2] = num_hw_blocks_per_core;
 
             compute_args[0] = num_hw_blocks_per_core;
 
-            writer_args[0] = output_tensor.buffer()->address();
+            writer_args[0] = output_tensor.mesh_buffer()->address();
             writer_args[1] = num_sticks_write;
             writer_args[2] = num_hw_blocks_per_core;
         }

@@ -181,7 +181,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(output_grad.buffer()->address());
+        reader_rt_args.push_back(output_grad.mesh_buffer()->address());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);
         reader_rt_args.push_back(num_dim);
@@ -192,7 +192,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
+            program, writer_kernel_id, core, {input_grad.mesh_buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }
@@ -210,8 +210,8 @@ void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_argu
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_grad_address = tensor_args.output_grad.buffer()->address();
-    auto input_grad_address = output.buffer()->address();
+    auto output_grad_address = tensor_args.output_grad.mesh_buffer()->address();
+    auto input_grad_address = output.mesh_buffer()->address();
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {

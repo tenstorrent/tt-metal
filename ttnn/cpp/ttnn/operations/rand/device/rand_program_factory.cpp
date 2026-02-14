@@ -112,7 +112,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         std::vector<uint32_t> compute_runtime_args = {seed, f2u_from.u, f2u_to.u, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
+        std::vector<uint32_t> writer_runtime_args = {output.mesh_buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         tile_offset += units_per_core;
@@ -133,7 +133,7 @@ void RandDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
 
-    const uint32_t output_addr = output.buffer()->address();
+    const uint32_t output_addr = output.mesh_buffer()->address();
 
     for (int i = 0; i < cores.size(); ++i) {
         {

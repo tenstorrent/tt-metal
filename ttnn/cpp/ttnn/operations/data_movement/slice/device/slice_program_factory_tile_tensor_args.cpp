@@ -53,8 +53,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
                                             uint32_t* num_padded_tiles_per_dim,
                                             uint32_t* input_shape_args) __attribute__((always_inline)) {
         reader_common_args[0] = input_buffer->address();
-        reader_common_args[1] = start_tensor.buffer()->address();
-        reader_common_args[2] = end_tensor.buffer()->address();
+        reader_common_args[1] = start_tensor.mesh_buffer()->address();
+        reader_common_args[2] = end_tensor.mesh_buffer()->address();
 
         num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
         num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;

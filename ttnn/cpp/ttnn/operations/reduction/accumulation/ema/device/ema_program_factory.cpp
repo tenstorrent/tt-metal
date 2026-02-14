@@ -188,8 +188,8 @@ void EmaProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = tensor_return_value.buffer()->address();
+    auto src_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto dst_buffer_address = tensor_return_value.mesh_buffer()->address();
 
     // Update buffer addresses for all cores
     for (const auto& range : shared_variables.all_cores.ranges()) {

@@ -131,10 +131,15 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
         }
 
         const std::vector<uint32_t> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            input.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         const std::vector<uint32_t> writer_args = {
-            output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            output_tensor.mesh_buffer()->address(),
+            num_tiles_per_core,
+            tile_offset,
+            outer_stride,
+            inner_size,
+            dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

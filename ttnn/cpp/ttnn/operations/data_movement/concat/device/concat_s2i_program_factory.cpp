@@ -73,7 +73,7 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.reserve(num_input_tensors * 2);
         std::vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(),
+            output.mesh_buffer()->address(),
             core_id,
             curr_num_output_rows,
             num_input_tensors * input_shard_spec.shape[0],

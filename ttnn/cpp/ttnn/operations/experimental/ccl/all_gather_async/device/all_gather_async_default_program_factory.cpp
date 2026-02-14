@@ -669,15 +669,15 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),   // input_tensor_address
-                    output_tensor.buffer()->address(),  // output_tensor_address
-                    semaphore.at(dir).address(),        // out_ready_sem
-                    dir,                                // direction RT ARG
-                    input_tile_id_start,                // input_tile_id_start RT ARG
-                    input_tile_id_end,                  // input_tile_id_end RT ARG
-                    start_pages_read_in_row,            // start_pages_read_in_row RT ARG
-                    start_row_offset,                   // start_row_offset RT ARG
-                    chunks_per_sync_val,                // chunks_per_sync RT ARG
+                    input_tensor.mesh_buffer()->address(),   // input_tensor_address
+                    output_tensor.mesh_buffer()->address(),  // output_tensor_address
+                    semaphore.at(dir).address(),             // out_ready_sem
+                    dir,                                     // direction RT ARG
+                    input_tile_id_start,                     // input_tile_id_start RT ARG
+                    input_tile_id_end,                       // input_tile_id_end RT ARG
+                    start_pages_read_in_row,                 // start_pages_read_in_row RT ARG
+                    start_row_offset,                        // start_row_offset RT ARG
+                    chunks_per_sync_val,                     // chunks_per_sync RT ARG
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -707,7 +707,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
+                    output_tensor.mesh_buffer()->address(),                      // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                                 // out_ready_sem
@@ -816,13 +816,13 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.mesh_buffer()->address();
                 worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
 
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = output.mesh_buffer()->address();
                 worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
 
                 if (barrier_semaphore.has_value()) {

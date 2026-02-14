@@ -71,7 +71,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         const auto& index = index_tensors[i];
 
         index_info[dim].is_defined = true;
-        index_info[dim].address = index_tensors[i].buffer()->address();
+        index_info[dim].address = index_tensors[i].mesh_buffer()->address();
         index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
@@ -161,7 +161,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
         std::vector<uint32_t> reader_args = {
             // buffers
-            input_5d.buffer()->address(),
+            input_5d.mesh_buffer()->address(),
             index_info[0].address,
             index_info[1].address,
             index_info[2].address,
@@ -210,7 +210,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
         std::vector<uint32_t> writer_args = {
             // buffer
-            output.buffer()->address(),
+            output.mesh_buffer()->address(),
 
             // output
             output_unit_size,
@@ -252,7 +252,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
         auto dim = index_dims[i] + input_dim_offset;
         const auto& index_buffer = index_tensors[i];
 
-        index_info[dim].address = index_buffer.buffer()->address();
+        index_info[dim].address = index_buffer.mesh_buffer()->address();
     }
 
     for (uint32_t icore = 0; icore < num_cores; icore++) {

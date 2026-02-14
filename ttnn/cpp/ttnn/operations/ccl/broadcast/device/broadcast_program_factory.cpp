@@ -254,7 +254,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),        // tensor_address0
+            input_tensor.mesh_buffer()->address(),   // tensor_address0
             input_tile_id_start * num_width_shards,  // tile_id_start
             input_tile_id_end * num_width_shards,    // tile_id_end
         };
@@ -271,18 +271,18 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            tensor_return_value.buffer()->address(),  // tensor_address0
-            semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,  // tile_id_start
-            output_tile_id_end * num_width_shards,    // tile_id_end
-            wait_output_semaphore,                    // wait_output_semaphore
-            reset_global_semaphore,                   // reset_global_semaphore
-            drain_sync_core.x,                        // out_ready_sem_noc0_x
-            drain_sync_core.y,                        // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                 // out_ready_sem_wait_value
-            barrier_semaphore.address(),              // barrier_sem
-            barrier_core.x,                           // barrier_sem_noc0_x
-            barrier_core.y                            // barrier_sem_noc0_y
+            tensor_return_value.mesh_buffer()->address(),  // tensor_address0
+            semaphore.address(),                           // out_ready_sem_bank_addr (absolute address)
+            output_tile_id_start * num_width_shards,       // tile_id_start
+            output_tile_id_end * num_width_shards,         // tile_id_end
+            wait_output_semaphore,                         // wait_output_semaphore
+            reset_global_semaphore,                        // reset_global_semaphore
+            drain_sync_core.x,                             // out_ready_sem_noc0_x
+            drain_sync_core.y,                             // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                      // out_ready_sem_wait_value
+            barrier_semaphore.address(),                   // barrier_sem
+            barrier_core.x,                                // barrier_sem_noc0_x
+            barrier_core.y                                 // barrier_sem_noc0_y
         };
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
@@ -340,10 +340,10 @@ void BroadcastProgramFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = tensor_return_value.buffer()->address();
+            worker_writer_sender_runtime_args[0] = tensor_return_value.mesh_buffer()->address();
             worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
             worker_writer_sender_runtime_args[9] = shared_vars.barrier_semaphore.address();
         }

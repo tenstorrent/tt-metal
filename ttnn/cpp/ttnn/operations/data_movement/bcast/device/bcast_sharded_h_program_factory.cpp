@@ -157,12 +157,12 @@ BcastShardedHProgramFactory::cached_program_t BcastShardedHProgramFactory::creat
             binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(),  // 0
-                Ht,                     // 1
-                Wt,                     // 2
-                offset,                 // 3
-                Ht_per_core,            // 4
-                tile_offset,            // 5
+                b.mesh_buffer()->address(),  // 0
+                Ht,                          // 1
+                Wt,                          // 2
+                offset,                      // 3
+                Ht_per_core,                 // 4
+                tile_offset,                 // 5
             });
 
         SetRuntimeArgs(
@@ -245,12 +245,12 @@ void BcastShardedHProgramFactory::override_runtime_arguments(
             cached_program.shared_variables.binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(),  // 0
-                Ht,                     // 1
-                Wt,                     // 2
-                offset,                 // 3
-                Ht_per_core,            // 4
-                tile_offset,            // 5
+                b.mesh_buffer()->address(),  // 0
+                Ht,                          // 1
+                Wt,                          // 2
+                offset,                      // 3
+                Ht_per_core,                 // 4
+                tile_offset,                 // 5
             });
 
         SetRuntimeArgs(

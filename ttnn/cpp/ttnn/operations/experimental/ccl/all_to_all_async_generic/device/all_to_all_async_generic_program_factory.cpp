@@ -271,7 +271,7 @@ AllToAllAsyncGenericProgram::create_at(
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
         std::vector<uint32_t> sender_reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),
+            tensor_args.input_tensor.mesh_buffer()->address(),
             device_offsets[core_id % num_blocks_devices].size(),
         };
         for (uint32_t i = 0; i < device_offsets[core_id % num_blocks_devices].size(); ++i) {
@@ -283,7 +283,7 @@ AllToAllAsyncGenericProgram::create_at(
         tt::tt_metal::SetRuntimeArgs(program, sender_reader_kernel_id, {core}, sender_reader_rt_args);
 
         std::vector<uint32_t> sender_writer_rt_args = {
-            tensor_return_value.buffer()->address(),
+            tensor_return_value.mesh_buffer()->address(),
             init_barrier_semaphore.address(),
             final_barrier_semaphore.address(),
             core_id % num_blocks_devices,
@@ -365,8 +365,8 @@ void AllToAllAsyncGenericProgram::override_runtime_arguments(
         for (const auto& core : shared_variables.sender_worker_cores) {
             auto& worker_sender_reader_runtime_args = sender_reader_runtime_args[core.x][core.y];
             auto& worker_sender_writer_runtime_args = sender_writer_runtime_args[core.x][core.y];
-            worker_sender_reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-            worker_sender_writer_runtime_args[0] = tensor_return_value.buffer()->address();
+            worker_sender_reader_runtime_args[0] = tensor_args.input_tensor.mesh_buffer()->address();
+            worker_sender_writer_runtime_args[0] = tensor_return_value.mesh_buffer()->address();
             worker_sender_writer_runtime_args[1] = shared_variables.init_barrier_semaphore.address();
             worker_sender_writer_runtime_args[2] = shared_variables.final_barrier_semaphore.address();
         }

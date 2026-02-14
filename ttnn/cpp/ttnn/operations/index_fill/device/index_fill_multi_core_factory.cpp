@@ -135,8 +135,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             reader_kernel_id,
             core,
             {
-                input.buffer()->address(),         // input tensor address
-                index.buffer()->address(),         // index tensor address
+                input.mesh_buffer()->address(),    // input tensor address
+                index.mesh_buffer()->address(),    // index tensor address
                 start_row_id,                      // start row
                 start_row_id + num_rows_per_core,  // end row
                 num_rows_in_dim,                   // num rows in dim
@@ -148,7 +148,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),        // output tensor address
+                output.mesh_buffer()->address(),   // output tensor address
                 start_row_id,                      // start row
                 start_row_id + num_rows_per_core,  // end row
                 num_rows_in_dim,                   // num rows in dim
@@ -172,9 +172,9 @@ void IndexFillOperation::MultiCore::override_runtime_arguments(
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
 
-    auto src_buffer = tensor_args.input.buffer()->address();
-    auto index_buffer = tensor_args.index.buffer()->address();
-    auto output_buffer = output.buffer()->address();
+    auto src_buffer = tensor_args.input.mesh_buffer()->address();
+    auto index_buffer = tensor_args.index.mesh_buffer()->address();
+    auto output_buffer = output.mesh_buffer()->address();
 
     for (const auto& core : cores) {
         {

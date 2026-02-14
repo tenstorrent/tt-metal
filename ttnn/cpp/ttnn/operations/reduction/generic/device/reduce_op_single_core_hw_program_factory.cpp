@@ -113,12 +113,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .compile_args = compute_kernel_args,
             .defines = reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW)});
 
-    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
+    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.mesh_buffer()->address(), num_tensor_tiles, 0});
 
     uint32_t out_dim_divider = Ht * Wt;
 
     tt_metal::SetRuntimeArgs(
-        program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
+        program, writer_kernel_id, core, {output.mesh_buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, selected_core_coord}};
 }

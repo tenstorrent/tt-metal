@@ -186,7 +186,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-    auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
+    auto pad_value_const_tensor_addr = pad_value_const_tensor.mesh_buffer()->address();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_h = output_padded_shape[2] / TILE_HEIGHT;
@@ -329,7 +329,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
                     curr_stick_size_nbytes,
                     (uint32_t)dst_nbytes_per_core_w,
                     (uint32_t)curr_stick_diff_nbytes,
-                    pad_value_const_tensor_addr,
+                    (uint32_t)pad_value_const_tensor_addr,
                     pad_value_const_buffer_nbytes,
                     packed_pad_value,
                     start_src_stick_id,

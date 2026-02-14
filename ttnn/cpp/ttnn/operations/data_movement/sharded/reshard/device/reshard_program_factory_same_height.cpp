@@ -60,7 +60,7 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
-    uint32_t remote_address = remote_tensor.buffer()->address();
+    uint32_t remote_address = remote_tensor.mesh_buffer()->address();
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
 
     // Generate all read/write offsets for each core
@@ -125,7 +125,7 @@ void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
     const auto& output = output_tensor;
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
-    uint32_t remote_address = remote_tensor.buffer()->address();
+    uint32_t remote_address = remote_tensor.mesh_buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
     for (auto core : cached_program.shared_variables.local_cores) {

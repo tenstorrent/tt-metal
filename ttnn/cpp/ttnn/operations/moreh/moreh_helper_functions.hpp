@@ -192,11 +192,11 @@ auto create_override_runtime_arguments_callback(
                 uint32_t rt_idx = 0;
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 for (const auto& input_tensor : input_tensors) {
-                    runtime_args[rt_idx++] = input_tensor.buffer()->address();
+                    runtime_args[rt_idx++] = input_tensor.mesh_buffer()->address();
                 }
                 for (const auto& optional_input_tensor : optional_input_tensors) {
                     runtime_args[rt_idx++] =
-                        optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
+                        optional_input_tensor.has_value() ? optional_input_tensor.value().mesh_buffer()->address() : 0;
                 }
             }
 
@@ -204,7 +204,7 @@ auto create_override_runtime_arguments_callback(
             {
                 auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 for (uint32_t idx = 0; idx < output_tensors.size(); idx++) {
-                    runtime_args[idx] = output_tensors.at(idx).buffer()->address();
+                    runtime_args[idx] = output_tensors.at(idx).mesh_buffer()->address();
                 }
             }
         }
@@ -233,12 +233,12 @@ auto create_override_runtime_arguments_callback(
             {
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 for (const auto& pair : arg_map.input) {
-                    runtime_args[pair.first] = input_tensors.at(pair.second).buffer()->address();
+                    runtime_args[pair.first] = input_tensors.at(pair.second).mesh_buffer()->address();
                 }
                 for (const auto& pair : arg_map.optional_input) {
                     const auto& optional_input_tensor = optional_input_tensors.at(pair.second);
                     runtime_args[pair.first] =
-                        optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
+                        optional_input_tensor.has_value() ? optional_input_tensor.value().mesh_buffer()->address() : 0;
                 }
             }
 
@@ -246,7 +246,7 @@ auto create_override_runtime_arguments_callback(
             {
                 auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 for (const auto& pair : arg_map.output) {
-                    runtime_args[pair.first] = output_tensors.at(pair.second).buffer()->address();
+                    runtime_args[pair.first] = output_tensors.at(pair.second).mesh_buffer()->address();
                 }
             }
         }

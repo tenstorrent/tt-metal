@@ -262,10 +262,10 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
             const auto& core = shared_variables.sender_cores.at(0);
 
             auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
+            writer_runtime_args.at(0) = tensor_return_value.at(0).mesh_buffer()->address();
             writer_runtime_args.at(8) = shared_variables.semaphore.address();
         }
 
@@ -277,11 +277,11 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
             const auto& core = shared_variables.receiver_cores.at(0);
 
             auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
-            reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
+            reader_runtime_args.at(3) = tensor_return_value.at(0).mesh_buffer()->address();
             reader_runtime_args.at(7) = shared_variables.semaphore.address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
+            writer_runtime_args.at(0) = tensor_return_value.at(1).mesh_buffer()->address();
         }
     }
 };

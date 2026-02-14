@@ -349,7 +349,17 @@ void set_or_update_runtime_arguments(
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
             std::array writer_runtime_args = {
-                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
+                (uint32_t)c.mesh_buffer()->address(),
+                c_start_id,
+                c_num_tiles,
+                c_current_shard_width,
+                cD,
+                cN,
+                cC,
+                cHt,
+                cWt,
+                cND,
+                0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -369,7 +379,7 @@ void set_or_update_runtime_arguments(
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
-                c.buffer()->address(),
+                (uint32_t)c.mesh_buffer()->address(),
                 c_start_id,
                 c_num_tiles,
                 c_current_shard_width,
@@ -386,7 +396,7 @@ void set_or_update_runtime_arguments(
         }
 
         std::array reader_runtime_args = {
-            a.buffer()->address(),
+            (uint32_t)a.mesh_buffer()->address(),
             c_start_id,
             a_num_tiles,
             c_num_tiles,
