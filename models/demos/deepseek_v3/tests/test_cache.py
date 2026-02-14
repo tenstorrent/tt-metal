@@ -344,6 +344,7 @@ def test_on_disk_cache_storage_writes_manifest_payload(tmp_path, device):
 
     assert payload["fingerprint"] == cache_key.fingerprint
     assert payload.get("name") == cache_key.manifest.name
+    assert payload.get("created_at") == payload.get("last_modified")
 
 
 def test_on_disk_cache_storage_manifest_includes_mesh_mapper(

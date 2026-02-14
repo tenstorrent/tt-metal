@@ -2,6 +2,7 @@ import inspect
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import md5
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
@@ -123,6 +124,10 @@ def compute_fingerprint(manifest: dict[str, Any]) -> str:
     return md5(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class CacheStorage(Protocol):
     def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
         ...
@@ -182,8 +187,20 @@ class OnDiskCacheStorage:
         ttnn.dump_tensor(tensor_path, tensor)
 
         manifest_path = self._manifest_path(key)
+        created_at = None
+        if manifest_path.is_file():
+            try:
+                existing_payload = json.loads(manifest_path.read_text())
+                created_at = existing_payload.get("created_at")
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid manifest file: {manifest_path}")
+        now = _utc_now_iso()
+        if created_at is None:
+            created_at = now
         manifest_payload = key.manifest.to_dict()
         manifest_payload["fingerprint"] = key.fingerprint
+        manifest_payload["created_at"] = created_at
+        manifest_payload["last_modified"] = now
         with manifest_path.open("w", encoding="utf-8") as f:
             json.dump(manifest_payload, f, indent=2, sort_keys=True)
 
