@@ -53,16 +53,16 @@ struct AllGatherMinimalMatmulAsyncParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
-    uint32_t num_links;
-    uint32_t ring_size;
+    uint32_t num_links = 0;
+    uint32_t ring_size = 0;
     ttnn::ccl::Topology topology;
     std::vector<GlobalSemaphore> semaphore;
     std::optional<uint32_t> cluster_axis;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
-    bool using_persistent_buffers;
-    bool force_transpose;
-    uint32_t num_workers_per_link;
-    uint32_t num_buffers_per_channel;
+    bool using_persistent_buffers = false;
+    bool force_transpose = false;
+    uint32_t num_workers_per_link = 0;
+    uint32_t num_buffers_per_channel = 0;
 
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const AllGatherMinimalMatmulAsyncConfig> config,
