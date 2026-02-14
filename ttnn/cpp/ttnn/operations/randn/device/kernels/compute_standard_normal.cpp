@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/eltwise_unary/trigonometry.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rand.h"
+#include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/eltwise_unary/trigonometry.h"
 
 namespace NAMESPACE {
 
