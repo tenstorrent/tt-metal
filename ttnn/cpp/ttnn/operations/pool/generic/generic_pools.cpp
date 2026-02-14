@@ -1038,7 +1038,7 @@ static std::vector<Tensor> pool2d(
     return result;
 }
 
-std::vector<Tensor> MaxPool2DOp::invoke(
+std::vector<Tensor> max_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -1085,7 +1085,7 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     return result;
 }
 
-Tensor AvgPool2DOp::invoke(
+Tensor avg_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,

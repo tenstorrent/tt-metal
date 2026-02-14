@@ -4,24 +4,20 @@
 
 #include "global_avg_pool_nanobind.hpp"
 
-#include <optional>
-
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::avgpool {
 
 namespace {
 
 void bind_global_avg_pool2d(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
+    const auto* doc = R"doc(
+        Applies global_avg_pool2d to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
 
         .. math::
             global\_avg\_pool(\mathrm{{input\_tensor}}_i)
@@ -37,20 +33,16 @@ void bind_global_avg_pool2d(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the output tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
-        )doc",
+        )doc";
 
-        ttnn::global_avg_pool2d.base_name(),
-        ttnn::global_avg_pool2d.python_fully_qualified_name());
-
-    bind_registered_operation(
+    ttnn::bind_function<"global_avg_pool2d">(
         mod,
-        ttnn::global_avg_pool2d,
         doc,
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none()});
+        &ttnn::global_avg_pool2d,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace
