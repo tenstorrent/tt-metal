@@ -1228,18 +1228,12 @@ class Generator(WarmupForwardMixin):
         else:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
-        output = None
         if read_from_device:
             to_host = self.read_decode_output(tt_logits)
-            output = self.process_decode_output_host(to_host)
+            # skip log_probs
+            return self.process_decode_output_host(to_host)[0]
         else:
-            output = tt_logits
-
-        # skip returning log-probs
-        if isinstance(output, tuple):
-            return output[0]
-        else:
-            return output
+            return tt_logits
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
