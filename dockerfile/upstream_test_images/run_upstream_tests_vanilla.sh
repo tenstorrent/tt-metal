@@ -37,10 +37,10 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
 
 test_suite_bh_pcie_didt_tests() {
     echo "[upstream-tests] Running BH upstream didt tests"
-    pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "all" --didt-workload-iterations 100 --determinism-check-interval 1
     pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and all" --didt-workload-iterations 100 --determinism-check-interval 1
     pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and all" --didt-workload-iterations 100 --determinism-check-interval 1
     pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "all" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "all" --didt-workload-iterations 100 --determinism-check-interval 1
 }
 
 verify_llama_dir_() {
@@ -75,7 +75,7 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --timeout 1200
 }
 
 test_suite_bh_multi_pcie_metal_unit_tests() {
@@ -135,8 +135,8 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices"
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices" --timeout 1200
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 220 --timeout 3600
 }
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
@@ -154,7 +154,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
     echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000 --timeout 3600
 }
 
 test_suite_wh_6u_metal_unit_tests() {
@@ -253,7 +253,7 @@ test_suite_bh_glx_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32 --timeout 1200
 }
 
 test_suite_bh_glx_torus_xyz_health_check_tests() {

@@ -29,8 +29,19 @@ def collect_test_results(results_dir: str) -> list[dict]:
         print(f"ERROR: Results directory not found: {results_dir}", file=sys.stderr)
         return []
 
+    # Prefer consolidated run-level exports when available to avoid double-counting.
+    # In current sweep workflow, oprun_*.json already contains all per-test records.
+    oprun_files = sorted(results_path.glob("oprun_*.json"))
+    if oprun_files:
+        json_files = oprun_files
+        print(f"Found {len(oprun_files)} run-level files (oprun_*.json); using only these for ingestion")
+    else:
+        # Fallback for older/non-consolidated layouts: ingest non-oprun JSON result files.
+        json_files = sorted(p for p in results_path.glob("*.json") if not p.name.startswith("oprun_"))
+        print(f"No run-level files found; using {len(json_files)} non-oprun JSON files")
+
     tests = []
-    for json_file in results_path.glob("*.json"):
+    for json_file in json_files:
         print(f"Reading {json_file}")
         try:
             with open(json_file) as f:
