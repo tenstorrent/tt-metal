@@ -27,7 +27,7 @@ void CloneOperation::validate_inputs(
             input_memory_layout == output_memory_layout,
             "Clone: input and output must have the same memory layout when both are sharded");
 
-        auto input_shard_spec = input.buffer()->shard_spec();
+        auto input_shard_spec = input.mesh_buffer()->get_reference_buffer()->shard_spec();
         auto output_shard_spec = operation_attributes.memory_config.shard_spec();
 
         TT_FATAL(output_shard_spec.has_value(), "Clone: output memory config must have shard spec when sharded");

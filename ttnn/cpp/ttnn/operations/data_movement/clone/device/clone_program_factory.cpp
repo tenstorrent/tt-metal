@@ -48,7 +48,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     uint32_t num_cores_y;
 
     if (is_sharded) {
-        auto shard_spec = output.buffer()->shard_spec();
+        auto shard_spec = output.mesh_buffer()->get_reference_buffer()->shard_spec();
         all_cores = shard_spec.grid();
         num_cores = all_cores.num_cores();
 

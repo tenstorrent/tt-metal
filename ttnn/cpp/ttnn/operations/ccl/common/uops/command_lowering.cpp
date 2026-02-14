@@ -102,7 +102,8 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
 
     auto coord_lookup = tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup();
 
-    const auto& [pages_per_shard_y, pages_per_shard_x] = tensor.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] =
+        tensor.mesh_buffer()->get_reference_buffer()->shard_spec().shape_in_pages();
     const auto& [shard_grid_start, shard_grid_end] = ttnn::ccl::shard_grid_from_shard_spec(tensor.shard_spec().value());
     const bool shard_grid_transposed = ttnn::ccl::ShardedAddrGenArgBuilder::shard_grid_is_transposed(tensor);
     // shard_grid_height (cores)

@@ -10,7 +10,7 @@ namespace shard_builder {
 
 uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
     uint32_t core_count = 0;
-    const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
+    const auto core_ranges = t.shard_spec().value().grid.ranges();
     for (const auto& core_range : core_ranges) {
         TT_FATAL(
             core_range.start_coord.x <= core_range.end_coord.x, "end coordinates left of start coordinates in shard");
@@ -26,7 +26,7 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     std::vector<CoreCoord> coordinates;
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
-    const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
+    const auto core_ranges = t.shard_spec().value().grid.ranges();
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
@@ -66,7 +66,7 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
     std::vector<uint32_t> args;
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
-    const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
+    const auto core_ranges = t.shard_spec().value().grid.ranges();
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
@@ -137,7 +137,7 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
         t.memory_config().memory_layout());
     bool is_dram = t.memory_config().is_dram();
     ShardSpec shard_spec = t.shard_spec().value();
-    ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
+    ShardSpecBuffer buf_shard_spec = t.mesh_buffer()->get_reference_buffer()->shard_spec();
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
     // contiguity is 0(3) if there is padding between unaligned page and target is L1(DRAM),
     // 1(4) if there is padding in the rightmost shard and target is L1(DRAM),
