@@ -347,9 +347,9 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
-    split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
-    if disable_attn_pc:
-        split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    # Split-heads outputs should stay sharded in Stage-2/3. Disabling attention
+    # program configs should not force an interleaved/DRAM "island".
+    split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None)
 
     qkv_pc = prog_cfgs.get("query_key_value_matmul_program_config")
     proj_pc = prog_cfgs.get("self_output_matmul_program_config")
