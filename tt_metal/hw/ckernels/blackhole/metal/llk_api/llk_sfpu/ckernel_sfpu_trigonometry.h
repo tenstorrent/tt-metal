@@ -46,8 +46,9 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         s = t * a + s;
         t = sfpi::approx_recip(r);
         // one N-R
-        sfpi::vFloat e = -r * t + sfpi::vConst1;
-        t = -t * e - t;
+        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
+        vFloat neg_t = -t;
+        t = t * neg_e + neg_t;
         r = r * t + sfpi::vConst1;
         r = s * t + r;
         r = r * t + t;
@@ -72,8 +73,9 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     v_if(i < 0) {
         t = sfpi::approx_recip(r);
         // one N-R
-        sfpi::vFloat e = -r * t + sfpi::vConst1;
-        r = -t * e - t;
+        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
+        vFloat neg_t = -t;
+        r = t * neg_e + neg_t;
     }
     v_endif;
 
