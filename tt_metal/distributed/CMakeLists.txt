@@ -3,6 +3,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_coordinate_translator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue_base.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dummy_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fd_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sd_mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp

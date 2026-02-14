@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,7 @@
 
 namespace tt::tt_metal::distributed {
 
-class SDMeshCommandQueue final : public MeshCommandQueueBase {
-private:
-    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
-    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
-
+class DummyMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
     bool write_shard_to_device(
         const MeshBuffer& buffer,
@@ -36,12 +32,9 @@ protected:
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
 
 public:
-    SDMeshCommandQueue(
-        MeshDevice* mesh_device,
-        uint32_t id,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function,
-        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
-    ~SDMeshCommandQueue() override = default;
+    DummyMeshCommandQueue(
+        MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
+    ~DummyMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
 
@@ -64,11 +57,6 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
-
-private:
-    void wait_for_cores_idle();
-
-    std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -19,8 +19,12 @@
 namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(
-    MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)) {}
+    MeshDevice* mesh_device,
+    uint32_t id,
+    std::function<std::lock_guard<std::mutex>()> lock_api_function,
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
+    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)),
+    active_distributed_context_(std::move(distributed_context)) {}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     TT_THROW("Trace not supported for slow dispatch");
@@ -155,10 +159,8 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
 
-    // Barrier across all hosts of the mesh
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
-        mesh_device_->get_view().mesh_id());
-    distributed_context->barrier();
+    // Barrier across all active hosts of the mesh
+    active_distributed_context_->barrier();
 }
 
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}

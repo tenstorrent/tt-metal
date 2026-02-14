@@ -560,6 +560,14 @@ typename device_operation_t::tensor_return_value_t launch(
 
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
+    // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
+    // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
+    // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
+    if (mesh_device->get_view().get_devices().empty()) {
+        tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+        return tensor_return_value;
+    }
+
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);

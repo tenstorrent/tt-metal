@@ -18,6 +18,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/dummy_mesh_command_queue.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -214,6 +215,12 @@ TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
     auto submesh = mesh_device_->create_submesh(MeshShape(2, 2));
     ASSERT_NE(submesh, nullptr);
     EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+
+    // Make sure the inactive rank returns a DummyMeshCommandQueue
+    if (submesh->get_view().get_devices().empty()) {
+        auto& cq = submesh->mesh_command_queue();
+        EXPECT_TRUE(dynamic_cast<DummyMeshCommandQueue*>(&cq) != nullptr);
+    }
 }
 
 TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
