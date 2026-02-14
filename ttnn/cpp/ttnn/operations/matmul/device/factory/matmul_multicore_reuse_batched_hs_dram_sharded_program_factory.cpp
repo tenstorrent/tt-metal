@@ -646,7 +646,7 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         const auto& c = bias.value();
         TT_FATAL(c.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+        TT_FATAL(c.is_allocated(), "Operands to matmul need to be allocated in buffers on device!");
         bias_buffer = c.buffer();
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }

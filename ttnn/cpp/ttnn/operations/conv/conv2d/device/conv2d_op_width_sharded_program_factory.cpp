@@ -164,7 +164,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -187,8 +187,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -290,7 +289,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         num_blocks_output_w,
         num_blocks_weight_w);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_FATAL(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");

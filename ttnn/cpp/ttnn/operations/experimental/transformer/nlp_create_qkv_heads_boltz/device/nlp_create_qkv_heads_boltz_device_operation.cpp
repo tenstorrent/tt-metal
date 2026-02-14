@@ -21,7 +21,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to TM need to be on device! {}",
         input_tensor.storage_type());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
@@ -114,7 +114,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
         const auto input_shape_kv = input_tensor_kv.padded_shape();
 
         TT_FATAL(input_tensor_kv.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-        TT_FATAL(input_tensor_kv.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+        TT_FATAL(input_tensor_kv.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
         TT_FATAL(input_tensor_kv.dtype() == input_tensor.dtype(), "KV tensor dtype must be same as Q tensor dtype!");
         TT_FATAL(
             input_tensor_kv.layout() == Layout::TILE,

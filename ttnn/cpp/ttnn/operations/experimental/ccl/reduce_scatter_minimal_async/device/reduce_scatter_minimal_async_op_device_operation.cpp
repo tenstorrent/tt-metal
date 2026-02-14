@@ -28,7 +28,7 @@ void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_hit(
     // Lightweight validation for cache hits
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 }
 
 void ReduceScatterMinimalAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -186,7 +186,7 @@ void reduce_scatter_common_validates(
         "reduce_scatter_minimal_async currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device");
     TT_FATAL(num_links > 0, "num_links must be greater than 0");
 
     const auto& rank = input_tensor.logical_shape().rank();

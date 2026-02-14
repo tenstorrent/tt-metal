@@ -36,7 +36,7 @@ void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");
     TT_FATAL(
         operation_attributes.num_links > 0,
         "Number of links must be greater than 0, but is {}",

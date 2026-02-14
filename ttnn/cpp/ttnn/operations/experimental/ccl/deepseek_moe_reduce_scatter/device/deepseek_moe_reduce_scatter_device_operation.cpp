@@ -26,7 +26,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     for (const ttnn::Tensor& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
     }
 }
 

@@ -364,7 +364,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         }
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -380,8 +380,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");

@@ -23,7 +23,7 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to all_broadcast need to be on device! Storage type: {}",
         static_cast<int>(input_tensor.storage_type()));
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_broadcast need to be allocated in buffers on device!");
 
     TT_FATAL(
         operation_attributes.num_links > 0,

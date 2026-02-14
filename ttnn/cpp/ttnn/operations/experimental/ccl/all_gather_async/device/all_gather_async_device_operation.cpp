@@ -60,7 +60,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,

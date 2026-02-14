@@ -25,7 +25,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Basic validations
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffer on device!");
     TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGather requires tensor of rank 2 or greater");
 
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);

@@ -53,7 +53,7 @@ void validate(
         tensor_args.input.storage_type() == StorageType::DEVICE,
         "bcast_to: Invalid storage_type {}. Input tensor need to be on device",
         tensor_args.input.storage_type());
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "bcast_to: Input tensor need to be allocated in buffers on device");
+    TT_FATAL(tensor_args.input.is_allocated(), "bcast_to: Input tensor need to be allocated in buffers on device");
     TT_FATAL(
         tensor_args.input.memory_config().is_sharded() == false,
         "bcast_to: Invalid input memory config {}. Input tensor sharding not supported",

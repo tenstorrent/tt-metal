@@ -36,10 +36,10 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(buffer_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(

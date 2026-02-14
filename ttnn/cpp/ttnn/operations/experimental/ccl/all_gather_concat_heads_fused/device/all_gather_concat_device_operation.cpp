@@ -33,7 +33,7 @@ void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but is {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
