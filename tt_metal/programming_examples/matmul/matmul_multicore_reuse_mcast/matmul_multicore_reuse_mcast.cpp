@@ -10,7 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <matmul_common/bmm_op.hpp>
+#include <bmm_op.hpp>
 #include <algorithm>
 #include "tt-metalium/core_coord.hpp"
 
@@ -88,9 +88,6 @@ void matmul_multicore_reuse_mcast(
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
-    uint32_t MtKt = Mt * Kt;
-    uint32_t MtNt = Mt * Nt;
 
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])2
@@ -224,10 +221,6 @@ void matmul_multicore_reuse_mcast(
     auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
-
     /*
      * Config of Circular Buffer in the device L1
      * input tiles count is = 2 because it's single tile process, and double-buffer
@@ -235,12 +228,12 @@ void matmul_multicore_reuse_mcast(
     uint32_t src0_cb_index = CBIndex::c_0;  // 0
     CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
                                               .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = CBIndex::c_1;  // 1
     CircularBufferConfig cb_src1_config = CircularBufferConfig(in1_CB_size, {{src1_cb_index, cb_data_format}})
                                               .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
@@ -249,7 +242,7 @@ void matmul_multicore_reuse_mcast(
     CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                                 .set_page_size(output_cb_index, single_tile_size)
                                                 .set_page_size(interm0_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
+    tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
     ////////////////////////////
     /*
@@ -269,7 +262,8 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -278,7 +272,7 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
         tt_metal::DataMovementConfig{
@@ -288,7 +282,7 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
         tt_metal::DataMovementConfig{
@@ -298,7 +292,7 @@ void matmul_multicore_reuse_mcast(
 
     auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
         tt_metal::DataMovementConfig{
@@ -308,7 +302,7 @@ void matmul_multicore_reuse_mcast(
 
     auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_except_left_column,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -317,7 +311,7 @@ void matmul_multicore_reuse_mcast(
 
     auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
         left_column,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -325,9 +319,9 @@ void matmul_multicore_reuse_mcast(
             .compile_args = writer_compile_time_args});
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
 
@@ -339,8 +333,6 @@ void matmul_multicore_reuse_mcast(
     /*
      * Kernels - Runtime arguments
      */
-    std::vector<KernelHandle> reader_kernel_ids;
-    std::vector<KernelHandle> writer_kernel_ids;
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
@@ -430,26 +422,18 @@ void matmul_multicore_reuse_mcast(
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args);      // RISCV_0_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_sender_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x == 0 and core_idx_y != 0) {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args);    // RISCV_0_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_receiver_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x != 0 and core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args);    // RISCV_1_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_sender_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             } else {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args);  // RISCV_1_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_receiver_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             }
         }
     }
