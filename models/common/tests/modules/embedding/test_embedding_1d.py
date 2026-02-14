@@ -385,7 +385,6 @@ def test_embedding_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
     """
     from models.tt_transformers.tt.model_config import ModelArgs
 
-    hf_model_name = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     dtype = ttnn.bfloat16
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
