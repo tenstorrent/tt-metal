@@ -103,6 +103,8 @@ jobs:
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
             { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
             # { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
+            { name: "phi3", runner-label: "N150", performance: false, cmd: run_phi3_func, owner_id: U094PKWHNJ0},  # Petar Milojevic
+            { name: "phi3", runner-label: "N300", performance: false, cmd: run_phi3_func, owner_id: U094PKWHNJ0},  # Petar Milojevic
           ]]
     steps:
       - name: Compute tests
