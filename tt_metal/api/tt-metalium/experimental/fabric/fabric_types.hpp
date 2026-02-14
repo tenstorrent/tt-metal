@@ -112,6 +112,7 @@ bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id);
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 }  // namespace tt::tt_fabric

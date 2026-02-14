@@ -5,12 +5,14 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
@@ -19,6 +21,8 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_metal::experimental::tt_fabric {
 
 // Import types from tt::tt_fabric for use in this API
+using ::tt::tt_fabric::AdjacencyGraph;
+using ::tt::tt_fabric::ConnectionValidationMode;
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
@@ -54,6 +58,18 @@ struct TopologyMappingConfig {
     // Map from AsicID to (TrayID, ASICLocation) - required if pinnings is non-empty.
     // Used to validate pinning constraints against the physical topology.
     AsicPositionMap asic_positions;
+
+    // Per-mesh validation modes for intra-mesh mapping (fabric node to ASIC).
+    // If empty, falls back to strict_mode for backward compatibility.
+    std::map<MeshId, ConnectionValidationMode> mesh_validation_modes;
+
+    // Validation mode for inter-mesh mapping (mesh to mesh).
+    // Defaults to RELAXED for backward compatibility if not set.
+    std::optional<ConnectionValidationMode> inter_mesh_validation_mode;
+
+    // When true, disables rank binding constraints. Rank mappings will be ignored
+    // and any mapping that satisfies connectivity constraints will be valid.
+    bool disable_rank_bindings = false;
 };
 
 /**
@@ -159,4 +175,276 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
+/**
+ * @brief Represents a mesh node in a 2-layer adjacency graph
+ *
+ * Simplified to just be a MeshId. The internal adjacency graph is accessed via
+ * LogicalMultiMeshGraph::get_internal_graph().
+ */
+using LogicalMeshNode = MeshId;
+
+/**
+ * @brief Represents a logical exit node that can be at either the mesh level or fabric node level
+ *
+ * Logical exit nodes can represent:
+ * - Mesh-level exit nodes: mesh_id is set, fabric_node_id is empty (represents the entire mesh as an exit point)
+ * - Fabric node-level exit nodes: both mesh_id and fabric_node_id are set (represents a specific fabric node as an exit
+ * point)
+ */
+struct LogicalExitNode {
+    MeshId mesh_id;
+    std::optional<FabricNodeId> fabric_node_id;
+
+    bool operator<(const LogicalExitNode& other) const {
+        if (mesh_id < other.mesh_id) {
+            return true;
+        }
+        if (other.mesh_id < mesh_id) {
+            return false;
+        }
+        // If mesh_ids are equal, compare fabric_node_ids
+        if (!fabric_node_id && !other.fabric_node_id) {
+            return false;  // Both empty, equal
+        }
+        if (!fabric_node_id) {
+            return true;  // This is empty, other is not, so this < other
+        }
+        if (!other.fabric_node_id) {
+            return false;  // Other is empty, this is not, so other < this
+        }
+        return *fabric_node_id < *other.fabric_node_id;
+    }
+
+    bool operator==(const LogicalExitNode& other) const {
+        return mesh_id == other.mesh_id && fabric_node_id == other.fabric_node_id;
+    }
+};
+
+/**
+ * @brief Represents a physical exit node (ASIC that connects to other meshes)
+ *
+ * Physical exit nodes represent ASICs that have intermesh connections.
+ * Each physical exit node has a mesh_id (which mesh it belongs to) and an asic_id (the ASIC identifier).
+ */
+struct PhysicalExitNode {
+    MeshId mesh_id;
+    tt::tt_metal::AsicID asic_id;
+
+    bool operator<(const PhysicalExitNode& other) const {
+        if (mesh_id < other.mesh_id) {
+            return true;
+        }
+        if (other.mesh_id < mesh_id) {
+            return false;
+        }
+        return asic_id < other.asic_id;
+    }
+
+    bool operator==(const PhysicalExitNode& other) const {
+        return mesh_id == other.mesh_id && asic_id == other.asic_id;
+    }
+};
+
+/**
+ * @brief Multi-mesh adjacency graph where meshes are nodes
+ *
+ * Efficient representation that avoids duplicating adjacency graphs:
+ * - Stores each mesh's internal adjacency graph once in a map
+ * - Stores mesh-level connectivity as lightweight AdjacencyGraph<MeshId>
+ *
+ * This type represents a hierarchical adjacency graph:
+ * - Top layer: adjacency graph of mesh IDs (which meshes connect to which meshes)
+ * - Bottom layer: for each mesh, its internal adjacency graph (which fabric nodes connect within the mesh)
+ */
+struct LogicalMultiMeshGraph {
+    // Map from MeshId to its internal adjacency graph (stored once, no duplication)
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> mesh_adjacency_graphs_;
+
+    // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
+    AdjacencyGraph<MeshId> mesh_level_graph_;
+
+    // Map from MeshId to exit node adjacency graph for that mesh (optional, only populated if specified)
+    // Contains exit nodes (LogicalExitNode structs) that can represent either:
+    // - Mesh-level exit nodes (mesh_id set, fabric_node_id empty) - the entire mesh serves as an exit point
+    // - Fabric node-level exit nodes (both mesh_id and fabric_node_id set) - specific fabric nodes serve as exit points
+    // and their connections to exit nodes in other meshes as edges.
+    // Multiple channels between the same pair are represented by duplicate entries.
+    // Only populated when strict mode intermesh ports are specified.
+    std::map<MeshId, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
+};
+
+/**
+ * @brief Build a logical multi-mesh adjacency graph from a mesh graph
+ *
+ * Creates a LogicalMultiMeshGraph with:
+ * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
+ * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<FabricNodeId>)
+ * - Map of mesh IDs to exit node adjacency graphs (AdjacencyGraph<LogicalExitNode>), optional
+ *   - Populated for both strict mode (requested_intermesh_ports) and relaxed mode (requested_intermesh_connections)
+ *   - Strict mode: Creates fabric node-level exit nodes (LogicalExitNode with mesh_id and fabric_node_id set)
+ *   - Relaxed mode: Creates mesh-level exit nodes (LogicalExitNode with mesh_id only, fabric_node_id is nullopt)
+ *   - Exit nodes and their intermesh connections to other exit nodes
+ *
+ * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
+ * while the internal graphs represent intra-mesh connectivity (which fabric nodes connect within each mesh).
+ * Exit node graphs track which logical nodes (at mesh or fabric node level) serve as intermesh connection points.
+ *
+ * @param mesh_graph Reference to the mesh graph object containing fabric topology
+ * @return LogicalMultiMeshGraph containing mesh-level graph, internal mesh graphs, and optional exit node graphs
+ */
+LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
+
+/**
+ * @brief Represents a physical mesh node in a 2-layer adjacency graph
+ *
+ * Simplified to just be a MeshId. The internal adjacency graph is accessed via
+ * PhysicalMultiMeshGraph::mesh_adjacency_graphs_.
+ */
+using PhysicalMeshNode = MeshId;
+
+// Note: Exit node information is now stored as an AdjacencyGraph in PhysicalMultiMeshGraph
+// No separate MeshExitNodeInfo struct needed - the adjacency graph itself represents exit nodes
+
+/**
+ * @brief Multi-mesh adjacency graph for physical ASICs where meshes are nodes
+ *
+ * Efficient representation that avoids duplicating adjacency graphs:
+ * - Stores each mesh's internal adjacency graph once in a map
+ * - Stores mesh-level connectivity as lightweight AdjacencyGraph<MeshId>
+ * - Tracks exit node information as an adjacency graph (only exit nodes and their intermesh connections)
+ *
+ * This type represents a hierarchical adjacency graph:
+ * - Top layer: adjacency graph of mesh IDs (which meshes connect to which meshes)
+ * - Bottom layer: for each mesh, its internal adjacency graph (which ASICs connect within the mesh)
+ * - Exit nodes: adjacency graph containing only exit nodes (ASICs that connect to other meshes)
+ *   and their connections to ASICs in other meshes. Multiple connections are represented by
+ *   duplicate entries in the neighbor vector (matching AdjacencyGraph's channel representation).
+ */
+struct PhysicalMultiMeshGraph {
+    // Map from MeshId to its internal adjacency graph (stored once, no duplication)
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
+
+    // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
+    AdjacencyGraph<MeshId> mesh_level_graph_;
+
+    // Map from MeshId to exit node adjacency graph for that mesh
+    // Contains only exit nodes (PhysicalExitNode structs representing ASICs that connect to ASICs in other meshes) as
+    // nodes, and their connections to PhysicalExitNodes in other meshes as edges. Each PhysicalExitNode includes the
+    // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
+    // represented by duplicate entries.
+    std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
+};
+
+/**
+ * @brief Build a physical multi-mesh adjacency graph from physical system descriptor
+ *
+ * Creates a PhysicalMultiMeshGraph with:
+ * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
+ * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<AsicID>)
+ *
+ * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
+ * determined by checking if ASICs in one mesh connect to ASICs in another mesh.
+ * The internal graphs represent intra-mesh connectivity (which ASICs connect within each mesh).
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+ * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
+ */
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
+ *
+ * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
+ * based on mesh assignments. This is useful when you have a pre-built adjacency graph and need to
+ * organize it by mesh.
+ *
+ * The function:
+ * - Splits the flat adjacency graph into per-mesh adjacency graphs (only intra-mesh connections)
+ * - Builds the mesh-level graph based on intermesh connections
+ * - Builds exit node graphs for each mesh
+ *
+ * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks.
+ *                              Used to determine which mesh each ASIC belongs to.
+ * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
+ */
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Map logical multi-mesh topology to physical multi-mesh topology
+ *
+ * This function performs a two-level mapping:
+ * 1. Inter-mesh mapping: Maps logical meshes to physical meshes
+ * 2. Intra-mesh mapping: For each mapped mesh pair, maps logical fabric nodes to physical ASICs
+ *
+ * The function respects:
+ * - Mesh host rank constraints (logical nodes map to ASICs on the correct host)
+ * - Optional pinning constraints that restrict which physical ASICs specific logical nodes can map to
+ * - Inter-mesh connectivity constraints
+ *
+ * @param adjacency_map_logical Logical multi-mesh adjacency graph
+ * @param adjacency_map_physical Physical multi-mesh adjacency graph
+ * @param config Configuration options including pinning constraints, ASIC positions, and validation modes.
+ *               config.mesh_validation_modes and config.inter_mesh_validation_mode should be set for proper
+ *               validation. If not set, defaults to RELAXED mode. If config.strict_mode is true, it will be
+ *               used as a fallback for backward compatibility.
+ *               If config.disable_rank_bindings is true, rank mappings are ignored and can be omitted.
+ * @param asic_id_to_mesh_rank Optional mapping of mesh IDs to ASIC IDs to mesh host ranks.
+ *                             Required if config.disable_rank_bindings is false.
+ * @param fabric_node_id_to_mesh_rank Optional mapping of mesh IDs to fabric node IDs to mesh host ranks.
+ *                                    Required if config.disable_rank_bindings is false.
+ *
+ * @return TopologyMappingResult containing the overall mapping result with bidirectional mappings
+ *         for all successfully mapped meshes
+ *
+ * @note If inter-mesh mapping fails, result.success will be false and error_message will contain details
+ * @note If intra-mesh mapping fails for a specific mesh, the mapping will be retried with different
+ *       inter-mesh pairings. If all attempts fail, result.success will be false
+ * @note If config.disable_rank_bindings is true, rank constraints are ignored and any valid connectivity
+ *       mapping is allowed
+ */
+TopologyMappingResult map_multi_mesh_to_physical(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    const TopologyMappingConfig& config,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
+
+// Formatter for LogicalExitNode to enable fmt::format debugging
+template <>
+struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::LogicalExitNode> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::experimental::tt_fabric::LogicalExitNode& exit_node, format_context& ctx) const
+        -> format_context::iterator {
+        if (exit_node.fabric_node_id.has_value()) {
+            return fmt::format_to(
+                ctx.out(),
+                "LogicalExitNode(mesh_id={}, fabric_node_id={})",
+                exit_node.mesh_id.get(),
+                *exit_node.fabric_node_id);
+        } else {
+            return fmt::format_to(
+                ctx.out(), "LogicalExitNode(mesh_id={}, fabric_node_id=None)", exit_node.mesh_id.get());
+        }
+    }
+};
+
+// Formatter for PhysicalExitNode to enable fmt::format debugging
+template <>
+struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::PhysicalExitNode> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::experimental::tt_fabric::PhysicalExitNode& exit_node, format_context& ctx) const
+        -> format_context::iterator {
+        return fmt::format_to(
+            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id);
+    }
+};

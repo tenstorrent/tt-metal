@@ -17,14 +17,19 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-// topology_solver.hpp is included in topology_solver.tpp before this file is included
+// topology_solver.hpp is included in topology_solver_internal.hpp before this file is included
 // so the types are already available via the include chain
-
-namespace tt::tt_fabric::detail {
+// Note: This file is included from topology_solver_internal.hpp which includes topology_solver.hpp
+// which opens namespace tt::tt_fabric::detail, so we're already in that namespace
 
 // Progress logging interval mask: log every 2^18 (262144) DFS calls
 // Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
+
+// DFS call limit to prevent excessive search for complex topologies
+constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+
+namespace tt::tt_fabric::detail {
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
@@ -206,6 +211,103 @@ const std::vector<size_t>& ConstraintIndexData<TargetNode, GlobalNode>::get_cand
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool ConstraintIndexData<TargetNode, GlobalNode>::check_cardinality_constraints(const std::vector<int>& mapping) const {
+    // Check each cardinality constraint
+    for (const auto& [mapping_pairs, min_count] : cardinality_constraints) {
+        size_t satisfied_count = 0;
+        for (const auto& [target_idx, global_idx] : mapping_pairs) {
+            if (target_idx < mapping.size() && mapping[target_idx] != -1 &&
+                static_cast<size_t>(mapping[target_idx]) == global_idx) {
+                satisfied_count++;
+            }
+        }
+        if (satisfied_count < min_count) {
+            return false;  // This constraint is not satisfied
+        }
+    }
+    return true;  // All cardinality constraints are satisfied
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool ConstraintIndexData<TargetNode, GlobalNode>::can_satisfy_cardinality_constraints(
+    const std::vector<int>& mapping) const {
+    // Check each cardinality constraint to see if it can still be satisfied
+    for (const auto& [mapping_pairs, min_count] : cardinality_constraints) {
+        size_t satisfied_count = 0;
+        size_t possible_count = 0;  // Count of pairs that could still be satisfied
+
+        for (const auto& [target_idx, global_idx] : mapping_pairs) {
+            if (target_idx >= mapping.size()) {
+                continue;  // Invalid target index
+            }
+
+            if (mapping[target_idx] != -1) {
+                // Already mapped
+                if (static_cast<size_t>(mapping[target_idx]) == global_idx) {
+                    satisfied_count++;
+                }
+                // If mapped to something else, this pair cannot be satisfied
+            } else {
+                // Not yet mapped - this pair could still be satisfied
+                possible_count++;
+            }
+        }
+
+        // Check if we can still satisfy this constraint
+        // We need: satisfied_count + possible_count >= min_count
+        if (satisfied_count + possible_count < min_count) {
+            return false;  // Impossible to satisfy this constraint
+        }
+    }
+    return true;  // All cardinality constraints can still be satisfied
+}
+
+template <typename TargetNode, typename GlobalNode>
+size_t ConstraintIndexData<TargetNode, GlobalNode>::get_single_required_mapping(size_t target_idx) const {
+    // Check if this target has exactly one required constraint (pinning)
+    if (target_idx < restricted_global_indices.size() && restricted_global_indices[target_idx].size() == 1) {
+        return restricted_global_indices[target_idx][0];
+    }
+    return SIZE_MAX;  // Not a single required constraint
+}
+
+template <typename TargetNode, typename GlobalNode>
+std::tuple<size_t, size_t, size_t> ConstraintIndexData<TargetNode, GlobalNode>::compute_constraint_stats(
+    const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data) const {
+    size_t required_satisfied = 0;
+    size_t preferred_satisfied = 0;
+    size_t preferred_total = 0;
+
+    for (size_t i = 0; i < mapping.size() && i < graph_data.n_target; ++i) {
+        if (mapping[i] == -1) {
+            continue;  // Not mapped
+        }
+
+        size_t global_idx = static_cast<size_t>(mapping[i]);
+
+        // Check required constraints
+        if (i < restricted_global_indices.size() && !restricted_global_indices[i].empty()) {
+            // This target has required constraints - check if the mapping satisfies them
+            const auto& valid_globals = restricted_global_indices[i];
+            if (std::binary_search(valid_globals.begin(), valid_globals.end(), global_idx)) {
+                required_satisfied++;
+            }
+        }
+
+        // Check preferred constraints
+        if (i < preferred_global_indices.size() && !preferred_global_indices[i].empty()) {
+            const auto& preferred_globals = preferred_global_indices[i];
+            preferred_total += preferred_globals.size();
+            if (std::binary_search(preferred_globals.begin(), preferred_globals.end(), global_idx)) {
+                preferred_satisfied++;
+            }
+        }
+    }
+
+    return {required_satisfied, preferred_satisfied, preferred_total};
+}
+
+template <typename TargetNode, typename GlobalNode>
 ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
     const MappingConstraints<TargetNode, GlobalNode>& constraints,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
@@ -310,6 +412,56 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
             }
 
             preferred_global_indices[i] = std::move(preferred_indices);
+        }
+    }
+
+    // Convert cardinality constraints from node-based to index-based
+    const auto& cardinality_constraints_node = constraints.get_cardinality_constraints();
+    for (const auto& [mapping_pairs, min_count] : cardinality_constraints_node) {
+        std::set<std::pair<size_t, size_t>> indexed_pairs;
+        std::vector<std::pair<TargetNode, GlobalNode>> missing_pairs;
+
+        for (const auto& [target_node, global_node] : mapping_pairs) {
+            auto target_it = graph_data.target_to_idx.find(target_node);
+            auto global_it = graph_data.global_to_idx.find(global_node);
+
+            if (target_it != graph_data.target_to_idx.end() && global_it != graph_data.global_to_idx.end()) {
+                indexed_pairs.insert({target_it->second, global_it->second});
+            } else {
+                missing_pairs.emplace_back(target_node, global_node);
+            }
+        }
+
+        // Log warning if some pairs are missing
+        if (!missing_pairs.empty()) {
+            std::stringstream missing_pairs_str;
+            bool first = true;
+            for (const auto& [t, g] : missing_pairs) {
+                if (!first) {
+                    missing_pairs_str << ", ";
+                }
+                first = false;
+                missing_pairs_str << fmt::format("({}, {})", t, g);
+            }
+
+            log_warning(
+                tt::LogFabric,
+                "Topology solver: {} pair(s) in cardinality constraint are not present in the graphs. "
+                "These pairs will be ignored. Missing pairs: {}",
+                missing_pairs.size(),
+                missing_pairs_str.str());
+        }
+
+        // Only add the constraint if we have at least min_count valid pairs
+        if (indexed_pairs.size() >= min_count) {
+            cardinality_constraints.emplace_back(std::move(indexed_pairs), min_count);
+        } else {
+            log_warning(
+                tt::LogFabric,
+                "Topology solver: Cardinality constraint requires {} pairs but only {} valid pairs remain after "
+                "filtering. This constraint will be ignored.",
+                min_count,
+                indexed_pairs.size());
         }
     }
 }
@@ -742,6 +894,19 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
     state_.dfs_calls++;
+
+    // Check DFS call limit to prevent excessive search for complex topologies
+    if (state_.dfs_calls >= DFS_CALL_LIMIT) {
+        std::string error_msg = fmt::format(
+            "DFS search exceeded call limit of {} calls. Topology may be too complex to solve.",
+            DFS_CALL_LIMIT);
+        log_warning(tt::LogFabric, "{}", error_msg);
+        if (state_.error_message.empty()) {
+            state_.error_message = error_msg;
+        }
+        return false;
+    }
+
     if ((state_.dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
         size_t assigned = 0;
         for (auto v : state_.mapping) {
@@ -759,6 +924,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     // Check memoization cache
     uint64_t state_hash = hash_state(state_.mapping);
     if (state_.failed_states.find(state_hash) != state_.failed_states.end()) {
+        state_.memoization_hits++;
         return false;
     }
 
@@ -818,9 +984,17 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             continue;  // Skip candidate that leaves no options
         }
 
-        // Assign candidate
+        // Assign candidate temporarily to check cardinality constraints
         state_.mapping[target_idx] = static_cast<int>(global_idx);
         state_.used[global_idx] = true;
+
+        // Check if cardinality constraints can still be satisfied with this assignment
+        if (!constraint_data.can_satisfy_cardinality_constraints(state_.mapping)) {
+            // This assignment makes it impossible to satisfy cardinality constraints - backtrack
+            state_.mapping[target_idx] = -1;
+            state_.used[global_idx] = false;
+            continue;  // Skip this candidate
+        }
 
         // Recursive call
         if (dfs_recursive(pos + 1, graph_data, constraint_data, validation_mode)) {
@@ -842,7 +1016,6 @@ template <typename TargetNode, typename GlobalNode>
 bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode validation_mode,
     bool quiet_mode) {
     // Reset internal state
@@ -885,7 +1058,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     // Check if global graph has enough nodes
     if (graph_data.n_global < graph_data.n_target) {
         std::string error_msg = fmt::format(
-            "Cannot map target graph to global graph: target graph has {} nodes, but global graph only has {} nodes",
+            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has {} nodes",
             graph_data.n_target,
             graph_data.n_global);
         if (quiet_mode) {
@@ -899,53 +1072,87 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
 
     // Pre-assign nodes from required constraints (pinnings)
     size_t assigned_count = 0;
-    const auto& valid_mappings = constraints.get_valid_mappings();
     for (size_t i = 0; i < graph_data.n_target; ++i) {
-        const auto& target_node = graph_data.target_nodes[i];
-        auto it = valid_mappings.find(target_node);
-        if (it != valid_mappings.end() && it->second.size() == 1) {
+        size_t global_idx = constraint_data.get_single_required_mapping(i);
+        if (global_idx != SIZE_MAX) {
             // This target node has exactly one required constraint (pinning)
-            const GlobalNode& required_global = *it->second.begin();
-            auto global_it = graph_data.global_to_idx.find(required_global);
-            if (global_it != graph_data.global_to_idx.end()) {
-                size_t global_idx = global_it->second;
 
-                // Validate that this pre-assignment is consistent with already-assigned neighbors
-                for (size_t neighbor : graph_data.target_adj_idx[i]) {
-                    if (state_.mapping[neighbor] != -1) {
-                        size_t neighbor_global_idx = static_cast<size_t>(state_.mapping[neighbor]);
-                        // Check if edge exists between global_idx and neighbor_global_idx
-                        bool edge_exists = std::binary_search(
-                            graph_data.global_adj_idx[global_idx].begin(),
-                            graph_data.global_adj_idx[global_idx].end(),
-                            neighbor_global_idx);
-                        if (!edge_exists) {
-                            std::string error_msg = fmt::format(
-                                "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
-                                "but target node {} (adjacent to {}) is already mapped to global node {}, "
-                                "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
-                                target_node,
-                                required_global,
-                                graph_data.target_nodes[neighbor],
-                                target_node,
-                                graph_data.global_nodes[neighbor_global_idx],
-                                required_global,
-                                graph_data.global_nodes[neighbor_global_idx]);
-                            if (quiet_mode) {
-                                log_debug(tt::LogFabric, "{}", error_msg);
-                            } else {
-                                log_error(tt::LogFabric, "{}", error_msg);
-                            }
-                            state_.error_message = error_msg;
-                            return false;
-                        }
+            // Check if this global node is already used by another pre-assigned target node
+            if (state_.used[global_idx]) {
+                // Find which target node is already mapped to this global node
+                size_t conflicting_target_idx = SIZE_MAX;
+                for (size_t j = 0; j < i; ++j) {
+                    if (state_.mapping[j] == static_cast<int>(global_idx)) {
+                        conflicting_target_idx = j;
+                        break;
                     }
                 }
-
-                state_.mapping[i] = static_cast<int>(global_idx);
-                state_.used[global_idx] = true;
-                assigned_count++;
+                std::string error_msg;
+                const auto& target_node = graph_data.target_nodes[i];
+                const auto& required_global = graph_data.global_nodes[global_idx];
+                if (conflicting_target_idx != SIZE_MAX) {
+                    error_msg = fmt::format(
+                        "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                        "but target node {} is already mapped to the same global node {}. "
+                        "Multiple target nodes cannot map to the same global node.",
+                        target_node,
+                        required_global,
+                        graph_data.target_nodes[conflicting_target_idx],
+                        required_global);
+                } else {
+                    error_msg = fmt::format(
+                        "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                        "but this global node is already used by another pre-assignment. "
+                        "Multiple target nodes cannot map to the same global node.",
+                        target_node,
+                        required_global);
+                }
+                if (quiet_mode) {
+                    log_debug(tt::LogFabric, "{}", error_msg);
+                } else {
+                    log_error(tt::LogFabric, "{}", error_msg);
+                }
+                state_.error_message = error_msg;
+                return false;
             }
+
+            // Validate that this pre-assignment is consistent with already-assigned neighbors
+            for (size_t neighbor : graph_data.target_adj_idx[i]) {
+                if (state_.mapping[neighbor] != -1) {
+                    size_t neighbor_global_idx = static_cast<size_t>(state_.mapping[neighbor]);
+                    // Check if edge exists between global_idx and neighbor_global_idx
+                    bool edge_exists = std::binary_search(
+                        graph_data.global_adj_idx[global_idx].begin(),
+                        graph_data.global_adj_idx[global_idx].end(),
+                        neighbor_global_idx);
+                    if (!edge_exists) {
+                        const auto& target_node = graph_data.target_nodes[i];
+                        const auto& required_global = graph_data.global_nodes[global_idx];
+                        std::string error_msg = fmt::format(
+                            "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
+                            "but target node {} (adjacent to {}) is already mapped to global node {}, "
+                            "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
+                            target_node,
+                            required_global,
+                            graph_data.target_nodes[neighbor],
+                            target_node,
+                            graph_data.global_nodes[neighbor_global_idx],
+                            required_global,
+                            graph_data.global_nodes[neighbor_global_idx]);
+                        if (quiet_mode) {
+                            log_debug(tt::LogFabric, "{}", error_msg);
+                        } else {
+                            log_error(tt::LogFabric, "{}", error_msg);
+                        }
+                        state_.error_message = error_msg;
+                        return false;
+                    }
+                }
+            }
+
+            state_.mapping[i] = static_cast<int>(global_idx);
+            state_.used[global_idx] = true;
+            assigned_count++;
         }
     }
 
@@ -975,6 +1182,41 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     bool found = dfs_recursive(assigned_count, graph_data, constraint_data, validation_mode);
 
     if (!found && assigned_count == 0) {
+        // Search failed from the beginning - check if channel constraints are the issue in strict mode
+        if (validation_mode == ConnectionValidationMode::STRICT) {
+            // Check if any target edge requires more channels than any physical edge can provide
+            for (size_t i = 0; i < graph_data.n_target; ++i) {
+                for (size_t neighbor : graph_data.target_adj_idx[i]) {
+                    if (neighbor <= i) continue;  // Check each edge once
+                    size_t required = graph_data.target_conn_count[i].at(neighbor);
+                    // Find maximum available channels in physical graph
+                    size_t max_available = 0;
+                    for (size_t g1 = 0; g1 < graph_data.n_global; ++g1) {
+                        auto it = graph_data.global_conn_count[g1].begin();
+                        for (; it != graph_data.global_conn_count[g1].end(); ++it) {
+                            max_available = std::max(max_available, it->second);
+                        }
+                    }
+                    if (required > max_available) {
+                        std::string error_msg = fmt::format(
+                            "Strict mode validation failed: target graph edge from node {} to {} requires {} channels, "
+                            "but physical graph edges have at most {} channels. "
+                            "Strict mode requires sufficient channel capacity for all edges.",
+                            graph_data.target_nodes[i],
+                            graph_data.target_nodes[neighbor],
+                            required,
+                            max_available);
+                        if (quiet_mode) {
+                            log_debug(tt::LogFabric, "{}", error_msg);
+                        } else {
+                            log_error(tt::LogFabric, "{}", error_msg);
+                        }
+                        state_.error_message = error_msg;
+                        return found;
+                    }
+                }
+            }
+        }
         // Search failed from the beginning - provide summary
         std::string error_msg = fmt::format(
             "Failed to find mapping: target graph with {} nodes cannot be placed in global graph with {} nodes under given constraints",
@@ -1091,13 +1333,23 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
+bool detail::MappingValidator<TargetNode, GlobalNode>::validate_mapping(
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
     std::vector<std::string>* warnings,
     bool quiet_mode) {
-    // First, validate that all target nodes are mapped
+    // First, validate connection counts (collects warnings/errors)
+    // This needs to happen before checking unmapped nodes so channel errors are captured
+    if (warnings != nullptr) {
+        validate_connection_counts(mapping, graph_data, validation_mode, warnings);
+    }
+
+    // In STRICT mode, prioritize channel errors over unmapped node errors
+    bool has_channel_errors = (validation_mode == ConnectionValidationMode::STRICT && warnings != nullptr && !warnings->empty());
+
+    // Validate that all target nodes are mapped
     std::vector<size_t> unmapped_targets;
     for (size_t i = 0; i < mapping.size(); ++i) {
         if (mapping[i] == -1) {
@@ -1122,10 +1374,58 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
         } else {
             log_error(tt::LogFabric, "{}", error_msg);
         }
-        if (warnings != nullptr) {
+        // Only add unmapped error if we don't have channel errors (channel errors take priority)
+        if (warnings != nullptr && !has_channel_errors) {
             warnings->push_back(error_msg);
         }
+        // Return false if no channel errors, otherwise channel errors will be handled below
+        if (!has_channel_errors) {
+            return false;
+        }
+    }
+
+    // In STRICT mode, fail if any channel errors were found
+    if (has_channel_errors) {
+        log_error(
+            tt::LogFabric,
+            "Mapping validation failed in strict mode: {} validation error(s) found",
+            warnings->size());
         return false;
+    }
+
+    // Validate that no two target nodes map to the same global node
+    std::map<size_t, std::vector<size_t>> global_to_targets;
+    for (size_t i = 0; i < mapping.size(); ++i) {
+        size_t global_idx = static_cast<size_t>(mapping[i]);
+        global_to_targets[global_idx].push_back(i);
+    }
+
+    for (const auto& [global_idx, target_indices] : global_to_targets) {
+        if (target_indices.size() > 1) {
+            // Multiple target nodes map to the same global node - this is invalid
+            std::string conflicting_targets;
+            for (size_t target_idx : target_indices) {
+                if (!conflicting_targets.empty()) {
+                    conflicting_targets += ", ";
+                }
+                conflicting_targets += fmt::format("{}", graph_data.target_nodes[target_idx]);
+            }
+            std::string error_msg = fmt::format(
+                "Mapping validation failed: {} target node(s) map to the same global node {}: {}. "
+                "Each global node can only be mapped to one target node.",
+                target_indices.size(),
+                graph_data.global_nodes[global_idx],
+                conflicting_targets);
+            if (quiet_mode) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            } else {
+                log_error(tt::LogFabric, "{}", error_msg);
+            }
+            if (warnings != nullptr) {
+                warnings->push_back(error_msg);
+            }
+            return false;
+        }
     }
 
     // Validate that all edges exist in the global graph
@@ -1168,20 +1468,6 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
         }
     }
 
-    // Validate connection counts (collects warnings/errors)
-    if (warnings != nullptr) {
-        validate_connection_counts(mapping, graph_data, validation_mode, warnings);
-    }
-
-    // In STRICT mode, fail if any warnings were added (they're actually errors)
-    if (validation_mode == ConnectionValidationMode::STRICT && warnings != nullptr && !warnings->empty()) {
-        log_error(
-            tt::LogFabric,
-            "Mapping validation failed in strict mode: {} validation error(s) found",
-            warnings->size());
-        return false;
-    }
-
     if (validation_mode == ConnectionValidationMode::RELAXED && warnings != nullptr && !warnings->empty()) {
         log_info(
             tt::LogFabric,
@@ -1189,11 +1475,25 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
             warnings->size());
     }
 
+    // Validate cardinality constraints
+    if (!constraint_data.check_cardinality_constraints(mapping)) {
+        std::string error_msg = "Mapping validation failed: cardinality constraints not satisfied";
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
+        if (warnings != nullptr) {
+            warnings->push_back(error_msg);
+        }
+        return false;
+    }
+
     return true;
 }
 
 template <typename TargetNode, typename GlobalNode>
-void MappingValidator<TargetNode, GlobalNode>::print_mapping(
+void detail::MappingValidator<TargetNode, GlobalNode>::print_mapping(
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
     std::stringstream ss;
@@ -1218,36 +1518,76 @@ template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::build_result(
     const std::vector<int>& mapping,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
-    const MappingConstraints<TargetNode, GlobalNode>& constraints,
     ConnectionValidationMode validation_mode,
     bool quiet_mode) {
     MappingResult<TargetNode, GlobalNode> result;
 
-    // Always build bidirectional mappings, even if validation fails
-    // This allows users to see the closest/best mapping found for debugging
-    size_t mapped_count = 0;
-    for (size_t i = 0; i < mapping.size(); ++i) {
-        if (mapping[i] != -1) {
-            size_t global_idx = static_cast<size_t>(mapping[i]);
-            const TargetNode& target_node = graph_data.target_nodes[i];
-            const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+    // Validate mapping first to determine if it's valid
+    // Only count nodes as "mapped" if the mapping is valid
+    std::vector<std::string> validation_warnings;
+    bool valid = validate_mapping(mapping, graph_data, constraint_data, validation_mode, &validation_warnings, quiet_mode);
 
-            result.target_to_global[target_node] = global_node;
-            result.global_to_target.emplace(global_node, target_node);
-            mapped_count++;
+    // Build bidirectional mappings - only if validation passes, or save partial mapping for debugging
+    size_t mapped_count = 0;
+    if (valid) {
+        // Valid mapping - count all mapped nodes
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                mapped_count++;
+            }
+        }
+    } else {
+        // Invalid mapping - only count nodes that are part of a valid partial mapping
+        // For now, if validation fails, we don't count any nodes as successfully mapped
+        // This is because the mapping is invalid and shouldn't be used
+        // Still save the mapping for debugging purposes, but don't count it as "mapped"
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] != -1) {
+                size_t global_idx = static_cast<size_t>(mapping[i]);
+                const TargetNode& target_node = graph_data.target_nodes[i];
+                const GlobalNode& global_node = graph_data.global_nodes[global_idx];
+
+                // Save for debugging, but don't count as successfully mapped
+                result.target_to_global[target_node] = global_node;
+                result.global_to_target.emplace(global_node, target_node);
+                // mapped_count stays 0 - invalid mappings don't count as "mapped"
+            }
         }
     }
 
-    // Validate mapping and collect detailed error messages
-    std::vector<std::string> validation_warnings;
-    bool valid = validate_mapping(mapping, graph_data, validation_mode, &validation_warnings, quiet_mode);
-
     if (!valid) {
         result.success = false;
-        if (!validation_warnings.empty()) {
-            // Use first validation error as main error message
-            result.error_message = validation_warnings[0];
+        // Prioritize state.error_message (e.g., "larger" error, "channel" error) over validation warnings
+        if (!state.error_message.empty() &&
+            (state.error_message.find("larger") != std::string::npos ||
+             state.error_message.find("only has") != std::string::npos ||
+             state.error_message.find("channel") != std::string::npos)) {
+            result.error_message = state.error_message;
+        } else if (!validation_warnings.empty()) {
+            // Prioritize channel errors in strict mode
+            bool has_channel_error = false;
+            std::string channel_error;
+            for (const auto& warning : validation_warnings) {
+                if (warning.find("channel") != std::string::npos) {
+                    has_channel_error = true;
+                    channel_error = warning;
+                    break;
+                }
+            }
+            if (has_channel_error) {
+                result.error_message = channel_error;
+            } else {
+                // Use first validation error as main error message
+                result.error_message = validation_warnings[0];
+            }
             if (quiet_mode) {
                 log_debug(
                     tt::LogFabric,
@@ -1308,33 +1648,9 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 
         // Still compute statistics and copy search stats even if validation failed
         // This helps users understand what was found
-        // Compute constraint statistics
-        const auto& valid_mappings = constraints.get_valid_mappings();
-        const auto& preferred_mappings = constraints.get_preferred_mappings();
-
-        size_t required_satisfied = 0;
-        size_t preferred_satisfied = 0;
-        size_t preferred_total = 0;
-
-        for (const auto& [target_node, global_node] : result.target_to_global) {
-            // Check required constraints
-            auto valid_it = valid_mappings.find(target_node);
-            if (valid_it != valid_mappings.end() && !valid_it->second.empty()) {
-                // This target node has required constraints
-                if (valid_it->second.find(global_node) != valid_it->second.end()) {
-                    required_satisfied++;
-                }
-            }
-
-            // Check preferred constraints
-            auto preferred_it = preferred_mappings.find(target_node);
-            if (preferred_it != preferred_mappings.end() && !preferred_it->second.empty()) {
-                preferred_total += preferred_it->second.size();
-                if (preferred_it->second.find(global_node) != preferred_it->second.end()) {
-                    preferred_satisfied++;
-                }
-            }
-        }
+        // Compute constraint statistics from constraint_data
+        auto [required_satisfied, preferred_satisfied, preferred_total] =
+            constraint_data.compute_constraint_stats(mapping, graph_data);
 
         result.constraint_stats.required_satisfied = required_satisfied;
         result.constraint_stats.preferred_satisfied = preferred_satisfied;
@@ -1342,38 +1658,15 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 
         result.stats.dfs_calls = state.dfs_calls;
         result.stats.backtrack_count = state.backtrack_count;
+        result.stats.memoization_hits = state.memoization_hits;
         result.warnings = std::move(validation_warnings);
 
         return result;
     }
 
-    // Compute constraint statistics
-    const auto& valid_mappings = constraints.get_valid_mappings();
-    const auto& preferred_mappings = constraints.get_preferred_mappings();
-
-    size_t required_satisfied = 0;
-    size_t preferred_satisfied = 0;
-    size_t preferred_total = 0;
-
-    for (const auto& [target_node, global_node] : result.target_to_global) {
-        // Check required constraints
-        auto valid_it = valid_mappings.find(target_node);
-        if (valid_it != valid_mappings.end() && !valid_it->second.empty()) {
-            // This target node has required constraints
-            if (valid_it->second.find(global_node) != valid_it->second.end()) {
-                required_satisfied++;
-            }
-        }
-
-        // Check preferred constraints
-        auto preferred_it = preferred_mappings.find(target_node);
-        if (preferred_it != preferred_mappings.end() && !preferred_it->second.empty()) {
-            preferred_total += preferred_it->second.size();
-            if (preferred_it->second.find(global_node) != preferred_it->second.end()) {
-                preferred_satisfied++;
-            }
-        }
-    }
+    // Compute constraint statistics from constraint_data
+    auto [required_satisfied, preferred_satisfied, preferred_total] =
+        constraint_data.compute_constraint_stats(mapping, graph_data);
 
     result.constraint_stats.required_satisfied = required_satisfied;
     result.constraint_stats.preferred_satisfied = preferred_satisfied;
@@ -1385,16 +1678,18 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     // Copy statistics
     result.stats.dfs_calls = state.dfs_calls;
     result.stats.backtrack_count = state.backtrack_count;
+    result.stats.memoization_hits = state.memoization_hits;
 
     // Log success with statistics
     log_info(
         tt::LogFabric,
         "Mapping validation succeeded: {} target nodes mapped to {} global nodes. "
-        "DFS calls: {}, backtracks: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
+        "DFS calls: {}, backtracks: {}, memoization hits: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
         graph_data.n_target,
         graph_data.n_global,
         state.dfs_calls,
         state.backtrack_count,
+        state.memoization_hits,
         result.constraint_stats.required_satisfied,
         result.constraint_stats.preferred_satisfied,
         result.constraint_stats.preferred_total);
