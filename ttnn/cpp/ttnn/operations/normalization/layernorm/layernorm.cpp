@@ -5,10 +5,7 @@
 #include "layernorm.hpp"
 #include <optional>
 
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_common.hpp"
 #include "ttnn/device.hpp"

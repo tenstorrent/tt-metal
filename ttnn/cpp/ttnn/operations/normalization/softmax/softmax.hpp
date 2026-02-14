@@ -6,7 +6,6 @@
 
 #include "device/softmax_operation_types.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <optional>

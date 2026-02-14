@@ -17,7 +17,6 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
 
