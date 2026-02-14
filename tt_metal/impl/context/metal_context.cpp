@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <algorithm>
 #include <mutex>
@@ -2001,6 +2002,11 @@ void MetalContext::on_dispatch_timeout_detected() {
                 log_warning(
                     tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
             }
+        }
+
+        // Exit application if enabled via environment variable
+        if (rtoptions_.get_exit_on_dispatch_timeout()) {
+            std::_Exit(rtoptions_.get_dispatch_timeout_exit_code());
         }
     }
 }

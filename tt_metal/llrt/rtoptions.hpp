@@ -304,6 +304,12 @@ class RunTimeOptions {
     // Disable XIP dump
     bool disable_xip_dump = false;
 
+    // Exit application on dispatch timeout with exit code
+    bool exit_on_dispatch_timeout = false;
+
+    // Exit code to use when exiting on dispatch timeout (default: standard timeout code)
+    int dispatch_timeout_exit_code = 124;
+
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
 
@@ -558,6 +564,9 @@ public:
 
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
+
+    bool get_exit_on_dispatch_timeout() const { return exit_on_dispatch_timeout; }
+    int get_dispatch_timeout_exit_code() const { return dispatch_timeout_exit_code; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
