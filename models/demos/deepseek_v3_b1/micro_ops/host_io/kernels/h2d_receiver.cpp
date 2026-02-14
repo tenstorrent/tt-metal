@@ -29,10 +29,10 @@ void kernel_main() {
     constexpr bool has_embedding = get_compile_time_arg_val(6);
     constexpr uint32_t embedding_cb_index = get_compile_time_arg_val(7);
     constexpr uint32_t embedding_page_size = get_compile_time_arg_val(8);
-    // TensorAccessorArgs for embedding tensor at CT arg index 9
-    constexpr auto embedding_args = TensorAccessorArgs<9>();
+    constexpr uint32_t embedding_addr = get_compile_time_arg_val(9);
+    // TensorAccessorArgs for embedding tensor at CT arg index 10
+    constexpr auto embedding_args = TensorAccessorArgs<10>();
 
-    uint32_t embedding_addr = get_arg_val<uint32_t>(0);
     auto embedding_accessor = TensorAccessor(embedding_args, embedding_addr, embedding_page_size);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
@@ -76,15 +76,12 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* token_id_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
             // DPRINT << "GOt token ID: " << token_id_ptr[0] << ENDL();
-            cb_reserve_back(embedding_cb_index, 1);
             uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
-            uint64_t noc_addr = embedding_accessor.get_noc_addr(0);  // Read page 0
+            uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
             // DPRINT << "Embedding Noc Address: " << noc_addr << ENDL();
             // DPRINT << "Read " << embedding_page_size << " bytes" << ENDL();
             noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
             noc_async_read_barrier();
-            // DPRINT << "Done read" << ENDL();
-            cb_push_back(embedding_cb_index, 1);
         }
 
         if constexpr (loopback_mode) {
@@ -92,7 +89,9 @@ void kernel_main() {
             cb_reserve_back(downstream_interface_index, 1);
             // DPRINT << "Write to CB" << ENDL();
             noc_async_write(
-                receiver_socket.read_ptr, get_noc_addr(get_write_ptr(downstream_interface_index)), page_size);
+                get_noc_addr(get_read_ptr(embedding_cb_index)),
+                get_noc_addr(get_write_ptr(downstream_interface_index)),
+                embedding_page_size);
             noc_async_write_barrier();
             // DPRINT << "Done write" << ENDL();
             cb_push_back(downstream_interface_index, 1);
@@ -125,5 +124,4 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    // DPRINT << "End H2D Main Loop" << ENDL();
 }

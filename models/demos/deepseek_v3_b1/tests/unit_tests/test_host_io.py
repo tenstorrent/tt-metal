@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 
 # @pytest.mark.parametrize(
 #     "tensor_size_bytes, fifo_size, num_iterations",
@@ -79,25 +80,48 @@ from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
         ttnn.H2DMode.DEVICE_PULL,
     ],
 )
-def test_host_io_loopback_with_embedding(mesh_device, h2d_mode):
+@pytest.mark.parametrize(
+    "vocab_size, embedding_dim",
+    [
+        (128, 7168),
+        (256, 3584),
+        (512, 1792),
+    ],
+)
+@pytest.mark.parametrize(
+    "token_fifo_size, embedding_fifo_factor",
+    [
+        (128, 2),
+        (256, 4),
+        (512, 8),
+    ],
+)
+def test_host_io_loopback_with_embedding(
+    mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
+):
     """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
-    embedding_shape = (1, 1, 12980, 7168)
-
+    embedding_dtype = torch.bfloat16
+    token_dtype = torch.uint32
     token_size_bytes = 64
-    token_fifo_size = 256
-    embedding_fifo_size = 14 * 1024 * 4
-    token_size_datums = token_size_bytes // 4
-    embedding_size_bytes = embedding_shape[3] * 2  # bfloat16
+
+    embedding_shape = (1, 1, vocab_size, embedding_dim)
+    embedding_fifo_size = embedding_dim * dtype_size(embedding_dtype) * embedding_fifo_factor
+    token_size_datums = token_size_bytes // dtype_size(token_dtype)
+    embedding_size_bytes = embedding_shape[3] * dtype_size(embedding_dtype)
+
     device_coord = ttnn.MeshCoordinate(0, 0)
     core_coord = ttnn.CoreCoord(0, 0)
     socket_core = ttnn.MeshCoreCoord(device_coord, core_coord)
 
     # Create embedding tensor and load to DRAM
-    torch_embedding = torch.randn(embedding_shape, dtype=torch.bfloat16)
-    embedding_tensor = ttnn.from_torch(torch_embedding, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    logger.info("Creating embedding tensor and loading to DRAM")
+    torch_embedding = torch.randn(embedding_shape, dtype=embedding_dtype)
+    embedding_tensor = ttnn.from_torch(
+        torch_embedding, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     embedding_tensor = ttnn.to_device(embedding_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     logger.info(f"Embedding tensor loaded to DRAM with shape {embedding_shape}")
 
@@ -116,18 +140,35 @@ def test_host_io_loopback_with_embedding(mesh_device, h2d_mode):
     )
     host_io.run()
 
-    # Issue 1 write and 1 read, verify data correctness
-    torch_input = torch.arange(0, token_size_datums, dtype=torch.int32).reshape(1, token_size_datums)
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    torch_output = torch.zeros(1, embedding_size_bytes // 2, dtype=torch.bfloat16)
-    output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Send token IDs 0-127, read back embedding rows, verify against PyTorch reference
+    embedding_row_elems = embedding_shape[3]
+    logger.info(f"Testing embedding with vocab size {vocab_size} over H2D → D2H loopback")
 
-    logger.info("Writing and reading 1 page over H2D → D2H loopback")
-    h2d_socket.write_tensor(input_tensor)
-    d2h_socket.read_tensor(output_tensor)
+    for token_id in range(vocab_size):
+        # Write 64-byte packet with token ID as first uint32, rest zeros
+        torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
+        torch_input[0, 0] = token_id
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
-    # match = torch.equal(torch_input, result_torch)
-    # assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
-    # logger.info("Data verified successfully")
+        # Read embedding row back over D2H socket
+        torch_output = torch.zeros(1, embedding_row_elems, dtype=embedding_dtype)
+        output_tensor = ttnn.from_torch(
+            torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
+        h2d_socket.write_tensor(input_tensor)
+        d2h_socket.read_tensor(output_tensor)
+
+        result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+        expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+        match = torch.equal(expected, result_torch)
+        assert match, (
+            f"Token {token_id}: D2H output does not match embedding row!\n"
+            f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+        )
+
+    logger.info(f"{vocab_size} token lookups verified successfully")
 
     host_io.terminate()
