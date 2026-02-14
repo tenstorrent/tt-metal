@@ -349,8 +349,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
@@ -441,8 +440,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     // Wait for all ranks to finish initializing the mesh device before proceeding.
     mesh_device->pimpl_->distributed_context_->barrier();
 
-    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_profiler();
     tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
