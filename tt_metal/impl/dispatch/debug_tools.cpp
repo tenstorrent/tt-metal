@@ -265,16 +265,7 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->relay_paged_packed.stride));
                 stride = cmd->relay_paged_packed.stride;
                 break;
-            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED: {
-                iq_file << fmt::format(
-                    " (count={}, noc_xy_addr={:#010x}, total_length={:#010x}, stride={:#010x})",
-                    val(cmd->relay_linear_packed.count),
-                    val(cmd->relay_linear_packed.noc_xy_addr),
-                    val(cmd->relay_linear_packed.total_length),
-                    val(cmd->relay_linear_packed.stride));
-                stride = cmd->relay_linear_packed.stride;
-                break;
-            }
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
             case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H: {
                 iq_file << fmt::format(
                     " (count={}, noc_xy_addr={:#010x}, total_length={:#010x}, stride={:#010x})",
