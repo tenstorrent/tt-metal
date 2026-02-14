@@ -201,10 +201,6 @@ private:
     size_t worker_l1_unreserved_start_ = 0;
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
-    // Used to track which FW has been built already
-    std::unordered_set<uint64_t> firmware_built_keys_;
-    std::mutex firmware_built_keys_mutex_;
-
     // Mutex to protect control_plane_ for thread-safe access
     std::mutex control_plane_mutex_;
 

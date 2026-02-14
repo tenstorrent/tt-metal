@@ -1011,7 +1011,6 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/include/tt_metal/buffer.hpp \
                          tt_metal/include/tt_metal/command_queue.hpp \
                          tt_metal/include/tt_metal/device.hpp \
-                         tt_metal/include/tt_metal/event.hpp \
                          tt_metal/api/tt-metalium/global_circular_buffer.hpp \
                          tt_metal/include/tt_metal/kernel.hpp \
                          tt_metal/include/tt_metal/program.hpp \

@@ -6,7 +6,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <algorithm>
