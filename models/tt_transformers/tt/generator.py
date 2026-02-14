@@ -1230,8 +1230,7 @@ class Generator(WarmupForwardMixin):
 
         if read_from_device:
             to_host = self.read_decode_output(tt_logits)
-            # skip log_probs
-            return self.process_decode_output_host(to_host)[0]
+            return self.process_decode_output_host(to_host)
         else:
             return tt_logits
 
