@@ -351,39 +351,61 @@ inline auto invoke_binary_ng(
     if (not typecast_a and not typecast_b) {
         const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
         const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-        const auto input_a = detail::to_layout(lhs, Layout::TILE);
-        const auto input_b = detail::to_layout(rhs, Layout::TILE);
+        const auto input_a_sharded = lhs.memory_config().is_sharded();
+        const auto input_b_sharded = [&]() {
+            if constexpr (requires { rhs.memory_config(); }) {
+                return rhs.memory_config().is_sharded();
+            } else {
+                return false;
+            }
+        }();
+        // we don't support to_layout with optional output tensor
+        TT_FATAL(
+            !(output_preallocated && input_a_rm && input_b_rm),
+            "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
+        if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
+            auto result = ttnn::prim::binary_ng(
+                lhs,
+                rhs,
+                binary_op_type,
+                out_dtype,
+                mem_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt,
+                sub_core_grids);
 
-        if (input_a_rm and input_b_rm) {
-            // we don't support to_layout with optional output tensor
-            TT_FATAL(
-                !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise "
-                "operations");
+            return result;
+        } else {
+            // Either one or both are tiles
+            const auto input_a = detail::to_layout(lhs, Layout::TILE);
+            const auto input_b = detail::to_layout(rhs, Layout::TILE);
+
+            auto result = ttnn::prim::binary_ng(
+                input_a,
+                input_b,
+                binary_op_type,
+                out_dtype,
+                memory_config,
+                output,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt,
+                sub_core_grids);
+
+            // if both inputs are in row major, convert the output to row major
+            // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+            // since it leads to better perf
+            if (input_a_rm and input_b_rm) {
+                return detail::to_layout(result, Layout::ROW_MAJOR);
+            }
+            return result;
         }
-
-        auto result = ttnn::prim::binary_ng(
-            input_a,
-            input_b,
-            binary_op_type,
-            out_dtype,
-            memory_config,
-            output,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt,
-            sub_core_grids);
-
-        // if both inputs are in row major, convert the output to row major
-        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-        // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
-            return detail::to_layout(result, Layout::ROW_MAJOR);
-        }
-
-        return result;
     }
     const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
     const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);

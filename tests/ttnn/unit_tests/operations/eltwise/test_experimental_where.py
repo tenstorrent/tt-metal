@@ -109,16 +109,34 @@ def test_ttt_where_int_types(device, tt_dtype):
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
-@pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported.")
-@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "tt_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        pytest.param(
+            ttnn.bfloat4_b,
+            marks=pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported."),
+        ),
+    ],
+)
 def test_ttt_where_float_types(device, tt_dtype):
     if is_watcher_enabled():
         pytest.skip("Skipping test_ttt_where_float_types with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
-@pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported.")
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        pytest.param(
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported."),
+        ),
+    ],
+)
 def test_ttt_where_layouts(device, layout):
     if is_watcher_enabled():
         pytest.skip("Skipping test_ttt_where_float_types with watcher enabled, github issue #37048")
