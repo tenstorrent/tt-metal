@@ -326,12 +326,156 @@ def test_on_disk_cache_storage_set_get(tmp_path, device):
     assert torch.allclose(ttnn.to_torch(loaded_2), ttnn.to_torch(tensor))
 
 
+def test_on_disk_cache_storage_writes_manifest_payload(tmp_path, device):
+    tensor = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    cache_key = _make_cache_key(name="weight1")
+    storage = OnDiskCacheStorage(tmp_path, device)
+
+    storage.set(cache_key, tensor)
+
+    safe_name = _safe_name_from_manifest(cache_key.manifest)
+    manifest_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.manifest.json"
+    payload = json.loads(manifest_path.read_text())
+
+    assert payload["fingerprint"] == cache_key.fingerprint
+    assert payload.get("name") == cache_key.manifest.name
+
+
+def test_on_disk_cache_storage_manifest_includes_mesh_mapper(
+    tmp_path, mesh_device, sample_state_dict, sample_hf_config
+):
+    storage = OnDiskCacheStorage(tmp_path, mesh_device)
+    cache = TensorCache(sample_state_dict, sample_hf_config, storage)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
+
+    cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocessor=_identity,
+        postprocessor=_identity,
+        device=mesh_device,
+        mesh_mapper=mapper,
+    )
+
+    manifest = create_manifest(
+        name=["weight1"],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        hf_config=sample_hf_config,
+        preprocessor=_identity,
+        postprocessor=_identity,
+        mesh_mapper=mapper,
+    )
+    cache_key = CacheKey(fingerprint=manifest.get_fingerprint(), manifest=manifest)
+    safe_name = _safe_name_from_manifest(manifest)
+    manifest_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.manifest.json"
+    payload = json.loads(manifest_path.read_text())
+
+    expected_mesh_mapper = manifest.to_dict()["mesh_mapper"]
+    if expected_mesh_mapper["mesh_shape_override"] is not None:
+        expected_mesh_mapper["mesh_shape_override"] = list(expected_mesh_mapper["mesh_shape_override"])
+    assert payload["mesh_mapper"] == expected_mesh_mapper
+
+
 def test_on_disk_cache_storage_missing_key(tmp_path, device):
     storage = OnDiskCacheStorage(tmp_path, device)
     missing_key = _make_cache_key(name="missing")
     assert not storage.has(missing_key)
     with pytest.raises(KeyError):
         storage.get(missing_key)
+
+
+def test_tensor_cache_on_disk_cache_hit_uses_disk(tmp_path, device, sample_state_dict, sample_hf_config):
+    calls = {"converter": 0}
+
+    def counting_converter(tensor, dtype, layout, memory_config=None, device=None, mesh_mapper=None):
+        calls["converter"] += 1
+        return ttnn.from_torch(
+            tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+
+    storage = OnDiskCacheStorage(tmp_path, device)
+    cache = TensorCache(sample_state_dict, sample_hf_config, storage, converter=counting_converter)
+
+    tensor1 = cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    tensor2 = cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+
+    assert calls["converter"] == 1
+    assert torch.allclose(ttnn.to_torch(tensor1), ttnn.to_torch(tensor2))
+
+
+def test_tensor_cache_on_disk_mesh_mapper_entries(
+    tmp_path, mesh_device, sample_state_dict, sample_hf_config, monkeypatch
+):
+    storage = OnDiskCacheStorage(tmp_path, mesh_device)
+    cache = TensorCache(sample_state_dict, sample_hf_config, storage)
+    call_tracker = setup_cache_tracker(cache, monkeypatch)
+
+    replicate_1 = ttnn.ReplicateTensorToMesh(mesh_device)
+    tensor_1 = cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocessor=_identity,
+        postprocessor=_identity,
+        device=mesh_device,
+        mesh_mapper=replicate_1,
+    )
+    assert tensor_1 is not None
+    assert_cache_miss(call_tracker)
+
+    replicate_2 = ttnn.ReplicateTensorToMesh(mesh_device)
+    tensor_2 = cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocessor=_identity,
+        postprocessor=_identity,
+        device=mesh_device,
+        mesh_mapper=replicate_2,
+    )
+    assert tensor_2 is not None
+    assert_cache_hit(call_tracker)
+
+    shard_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -1))
+    tensor_shard = cache.get_tensor(
+        name="weight1",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preprocessor=_identity,
+        postprocessor=_identity,
+        device=mesh_device,
+        mesh_mapper=shard_mapper,
+    )
+    assert tensor_shard is not None
+    assert_cache_miss(call_tracker)
 
 
 def test_tensor_cache_cache_miss(tensor_cache, monkeypatch, device):
