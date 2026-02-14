@@ -411,12 +411,35 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=256 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
+            # match KV cache block_size so one trace works for any block-aligned chunk at replay.
+            # Required by llama_attention when use_chunked_sdpa is True (chunk_start_idx > 0).
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=min(page_size, 128),
+                k_chunk_size=min(page_size, 128),
             )
 
             def find_largest_divisor(n, max_divisor=8):

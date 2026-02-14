@@ -729,12 +729,37 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=512 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
+            # works for any block-aligned chunk_start at replay.
+            # Chunk sizes must equal KV cache page_size (block_size) so chunk boundaries align with cache blocks.
+            # page_size is 32 or 64 (vLLM page_block_size); pass from paged_attention_config.block_size at call site.
+            # seqlen not used here, since the padding is always at least 128.
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=min(page_size, 128),
+                k_chunk_size=min(page_size, 128),
             )
 
             def find_largest_divisor(n, max_divisor=8):

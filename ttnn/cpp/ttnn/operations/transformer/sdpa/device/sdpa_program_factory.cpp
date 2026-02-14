@@ -186,7 +186,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         if (flexible_chunked) {
             max_blocks_per_seq = page_table_tensor.padded_shape()[1];
             page_table_stick_size = max_blocks_per_seq * sizeof(int32_t);
-            TT_FATAL(page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
+            TT_FATAL(page_table_stick_size % 32 == 0, "page table stick size in bytes must be a multiple of 32");
         } else {
             max_blocks_per_seq = page_table_tensor.padded_shape()[1];
             page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
