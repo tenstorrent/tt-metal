@@ -724,7 +724,7 @@ class TTAttention:
             if explicit_sharded_attn:
                 # Height-shard Q/K/V across the full core grid so attention
                 # scores/probs fit in L1 at seq=640.
-                grid = getattr(cfg, "grid", None) if cfg is not None else None
+                grid = (getattr(cfg, "attn_grid", None) or getattr(cfg, "grid", None)) if cfg is not None else None
                 if grid is None:
                     raise RuntimeError("Missing attention core grid in TT config")
                 grid_x, grid_y = int(grid[0]), int(grid[1])

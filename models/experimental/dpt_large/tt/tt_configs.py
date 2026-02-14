@@ -26,6 +26,10 @@ from .config import DPTLargeConfig, DEFAULT_CONFIG
 @dataclass
 class TTLayerConfig:
     grid: Tuple[int, int]
+    # Attention can benefit from a different core grid than the encoder-wide
+    # block sharding. For DPT-Large, we want attention height-sharding to align
+    # with head sharding (num_heads cores) so per-core M is a multiple of seq tiles.
+    attn_grid: Optional[Tuple[int, int]] = None
     dtype: str = "bfloat16"
     shard_tokens: bool = True
     shard_heads: bool = True
@@ -296,15 +300,20 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         # keep split-heads height-sharded; QKV split uses an interleaved input
         # tensor to avoid runtime constraints on sharded create_qkv_heads.
         grid = (8, 4)
+        # Height-shard attention across 16 cores (one per head) on N300.
+        attn_grid = (8, 2)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
+        attn_grid = grid
         math = "hi-fi2"
     else:
         grid = (6, 6)
+        attn_grid = grid
         math = "hi-fi3"
 
     prog_cfgs = _build_perf_program_configs(config, grid)
+    attn_prog_cfgs = _build_perf_program_configs(config, attn_grid)
     # MLP dominates ViT-Large runtime. In practice, attention SDPA op constraints
     # vary across runtimes; keep attention operands interleaved for stability,
     # but compute separate MLP program configs for a simple 1-row core grid so
@@ -352,9 +361,9 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     # for DPT-Large (seq=640 padded).
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
 
-    qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
-    softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
-    av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
+    qk_pc = None if disable_attn_pc else attn_prog_cfgs.get("query_by_key_matmul_program_config")
+    softmax_pc = None if disable_attn_pc else attn_prog_cfgs.get("softmax_program_config")
+    av_pc = None if disable_attn_pc else attn_prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
     split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
     if disable_attn_pc:
         split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
@@ -398,6 +407,7 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
 
     return TTLayerConfig(
         grid=grid,
+        attn_grid=attn_grid,
         math_fidelity=math,
         shard_tokens=True,
         shard_heads=True,
