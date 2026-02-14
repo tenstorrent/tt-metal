@@ -68,3 +68,16 @@ Tensor global_avg_pool2d(
 }
 
 }  // namespace tt::tt_metal
+
+namespace ttnn::operations::pool {
+
+Tensor global_avg_pool2d(
+    const Tensor& input,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DataType>& output_dtype) {
+    auto memory_config = memory_config_arg.value_or(input.memory_config());
+    auto result = tt::tt_metal::global_avg_pool2d(input, memory_config, output_dtype);
+    return result;
+}
+
+}  // namespace ttnn::operations::pool
