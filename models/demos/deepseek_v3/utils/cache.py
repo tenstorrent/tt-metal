@@ -210,6 +210,34 @@ class OnDiskCacheStorage:
         self.cache_root = Path(cache_root)
         self.device = device
 
+    def _ensure_entry_consistency(self, key: CacheKey, tensor_path: Path, manifest_path: Path) -> tuple[bool, bool]:
+        tensor_exists = tensor_path.is_file()
+        manifest_exists = manifest_path.is_file()
+        if tensor_exists and not manifest_exists:
+            raise RuntimeError(
+                f"Cache tensor exists but manifest is missing for fingerprint {key.fingerprint}. "
+                "This may indicate a partial write or concurrent writer."
+            )
+        if manifest_exists and not tensor_exists:
+            raise RuntimeError(
+                f"Cache manifest exists but tensor is missing for fingerprint {key.fingerprint}. "
+                "This may indicate a partial write or concurrent writer."
+            )
+        return tensor_exists, manifest_exists
+
+    def _read_manifest_payload(self, key: CacheKey, manifest_path: Path) -> dict[str, Any]:
+        try:
+            payload = json.loads(manifest_path.read_text())
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid manifest file: {manifest_path}")
+        fingerprint = payload.get("fingerprint")
+        if fingerprint != key.fingerprint:
+            raise RuntimeError(
+                f"Manifest fingerprint mismatch: expected {key.fingerprint}, got {fingerprint}. "
+                f"Manifest path: {manifest_path}"
+            )
+        return payload
+
     def _tensor_path(self, key: CacheKey) -> Path:
         safe_name = _safe_name_from_manifest(key.manifest)
         return self.cache_root / f"{safe_name}__{key.fingerprint}.tensorbin"
@@ -230,11 +258,8 @@ class OnDiskCacheStorage:
         with _exclusive_lock(lock_path, ensure_dir=self.cache_root):
             created_at = None
             if manifest_path.is_file():
-                try:
-                    existing_payload = json.loads(manifest_path.read_text())
-                    created_at = existing_payload.get("created_at")
-                except json.JSONDecodeError:
-                    raise ValueError(f"Invalid manifest file: {manifest_path}")
+                existing_payload = self._read_manifest_payload(key, manifest_path)
+                created_at = existing_payload.get("created_at")
 
             _atomic_write(tensor_path, lambda p: ttnn.dump_tensor(p, tensor))
 
@@ -251,12 +276,18 @@ class OnDiskCacheStorage:
             )
 
     def has(self, key: CacheKey) -> bool:
-        return self._tensor_path(key).is_file()
+        tensor_path = self._tensor_path(key)
+        manifest_path = self._manifest_path(key)
+        tensor_exists, manifest_exists = self._ensure_entry_consistency(key, tensor_path, manifest_path)
+        return tensor_exists and manifest_exists
 
     def get(self, key: CacheKey) -> ttnn.Tensor:
         tensor_path = self._tensor_path(key)
-        if not tensor_path.is_file():
+        manifest_path = self._manifest_path(key)
+        tensor_exists, manifest_exists = self._ensure_entry_consistency(key, tensor_path, manifest_path)
+        if not tensor_exists or not manifest_exists:
             raise KeyError(key.fingerprint)
+        self._read_manifest_payload(key, manifest_path)
         return ttnn.load_tensor(tensor_path, device=self.device)
 
 
