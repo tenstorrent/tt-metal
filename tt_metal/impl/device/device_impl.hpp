@@ -5,6 +5,8 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -22,6 +24,10 @@
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
+class SharedMemoryStatsProvider;
+namespace detail {
+class ProgramImpl;
+}
 
 namespace experimental {
 class DispatchContext;
@@ -48,8 +54,9 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other) noexcept;
-    Device& operator=(Device&& other) noexcept;
+    // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
+    Device(Device&& other) noexcept = delete;
+    Device& operator=(Device&& other) noexcept = delete;
 
     tt::ARCH arch() const override;
 
@@ -160,6 +167,14 @@ public:
         this->mesh_device = mesh_device;
     };
 
+    // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
+    SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
+
+    // Program tracking for accurate CB memory reporting
+    void register_program(detail::ProgramImpl* program);
+    void unregister_program(detail::ProgramImpl* program);
+    uint64_t get_total_cb_allocated() const;
+
 private:
     // Depracated ovverrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -240,6 +255,13 @@ private:
     uint32_t trace_buffers_size_ = 0;
 
     std::unique_ptr<AllocatorImpl> default_allocator_;
+
+    // Shared memory statistics provider (for real-time memory monitoring)
+    std::unique_ptr<class SharedMemoryStatsProvider> shm_stats_provider_;
+
+    // Program tracking for CB memory reporting
+    std::unordered_set<detail::ProgramImpl*> active_programs_;
+    mutable std::mutex active_programs_mutex_;
 
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
