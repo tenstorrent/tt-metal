@@ -6,10 +6,13 @@ import pytest
 import torch
 from functools import partial
 
-
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
+
+from tests.ttnn.utils_for_testing import assert_equal
+
+torch.manual_seed(0)
 
 params = [
     pytest.param(
@@ -82,3 +85,16 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
         device,
         tilize_with_val_padding_args,
     )
+
+
+@pytest.mark.parametrize("input_shape", [(32, 15916), (16, 5210112), (48, 5210112), (180, 5210116)])
+def test_run_tilize_large_row_input(device, input_shape):
+    orig_shape = input_shape
+
+    input = torch.randn(orig_shape, dtype=torch.bfloat16)
+    halos = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device)
+    halos_tile = ttnn.to_layout(halos, layout=ttnn.TILE_LAYOUT)
+    halos_rm = ttnn.to_layout(halos_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    output = ttnn.to_torch(halos_rm)
+    assert_equal(input, output)

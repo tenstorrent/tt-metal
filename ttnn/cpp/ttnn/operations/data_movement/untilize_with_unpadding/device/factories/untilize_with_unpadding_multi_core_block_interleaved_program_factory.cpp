@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -43,10 +44,12 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
     uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
         [ncores,
@@ -62,8 +65,14 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
          has_cliff_row,
          has_cliff_col,
          full_cores_per_row,
-         full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
+         full_cores_per_col,
+         single_sblock_size] =
+            ttnn::split_blocks_for_tilize_wh(
+                available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
+    if (single_sblock_size > 0 && single_block_size % single_sblock_size) {
+        TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
+    }
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -83,10 +92,10 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
 
     if (!core_range.empty()) {
         create_cb(
-            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
+            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_sblock_size, input_cb_data_format);
 
         create_cb(
-            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_block_size, output_cb_data_format);
+            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_sblock_size, output_cb_data_format);
     }
 
     if (has_cliff_col && has_cliff_row) {
@@ -131,7 +140,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
             program,
             cliff_col_core_range,
             input_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             input_cb_data_format);
 
         create_cb(
@@ -139,7 +148,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
             program,
             cliff_col_core_range,
             output_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             output_cb_data_format);
     }
 
@@ -179,6 +188,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
         WriterDataMovementConfig(writer_ct_args));
 
     // compute
+    uint32_t single_sblock_size_wh = single_block_size * single_block_size / single_sblock_size;
+    uint32_t single_sblock_size_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sblock_size;
     std::map<std::string, std::string> compute_kernel_defines;
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
         input_cb_data_format == tt::DataFormat::Float32) {
@@ -204,7 +215,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = {single_block_size, single_block_size, third_dim},
+                .compile_args = {single_sblock_size_wh, single_sblock_size, third_dim},
                 .defines = compute_kernel_defines});
     }
     if (has_cliff_col && has_cliff_row) {
@@ -244,7 +255,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim},
+                .compile_args = {single_sblock_size_cliff_col_wh, single_sblock_size, third_dim},
                 .defines = compute_kernel_defines});
     }
 
@@ -255,6 +266,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     uint32_t tile_start_id = 0;
     uint32_t single_block_size_row_arg;
     uint32_t single_block_size_col_arg;
+    uint32_t single_sblock_size_row_arg;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -268,18 +280,22 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
         if (has_cliff_col && has_cliff_row && i == ncores - 1) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (i < total_row_cores * full_cores_per_col) {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_sblock_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_sblock_size;
         }
 
         //  writer runtime args
@@ -290,7 +306,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
             start_column_id,
             single_block_size_row_arg,
             single_block_size_col_arg,
-        };
+            TILE_WIDTH * el_size * single_sblock_size_row_arg,
+            single_sblock_size_row_arg};
 
         // reader runtime args
         const std::array reader_rt_args = {

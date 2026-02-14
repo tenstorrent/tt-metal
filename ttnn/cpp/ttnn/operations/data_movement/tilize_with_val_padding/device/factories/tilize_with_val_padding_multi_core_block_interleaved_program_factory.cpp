@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -42,10 +43,11 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
-
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
         [ncores,
@@ -61,8 +63,14 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
          has_cliff_row,
          has_cliff_col,
          full_cores_per_row,
-         full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
+         full_cores_per_col,
+         single_sblock_size] =
+            ttnn::split_blocks_for_tilize_wh(
+                available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
+    if (single_sblock_size > 0 && single_block_size % single_sblock_size) {
+        TT_FATAL(false, "single_block_size is not divided by single_sblock_size");
+    }
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -72,10 +80,10 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
 
     if (!core_range.empty()) {
         create_cb(
-            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
+            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_sblock_size, input_cb_data_format);
 
         create_cb(
-            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_block_size, output_cb_data_format);
+            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_sblock_size, output_cb_data_format);
     }
     if (has_cliff_col && has_cliff_row) {
         create_cb(
@@ -119,7 +127,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             program,
             cliff_col_core_range,
             input_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             input_cb_data_format);
 
         create_cb(
@@ -127,7 +135,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             program,
             cliff_col_core_range,
             output_single_tile_size,
-            single_block_size,
+            single_sblock_size,
             output_cb_data_format);
     }
 
@@ -169,7 +177,6 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
     std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
@@ -179,14 +186,15 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         WriterDataMovementConfig(writer_compile_time_args));
 
     // compute
-
+    uint32_t single_sblock_wh = single_block_size * single_block_size / single_sblock_size;
+    uint32_t single_sblock_cliff_col_wh = single_block_size_cliff_col * single_block_size / single_sblock_size;
     if (!core_range.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
             ComputeConfig{
-                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {single_block_size, single_block_size, third_dim}});
+                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {single_sblock_wh, single_sblock_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
@@ -214,7 +222,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+                .compile_args = {single_sblock_cliff_col_wh, single_sblock_size, third_dim}});
     }
 
     // RUNTIME ARGS
@@ -224,6 +232,7 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
     uint32_t tile_start_id = 0;
     uint32_t single_block_size_row_arg;
     uint32_t single_block_size_col_arg;
+    uint32_t single_sblock_size_row_arg;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -235,18 +244,22 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
         if (has_cliff_col && has_cliff_row && i == ncores - 1) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_block_size_cliff_row;
 
         } else if (i < total_row_cores * full_cores_per_col) {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size;
+            single_sblock_size_row_arg = single_sblock_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sblock_size_row_arg = single_sblock_size;
         }
 
         //  reader runtime args
@@ -258,7 +271,8 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             start_column_id,
             single_block_size_row_arg,
             single_block_size_col_arg,
-        };
+            TILE_WIDTH * a.element_size() * single_sblock_size_row_arg,
+            single_sblock_size_row_arg};
 
         // writer runtime args
         const std::array writer_rt_args = {
