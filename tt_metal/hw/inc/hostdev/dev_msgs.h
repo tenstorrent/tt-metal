@@ -109,6 +109,7 @@ struct ncrisc_halt_msg_t {
 enum dispatch_mode {
     DISPATCH_MODE_DEV,
     DISPATCH_MODE_HOST,
+    DISPATCH_MODE_NONE,
 };
 
 enum noc_index {

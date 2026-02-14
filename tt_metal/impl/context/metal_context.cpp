@@ -687,8 +687,18 @@ void MetalContext::clear_dram_state(ChipId device_id) {
 void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
     auto clear_ethernet_core = [&](const CoreCoord& logical_eth_core, HalProgrammableCoreType programmable_core_type) {
         auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
+        size_t launch_msg_size = factory.size_of<dev_msgs::launch_msg_t>();
         std::vector<std::byte> init_launch_msg_data(
-            dev_msgs::launch_msg_buffer_num_entries * factory.size_of<dev_msgs::launch_msg_t>(), std::byte{0});
+            dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
+
+        // Set all entries to DISPATCH_MODE_NONE since these are cleared launch messages.
+        // Specifying DISPATCH_MODE_DEV or DISPATCH_MODE_HOST would be misleading.
+        for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
+            auto entry_view =
+                factory.create_view<dev_msgs::launch_msg_t>(init_launch_msg_data.data() + (i * launch_msg_size));
+            entry_view.kernel_config().mode() = dev_msgs::DISPATCH_MODE_NONE;
+        }
+
         dev_msgs::go_msg_t go_msg = factory.create<dev_msgs::go_msg_t>();
         go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
@@ -1405,11 +1415,24 @@ void MetalContext::initialize_firmware(
     std::vector<std::byte> init_launch_msg_data(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
     auto prepare_initial_launch_msg = [&]() {
-        for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
+        // Entry 0: Use the proper firmware startup message
+        std::copy(
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data());
+
+        // Entries 1-7: Set dispatch mode to DISPATCH_MODE_NONE as they are not needed during init.
+        // These are placeholder entries during firmware initialization - specifying a dispatch mode
+        // at this time is misleading since these launch messages are not actually used by workers.
+        auto factory = hal_->get_dev_msgs_factory(core_type);
+        for (size_t i = 1; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
             std::copy(
                 launch_msg.data(),
                 launch_msg.data() + launch_msg_size,
                 init_launch_msg_data.data() + (i * launch_msg_size));
+            auto entry_view =
+                factory.create_view<dev_msgs::launch_msg_t>(init_launch_msg_data.data() + (i * launch_msg_size));
+            entry_view.kernel_config().mode() = dev_msgs::DISPATCH_MODE_NONE;
         }
     };
     const auto write_initial_go_launch_msg = [&]() {

@@ -927,14 +927,17 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
         fprintf(reader_.f, "D");
     } else if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_HOST) {
         fprintf(reader_.f, "H");
+    } else if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_NONE) {
+        fprintf(reader_.f, "N");
     } else {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
+            "Watcher data corruption, unexpected launch mode on core {}: {} (expected {}, {}, or {})",
             virtual_coord_.str(),
             launch_msg_.kernel_config().mode(),
             dev_msgs::DISPATCH_MODE_DEV,
-            dev_msgs::DISPATCH_MODE_HOST);
+            dev_msgs::DISPATCH_MODE_HOST,
+            dev_msgs::DISPATCH_MODE_NONE);
     }
 
     if (launch_msg_.kernel_config().brisc_noc_id() == 0 || launch_msg_.kernel_config().brisc_noc_id() == 1) {
