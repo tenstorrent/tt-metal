@@ -14,7 +14,7 @@
 namespace ttnn::operations::embedding {
 
 ttnn::Tensor EmbeddingOperation::invoke(
-    const Tensor& input_tensor_arg,
+    const Tensor& input_tensor,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,
     const std::optional<ttnn::Layout>& layout,
@@ -25,22 +25,13 @@ ttnn::Tensor EmbeddingOperation::invoke(
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
-    Tensor mutable_input_tensor = input_tensor_arg;
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
-    auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
-    // If indices tensor is 1 dimensional, batch size is 1
-    auto batch_size = (mutable_input_tensor.logical_shape().rank() == 1) ? 1 : mutable_input_tensor.logical_shape()[0];
-    auto sentence_size = mutable_input_tensor.logical_shape()[-1];
-    auto input_tensor = mutable_input_tensor;
-    if (mutable_input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        input_tensor = ttnn::reshape(mutable_input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
-    }
+    auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
@@ -60,12 +51,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     auto embeddings = ttnn::prim::embedding(
         input_tensor, weight, fused_tilized, embeddings_type, memory_config, pad_token, optional_output_tensor);
-    // Don't include batch_size if there was none
-    if (input_tensor_arg.logical_shape().rank() == 1) {
-        embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
-    } else {
-        embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
-    }
+
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
         embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
