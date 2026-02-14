@@ -18,9 +18,9 @@ struct EmbeddingsReaderKernelArgs {
 };
 
 struct CompileTimeEmbeddingsReaderKernelArgs {
-    uint32_t cb_id_index;
+    uint32_t input_cb_index;
     uint32_t input_page_size;
-    uint32_t weight_stick_size;
+    uint32_t weight_page_size;
     uint32_t elems_per_page;
     uint32_t input_block_size_bytes;
     uint32_t input_buf_alignment;

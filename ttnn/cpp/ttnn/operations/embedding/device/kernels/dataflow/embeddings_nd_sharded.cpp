@@ -22,11 +22,11 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
 
     const auto input = TensorAccessor(input_args, args.input_buffer_src_addr, c_args.input_page_size);
-    const auto weights = TensorAccessor(weights_args, args.weight_buffer_src_addr, c_args.weight_stick_size);
-    const auto output = TensorAccessor(output_args, args.output_buffer_src_addr, c_args.weight_stick_size);
+    const auto weights = TensorAccessor(weights_args, args.weight_buffer_src_addr, c_args.weight_page_size);
+    const auto output = TensorAccessor(output_args, args.output_buffer_src_addr, c_args.weight_page_size);
 
-    cb_reserve_back(c_args.cb_id_index, 1);
-    uint32_t index_cb_addr = get_write_ptr(c_args.cb_id_index);
+    cb_reserve_back(c_args.input_cb_index, 1);
+    uint32_t index_cb_addr = get_write_ptr(c_args.input_cb_index);
     volatile tt_l1_ptr input_token_t* index_cb_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(index_cb_addr);
 
     uint32_t output_cb_addr = get_write_ptr(c_args.output_cb_index);
@@ -50,11 +50,11 @@ void kernel_main() {
             input_token_t weights_flatten_idx = index_cb_ptr[index];
 
             uint64_t weight_noc_addr = get_token_noc_addr(weights_flatten_idx, weights);
-            noc_async_read<c_args.weight_stick_size>(weight_noc_addr, output_cb_addr, c_args.weight_stick_size);
+            noc_async_read<c_args.weight_page_size>(weight_noc_addr, output_cb_addr, c_args.weight_page_size);
             noc_async_read_barrier();
 
-            noc_async_write<c_args.weight_stick_size>(
-                output_cb_addr, output_page_iter->noc_addr(), c_args.weight_stick_size);
+            noc_async_write<c_args.weight_page_size>(
+                output_cb_addr, output_page_iter->noc_addr(), c_args.weight_page_size);
             noc_async_write_barrier();
         }
     }

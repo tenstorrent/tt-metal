@@ -87,9 +87,9 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     std::vector<uint32_t> embedding_compile_time_args =
         ttnn::kernel_utils::to_vector(ttnn::kernel::CompileTimeEmbeddingsReaderKernelArgs{
-            .cb_id_index = src1_cb_index,
+            .input_cb_index = src1_cb_index,
             .input_page_size = input_page_size,
-            .weight_stick_size = weight_page_size,
+            .weight_page_size = weight_page_size,
             .elems_per_page = index_elems_per_page,
             .input_block_size_bytes = index_elems_per_page * input_element_size_bytes,
             .input_buf_alignment = input.buffer()->alignment(),
