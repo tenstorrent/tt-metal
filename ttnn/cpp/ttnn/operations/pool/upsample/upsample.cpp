@@ -49,10 +49,9 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
         input_tensor_reshaped,
         sliding_window_config,
-        0,      // pad_val
-        false,  // remote_read
-        false,  // transpose_mcast
-        input_tensor_reshaped.memory_config(),
+        0,       // pad_val
+        false,   // remote_read
+        false,   // transpose_mcast
         false);  // is_out_tiled
 
     return {haloed_tensor, sliding_window_config};
