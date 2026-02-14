@@ -602,32 +602,18 @@ class TTAttention:
                 device=device,
             )
             self._bqkv_tt = ttnn.from_torch(
-                bqkv.unsqueeze(0),
+                # Keep bias in TILE layout and rank-3 so linear's bias application stays in
+                # well-supported interleaved broadcast territory (avoid sharded broadcast).
+                bqkv.reshape(1, 1, -1),
                 dtype=(ttnn.bfloat8_b if hasattr(ttnn, "bfloat8_b") else ttnn.bfloat16),
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
-            # Per-Q/K/V biases for the explicit sharded attention path. We add these
-            # after split-heads to avoid large broadcast buffers in the fused QKV linear.
-            bias_dtype = ttnn.bfloat8_b if hasattr(ttnn, "bfloat8_b") else ttnn.bfloat16
-            self._q_bias_tt = ttnn.from_torch(
-                q_b_hd.unsqueeze(0).unsqueeze(2),  # [1, H, 1, D]
-                dtype=bias_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            self._k_bias_tt = ttnn.from_torch(
-                k_b_hd.unsqueeze(0).unsqueeze(3),  # [1, H, D, 1] (K is transposed)
-                dtype=bias_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-            self._v_bias_tt = ttnn.from_torch(
-                v_b_hd.unsqueeze(0).unsqueeze(2),  # [1, H, 1, D]
-                dtype=bias_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
+            # NOTE: Do not apply Q/K/V biases post-split on height-sharded tensors. Bias is
+            # fused (or applied) only in the QKV linear while still interleaved.
+            self._q_bias_tt = None
+            self._k_bias_tt = None
+            self._v_bias_tt = None
         except Exception:
             self._wqkv_tt = None
             self._bqkv_tt = None
@@ -710,11 +696,10 @@ class TTAttention:
                 split_memcfg = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
 
             # QKV fused linear must be block-sharded for TTNN split-heads to take the
-            # fully sharded path (vit.md pattern). Prefer the canonical TTNN constant
-            # so the op can pick the right sharded kernel from program_config.
+            # fully sharded path (vit.md pattern). We reshard the QKV output to block-sharded
+            # right before split-heads; keep the *linear output* interleaved so bias handling
+            # does not trigger unsupported sharded broadcast.
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
-            if explicit_sharded_attn:
-                memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
@@ -740,7 +725,7 @@ class TTAttention:
             qkv3 = _ttnn_linear_with_optional_program_config(
                 x=x3,
                 w=self._wqkv_tt,
-                bias=(None if explicit_sharded_attn else self._bqkv_tt),
+                bias=self._bqkv_tt,
                 dtype=qkv_dtype,
                 memory_config=memcfg,
                 program_config=qkv_pc,
@@ -780,38 +765,126 @@ class TTAttention:
             except TypeError:
                 # Backward compat: older runtimes may not expose these kwargs.
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
-
-            if explicit_sharded_attn and getattr(self, "_q_bias_tt", None) is not None:
-                # Apply Q/K/V biases post-split to avoid large sharded broadcast in QKV linear.
-                qb, kb, vb = self._q_bias_tt, self._k_bias_tt, self._v_bias_tt
-                # Broadcast+add kernels are sensitive to bias placement; keep biases in L1.
-                try:
-                    qb = ttnn.to_memory_config(qb, memory_config=ttnn.L1_MEMORY_CONFIG)
-                    kb = ttnn.to_memory_config(kb, memory_config=ttnn.L1_MEMORY_CONFIG)
-                    vb = ttnn.to_memory_config(vb, memory_config=ttnn.L1_MEMORY_CONFIG)
-                except Exception:
-                    pass
-                q_tt = ttnn.add(q_tt, qb)
-                k_tt = ttnn.add(k_tt, kb)
-                v_tt = ttnn.add(v_tt, vb)
+            # Free the fused QKV buffer after split.
+            try:
+                if hasattr(ttnn, "deallocate"):
+                    ttnn.deallocate(qkv3)
+            except Exception:
+                pass
 
             if explicit_sharded_attn:
+                # For DPT-Large (H=16, seq padded to 640), attention score buffers do not fit
+                # when 2 heads are packed per core on an 8x1 grid. When an attention grid
+                # with grid_y>1 is configured, reshape heads into a pseudo-batch so QK/softmax/AV
+                # can run on more cores (e.g., 8x2 => 16 cores, 1 head/core).
+                attn_grid = getattr(cfg, "attn_grid", None) if cfg is not None else None
+                if attn_grid is None:
+                    attn_grid = getattr(cfg, "grid", None) if cfg is not None else None
+
+                attn_core_grid = None
+                attn_scores_mc = split_memcfg
+                attn_q_mc = split_memcfg
+                pseudo_batch_b = None
+                if attn_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
+                    attn_grid_x, attn_grid_y = int(attn_grid[0]), int(attn_grid[1])
+                    if attn_grid_y > 1 and int(B) == 1 and (int(H) % attn_grid_y) == 0:
+                        new_B = attn_grid_y
+                        new_H = int(H) // attn_grid_y
+                        pseudo_batch_b = int(new_B)
+                        # Reshape first (may require interleaving depending on runtime).
+                        try:
+                            q_tt = ttnn.reshape(q_tt, (int(new_B), int(new_H), int(N), int(D)))
+                            k_tt = ttnn.reshape(k_tt, (int(new_B), int(new_H), int(D), int(N)))
+                            v_tt = ttnn.reshape(v_tt, (int(new_B), int(new_H), int(N), int(D)))
+                        except Exception:
+                            try:
+                                q_tt = ttnn.to_memory_config(q_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                                k_tt = ttnn.to_memory_config(k_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                                v_tt = ttnn.to_memory_config(v_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                            except Exception:
+                                pass
+                            q_tt = ttnn.reshape(q_tt, (int(new_B), int(new_H), int(N), int(D)))
+                            k_tt = ttnn.reshape(k_tt, (int(new_B), int(new_H), int(D), int(N)))
+                            v_tt = ttnn.reshape(v_tt, (int(new_B), int(new_H), int(N), int(D)))
+
+                        try:
+                            attn_core_grid = ttnn.CoreGrid(y=int(attn_grid_y), x=int(attn_grid_x))
+                            attn_q_mc = ttnn.create_sharded_memory_config(
+                                getattr(q_tt, "padded_shape", (int(new_B), int(new_H), int(N), int(D))),
+                                core_grid=attn_core_grid,
+                                strategy=ttnn.ShardStrategy.HEIGHT,
+                                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                            )
+                            attn_k_mc = ttnn.create_sharded_memory_config(
+                                getattr(k_tt, "padded_shape", (int(new_B), int(new_H), int(D), int(N))),
+                                core_grid=attn_core_grid,
+                                strategy=ttnn.ShardStrategy.HEIGHT,
+                                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                            )
+                            attn_v_mc = ttnn.create_sharded_memory_config(
+                                getattr(v_tt, "padded_shape", (int(new_B), int(new_H), int(N), int(D))),
+                                core_grid=attn_core_grid,
+                                strategy=ttnn.ShardStrategy.HEIGHT,
+                                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                            )
+                            # Attention scores: [B, H, N, N]
+                            attn_scores_mc = ttnn.create_sharded_memory_config(
+                                (int(new_B), int(new_H), int(N), int(N)),
+                                core_grid=attn_core_grid,
+                                strategy=ttnn.ShardStrategy.HEIGHT,
+                                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                            )
+                            q_tt = ttnn.to_memory_config(q_tt, memory_config=attn_q_mc)
+                            k_tt = ttnn.to_memory_config(k_tt, memory_config=attn_k_mc)
+                            v_tt = ttnn.to_memory_config(v_tt, memory_config=attn_v_mc)
+                            try:
+                                if hasattr(ttnn, "reallocate"):
+                                    q_tt = ttnn.reallocate(q_tt)
+                                    k_tt = ttnn.reallocate(k_tt)
+                                    v_tt = ttnn.reallocate(v_tt)
+                            except Exception:
+                                pass
+                        except Exception:
+                            # If any of these reshard steps fail, fall back to the split op's memcfg.
+                            attn_scores_mc = split_memcfg
+                            attn_q_mc = split_memcfg
+
                 # Explicit attention path (ViT TTNN pattern) on sharded operands:
                 # QK -> fused scale+mask+softmax -> AV, all height-sharded.
                 qk_pc = None if use_default_attn_programs else getattr(cfg, "qk_program_config", None)
                 softmax_pc = None if use_default_attn_programs else getattr(cfg, "softmax_program_config", None)
                 av_pc = None if use_default_attn_programs else getattr(cfg, "av_program_config", None)
 
-                scores_memcfg = split_memcfg
+                scores_memcfg = attn_scores_mc
+                # Keep attention intermediates in BF8 where supported to avoid L1 OOM on N300.
+                attn_mm_dtype = ttnn.bfloat8_b if hasattr(ttnn, "bfloat8_b") else ttnn.bfloat16
                 attn_scores = _ttnn_matmul_with_optional_program_config(
                     a=q_tt,
                     b=k_tt,
-                    dtype=ttnn.bfloat16,
+                    dtype=attn_mm_dtype,
                     memory_config=scores_memcfg,
                     program_config=qk_pc,
                     op_name="attn_qk_matmul",
                 )
+                try:
+                    if hasattr(ttnn, "deallocate"):
+                        ttnn.deallocate(q_tt)
+                        ttnn.deallocate(k_tt)
+                except Exception:
+                    pass
                 attn_mask = mm_opts.get("attn_mask", None)
+                if pseudo_batch_b is not None and attn_mask is not None:
+                    # Softmax sharded kernel requires mask batch dimension to match the input batch.
+                    # When using pseudo-batch sharding for heads, replicate the mask across batch.
+                    try:
+                        if isinstance(attn_mask, ttnn.Tensor):
+                            # Prefer DRAM to avoid consuming extra L1 during trace capture.
+                            mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None)
+                            attn_mask = ttnn.concat([attn_mask for _ in range(int(pseudo_batch_b))], 0, memory_config=mc)
+                        elif torch.is_tensor(attn_mask):
+                            attn_mask = attn_mask.repeat(int(pseudo_batch_b), 1, 1, 1)
+                    except Exception:
+                        pass
                 attn_probs = _ttnn_attention_softmax_with_optional_program_config(
                     x=attn_scores,
                     attention_mask=attn_mask,
@@ -823,11 +896,16 @@ class TTAttention:
                 ctx_tt = _ttnn_matmul_with_optional_program_config(
                     a=attn_probs,
                     b=v_tt,
-                    dtype=ttnn.bfloat16,
-                    memory_config=scores_memcfg,
+                    dtype=attn_mm_dtype,
+                    memory_config=attn_q_mc,
                     program_config=av_pc,
                     op_name="attn_av_matmul",
                 )
+                try:
+                    if hasattr(ttnn, "deallocate"):
+                        ttnn.deallocate(v_tt)
+                except Exception:
+                    pass
                 try:
                     if hasattr(ttnn, "deallocate"):
                         ttnn.deallocate(attn_scores)
@@ -835,13 +913,29 @@ class TTAttention:
                 except Exception:
                     pass
 
+                # If we reshaped heads into a pseudo-batch for attention, restore [B, H, N, D].
+                try:
+                    if tuple(getattr(ctx_tt, "shape", ()))[:2] != (int(B), int(H)):
+                        ctx_tt = ttnn.reshape(ctx_tt, (int(B), int(H), int(N), int(D)))
+                except Exception:
+                    pass
+
                 try:
                     merged = ttnn.transformer.concatenate_heads(
                         ctx_tt,
-                        memory_config=(tokens_shard_mc if tokens_shard_mc is not None else ttnn.L1_MEMORY_CONFIG),
+                        # When attention runs on an expanded grid (pseudo-batch), the context tensor
+                        # sharding may not be directly compatible with a block-sharded output spec.
+                        # Concatenate into an interleaved tensor first, then reshard explicitly.
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
                 except TypeError:
                     merged = ttnn.transformer.concatenate_heads(ctx_tt)
+                if tokens_shard_mc is not None:
+                    try:
+                        merged2 = ttnn.to_memory_config(merged, memory_config=tokens_shard_mc)
+                        merged = merged2
+                    except Exception:
+                        pass
                 ctx = merged
             else:
                 # Legacy SDPA path (interleaved). Keep it for non-sharded / debug.
@@ -974,6 +1068,8 @@ class TTMLP:
             )
         except Exception:
             self.w1_tt = self.b1_tt = self.w2_tt = self.b2_tt = None
+        # Cache sharded memory configs for running MLP matmuls on a separate grid.
+        self._mlp_block_shard_mc_cache: dict[tuple[int, int, int, int, int], object] = {}
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
         try:
@@ -1000,7 +1096,9 @@ class TTMLP:
 
             memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
             if incoming_sharded:
-                memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or tokens_shard_mc or memcfg
+                # For block-sharded MLP matmuls, use the canonical TTNN constant so the op
+                # can compute an output shard spec that matches the expanded hidden dims.
+                memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
 
@@ -1011,11 +1109,47 @@ class TTMLP:
             if ff2_pc is not None and not _ttnn_is_sharded(x3):
                 ff2_pc = None
 
+            mlp_dtype = ttnn.bfloat16
+            if incoming_sharded and hasattr(ttnn, "bfloat8_b"):
+                # Match vit.md: use BF8 for sharded MLP matmuls to reduce L1/CB pressure.
+                mlp_dtype = ttnn.bfloat8_b
+
+            # Optionally reshard activations to a different MLP grid (e.g., 8x2) to reduce per-core M
+            # and avoid static circular-buffer clashes on N300.
+            mlp_grid = getattr(cfg, "mlp_core_grid", None) if cfg is not None else None
+            did_reshard_for_mlp = False
+            if incoming_sharded and mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
+                try:
+                    grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
+                    cache_key = (int(B), int(N), int(C), int(grid_x), int(grid_y))
+                    mlp_shard_mc = self._mlp_block_shard_mc_cache.get(cache_key)
+                    if mlp_shard_mc is None:
+                        core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
+                        mlp_shard_mc = ttnn.create_sharded_memory_config(
+                            getattr(x3, "padded_shape", (int(B), int(N), int(C))),
+                            core_grid=core_grid,
+                            strategy=ttnn.ShardStrategy.BLOCK,
+                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        )
+                        self._mlp_block_shard_mc_cache[cache_key] = mlp_shard_mc
+                    try:
+                        x3 = ttnn.to_memory_config(x3, memory_config=mlp_shard_mc, dtype=mlp_dtype)
+                    except TypeError:
+                        x3 = ttnn.to_memory_config(x3, memory_config=mlp_shard_mc)
+                    memcfg = mlp_shard_mc
+                    did_reshard_for_mlp = True
+                except Exception:
+                    did_reshard_for_mlp = False
+            if incoming_sharded and mlp_grid is not None and not did_reshard_for_mlp:
+                # Avoid using mismatched program configs if we couldn't reshard to the requested grid.
+                ff1_pc = None
+                ff2_pc = None
+
             y1 = _ttnn_linear_with_optional_program_config(
                 x=x3,
                 w=self.w1_tt,
                 bias=self.b1_tt,
-                dtype=ttnn.bfloat16,
+                dtype=mlp_dtype,
                 memory_config=memcfg,
                 program_config=ff1_pc,
                 op_name="mlp_ff1",
@@ -1027,15 +1161,18 @@ class TTMLP:
                 x=y1,
                 w=self.w2_tt,
                 bias=self.b2_tt,
-                dtype=ttnn.bfloat16,
+                dtype=mlp_dtype,
                 memory_config=memcfg,
                 program_config=ff2_pc,
                 op_name="mlp_ff2",
             )
 
-            if incoming_sharded and tokens_shard_mc is not None:
+            if incoming_sharded and tokens_shard_mc is not None and did_reshard_for_mlp:
                 # Restore the encoder-wide token sharding spec for residual adds.
-                y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+                try:
+                    y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+                except TypeError:
+                    y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc)
 
             if wants_4d:
                 y2 = ttnn.reshape(y2, (int(B), 1, int(N), int(y2.shape[-1])))

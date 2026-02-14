@@ -196,19 +196,38 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         # keeping out_subblock_w/subblock_w <= 8 avoids register pressure limits.
         qk_out_subblock_w = seqL_t if seqL_t <= 8 else 1
         softmax_subblock_w = seqL_t if seqL_t <= 8 else 1
+        # MLP matmuls can exceed static CB limits on small grids; keep subblocks narrow.
+        ff1_out_subblock_w = (dim_t__x * 4) // 2
+        if ff1_out_subblock_w > 4:
+            ff1_out_subblock_w = 4
+        ff2_out_subblock_w = dim_t__x
+        if ff2_out_subblock_w > 2:
+            ff2_out_subblock_w = 2
+        ff1_fused_activation = (ttnn.UnaryOpType.GELU, True)
+        # On N300 (8x1), fused activation can increase static CB pressure enough to clash with L1.
+        # Run GELU as a separate op in perf mode to keep the sharded path stable.
+        try:
+            if config.device.endswith("n300") and int(core_grid_y) == 1:
+                ff1_fused_activation = None
+        except Exception:
+            pass
         # LayerNorm runs on block-sharded tokens across the same grid. When seqL
         # tiles divide cleanly along grid_y, each core sees seqL_t/grid_y tiles.
         ln_block_h = seqL_t
         if core_grid_y > 1 and (seqL_t % core_grid_y) == 0:
             ln_block_h = seqL_t // core_grid_y
+        # LayerNorm sharded kernels can clash with L1 buffers on small grids. Keep subblock_w small
+        # and prefer in-place execution to reduce additional L1 buffer pressure.
+        ln_subblock_w = 1
+        ln_inplace = True
 
         pc = {
             "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=core_grid,
-                subblock_w=dim_t__x,
+                subblock_w=ln_subblock_w,
                 block_h=ln_block_h,
                 block_w=dim_t__x,
-                inplace=False,
+                inplace=ln_inplace,
             ),
             "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=core_grid,
@@ -254,26 +273,26 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
             ),
             "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=core_grid,
-                subblock_w=dim_t__x,
+                subblock_w=ln_subblock_w,
                 block_h=ln_block_h,
                 block_w=dim_t__x,
-                inplace=False,
+                inplace=ln_inplace,
             ),
             "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=core_grid,
                 in0_block_w=dim_t__x,
                 out_subblock_h=1,
-                out_subblock_w=(dim_t__x * 4) // 2,
+                out_subblock_w=ff1_out_subblock_w,
                 per_core_M=seqL_t,
                 per_core_N=dim_t__x * 4,
                 transpose_mcast=False,
-                fused_activation=(ttnn.UnaryOpType.GELU, True),
+                fused_activation=ff1_fused_activation,
             ),
             "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=core_grid,
                 in0_block_w=dim_t__x * 4,
                 out_subblock_h=1,
-                out_subblock_w=dim_t__x,
+                out_subblock_w=ff2_out_subblock_w,
                 per_core_M=seqL_t,
                 per_core_N=dim_t__x,
                 transpose_mcast=False,
@@ -300,7 +319,10 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         # TTNN sharded split-heads expects the batch dimension to map to grid_y.
         # In our perf path (dp=2, batch=2), per-chip batch is 1, so grid_y must be 1.
         grid = (8, 1)
-        attn_grid = grid
+        # Attention score buffers are too large when 16 heads are packed across only 8 cores.
+        # Run attention (QK/softmax/AV) on a 16-core grid by reshaping heads into a
+        # pseudo-batch in TTAttention (see tt_modules.py).
+        attn_grid = (8, 2)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -435,7 +457,8 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         # Stage-2/3 want explicit sharded attention (QK matmul + fused softmax + AV matmul).
         # Keep a switch so we can force defaults if a runtime regresses.
         use_default_attention_programs=bool(disable_attn_pc),
-        mlp_core_grid=mlp_grid,
+        # MLP runs on the encoder grid for now; do not force a separate reshard grid in TTMLP.
+        mlp_core_grid=None,
     )
 
 
