@@ -10,9 +10,7 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/operations/math.hpp"
 
-#include <optional>
 #include <string>
 #include <variant>
 
@@ -21,49 +19,11 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
-    IDevice* device, uint32_t W, const CoreRangeSet& cores) {
-    const auto num_cores = cores.num_cores();
-    std::optional<Tensor> recip_tensor = std::nullopt;
-    uint32_t reciprocal_CB_size_bytes = 0;
-
-    const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
-    const tt::tt_metal::ShardSpec shard_spec(cores, {1, W}, ShardOrientation::ROW_MAJOR);
-    const MemoryConfig mem_config =
-        MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
-    const tt::tt_metal::TensorLayout tensor_layout(
-        tt::tt_metal::TensorLayout(recip_dtype, Layout::ROW_MAJOR, mem_config));
-    const Shape tensor_shape{num_cores, W};
-    const TensorSpec tensor_spec(tensor_shape, tensor_layout);
-    std::vector<float> reciprocals(num_cores * W);
-    for (uint32_t i = 0; i < W; i++) {
-        reciprocals[i] = 1.0f / (i + 1);
-    }
-    for (uint32_t i = 1; i < num_cores; i++) {
-        std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
-    }
-
-    if (auto* p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
-    } else {
-        TT_THROW("Cannot cast to MeshDevice");
-    }
-
-    reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
-    return std::make_pair(recip_tensor, reciprocal_CB_size_bytes);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFactory::create(
-    const DitLayernormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-
-    const auto& a = tensor_args;
+    const DitLayernormPreAllGatherParams& operation_attributes,
+    const DitLayernormPreAllGatherInputs& tensor_args,
+    Tensor& output) {
+    const auto& a = tensor_args.input;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
@@ -159,13 +119,14 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    auto [recip_tensor, reciprocal_CB_size_bytes] = create_reciprocal_tensor_if_needed(device, W, all_cores);
+    const auto& recip_tensor = tensor_args.recip_tensor;
+    const uint32_t reciprocal_CB_size_bytes = recip_tensor.buffer()->aligned_size_per_bank();
 
     constexpr tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
     auto c_recip_config =
         tt::tt_metal::CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_2, reciprocal_cb_data_format}})
             .set_page_size(tt::CBIndex::c_2, reciprocal_CB_size_bytes)
-            .set_globally_allocated_address(*recip_tensor.value().buffer());
+            .set_globally_allocated_address(*recip_tensor.buffer());
     tt::tt_metal::CreateCircularBuffer(program, all_cores, c_recip_config);
 
     uint32_t curr_row = 0;
@@ -206,12 +167,12 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
 void PreAllGatherWelfordProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const DitLayernormPreAllGatherParams&,
-    const Tensor& tensor_args,
+    const DitLayernormPreAllGatherInputs& tensor_args,
     Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.buffer()->address();
+    const auto input_addr = tensor_args.input.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
