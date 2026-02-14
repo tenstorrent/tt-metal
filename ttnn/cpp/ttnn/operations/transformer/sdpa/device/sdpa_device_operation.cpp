@@ -380,7 +380,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
-    const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
+    const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
@@ -398,7 +398,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         v,
         tensors.attn_mask,
         page_table_for_hash,
-        tensors.attention_sink);
+        tensors.attention_sink,
+        attrs.use_mla);
     return hash;
 }
 
@@ -407,7 +408,8 @@ SDPAOperation::create_op_performance_model(
     const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
+    const bool has_v = tensor_args.v.has_value();
+    const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
@@ -452,7 +454,7 @@ SDPAOperation::create_op_performance_model(
     const auto DH = q_shape[3];
 
     uint32_t Sv, DV;
-    if (args.use_mla) {
+    if (args.use_mla && !has_v) {
         Sv = k_shape[2];
         DV = k_shape[3];
     } else {
