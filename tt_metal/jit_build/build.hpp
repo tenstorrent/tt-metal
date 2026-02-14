@@ -168,13 +168,4 @@ void jit_link_additional_processor(
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);
 
-// Execute build_fn exactly once for a given hash.
-// Concurrent callers with the same hash block until the build completes.
-// Returns immediately if hash was already built.
-// If build_fn throws, subsequent callers will retry.
-void jit_build_once(size_t hash, const std::function<void()>& build_fn);
-
-// Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
-void jit_build_cache_clear();
-
 }  // namespace tt::tt_metal

@@ -65,6 +65,7 @@
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -189,7 +190,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 
 namespace experimental {
 
-void ClearKernelCache() { jit_build_cache_clear(); }
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
 
 }  // namespace experimental
 
@@ -1486,7 +1487,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
                                    tt::TargetDevice::Mock;
 
-                    jit_build_once(kernel_hash, [&] {
+                    if (detail::HashLookup::inst().add(kernel_hash)) {
                         if (!is_mock) {
                             GenerateBinaries(device, build_options, kernel);
                         } else {
@@ -1494,7 +1495,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                    });
+                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                    }
+                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
