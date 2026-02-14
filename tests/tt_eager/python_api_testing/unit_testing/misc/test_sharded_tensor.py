@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import get_debug_tensor
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
 from enum import Enum
 
 TILE_WIDTH = 32
@@ -41,7 +41,7 @@ def print_tiles(tiled_tensor, num_tiles_height, num_tiles_width):
 
 
 def get_tensor(shape, dtype):
-    if dtype in {torch.int16, torch.int32}:
+    if dtype in TORCH_INTEGER_DTYPES:
         torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=dtype)
