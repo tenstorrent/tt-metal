@@ -713,10 +713,15 @@ class TTAttention:
                                 grid_x, grid_y = int(cfg.grid[0]), int(cfg.grid[1])
                                 core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
                                 shape_for_shard = getattr(t, "padded_shape", None) or getattr(t, "shape", None)
+                                # Shard along height only so shard widths remain tile-aligned (avoid BLOCK splitting
+                                # the innermost dimension, which often produces non-32-multiple shard widths).
+                                strategy = getattr(getattr(ttnn, "ShardStrategy", object()), "HEIGHT", None)
+                                if strategy is None:
+                                    strategy = ttnn.ShardStrategy.BLOCK
                                 shard_mc = ttnn.create_sharded_memory_config(
                                     shape_for_shard,
                                     core_grid=core_grid,
-                                    strategy=ttnn.ShardStrategy.BLOCK,
+                                    strategy=strategy,
                                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                                 )
                                 try:
