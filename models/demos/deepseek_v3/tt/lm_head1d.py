@@ -26,7 +26,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class LMHead1D(AbstractModule):
@@ -75,6 +75,23 @@ class LMHead1D(AbstractModule):
                     preprocessor=lambda t: t.permute(1, 0),  # Convert to (in_features, out_features)
                 )
             }
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        context: WeightSpecContext,
+    ) -> ModuleWeightSpec:
+        return {
+            "weight": WeightSpec(
+                shard_dims=(None, -1),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                preprocessor=lambda t: t.permute(1, 0),  # Convert to (in_features, out_features)
+            )
         }
 
     @classmethod

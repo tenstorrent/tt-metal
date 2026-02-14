@@ -6,12 +6,16 @@ from hashlib import md5
 from typing import Any, Callable, Optional, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.cache.storage import CacheStorage
 
 # Type for mesh mapper: CppTensorToMesh (create_mesh_mapper / ShardTensor2dMesh) or ReplicateTensorToMeshWrapper
 MeshMapper = ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper
+
+# Increment when manifest fields or semantics change.
+MANIFEST_VERSION = 1
 
 
 def compute_func_fingerprint(func: Callable) -> str:
@@ -76,6 +80,7 @@ class CacheManifest:
             names_key = "names"
             names_value = json.dumps(sorted(self.name), sort_keys=True)
         return {
+            "manifest_version": MANIFEST_VERSION,
             names_key: names_value,
             "dtype": self.dtype.__name__,
             "layout": self.layout.__name__,
@@ -194,8 +199,17 @@ class TensorCache:
         )
         fingerprint = manifest.get_fingerprint()
         key = CacheKey(fingerprint=fingerprint, manifest=manifest)
+        logger.debug(
+            "TensorCache lookup: names={} fp={} storage={} device_type={} mesh_shape={}",
+            names,
+            fingerprint,
+            type(self.storage).__name__,
+            type(device).__name__,
+            mesh_shape,
+        )
 
         if not self.cache_entry_exists_for_key(key):
+            logger.debug("TensorCache miss: fp={} names={}", fingerprint, names)
             for n in names:
                 if n not in self.state_dict:
                     raise KeyError(
@@ -214,9 +228,11 @@ class TensorCache:
                 mesh_mapper=mesh_mapper,
             )
             tensor = postprocessor(tensor)
+            logger.debug("TensorCache store: fp={} names={}", fingerprint, names)
             self.storage.set(key, tensor)
             return tensor
         else:
+            logger.debug("TensorCache hit: fp={} names={}", fingerprint, names)
             # Validate cached tensor matches requested dtype, layout and memory config
             cached_tensor = self.storage.get(key)
             assert cached_tensor.dtype == dtype, (

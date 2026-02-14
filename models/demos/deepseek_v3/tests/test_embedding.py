@@ -13,15 +13,11 @@ import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.utils.cache import OnDiskCacheStorage, TensorCache
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    assert_hidden_dim_pcc,
-    get_model_config,
-    get_test_weight_config,
-    load_reference_io_tensors_for_module,
-    run_module_forward,
-)
+from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpecContext, create_weight_config_from_weight_spec
 
 
 @pytest.mark.parametrize(
@@ -70,16 +66,11 @@ from models.demos.deepseek_v3.utils.test_utils import (
         for seq_len in PREFILL_SEQ_LENS
     ],
 )
-@pytest.mark.parametrize(
-    "generate_reference_io",
-    [True, False],
-)
 def test_embedding_forward_pass(
     EmbeddingClass,
     hf_config,
     mode,
     batch_size_or_seq_len,
-    generate_reference_io,
     mesh_device,
     ccl,
     model_path,
@@ -90,29 +81,27 @@ def test_embedding_forward_pass(
 ):
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
+    full_state_dict = state_dict
+    module_state_dict = sub_state_dict(full_state_dict, module_path + ".")
+    reference_model = EmbeddingReference(
+        hf_config.vocab_size,
+        hf_config.hidden_size,
+        hf_config.pad_token_id,
+    ).eval()
+    reference_model.load_state_dict(module_state_dict)
 
-    if generate_reference_io:
-        reference_model = EmbeddingReference(
-            hf_config.vocab_size,
-            hf_config.hidden_size,
-            hf_config.pad_token_id,
-        ).eval()
-        state_dict = reference_model.state_dict()
-
-        torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, batch_size_or_seq_len))
-        reference_output = reference_model(torch_input)
-
-    else:
-        state_dict = sub_state_dict(state_dict, module_path + ".")
-        torch_input, reference_output = load_reference_io_tensors_for_module(
-            mode, module_path, batch_size_or_seq_len, 1
-        )
+    torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, batch_size_or_seq_len))
+    reference_output = reference_model(torch_input)
+    state_dict_for_cache = full_state_dict
 
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
-    weight_config = get_test_weight_config(
-        EmbeddingClass, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
-    )
+    cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
+    cache = TensorCache(state_dict_for_cache, hf_config.to_dict(), cache_storage)
+    context = WeightSpecContext(resolver=lambda key: state_dict_for_cache[key])
+    weight_spec = EmbeddingClass.create_weight_spec(hf_config, mesh_device.shape, context.with_prefix(module_path))
+    weight_config_inner = create_weight_config_from_weight_spec(weight_spec, module_path, cache, device=mesh_device)
+    weight_config = {"embedding": weight_config_inner}
     model_config = get_model_config(EmbeddingClass, mode, hf_config, mesh_device)
     model_state = EmbeddingClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

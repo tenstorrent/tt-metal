@@ -207,6 +207,7 @@ def test_create_manifest_basic(sample_hf_config):
 
     assert isinstance(manifest, CacheManifest)
     d = manifest.to_dict()
+    assert d["manifest_version"] == 1
     assert d["name"] == "test_weight"
     assert d["dtype"] == "BFLOAT16"  # dtype.__name__ returns uppercase
     assert d["layout"] == "TILE"  # layout.__name__ returns "TILE" for TILE_LAYOUT
@@ -238,6 +239,7 @@ def test_create_manifest_multi_name(sample_hf_config):
     )
     assert isinstance(manifest, CacheManifest)
     d = manifest.to_dict()
+    assert d["manifest_version"] == 1
     assert "names" in d
     assert d["names"] == json.dumps(sorted(["weight_a", "weight_b"]))
     assert "dtype" in d

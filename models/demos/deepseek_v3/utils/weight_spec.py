@@ -15,6 +15,7 @@ class WeightSpec:
     """Declarative specification for weight conversion."""
 
     name: str = ""
+    torch_tensor: torch.Tensor | None = None
     dtype: ttnn.DataType = ttnn.bfloat16
     layout: ttnn.Layout = ttnn.TILE_LAYOUT
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
@@ -80,6 +81,7 @@ def create_weight_config_from_weight_spec(
                 value.layout,
                 preprocessor=value.preprocessor,
                 postprocessor=value.postprocessor,
+                memory_config=value.memory_config,
                 device=device,
                 mesh_mapper=mesh_mapper,
             )

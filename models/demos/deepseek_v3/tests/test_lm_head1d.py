@@ -14,14 +14,11 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
+from models.demos.deepseek_v3.utils.cache import OnDiskCacheStorage, TensorCache
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    assert_hidden_dim_pcc,
-    get_model_config,
-    get_test_weight_config,
-    run_module_forward,
-)
+from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpecContext, create_weight_config_from_weight_spec
 
 
 class DeepseekV3LMHead(nn.Module):
@@ -61,16 +58,22 @@ def test_forward_pass(
     ccl: CCL,
     cache_path: Path,
     set_deterministic_env: Any,
+    state_dict,
 ):
+    full_state_dict = state_dict
     reference_model = DeepseekV3LMHead(hf_config).eval()
-    state_dict = sub_state_dict(reference_model.state_dict(), "lm_head.")
+    module_state_dict = sub_state_dict(full_state_dict, "lm_head.")
+    reference_model.lm_head.load_state_dict(module_state_dict)
     batch_size = batch_size_per_row * mesh_device.shape[0]
     torch_input = torch.randn(1, 1, batch_size, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
 
-    weight_config = get_test_weight_config(
-        LMHead1D, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
-    )
+    cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
+    cache = TensorCache(full_state_dict, hf_config.to_dict(), cache_storage)
+    context = WeightSpecContext(resolver=lambda key: full_state_dict[key])
+    weight_spec = LMHead1D.create_weight_spec(hf_config, mesh_device, context.with_prefix("lm_head"))
+    weight_config_inner = create_weight_config_from_weight_spec(weight_spec, "lm_head", cache, device=mesh_device)
+    weight_config = {"linear": {"input_tensor_b": weight_config_inner["weight"]}}
     model_config = get_model_config(LMHead1D, mode, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

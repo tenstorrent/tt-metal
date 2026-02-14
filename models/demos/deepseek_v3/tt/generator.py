@@ -48,7 +48,7 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
 
 class DeepseekGenerator:
     """
-    Simple generator that wires RowBatchedModel + LMHead for decode-only inference.
+    Simple generator that wires RowBatchedModel + LMHead1D for decode-only inference.
 
     Notes:
     - Prefill at the model level is not fully implemented in RowBatchedModel; we emulate

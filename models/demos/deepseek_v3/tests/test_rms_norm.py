@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 import torch
 
@@ -10,7 +9,7 @@ from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.cache import InMemoryCacheStorage, TensorCache
+from models.demos.deepseek_v3.utils.cache import InMemoryCacheStorage, OnDiskCacheStorage, TensorCache
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
@@ -72,6 +71,7 @@ def test_forward_pass(
     ccl,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    cache_path,
 ):
     num_module_layers, _ = mesh_device.shape
     hidden_size = getattr(hf_config, hf_config_size_attr)
@@ -97,7 +97,10 @@ def test_forward_pass(
     reference_model = reference_model.to(torch.float32)
     reference_output = reference_model(torch_input)
 
-    cache_storage = InMemoryCacheStorage()
+    if reference_layernorm_path is None:
+        cache_storage = InMemoryCacheStorage()
+    else:
+        cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
     cache = TensorCache(state_dict_for_cache, hf_config.to_dict(), cache_storage)
     context = WeightSpecContext(resolver=lambda key: state_dict_for_cache[key])
     weight_spec = RMSNormClass.create_weight_spec(hf_config, mesh_device.shape, context.with_prefix(prefix))

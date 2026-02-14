@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     ModelPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class Embedding1D(AbstractModule):
@@ -79,6 +79,47 @@ class Embedding1D(AbstractModule):
                     preprocessor=preprocessor,
                 )
             }
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+    ) -> ModuleWeightSpec:
+        num_devices = mesh_shape[0] * mesh_shape[1]
+
+        def preprocessor(t):
+            assert t.shape[-1] == hf_config.hidden_size, "Embedding size does not match the hf_config hidden size"
+            return t.reshape(
+                hf_config.vocab_size,
+                mesh_shape[1],
+                mesh_shape[0],
+                even_int_div(hf_config.hidden_size, num_devices),
+            )
+
+        def postprocessor(t: ttnn.Tensor) -> ttnn.Tensor:
+            shard_dims = (2, 1)
+            remove_dims = (True, True)
+            shape = list(t.shape)
+            if shard_dims[0] > shard_dims[1]:
+                shard_dims = (shard_dims[1], shard_dims[0])
+                remove_dims = (remove_dims[1], remove_dims[0])
+            if remove_dims[1]:
+                shape.pop(shard_dims[1])
+            if remove_dims[0]:
+                shape.pop(shard_dims[0])
+            shape = [1] * sum(remove_dims) + shape
+            return t.reshape(shape)
+
+        return {
+            "weight": WeightSpec(
+                shard_dims=(2, 1),
+                remove_dims=(True, True),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+            )
         }
 
     @classmethod

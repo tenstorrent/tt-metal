@@ -9,11 +9,18 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.utils.config_dataclass import ReduceScatterAsyncMinimalConfig
 from models.demos.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY, ModelDecodeConfig, ModelPrefillConfig
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpecContext
 
 
 class Embedding2D(Embedding1D):
     """Embedding module with  tensor and batch parallelism from TTT code.
     Uses DRAM-sharded weights split over rows and replicated over columns"""
+
+    @classmethod
+    def create_weight_spec(
+        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+    ) -> ModuleWeightSpec:
+        return super().create_weight_spec(hf_config, mesh_shape, context)
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelPrefillConfig:
