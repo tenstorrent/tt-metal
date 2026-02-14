@@ -80,3 +80,19 @@ Tests:
     patterns:
       - type: all_to_all
         iterations: 1
+
+  - name: "SequentialNeighborExchangeLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 128
+
+    patterns:
+      - type: sequential_neighbor_exchange
