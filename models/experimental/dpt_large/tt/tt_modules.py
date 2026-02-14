@@ -206,34 +206,23 @@ def _ttnn_matmul_with_optional_program_config(
         inc_program_config_fallback = None
         strict_program_config_enabled = lambda: False  # type: ignore
 
-    # In Stage-2/3 sharded paths, allow the runtime to choose an output spec by
-    # omitting memory_config (passing an interleaved memcfg can force an island).
-    def _call_matmul(*, pc):
-        if memory_config is None:
-            if pc is None:
-                return ttnn.matmul(a, b, dtype=dtype)
-            return ttnn.matmul(a, b, dtype=dtype, program_config=pc)
-        if pc is None:
-            return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
-        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config, program_config=pc)
-
     if program_config is None:
-        return _call_matmul(pc=None)
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
 
     try:
-        return _call_matmul(pc=program_config)
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config, program_config=program_config)
     except TypeError:
         if callable(inc_program_config_fallback):
             inc_program_config_fallback(op=op_name, reason="kwarg_unsupported")
         if strict_program_config_enabled():
             raise
-        return _call_matmul(pc=None)
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
     except Exception:
         if callable(inc_program_config_fallback):
             inc_program_config_fallback(op=op_name, reason="runtime_rejected")
         if strict_program_config_enabled():
             raise
-        return _call_matmul(pc=None)
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
 
 
 def _ttnn_attention_softmax_with_optional_program_config(
@@ -760,7 +749,7 @@ class TTAttention:
                 av_pc = None if use_default_attn_programs else getattr(cfg, "av_program_config", None)
 
                 # Scores and probs stay height-sharded for softmax.
-                scores_memcfg = None
+                scores_memcfg = split_memcfg or getattr(self, "output_mem", None) or ttnn.L1_MEMORY_CONFIG
                 attn_scores = _ttnn_matmul_with_optional_program_config(
                     a=q_tt,
                     b=k_tt,
