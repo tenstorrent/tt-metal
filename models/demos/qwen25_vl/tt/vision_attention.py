@@ -8,7 +8,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -26,6 +25,7 @@ class VisionAttention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        window_info=None,
     ):
         return self.forward_prefill(
             x,
@@ -36,6 +36,7 @@ class VisionAttention(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=None,
+            window_info=window_info,
         )
 
     def __init(
@@ -88,7 +89,7 @@ class VisionAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-        self.configuration = configuration
+
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
@@ -122,6 +123,7 @@ class VisionAttention(LightweightModule):
         self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
         )
+
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
@@ -366,6 +368,7 @@ class VisionAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        window_info=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -474,11 +477,48 @@ class VisionAttention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.configuration.get_attn_sdpa_program_config(
-                    Mode.PREFILL, seq_len, chunk_start_idx, None
-                ),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
+        elif window_info is not None and window_info.get("uniform", False):
+            # Batched SDPA optimization: reshape per-window tokens into batch dimension
+            # and use regular SDPA instead of windowed SDPA. This converts O(S^2) to O(S*W)
+            # by eliminating cross-window compute that would be masked out anyway.
+            W = window_info["window_size"]
+            # Include tail-padding as extra "empty" windows — they process zeros and output zeros.
+            # This avoids slice/pad which is problematic for bfloat8_b tensors.
+            # seq_len is always a multiple of W (seq_len is multiple of 2048, W divides 2048).
+            assert seq_len % W == 0, f"seq_len ({seq_len}) must be divisible by window_size ({W})"
+            total_windows = seq_len // W
+
+            # Reshape: [1, NQH, seq_len, DH] -> [total_windows, NQH, W, DH]
+            q_batched = ttnn.reshape(q_heads_1QSD_8b, [total_windows, self.n_local_heads, W, self.padded_head_dim])
+            k_batched = ttnn.reshape(k_heads_1KSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
+            v_batched = ttnn.reshape(v_heads_1VSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
+
+            ttnn.deallocate(q_heads_1QSD_8b)
+            ttnn.deallocate(k_heads_1KSD_8b)
+            ttnn.deallocate(v_heads_1VSD_8b)
+
+            # Regular SDPA (no mask, is_causal=False) — each window is independent
+            attn_output_batched = ttnn.transformer.scaled_dot_product_attention(
+                q_batched,
+                k_batched,
+                v_batched,
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                program_config=self.model_config["SDPA_PROGCFG"](W),
+            )
+
+            ttnn.deallocate(q_batched)
+            ttnn.deallocate(k_batched)
+            ttnn.deallocate(v_batched)
+
+            # Reshape back: [total_windows, NQH, W, DH] -> [1, NQH, seq_len, DH]
+            attn_output_84SD = ttnn.reshape(attn_output_batched, [1, self.n_local_heads, seq_len, self.padded_head_dim])
+            ttnn.deallocate(attn_output_batched)
         else:
+            # Fallback: use windowed SDPA for non-uniform windows
             attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -486,13 +526,14 @@ class VisionAttention(LightweightModule):
                 cu_seqlens,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
-        # deallocate keys and values
-        ttnn.deallocate(q_heads_1QSD_8b)
-        ttnn.deallocate(k_heads_1KSD_8b)
-        ttnn.deallocate(v_heads_1VSD_8b)
+        # deallocate keys and values (skip if already deallocated by batched SDPA path)
+        if not (window_info is not None and window_info.get("uniform", False) and chunk_start_idx is None):
+            ttnn.deallocate(q_heads_1QSD_8b)
+            ttnn.deallocate(k_heads_1KSD_8b)
+            ttnn.deallocate(v_heads_1VSD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 
