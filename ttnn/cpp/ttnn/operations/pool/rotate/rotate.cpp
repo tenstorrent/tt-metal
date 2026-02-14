@@ -7,7 +7,7 @@
 
 namespace ttnn::operations::rotate {
 
-Tensor Rotate::invoke(
+Tensor rotate(
     const Tensor& input_tensor,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
