@@ -151,16 +151,19 @@ ninja install # Installs to build directory by default, required for Python envi
 
 #### Step 3. Virtual Environment Setup
 
-- (Optional) Specify existing python envirionment:
-```
+- (Optional) Specify existing python environment:
+```bash
 export PYTHON_ENV_DIR=<path_to_your_env_directory>
 ```
 - Run the script to set up your Python environment:
-```
+```bash
 ./create_venv.sh
 source python_env/bin/activate
 ```
+
 Note: If `PYTHON_ENV_DIR` is not set, the script creates a new virtual environment in `./python_env`
+
+**Note:** The `create_venv.sh` script runs `pip install -e .` (from the project root) to install the `ttnn` package in editable mode. If you are using an existing Python environment, make sure to install `ttnn` in editable mode there as well.
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
