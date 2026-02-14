@@ -1162,3 +1162,156 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+def deform_conv2d(
+    input_nhwc,
+    weight_nhwc,
+    offset_nhwc,
+    stride=1,
+    padding=0,
+    dilation=1,
+    groups=1,
+    offset_groups=1,
+    device=None,
+    dtype=ttnn.float32,
+):
+    assert input_nhwc.dtype != dtype, f"input_nhwc must not be of dtype {dtype}; supported dtype is ttnn.bfloat16 "
+
+    assert weight_nhwc.dtype != dtype, f"weight_nhwc must not be of dtype {dtype}; supported dtype is ttnn.bfloat16 "
+
+    assert offset_nhwc.dtype != dtype, f"offset_nhwc must not be of dtype {dtype}; supported dtype is ttnn.bfloat16 "
+
+    assert (
+        input_nhwc.layout != ttnn.TILE_LAYOUT
+    ), f"input_nhwc must not be of layout {ttnn.TILE_LAYOUT}; supported layout is ttnn.ROW_MAJOR_LAYOUT "
+
+    assert (
+        weight_nhwc.dtype != ttnn.TILE_LAYOUT
+    ), f"weight_nhwc must not be of layout {ttnn.TILE_LAYOUT}; supported layout is ttnn.ROW_MAJOR_LAYOUT "
+
+    assert (
+        offset_nhwc.dtype != ttnn.TILE_LAYOUT
+    ), f"offset_nhwc must not be of layout {ttnn.TILE_LAYOUT}; supported layout is ttnn.ROW_MAJOR_LAYOUT "
+    B, H, W, C_in = input_nhwc.shape
+    kH, kW, C_in_g, C_out = weight_nhwc.shape
+
+    out_H = ((H + 2 * padding - dilation * (kH - 1) - 1) // stride) + 1
+    out_W = ((W + 2 * padding - dilation * (kW - 1) - 1) // stride) + 1
+
+    x_padded = ttnn.pad(input_nhwc, [(0, 0), (padding, padding), (padding, padding), (0, 0)], 0)
+
+    C_in_per_group = C_in // groups
+    C_out_per_group = C_out // groups
+    kHkW = kH * kW
+    groups_per_offset_group = groups // offset_groups
+
+    H_padded = x_padded.shape[1]
+    W_padded = x_padded.shape[2]
+
+    oy = ttnn.arange(0, out_H, 1, dtype=dtype, device=device)
+    oy = ttnn.reshape(oy, (out_H, 1, 1, 1))
+    oy = ttnn.multiply(oy, stride)
+
+    ox = ttnn.arange(0, out_W, 1, dtype=dtype, device=device)
+    ox = ttnn.reshape(ox, (1, out_W, 1, 1))
+    ox = ttnn.multiply(ox, stride)
+
+    ky = ttnn.arange(0, kH, 1, dtype=dtype, device=device)
+    ky = ttnn.reshape(ky, (1, 1, kH, 1))
+    ky = ttnn.multiply(ky, dilation)
+
+    kx = ttnn.arange(0, kW, 1, dtype=dtype, device=device)
+    kx = ttnn.reshape(kx, (1, 1, 1, kW))
+    kx = ttnn.multiply(kx, dilation)
+
+    y_base = ttnn.add(oy, ky)
+    x_base = ttnn.add(ox, kx)
+
+    precomputed_grids = []
+
+    for i in range(0, offset_groups):
+        off_g = ttnn.slice(
+            offset_nhwc,
+            [0, 0, 0, i * 2 * kHkW],
+            [offset_nhwc.shape[0], offset_nhwc.shape[1], offset_nhwc.shape[2], (2 * kHkW) * (i + 1)],
+        )
+        off_g = ttnn.reshape(off_g, (B, out_H, out_W, kH, kW, 2))
+
+        off_y = ttnn.slice(
+            off_g,
+            (0, 0, 0, 0, 0, 0),
+            (off_g.shape[0], off_g.shape[1], off_g.shape[2], off_g.shape[3], off_g.shape[4], 1),
+        )
+        off_x = ttnn.slice(
+            off_g,
+            (0, 0, 0, 0, 0, 1),
+            (off_g.shape[0], off_g.shape[1], off_g.shape[2], off_g.shape[3], off_g.shape[4], 2),
+        )
+
+        y = ttnn.unsqueeze(y_base, 0)
+        off_y = ttnn.squeeze(off_y, -1)
+        y = ttnn.add(y, off_y)
+        x_ = ttnn.unsqueeze(x_base, 0)
+        off_x = ttnn.squeeze(off_x, -1)
+        x_ = ttnn.add(x_, off_x)
+
+        y_add = ttnn.add(y, 0.5)
+        y_div = ttnn.div(y_add, float(H_padded))
+        y_mul = ttnn.multiply(y_div, 2.0)
+        y_norm = ttnn.subtract(y_mul, 1.0)
+
+        x_add = ttnn.add(x_, 0.5)
+        x_div = ttnn.div(x_add, float(W_padded))
+        x_mul = ttnn.multiply(x_div, 2.0)
+        x_norm = ttnn.subtract(x_mul, 1.0)
+
+        grid = ttnn.stack([x_norm, y_norm], -1)
+
+        grid_flat = ttnn.reshape(grid, (B, out_H * out_W * kH * kW, 1, 2))
+
+        precomputed_grids.append(grid_flat)
+
+    outputs = []
+
+    for i in range(0, groups):
+        offset_group_idx = i // groups_per_offset_group
+        grid_flat = precomputed_grids[offset_group_idx]
+
+        x_g = ttnn.slice(
+            x_padded,
+            [0, 0, 0, i * C_in_per_group],
+            [x_padded.shape[0], x_padded.shape[1], x_padded.shape[2], (i + 1) * C_in_per_group],
+        )
+
+        w_g = ttnn.slice(
+            weight_nhwc,
+            [0, 0, 0, i * C_out_per_group],
+            [weight_nhwc.shape[0], weight_nhwc.shape[1], weight_nhwc.shape[2], (i + 1) * C_out_per_group],
+        )
+
+        org_channels = x_g.shape[3]
+        pad_c = ((org_channels + 31) // 32) * 32 - org_channels
+
+        x_g = ttnn.pad(x_g, [(0, 0), (0, 0), (0, 0), (0, pad_c)], 0)
+
+        sampled = ttnn.grid_sample(x_g, grid_flat)
+
+        sampled = ttnn.slice(
+            sampled, [0, 0, 0, 0], [sampled.shape[0], sampled.shape[1], sampled.shape[2], org_channels]
+        )
+
+        sampled = ttnn.reshape(sampled, (B, out_H, out_W, C_in_per_group * kH * kW))
+
+        w_g = ttnn.reshape(w_g, (C_in_per_group * kH * kW, C_out_per_group))
+
+        sampled = ttnn.to_layout(sampled, layout=ttnn.TILE_LAYOUT)
+        w_g = ttnn.to_layout(w_g, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.matmul(sampled, w_g)
+
+        outputs.append(result)
+
+    result = ttnn.concat(outputs, 3)
+
+    return result
