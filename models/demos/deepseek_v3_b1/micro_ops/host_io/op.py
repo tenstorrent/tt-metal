@@ -130,19 +130,22 @@ class HostInterface:
             self.intermed_cb_index
             if self.loopback_mode
             else self.downstream_socket_pair[0].get_config_buffer_address(),
-            self.has_embedding,
-            self.embedding_cb_index,
-            self.embedding_page_size if self.has_embedding else 0,
-            self.embedding_tensor.buffer_address()
-            if self.has_embedding
-            else 0,  # This is a compile time argument since embedding tensor is persistent
         ]
-
+        # Add CTAs for fused embedding op if needed
         if self.has_embedding:
+            h2d_socket_kernel_ct_args.extend(
+                [self.embedding_cb_index, self.embedding_page_size, self.embedding_tensor.buffer_address()]
+            )
             h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))
 
+        kernel_source = (
+            "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/fused_h2d_receiver_embedding.cpp"
+            if self.has_embedding
+            else "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_receiver.cpp"
+        )
+
         h2d_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_receiver.cpp",
+            kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=ttnn.CoreRangeSet(
                 [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
