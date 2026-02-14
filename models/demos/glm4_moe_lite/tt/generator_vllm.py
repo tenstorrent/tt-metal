@@ -61,6 +61,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
         self._kv_cache: Optional[Any] = None
         self._tt_runner: Optional[Glm4MoeLiteDenseOnlyTT] = None
+        self._last_draft_token_ids: Optional[torch.Tensor] = None
 
     @classmethod
     def initialize_vllm_model(
@@ -438,6 +439,21 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             # Debug-only: force full device sync at the end of decode to rule out
             # cross-request overlap or async lifetime issues.
             ttnn.synchronize_device(self.mesh_device)
+
+        # Handle MTP output: eager path returns (main, draft) tuple
+        self._last_draft_token_ids = None
+        if isinstance(tt_out, tuple) and len(tt_out) == 2:
+            first = tt_out[0]
+            # Distinguish MTP tuple (torch, torch) from vocab-sharded tuple (ttnn, ttnn)
+            if isinstance(first, torch.Tensor):
+                main_out, draft_ids = tt_out
+                self._last_draft_token_ids = draft_ids  # [active] int32 on host
+                tt_out = main_out
+        # Check trace path stored draft tokens on the runner
+        if self._last_draft_token_ids is None and hasattr(self._tt_runner, '_last_draft_token_ids'):
+            self._last_draft_token_ids = self._tt_runner._last_draft_token_ids
+            self._tt_runner._last_draft_token_ids = None
+
         if read_from_device:
             # Used by vLLM warmup. Force a synchronous readback so compilation/tracing
             # work happens during warmup rather than at first user request.
@@ -558,3 +574,14 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
         next_ids_torch = _tt_to_torch_device0(tt_out).reshape(-1).to(dtype=torch.int32).cpu()
         return next_ids_torch
+
+    def get_spec_token_ids(self, num_reqs: int) -> list[list[int]] | None:
+        """Return MTP draft tokens from the last decode step, or None."""
+        draft = self._last_draft_token_ids
+        if draft is None:
+            return None
+        result = [[int(draft[b].item())] for b in range(min(int(draft.shape[0]), num_reqs))]
+        while len(result) < num_reqs:
+            result.append([])
+        self._last_draft_token_ids = None
+        return result
