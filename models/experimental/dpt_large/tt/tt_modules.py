@@ -701,6 +701,13 @@ class TTAttention:
                 # Split-heads sharded path is sensitive to L1 circular-buffer pressure.
                 # Match vit.md and use BF8 for the fused QKV projection in perf mode.
                 qkv_dtype = ttnn.bfloat8_b
+            if explicit_sharded_attn:
+                # Reduce L1 fragmentation / static CB overlap risk (vit demo pattern).
+                try:
+                    if hasattr(ttnn, "reallocate"):
+                        x3 = ttnn.reallocate(x3)
+                except Exception:
+                    pass
             qkv3 = _ttnn_linear_with_optional_program_config(
                 x=x3,
                 w=self._wqkv_tt,
@@ -731,6 +738,11 @@ class TTAttention:
                     )
                     self._qkv_block_shard_mc_cache[cache_key] = qkv_shard_mc
                 qkv3 = ttnn.to_memory_config(qkv3, qkv_shard_mc)
+                try:
+                    if hasattr(ttnn, "reallocate"):
+                        qkv3 = ttnn.reallocate(qkv3)
+                except Exception:
+                    pass
             # Split to heads (vit.md pattern): returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
             try:
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
