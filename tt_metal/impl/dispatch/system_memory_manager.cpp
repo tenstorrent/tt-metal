@@ -543,14 +543,18 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
+    constexpr int kMaxRetries = 3;
+    constexpr std::chrono::milliseconds kRetryDelayMs{100};
+
     const uint32_t prefetch_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed
+    // Returns true on success, false on timeout
     uint32_t fence;
-    auto wait_for_fetch_q_space = [&]() {
+    auto wait_for_fetch_q_space = [&]() -> bool {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
-            return;
+            return true;  // Space available
         }
         ZoneScopedN("wait_for_fetch_q_space");
 
@@ -566,11 +570,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
         };
 
-        // Handler for timeout
-        auto fetch_on_timeout = []() {
-            MetalContext::instance().on_dispatch_timeout_detected();
-            TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
-        };
+        // Handler for timeout - sets flag instead of throwing
+        std::atomic<bool> timed_out{false};
+        auto fetch_on_timeout = [&timed_out]() { timed_out.store(true); };
 
         // Get dispatch progress for timeout detection
         auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
@@ -580,9 +582,30 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         loop_and_wait_with_timeout(
             fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
+
+        return !timed_out.load();
     };
 
-    wait_for_fetch_q_space();
+    for (int retry = 0; retry < kMaxRetries; ++retry) {
+        if (wait_for_fetch_q_space()) {
+            break;  // Success
+        }
+
+        if (retry < kMaxRetries - 1) {
+            log_warning(
+                tt::LogMetal,
+                "Fetch queue wait timed out on device {} cq {}, attempt {}/{}, retrying...",
+                this->device_id,
+                cq_id,
+                retry + 1,
+                kMaxRetries);
+            std::this_thread::sleep_for(kRetryDelayMs);
+        } else {
+            MetalContext::instance().on_dispatch_timeout_detected();
+            TT_THROW(
+                "TIMEOUT: device timeout in fetch queue wait after {} retries, potential hang detected", kMaxRetries);
+        }
+    }
     // Wrap FetchQ if possible
     uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
@@ -590,7 +613,34 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                                                    sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        wait_for_fetch_q_space();
+
+        auto retry_wait_for_fetch_q_space = [this, cq_id](const char* context_description) {
+            for (int retry = 0; retry < kMaxRetries; ++retry) {
+                if (wait_for_fetch_q_space()) {
+                    return;  // Success
+                }
+
+                if (retry < kMaxRetries - 1) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Fetch queue wait ({}) timed out on device {} cq {}, attempt {}/{}, retrying...",
+                        context_description,
+                        this->device_id,
+                        cq_id,
+                        retry + 1,
+                        kMaxRetries);
+                    std::this_thread::sleep_for(kRetryDelayMs);
+                } else {
+                    MetalContext::instance().on_dispatch_timeout_detected();
+                    TT_THROW(
+                        "TIMEOUT: device timeout in fetch queue wait ({}) after {} retries, potential hang detected",
+                        context_description,
+                        kMaxRetries);
+                }
+            }
+        };
+
+        retry_wait_for_fetch_q_space("after wrap");
     }
 }
 
