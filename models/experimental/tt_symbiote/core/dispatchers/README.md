@@ -46,7 +46,9 @@ TT_SYMBIOTE_DISPATCHER=default pytest tests/test_vit.py
 ## Available Dispatchers
 
 ### default
+
 Standard TTNN dispatcher with all supported operations. This includes:
+
 - Binary operations (add, mul, sub, div, etc.) with helper functions for reduced code duplication
 - Matrix operations (bmm, matmul, addmm)
 - Activation functions (relu, gelu, silu, sigmoid, softmax)
@@ -184,11 +186,11 @@ set_dispatcher("optimized")
 
 Each dispatcher module must implement:
 
-- `can_dispatch_to_ttnn(func_name: str, args, kwargs) -> bool`
+- **can_dispatch_to_ttnn(func_name: str, args, kwargs) -> bool**
   - Determines if an operation can be handled by TTNN
   - Should check tensor types, dtypes, and operation support
 
-- `dispatch_to_ttnn(func_name: str, args, kwargs) -> Any`
+- **dispatch_to_ttnn(func_name: str, args, kwargs) -> Any**
   - Executes the TTNN operation
   - Returns a `TorchTTNNTensor` or appropriate result
 

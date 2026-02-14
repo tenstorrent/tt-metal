@@ -127,3 +127,84 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                         _set_device_recursive(v)
 
     _set_device_recursive(obj)
+
+
+# --- Patches (run at import end): pad fallback + linear dtype alignment ---
+
+
+def _install_pad_fallback():
+    """Force aten::pad to torch fallback so DPL comparison does not hit TTNN tile-rounding shape mismatch."""
+    from models.experimental.tt_symbiote.core.dispatchers import default_dispatcher
+
+    _orig = default_dispatcher.can_dispatch_to_ttnn
+
+    def _can_dispatch_to_ttnn_with_pad_fallback(func_name, args=None, kwargs=None):
+        if func_name == "aten::pad":
+            return False
+        return _orig(func_name, args, kwargs)
+
+    default_dispatcher.can_dispatch_to_ttnn = _can_dispatch_to_ttnn_with_pad_fallback
+
+
+_original_dispatch_to_torch_wrapper = None
+
+
+def _align_linear_dtypes_for_fallback(func_name, func_args, func_kwargs):
+    """Cast weight/bias to input dtype for aten::linear so torch fallback works when params are fp32 (e.g. DPL)."""
+    import torch
+
+    if func_name != "aten::linear" or not func_args or not isinstance(func_args[0], torch.Tensor):
+        return func_args, func_kwargs
+    inp = func_args[0]
+    target_dtype = inp.dtype
+    args_list = list(func_args)
+    if len(args_list) >= 2 and isinstance(args_list[1], torch.Tensor) and args_list[1].dtype != target_dtype:
+        args_list[1] = args_list[1].to(target_dtype)
+    if len(args_list) >= 3 and args_list[2] is not None and isinstance(args_list[2], torch.Tensor):
+        if args_list[2].dtype != target_dtype:
+            args_list[2] = args_list[2].to(target_dtype)
+    kwargs_dict = dict(func_kwargs) if func_kwargs else {}
+    if "bias" in kwargs_dict and kwargs_dict["bias"] is not None and isinstance(kwargs_dict["bias"], torch.Tensor):
+        if kwargs_dict["bias"].dtype != target_dtype:
+            kwargs_dict["bias"] = kwargs_dict["bias"].to(target_dtype)
+    return tuple(args_list), kwargs_dict
+
+
+def _patched_dispatch_to_torch_wrapper(func, torch_args, torch_kwargs):
+    """Wrapper that aligns linear dtypes before calling the original dispatch_to_torch_wrapper."""
+    import torch
+    from torch.utils._pytree import tree_map
+
+    from models.experimental.tt_symbiote.core.run_config import unwrap_to_torch, wrap_from_torch
+
+    if func.name() != "aten::linear":
+        return _original_dispatch_to_torch_wrapper(func, torch_args, torch_kwargs)
+    unwrap = unwrap_to_torch(func)
+    func_args = tree_map(unwrap, torch_args)
+    func_kwargs = tree_map(unwrap, torch_kwargs)
+    func_args, func_kwargs = _align_linear_dtypes_for_fallback(func.name(), func_args, func_kwargs)
+    args_list = list(torch_args)
+    if len(args_list) >= 2 and isinstance(func_args[1], torch.Tensor):
+        args_list[1] = wrap_from_torch(func_args[1])
+    if len(args_list) >= 3 and args_list[2] is not None and isinstance(func_args[2], torch.Tensor):
+        args_list[2] = wrap_from_torch(func_args[2])
+    new_torch_kwargs = dict(torch_kwargs) if torch_kwargs else {}
+    if (
+        "bias" in new_torch_kwargs
+        and new_torch_kwargs["bias"] is not None
+        and isinstance(func_kwargs.get("bias"), torch.Tensor)
+    ):
+        new_torch_kwargs["bias"] = wrap_from_torch(func_kwargs["bias"])
+    return _original_dispatch_to_torch_wrapper(func, tuple(args_list), new_torch_kwargs)
+
+
+def _install_linear_dtype_patch():
+    """Patch DispatchManager.dispatch_to_torch_wrapper to align linear dtypes (keeps run_config.py unchanged)."""
+    global _original_dispatch_to_torch_wrapper
+    if _original_dispatch_to_torch_wrapper is None:
+        _original_dispatch_to_torch_wrapper = DispatchManager.dispatch_to_torch_wrapper
+        DispatchManager.dispatch_to_torch_wrapper = staticmethod(_patched_dispatch_to_torch_wrapper)
+
+
+_install_pad_fallback()
+_install_linear_dtype_patch()

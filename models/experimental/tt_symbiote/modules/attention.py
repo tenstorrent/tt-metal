@@ -719,3 +719,128 @@ class LlamaAttention(TTNNModule):
             attn_out = attn_out[:, -original_q_len:, :]
 
         return self.o_proj(attn_out), None
+
+
+# GR00T-N1.6 Self-Attention
+class TTNNGR00TSelfAttention(TTNNModule):
+    def __init__(self, config=None, torch_layer=None):
+        super().__init__()
+        self._torch_layer = torch_layer
+
+        if isinstance(torch_layer, TTNNGR00TSelfAttention):
+            return
+
+        self.num_heads = getattr(torch_layer, "num_heads", getattr(config, "num_attention_heads", 16))
+        self.num_kv_heads = getattr(
+            torch_layer, "num_key_value_heads", getattr(config, "num_key_value_heads", self.num_heads)
+        )
+        self.hidden_size = getattr(config, "hidden_size", 1152)
+
+        self.tt_q_proj = None
+        self.tt_k_proj = None
+        self.tt_v_proj = None
+        self.tt_o_proj = None
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        if torch_layer is not None:
+            self._map_weights(torch_layer)
+
+    @classmethod
+    def from_torch(cls, torch_layer, model_config=None):
+        if isinstance(torch_layer, TTNNGR00TSelfAttention):
+            return torch_layer
+        config = getattr(torch_layer, "config", None)
+        return cls(config=config, torch_layer=torch_layer)
+
+    def _map_weights(self, torch_layer):
+        for name, m in torch_layer.named_children():
+            lname = name.lower()
+            if any(x in lname for x in ["q_proj", "query"]):
+                self.tt_q_proj = TTNNLinear.from_torch(m)
+            elif any(x in lname for x in ["k_proj", "key"]):
+                self.tt_k_proj = TTNNLinear.from_torch(m)
+            elif any(x in lname for x in ["v_proj", "value"]):
+                self.tt_v_proj = TTNNLinear.from_torch(m)
+            elif any(x in lname for x in ["o_proj", "out_proj"]):
+                self.tt_o_proj = TTNNLinear.from_torch(m)
+
+    def forward(self, hidden_states, *args, **kwargs):
+        if self.tt_q_proj is None:
+            return hidden_states, None
+        hw_device = self.tt_q_proj.device
+
+        q_w = self.tt_q_proj(hidden_states)
+        k_w = self.tt_k_proj(hidden_states)
+        v_w = self.tt_v_proj(hidden_states)
+
+        def prepare_heads_on_device(t, num_heads):
+            raw = t.to_ttnn if hasattr(t, "to_ttnn") else t
+            b, s, h = raw.shape
+            d_head = h // num_heads
+
+            t_reshaped = ttnn.reshape(raw, (b, s, num_heads, d_head))
+            t_transposed = ttnn.transpose(t_reshaped, 1, 2)
+
+            pad_s = (32 - (s % 32)) % 32
+            pad_d = (32 - (d_head % 32)) % 32
+
+            padding_config = [
+                [0, 0],
+                [0, 0],
+                [0, pad_s],
+                [0, pad_d],
+            ]
+
+            if pad_s > 0 or pad_d > 0:
+                t_transposed = ttnn.pad(t_transposed, padding_config, value=0.0)  # Passing the sequence of sequences
+
+            return t_transposed, b, s, h, d_head, pad_s, pad_d
+
+        q_raw, b, s, h, d_head, pad_s, pad_d = prepare_heads_on_device(q_w, self.num_heads)
+        k_raw, _, _, _, _, _, _ = prepare_heads_on_device(k_w, self.num_kv_heads)
+        v_raw, _, _, _, _, _, _ = prepare_heads_on_device(v_w, self.num_kv_heads)
+
+        _sdpa_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+        if q_raw.dtype not in _sdpa_dtypes:
+            q_raw = ttnn.typecast(q_raw, ttnn.bfloat16)
+        if k_raw.dtype not in _sdpa_dtypes:
+            k_raw = ttnn.typecast(k_raw, ttnn.bfloat16)
+        if v_raw.dtype not in _sdpa_dtypes:
+            v_raw = ttnn.typecast(v_raw, ttnn.bfloat16)
+
+        # 3. Hardware SDPA
+        attn_out_raw = ttnn.transformer.scaled_dot_product_attention(
+            q_raw,
+            k_raw,
+            v_raw,
+            attn_mask=None,
+            is_causal=False,
+            scale=float(d_head**-0.5),
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        if pad_s > 0 or pad_d > 0:
+            attn_out_raw = ttnn.slice(attn_out_raw, [0, 0, 0, 0], [b, self.num_heads, s, d_head])
+
+        out_transposed = ttnn.transpose(attn_out_raw, 1, 2)
+        merged_dev = ttnn.reshape(out_transposed, (b, s, h))
+
+        if merged_dev.layout != ttnn.TILE_LAYOUT:
+            merged_dev = ttnn.to_layout(merged_dev, ttnn.TILE_LAYOUT)
+
+        # 5. Output Projection
+        if self.tt_o_proj is not None:
+            final_output = self.tt_o_proj(TorchTTNNTensor(merged_dev))
+        else:
+            final_output = TorchTTNNTensor(merged_dev)
+
+        return final_output, None
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)

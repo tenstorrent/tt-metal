@@ -10,15 +10,42 @@ import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
+class TTNNLayerNormNoAffine(TTNNModule):
+    """TTNN LayerNorm for layers with elementwise_affine=False (weight=None, bias=None)."""
+
+    @classmethod
+    def from_torch(cls, layer_norm: nn.LayerNorm):
+        new_layer_norm = cls()
+        new_layer_norm._fallback_torch_layer = layer_norm
+        return new_layer_norm
+
+    def preprocess_weights_impl(self):
+        self.tt_weight = None
+        self.tt_bias = None
+
+    def move_weights_to_device_impl(self):
+        pass
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        eps = getattr(self.torch_layer, "eps", 1e-5)
+        return ttnn.layer_norm(
+            input_tensor,
+            weight=None,
+            bias=None,
+            epsilon=eps,
+        )
+
+
 class TTNNLayerNorm(TTNNModule):
-    """TTNN-accelerated LayerNorm."""
+    """TTNN-accelerated LayerNorm (with weight/bias)."""
 
     @classmethod
     def from_torch(cls, layer_norm: nn.LayerNorm):
         """Create TTNNLayerNorm from PyTorch LayerNorm."""
         if layer_norm.weight is None:
-            print(f"Warning: LayerNorm layer {layer_norm} has no weight. Using standard LayerNorm.")
-            return layer_norm
+            return TTNNLayerNormNoAffine.from_torch(layer_norm)
         new_layer_norm = cls()
         new_layer_norm._fallback_torch_layer = layer_norm
         return new_layer_norm
