@@ -808,10 +808,17 @@ class TTAttention:
                     pass
 
                 try:
-                    concat_memcfg = tokens_shard_mc or getattr(cfg, "proj_memcfg", None) or memcfg
-                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=concat_memcfg)
+                    # Concatenate-heads has tight constraints on sharded output
+                    # layouts when num_heads > grid_x. Emit an interleaved
+                    # tensor, then reshard back to the encoder token layout.
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=attn_island_memcfg)
                 except TypeError:
                     merged = ttnn.transformer.concatenate_heads(ctx_tt)
+                if tokens_shard_mc is not None:
+                    try:
+                        merged = ttnn.to_memory_config(merged, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+                    except TypeError:
+                        merged = ttnn.to_memory_config(merged, memory_config=tokens_shard_mc)
                 ctx = merged
             else:
                 # Legacy SDPA path (interleaved). Keep it for non-sharded / debug.
