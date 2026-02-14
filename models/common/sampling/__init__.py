@@ -5,6 +5,7 @@
 from .tt_sampling import TTSampling
 from .tt_penalties import TTPenalties, apply_penalties
 from .generator import SamplingGenerator, format_sampling_params
+from .sampling_params import SamplingParams
 
 __all__ = [
     "TTSampling",
@@ -12,4 +13,5 @@ __all__ = [
     "TTPenalties",
     "apply_penalties",
     "SamplingGenerator",
+    "SamplingParams",
 ]

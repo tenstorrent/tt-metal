@@ -6,11 +6,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen3_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
@@ -88,10 +89,6 @@ class Generator:
 
         return output_logits
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params=None):
-        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
-        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
-
     def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
         self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
 
@@ -107,7 +104,7 @@ class Generator:
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -117,7 +114,7 @@ class Generator:
         read_from_device=True,
         sampling_params=None,
     ):
-        return self._ttt_generator.decode_forward_text(
+        return self._ttt_generator.decode_forward(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
@@ -242,6 +239,10 @@ class Generator:
                 ttnn.deallocate(page_table_tt)
 
             return logits
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
+        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
 
     # [INFO] this is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):

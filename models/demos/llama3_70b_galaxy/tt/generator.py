@@ -24,7 +24,8 @@ from models.common.llama_models import (
 )
 
 from models.common.sampling.generator import format_sampling_params
-from models.tt_transformers.tt.generator import SamplingParams
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.warmup import WarmupForwardMixin
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -41,7 +42,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -501,7 +502,7 @@ class Generator:
 
         return tt_out_trace
 
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -855,7 +856,7 @@ class Generator:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)

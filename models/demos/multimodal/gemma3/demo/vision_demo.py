@@ -435,7 +435,7 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward(
+                    logits = generator.decode_forward_llama_vision(
                         position_id,
                         next_token_tensor,
                         prefill_batch_xattn_masks,
@@ -445,6 +445,9 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
+
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
 
                     next_tokens, next_texts = sampler(logits)
                     # Update next token

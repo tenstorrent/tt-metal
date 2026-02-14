@@ -38,3 +38,6 @@ class DummyNoOpModel:
 
     def warmup_model_prefill(self, *args, **kwargs):
         pass
+
+    def warmup_model_decode(self, *args, **kwargs):
+        pass
