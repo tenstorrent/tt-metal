@@ -28,7 +28,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (8192,),
+    (32768,),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -96,7 +96,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensu
             layout=ttnn.TILE_LAYOUT,
         )
         logger.info("Run Llama_MLP")
-        tt_output = tt_model.forward_prefill(tt_input, mode)
+        tt_output = tt_model.forward_prefill(tt_input)
 
         tt_output_torch = ttnn.to_torch(
             tt_output,

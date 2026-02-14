@@ -184,7 +184,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
             .barrier_semaphore = barrier_semaphore,
             .using_persistent_buffers = using_persistent_buffers,
             .sub_device_id = sub_device_id,
-            .cluster_axis = std::nullopt,
+            .cluster_axis = cluster_axis,
             .chunks_per_sync = std::nullopt,
             .num_workers_per_link = num_workers_per_link,
             .num_buffers_per_channel = std::nullopt,
