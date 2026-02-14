@@ -4126,3 +4126,505 @@ class TestCrossOpCompilation:
         s3 = self._read_and_process(self.KERNEL_PATHS["untilize"])
         source = self._build_fused_source([(0, s0), (1, s1), (2, s2), (3, s3)])
         self._compile_source(device, source)
+
+
+@pytest.fixture
+def opgraph_tensors(device):
+    """Create test tensors sized for multi-core OpGraph tests.
+
+    Interleaved norm ops need NCHt >= num_cores to use all cores.
+    Shape (1, 1, 256, 128) gives NCHt=8, supporting up to 8 cores.
+    """
+    torch.manual_seed(42)
+
+    batch, seq_len, hidden = 1, 256, 128
+    input_shape = (batch, 1, seq_len, hidden)
+    weight_shape = (1, 1, 1, hidden)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Use ones weights for stability (avoids amplifying numerical errors across phases)
+    torch_weights = [torch.ones(weight_shape, dtype=torch.bfloat16) for _ in range(8)]
+    torch_bias = torch.zeros(weight_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_weights = [
+        ttnn.from_torch(
+            w,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for w in torch_weights
+    ]
+    tt_bias = ttnn.from_torch(
+        torch_bias,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    return {
+        "torch_input": torch_input,
+        "torch_weights": torch_weights,
+        "torch_bias": torch_bias,
+        "tt_input": tt_input,
+        "tt_weights": tt_weights,
+        "tt_bias": tt_bias,
+    }
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestOpGraphExecution:
+    """Tests for OpGraph (branching tree) fusion topologies.
+
+    An OpGraph has a shared stem of phases running on ALL branch cores,
+    then the cores split into disjoint branches each running their own
+    subsequent phases.  For each root-to-leaf path, a separate fused
+    kernel binary is generated.  During stem phases, different kernel
+    binaries synchronize via shared GlobalSemaphore addresses.
+
+    These tests use larger tensors (NCHt=8) so the factory actually
+    distributes work across multiple cores for interleaved operations.
+    """
+
+    def test_simple_two_branch_split(self, device, opgraph_tensors):
+        """Stem (1 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+        assert len(fused_ops) == 2
+
+        outputs = composite.launch(fused_ops)
+        assert len(outputs) == 2
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        print(f"Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_two_phase_stem_two_branches(self, device, opgraph_tensors):
+        """Stem (2 RMS on 4 cores) -> Branch A (RMS on 2 cores) + Branch B (RMS on 2 cores)."""
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op0 = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        stem_op1 = rms_norm.rms_norm(
+            stem_op0.output_tensors[0], core_range_set=union_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_a_op = rms_norm.rms_norm(
+            stem_op1.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op1.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][3], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op0, stem_op1],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch(fused_ops)
+
+        golden_s0 = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_s1 = torch_rms_norm(golden_s0, t["torch_weights"][1])
+        golden_a = torch_rms_norm(golden_s1, t["torch_weights"][2])
+        golden_b = torch_rms_norm(golden_s1, t["torch_weights"][3])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        print(f"2-stem Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_three_way_split(self, device, opgraph_tensors):
+        """Stem (1 RMS on 6 cores) -> 3 branches of 2 cores each."""
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        branch_c_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+        branch_c_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_c_range, weight=t["tt_weights"][3], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+                BranchSpec(core_range=branch_c_range, phases=[branch_c_op]),
+            ],
+            device=device,
+        )
+        assert len(fused_ops) == 3
+
+        outputs = composite.launch(fused_ops)
+        assert len(outputs) == 3
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        goldens = [torch_rms_norm(golden_stem, t["torch_weights"][i + 1]) for i in range(3)]
+
+        for i, label in enumerate(["A", "B", "C"]):
+            result = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(goldens[i], result, pcc=0.98)
+            print(f"3-way Branch {label} PCC: {pcc:.6f}")
+            assert passing, f"Branch {label} PCC: {pcc}"
+
+    def test_nested_branching(self, device, opgraph_tensors):
+        """Stem -> Branch A (with 2 children) + Branch B. 3 paths total.
+
+        Tree structure:
+            Stem (8 cores) -> Branch A (4 cores) -> Leaf A1 (2 cores)
+                                                  -> Leaf A2 (2 cores)
+                           -> Branch B (4 cores)
+        """
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        leaf_a1_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        leaf_a2_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        leaf_a1_op = rms_norm.rms_norm(
+            branch_a_op.output_tensors[0], core_range_set=leaf_a1_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+        leaf_a2_op = rms_norm.rms_norm(
+            branch_a_op.output_tensors[0], core_range_set=leaf_a2_range, weight=t["tt_weights"][3], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][4], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(
+                    core_range=branch_a_range,
+                    phases=[branch_a_op],
+                    children=[
+                        BranchSpec(core_range=leaf_a1_range, phases=[leaf_a1_op]),
+                        BranchSpec(core_range=leaf_a2_range, phases=[leaf_a2_op]),
+                    ],
+                ),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+        assert len(fused_ops) == 3
+
+        outputs = composite.launch(fused_ops)
+        assert len(outputs) == 3
+
+        g_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        g_a = torch_rms_norm(g_stem, t["torch_weights"][1])
+        goldens = [
+            torch_rms_norm(g_a, t["torch_weights"][2]),
+            torch_rms_norm(g_a, t["torch_weights"][3]),
+            torch_rms_norm(g_stem, t["torch_weights"][4]),
+        ]
+        labels = ["A1", "A2", "B"]
+
+        for i, (golden, label) in enumerate(zip(goldens, labels)):
+            result = ttnn.to_torch(outputs[i][0])
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            print(f"Nested branch {label} PCC: {pcc:.6f}")
+            assert passing, f"Branch {label} PCC: {pcc}"
+
+    def test_op_graph_plus_independent_chain(self, device, opgraph_tensors):
+        """OpGraph on 4 cores + independent RMS chain on 2 separate cores."""
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec, chain_descriptors
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        indep_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 0))})
+
+        torch_input2 = torch.randn_like(t["torch_input"])
+        tt_input2 = ttnn.from_torch(
+            torch_input2,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        graph_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+
+        indep_op0 = rms_norm.rms_norm(tt_input2, core_range_set=indep_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        indep_op1 = rms_norm.rms_norm(
+            indep_op0.output_tensors[0], core_range_set=indep_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        indep_fused = chain_descriptors([indep_op0, indep_op1], device)
+
+        all_ops = graph_ops + [indep_fused]
+        outputs = composite.launch(all_ops)
+        assert len(outputs) == 3
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+        golden_indep = torch_rms_norm(torch_rms_norm(torch_input2, t["torch_weights"][0]), t["torch_weights"][1])
+
+        for result_idx, golden, label in [
+            (0, golden_a, "Graph A"),
+            (1, golden_b, "Graph B"),
+            (2, golden_indep, "Independent"),
+        ]:
+            result = ttnn.to_torch(outputs[result_idx][0])
+            passing, pcc = comp_pcc(golden, result, pcc=0.98)
+            print(f"{label} PCC: {pcc:.6f}")
+            assert passing, f"{label} PCC: {pcc}"
+
+    def test_single_core_branches(self, device, opgraph_tensors):
+        """Stem (1 RMS on 2 cores) -> 2 branches of 1 core each.
+
+        Tests barrier with single-core branches (no NOC multicast needed
+        within the branch segment).
+        """
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch(fused_ops)
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        print(f"Single-core Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_deep_stem_short_branches(self, device, opgraph_tensors):
+        """Stem (3 RMS phases on 4 cores) -> 2 branches of 2 cores, 1 phase each.
+
+        Tests many stem barriers before the split point.
+        """
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op0 = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        stem_op1 = rms_norm.rms_norm(
+            stem_op0.output_tensors[0], core_range_set=union_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        stem_op2 = rms_norm.rms_norm(
+            stem_op1.output_tensors[0], core_range_set=union_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+        branch_a_op = rms_norm.rms_norm(
+            stem_op2.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][3], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op2.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][4], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op0, stem_op1, stem_op2],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch(fused_ops)
+
+        golden = t["torch_input"]
+        for i in range(3):
+            golden = torch_rms_norm(golden, t["torch_weights"][i])
+        golden_a = torch_rms_norm(golden, t["torch_weights"][3])
+        golden_b = torch_rms_norm(golden, t["torch_weights"][4])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        print(f"Deep stem Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_mixed_ln_rms_op_graph(self, device, opgraph_tensors):
+        """LN stem -> RMS branches, with matching compute configs.
+
+        Tests that fp32_dest_acc_en is consistent when mixing LN (fp32=True)
+        and RMS (fp32=False default) by passing LN compute config to RMS.
+        """
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op = layer_norm.layer_norm(
+            t["tt_input"],
+            core_range_set=union_range,
+            weight=t["tt_weights"][0],
+            bias=t["tt_bias"],
+            epsilon=1e-5,
+        )
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0],
+            core_range_set=branch_a_range,
+            weight=t["tt_weights"][1],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0],
+            core_range_set=branch_b_range,
+            weight=t["tt_weights"][2],
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+
+        outputs = composite.launch(fused_ops)
+
+        golden_stem = torch_layer_norm(t["torch_input"], t["torch_weights"][0], t["torch_bias"])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        print(f"Mixed LN/RMS Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
