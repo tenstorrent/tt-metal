@@ -119,7 +119,7 @@ jobs:
 
       - name: Download Llama 70B weights from LFC
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 90
         run: |
           set -euo pipefail
           # Download under huggingface/tt_cache so when workspace is mounted at /mnt/MLPerf,
