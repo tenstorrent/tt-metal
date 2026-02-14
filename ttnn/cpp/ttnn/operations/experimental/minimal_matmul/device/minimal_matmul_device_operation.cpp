@@ -35,13 +35,13 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         "minimal_matmul operands must be on device");
     TT_FATAL(act_tensor.device() == weight_tensor.device(), "minimal_matmul inputs must reside on the same device");
     TT_FATAL(
-        act_tensor.buffer() != nullptr && weight_tensor.buffer() != nullptr,
+        act_tensor.is_allocated() && weight_tensor.is_allocated(),
         "minimal_matmul inputs must be allocated in device buffers");
     if (has_bias) {
         const auto& bias_tensor = *bias_ptr;
         TT_FATAL(bias_tensor.storage_type() == StorageType::DEVICE, "minimal_matmul bias must be on device");
         TT_FATAL(bias_tensor.device() == act_tensor.device(), "minimal_matmul bias must be on the same device");
-        TT_FATAL(bias_tensor.buffer() != nullptr, "minimal_matmul bias must be allocated in a device buffer");
+        TT_FATAL(bias_tensor.is_allocated(), "minimal_matmul bias must be allocated in a device buffer");
     }
 
     // Layout requirements: all inputs must be TILE layout

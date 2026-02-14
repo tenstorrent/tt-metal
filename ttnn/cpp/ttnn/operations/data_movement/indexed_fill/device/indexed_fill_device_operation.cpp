@@ -35,7 +35,7 @@ void IndexedFillDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(batch_ids.layout() == Layout::ROW_MAJOR, "Batch IDs must be ROW MAJOR");
     TT_FATAL(args.dim == 0, "Currently only supporting batch dimension");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to Index Fill need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to Index Fill need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to Index Fill need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input tensor memory layout must be INTERLEAVED but got {}",

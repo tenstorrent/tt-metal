@@ -89,7 +89,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||

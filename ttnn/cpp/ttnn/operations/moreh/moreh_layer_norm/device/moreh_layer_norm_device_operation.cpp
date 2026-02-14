@@ -21,7 +21,7 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
         "Operands to {} need to be on device! Got: {}",
         op_name,
         tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
+    TT_FATAL(tensor.is_allocated(), "Operands to {} need to be allocated in buffers on device!", op_name);
 }
 }  // namespace
 

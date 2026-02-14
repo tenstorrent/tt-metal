@@ -199,7 +199,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
 
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 

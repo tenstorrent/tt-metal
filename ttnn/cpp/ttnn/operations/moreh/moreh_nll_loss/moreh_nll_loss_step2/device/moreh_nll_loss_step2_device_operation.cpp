@@ -23,12 +23,12 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
     const std::optional<Tensor>& divisor_tensor = tensor_args.divisor_tensor;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "intput_tensor to nll_loss need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "intput_tensor to nll_loss need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "intput_tensor to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "input tensor type must be bfloat16");
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "target_tensor to nll_loss need to be on device!");
-    TT_FATAL(target_tensor.buffer() != nullptr, "target_tensor to nll_loss need to be allocated in buffers on device!");
+    TT_FATAL(target_tensor.is_allocated(), "target_tensor to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
     TT_FATAL(target_tensor.dtype() == DataType::INT32, "target tensor type must be int32");
 
@@ -37,7 +37,7 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
             weight_tensor.value().storage_type() == StorageType::DEVICE,
             "weight_tensor to nll_loss need to be on device!");
         TT_FATAL(
-            weight_tensor.value().buffer() != nullptr,
+            weight_tensor.value().is_allocated(),
             "weight_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL(
             (weight_tensor.value().layout() == Layout::TILE), "weight_tensor to nll_loss must be in row major layout");
@@ -49,7 +49,7 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
             divisor_tensor.value().storage_type() == StorageType::DEVICE,
             "divisor_tensor to nll_loss need to be on device!");
         TT_FATAL(
-            divisor_tensor.value().buffer() != nullptr,
+            divisor_tensor.value().is_allocated(),
             "divisor_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
         TT_FATAL(divisor_tensor.value().dtype() == DataType::BFLOAT16, "divisor tensor type must be bfloat16");

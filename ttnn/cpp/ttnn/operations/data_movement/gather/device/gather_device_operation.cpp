@@ -86,7 +86,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_index_tensor.layout());
 
     TT_FATAL(
-        (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
+        (tensor_args.input_tensor.is_allocated()) && (tensor_args.input_index_tensor.is_allocated()),
         "Operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,

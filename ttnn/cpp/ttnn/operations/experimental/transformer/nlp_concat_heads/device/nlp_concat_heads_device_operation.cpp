@@ -18,7 +18,7 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args;
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||

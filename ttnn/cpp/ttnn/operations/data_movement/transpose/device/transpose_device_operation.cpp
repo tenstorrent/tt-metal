@@ -65,7 +65,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const auto& output_mem_config = operation_attributes.output_mem_config;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to transpose need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to transpose need to be allocated in buffers on device!");
     TT_FATAL(
         !(dim != TransposeOpDim::HC && pad_value != 0.0f),
         "Non-zero padding {} is not supported for any transpose other than HC.",

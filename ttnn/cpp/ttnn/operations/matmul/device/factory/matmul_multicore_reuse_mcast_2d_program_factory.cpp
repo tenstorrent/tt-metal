@@ -1548,7 +1548,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
             "Bias tensor must be on device, got storage type: {}",
             c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+        TT_FATAL(c.is_allocated(), "Operands to matmul need to be allocated in buffers on device!");
 
         bias_buffer = c.buffer();
 

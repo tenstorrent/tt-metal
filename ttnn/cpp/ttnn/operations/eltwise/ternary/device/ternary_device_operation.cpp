@@ -245,7 +245,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        input_a.buffer() != nullptr,
+        input_a.is_allocated(),
         "Operands to eltwise ternary operation need to be allocated in buffers on the device. Buffer is null.");
 
     // Validate each tensor individually

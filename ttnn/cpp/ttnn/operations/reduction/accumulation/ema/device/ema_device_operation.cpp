@@ -29,7 +29,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Input tensor must be on device, got: {}",
         input_tensor.storage_type());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a device buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a device buffer");
     TT_FATAL(
         input_tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", input_tensor.layout());
 
@@ -50,7 +50,7 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor must be on device, got: {}",
             output_tensor.storage_type());
-        TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in a device buffer");
+        TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in a device buffer");
         TT_FATAL(
             output_tensor.layout() == Layout::TILE,
             "Output tensor must have TILE layout, got: {}",

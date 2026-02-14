@@ -20,7 +20,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input;
     TT_FATAL(
         input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.layout() == tt::tt_metal::Layout::TILE,
         "Input tensor layout must be TILE but got {}",

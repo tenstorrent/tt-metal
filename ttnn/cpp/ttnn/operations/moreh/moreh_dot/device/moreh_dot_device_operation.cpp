@@ -35,7 +35,7 @@ void MorehDotOperation::validate(
         "Operands to matmul need to be on device!");
     TT_FATAL(input_a.device() == input_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(
-        input_a.buffer() != nullptr and input_b.buffer() != nullptr,
+        input_a.is_allocated() and input_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
 }
 

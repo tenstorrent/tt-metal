@@ -23,7 +23,7 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
     auto shard_spec = input_tensor.shard_spec().value();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Input tensor must be sharded");
     TT_FATAL(input_tensor.memory_config().buffer_type() == BufferType::L1, "Input tensor must be in L1");
 
@@ -32,7 +32,7 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.memory_config() == args.output_mem_config, "Mismatched output memory config");
         TT_FATAL(output_tensor.dtype() == args.output_dtype, "Mismatched output dtype");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-        TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+        TT_FATAL(output_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
     }
 

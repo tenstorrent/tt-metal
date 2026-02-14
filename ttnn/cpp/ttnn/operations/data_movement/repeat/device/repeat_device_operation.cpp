@@ -29,7 +29,7 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to reshape need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(
         input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or

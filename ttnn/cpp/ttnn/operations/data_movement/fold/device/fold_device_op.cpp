@@ -30,7 +30,7 @@ void validate_fold(
     const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
     if (is_sharded) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,

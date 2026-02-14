@@ -36,7 +36,7 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
         "ttnn.copy only supports float, bfloat and int32 output tensors but got {}",
         operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to copy need to be allocated in buffers on device!");
 
     // Determine the actual output dtype based on preallocated output if present
     DataType output_dtype = operation_attributes.output_dtype;

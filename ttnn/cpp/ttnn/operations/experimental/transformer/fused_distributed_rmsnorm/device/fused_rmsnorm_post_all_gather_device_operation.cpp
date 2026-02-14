@@ -34,7 +34,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, tensor.layout());
         TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} tensor must be BFLOAT16, got: {}", name, tensor.dtype());
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
-        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.is_allocated(), "{} tensor must be allocated in buffers on device!", name);
     };
 
     check_tile_bf16_device_alloc(a, "Input tensor 0");

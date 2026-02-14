@@ -26,7 +26,7 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
         "The input shape must be 4D with the following form: 1, 1, 1, X.");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Currently only supporting row major layout");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to Non-zero need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to Non-zero need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Non-zero does not currently support sharding");

@@ -73,14 +73,14 @@ void MoveDeviceOperation::validate_on_program_cache_hit(
         "ttnn.move: input tensor must be on device on cache hit. Got storage type: {}",
         input_tensor.storage_type());
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "ttnn.move: input tensor buffer must be allocated on cache hit");
+    TT_FATAL(input_tensor.is_allocated(), "ttnn.move: input tensor buffer must be allocated on cache hit");
 
     TT_FATAL(
         output_tensor.storage_type() == StorageType::DEVICE,
         "ttnn.move: output tensor must be on device on cache hit. Got storage type: {}",
         output_tensor.storage_type());
 
-    TT_FATAL(output_tensor.buffer() != nullptr, "ttnn.move: output tensor buffer must be allocated on cache hit");
+    TT_FATAL(output_tensor.is_allocated(), "ttnn.move: output tensor buffer must be allocated on cache hit");
 }
 
 MoveDeviceOperation::spec_return_value_t MoveDeviceOperation::compute_output_specs(

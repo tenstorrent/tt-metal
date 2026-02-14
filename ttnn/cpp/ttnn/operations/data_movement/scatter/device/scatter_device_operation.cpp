@@ -46,9 +46,9 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
     TT_FATAL(!src_tensor.is_sharded(), "Sharded tensors are not supported - src_tensor is sharded.");
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor's buffer is null.");
-    TT_FATAL(index_tensor.buffer() != nullptr, "Index tensor's buffer is null.");
-    TT_FATAL(src_tensor.buffer() != nullptr, "Src tensor's buffer is null.");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor's buffer is null.");
+    TT_FATAL(index_tensor.is_allocated(), "Index tensor's buffer is null.");
+    TT_FATAL(src_tensor.is_allocated(), "Src tensor's buffer is null.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be allocated on a device.");
     TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Index tensor must be allocated on a device.");

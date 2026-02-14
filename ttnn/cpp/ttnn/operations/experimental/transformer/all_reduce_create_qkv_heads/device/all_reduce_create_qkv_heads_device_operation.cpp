@@ -35,7 +35,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
             tensor_name,
             tensor.storage_type());
         TT_FATAL(
-            tensor.buffer() != nullptr,
+            tensor.is_allocated(),
             "Operand {} needs to be allocated in buffers on device, but buffer is null",
             tensor_name);
     };

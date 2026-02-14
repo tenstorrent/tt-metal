@@ -45,7 +45,7 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
             input.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
     // Additional validation for Welford - requires recip_tensor
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {

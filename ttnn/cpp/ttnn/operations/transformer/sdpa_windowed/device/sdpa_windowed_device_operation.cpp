@@ -46,8 +46,7 @@ void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache
     // Check storage and dtype
     for (const auto& input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to windowed SDPA need to be on device");
-        TT_FATAL(
-            input_tensor->buffer() != nullptr, "Operands to windowed SDPA need to be allocated in buffers on device");
+        TT_FATAL(input_tensor->is_allocated(), "Operands to windowed SDPA need to be allocated in buffers on device");
         TT_FATAL(
             input_tensor->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to windowed SDPA need to be in DRAM");
@@ -60,7 +59,7 @@ void WindowedScaledDotProductAttentionDeviceOperation::validate_on_program_cache
     }
 
     TT_FATAL(cu_window_seqlens.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device");
-    TT_FATAL(cu_window_seqlens.buffer() != nullptr, "cu_window_seqlens must be allocated in buffers on device");
+    TT_FATAL(cu_window_seqlens.is_allocated(), "cu_window_seqlens must be allocated in buffers on device");
     TT_FATAL(
         cu_window_seqlens.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "cu_window_seqlens must be in DRAM");

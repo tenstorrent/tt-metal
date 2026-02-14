@@ -19,7 +19,7 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
     Program program = Program();
 

@@ -120,7 +120,7 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;

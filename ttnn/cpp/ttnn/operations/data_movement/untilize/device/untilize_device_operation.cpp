@@ -114,7 +114,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TensorMemoryLayout output_memory_layout = operation_attributes.output_mem_config.memory_layout();
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     // Input must be in valid tile layout

@@ -52,7 +52,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
     TT_FATAL(
@@ -70,8 +70,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[3],
                 gamma.value().padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 gamma.value().padded_shape()[2] == TILE_HEIGHT,
                 "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
@@ -86,8 +85,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor inner dimension must be TILE_WIDTH (32), got: {}",
                 gamma.value().padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 gamma.value().dtype() == DataType::BFLOAT16,
                 "Gamma tensor must be BFLOAT16, got: {}",
@@ -110,8 +108,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[3],
                 beta.value().padded_shape()[3]);
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 beta.value().padded_shape()[2] == TILE_HEIGHT,
                 "Beta tensor height must be TILE_HEIGHT (32), got: {}",
@@ -126,8 +123,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Beta tensor inner dimension must be TILE_WIDTH (32), got: {}",
                 beta.value().padded_shape()[3]);
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 beta.value().dtype() == DataType::BFLOAT16,
                 "Beta tensor must be BFLOAT16, got: {}",
@@ -200,7 +196,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             "Reciprocals tensor must be FLOAT32, got: {}",
             reciprocals.value().dtype());
         TT_FATAL(reciprocals.value().storage_type() == StorageType::DEVICE, "Reciprocals tensor must be on device");
-        TT_FATAL(reciprocals.value().buffer() != nullptr, "Reciprocals tensor must be allocated in buffers on device");
+        TT_FATAL(reciprocals.value().is_allocated(), "Reciprocals tensor must be allocated in buffers on device");
         TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
     }
 }

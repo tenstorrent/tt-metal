@@ -125,7 +125,7 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     const auto& a_shape = input_tensor.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];

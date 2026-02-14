@@ -115,7 +115,7 @@ void ReshardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
 
     if (tensor_args.preallocated_output.has_value()) {

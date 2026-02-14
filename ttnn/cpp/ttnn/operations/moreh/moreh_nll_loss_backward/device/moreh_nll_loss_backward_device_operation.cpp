@@ -22,12 +22,12 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
     const auto& input_grad_tensor = tensor_args.input_grad_tensor;
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
-    TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
+    TT_FATAL(target_tensor.is_allocated(), "Operands to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
     TT_FATAL(target_tensor.dtype() == DataType::INT32, "Invalid target_tensor dtype {}", target_tensor.dtype());
 
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
-    TT_FATAL(output_grad_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
+    TT_FATAL(output_grad_tensor.is_allocated(), "Operands to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
     TT_FATAL(
         output_grad_tensor.dtype() == DataType::BFLOAT16,
@@ -39,7 +39,7 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             input_grad_tensor.value().storage_type() == StorageType::DEVICE,
             "Operands to nll_loss need to be on device!");
         TT_FATAL(
-            input_grad_tensor.value().buffer() != nullptr,
+            input_grad_tensor.value().is_allocated(),
             "Operands to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((input_grad_tensor.value().layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
         TT_FATAL(
@@ -53,7 +53,7 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             weight_tensor.value().storage_type() == StorageType::DEVICE,
             "weight_tensor to nll_loss need to be on device!");
         TT_FATAL(
-            weight_tensor.value().buffer() != nullptr,
+            weight_tensor.value().is_allocated(),
             "weight_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((weight_tensor.value().layout() == Layout::TILE), "weight_tensor to nll_loss must be in tilized");
         TT_FATAL(
@@ -67,7 +67,7 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             divisor_tensor.value().storage_type() == StorageType::DEVICE,
             "divisor_tensor to nll_loss need to be on device!");
         TT_FATAL(
-            divisor_tensor.value().buffer() != nullptr,
+            divisor_tensor.value().is_allocated(),
             "divisor_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
         TT_FATAL(

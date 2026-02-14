@@ -48,7 +48,7 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
 void UpsampleOperation::validate_on_program_cache_miss(const operation_attributes_t& args, const Tensor& input) {
     // Basic tensor validation
     TT_FATAL(input.storage_type() == tt::tt_metal::StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Input tensor must have allocated buffer");
+    TT_FATAL(input.is_allocated(), "Input tensor must have allocated buffer");
 
     // Scale factor validation
     TT_FATAL(args.scale_factor_h > 0.0f, "scale_factor_h must be positive, got {}", args.scale_factor_h);

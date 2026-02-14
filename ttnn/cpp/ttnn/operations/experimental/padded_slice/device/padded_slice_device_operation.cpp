@@ -31,7 +31,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!has_step, "Padded slice does not support strided slices");
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
     TT_FATAL(
         input_tensor_a.padded_shape().rank() == args.padded_slice_start.rank() &&

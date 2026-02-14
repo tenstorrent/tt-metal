@@ -33,7 +33,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be on device!");
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr && cache_tensor.buffer() != nullptr,
+        input_tensor.is_allocated() && cache_tensor.is_allocated(),
         "Operands to update_cache need to be allocated in buffers on device!");
 
     // Layout and data type validation

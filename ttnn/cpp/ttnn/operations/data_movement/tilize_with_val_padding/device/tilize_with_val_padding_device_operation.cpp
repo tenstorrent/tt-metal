@@ -60,7 +60,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or

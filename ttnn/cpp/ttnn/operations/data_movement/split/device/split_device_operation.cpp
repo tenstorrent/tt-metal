@@ -17,7 +17,7 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.dim == 3 || args.dim == 2, "Split is possible along dim 2 or 3 only");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Split does not currently support sharding");

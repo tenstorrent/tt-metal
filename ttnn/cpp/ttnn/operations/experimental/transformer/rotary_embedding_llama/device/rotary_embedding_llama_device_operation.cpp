@@ -32,17 +32,16 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE, "input tensor to rotary embedding need to be on device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
-        "input tensor to rotary embedding need to be allocated in buffers on device!");
+        input_tensor.is_allocated(), "input tensor to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "input tensor to rotary embedding must be tilized");
 
     TT_FATAL(cos.storage_type() == StorageType::DEVICE, "cos tensor to rotary embedding need to be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "cos tensor to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(cos.is_allocated(), "cos tensor to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(cos.device() == ref_device, "cos tensor to rotary embedding need to be on same device!");
     TT_FATAL((cos.layout() == Layout::TILE), "cos tensor to rotary embedding must be tilized");
 
     TT_FATAL(sin.storage_type() == StorageType::DEVICE, "sin tensor to rotary embedding need to be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "sin tensor to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(sin.is_allocated(), "sin tensor to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(sin.device() == ref_device, "sin tensor to rotary embedding need to be on same device!");
     TT_FATAL((sin.layout() == Layout::TILE), "sin tensor to rotary embedding must be tilized");
 
@@ -50,7 +49,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
         trans_mat.storage_type() == StorageType::DEVICE,
         "transformation matrix to rotary embedding need to be on device!");
     TT_FATAL(
-        trans_mat.buffer() != nullptr,
+        trans_mat.is_allocated(),
         "transformation matrix to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(trans_mat.device() == ref_device, "transformation matrix to rotary embedding need to be on same device!");
     TT_FATAL((trans_mat.layout() == Layout::TILE), "transformation matrix to rotary embedding must be tilized");
