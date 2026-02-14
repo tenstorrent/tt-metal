@@ -9,7 +9,8 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utils import LogProbsCalculator
+from models.common.sampling._utils import is_default_value
+from models.common.sampling.tt_log_probs import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -45,20 +46,17 @@ class TTSampling(LightweightModule):
         otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
 
-    def _is_default_val(self, values, default):
-        if values is None:
-            return True
-        if isinstance(values, (int, float)):
-            return values == default
-        return all(value == default for value in values)
-
     def _is_force_argmax_sampling(self, k, p, temp):
         return (
             self._allow_force_argmax_sampling
-            and self._is_default_val(k, 1)
-            and self._is_default_val(p, 1.0)
-            and self._is_default_val(temp, 1.0)
+            and is_default_value(k, 1)
+            and is_default_value(p, 1.0)
+            and is_default_value(temp, 1.0)
         )
+
+    @property
+    def force_argmax_sampling(self) -> bool:
+        return self._force_argmax_sampling
 
     def __init__(
         self,
@@ -92,7 +90,8 @@ class TTSampling(LightweightModule):
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
-        self.max_batch_size = 32
+        self.vocab_size = args.vocab_size
+        self.max_batch_size = getattr(args, "max_batch_size", 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
@@ -100,6 +99,12 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
+
+        # sampling_dp > 1 when multiple mesh rows each sample 32 users independently
+        # (e.g. GPT-OSS on [4,8] Galaxy: 4 rows × 32 users = 128 total users)
+        self._sampling_dp = getattr(args, "sampling_dp", 1)
+        # Row-shard k/p/temp across mesh rows; replicate within each row (across TP cols)
+        self._param_dims = (0, None) if self._sampling_dp > 1 else (None, None)
 
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
@@ -127,53 +132,57 @@ class TTSampling(LightweightModule):
         # Set defaults for sampling parameters if not provided
         # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
         # When p=0, the sampling operation will select the token with highest probability (argmax)
+        total_param_size = self.max_batch_size * self._sampling_dp
         if k is None:
-            k = torch.ones(self.max_batch_size)
+            k = torch.ones(total_param_size)
         if p is None:
-            p = torch.zeros(self.max_batch_size)
+            p = torch.zeros(total_param_size)
         if temp is None:
-            temp = torch.ones(self.max_batch_size)
+            temp = torch.ones(total_param_size)
 
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
+        # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
         self.k_tensor = ttnn.from_torch(
             k,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
         self.p_tensor = ttnn.from_torch(
             p,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
         self.temp_tensor = ttnn.from_torch(
             temp,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
-        self.log_probs_calculator = LogProbsCalculator(self.mesh_device, self.sub_core_grids, self.tt_ccl)
+        self.log_probs_calculator = LogProbsCalculator(
+            self.mesh_device, self.sub_core_grids, self.tt_ccl, batch_size=self.max_batch_size
+        )
 
         self.seeds_tt_tensor = ttnn.as_tensor(
-            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            torch.arange(self.max_batch_size).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.user_ids_tt_tensor = ttnn.as_tensor(
-            torch.tensor(list(torch.arange(32)), dtype=torch.uint32),
+            torch.arange(self.max_batch_size).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
@@ -200,11 +209,14 @@ class TTSampling(LightweightModule):
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
-        per_device_vocab_size = self.padded_vocab_size // num_devices_in_mesh
+        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
+        padded_per_device = self.padded_vocab_size // num_devices_in_mesh
+        # actual_per_device: unpadded vocab per device (for correct global token ID offsets)
+        actual_per_device = (self.vocab_size + num_devices_in_mesh - 1) // num_devices_in_mesh
 
         for device_id in range(num_devices_in_mesh):
             indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
-                device_id * per_device_vocab_size
+                device_id * actual_per_device
             )
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
@@ -215,9 +227,9 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Create local indices tensor for top-k operations
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
-        for i in range(per_device_vocab_size):
+        # Create local indices tensor for top-k operations (must match logit width)
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
+        for i in range(padded_per_device):
             indices_tensor_torch[:, :, :, i] = i
         self.tt_indices_tensor = ttnn.from_torch(
             indices_tensor_torch,
@@ -259,27 +271,36 @@ class TTSampling(LightweightModule):
         )
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        # Force argmax sampling
+        """Update sampling parameters (k, p, temperature) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
-            """Update sampling parameters (k, p, temperature) dynamically."""
+            # When _sampling_dp > 1, create multi-device host tensors so
+            # copy_host_to_device_tensor writes per-row shards correctly.
+            if self._sampling_dp > 1:
+                mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+            else:
+                mapper = None
+
             self.k_tensor_new = ttnn.from_torch(
                 torch.tensor(k),
                 device=None,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             self.p_tensor_new = ttnn.from_torch(
                 torch.tensor(p),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
             self.temp_tensor_new = ttnn.from_torch(
                 torch.tensor(temp),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mapper,
             )
 
             ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
@@ -479,11 +500,3 @@ class TTSampling(LightweightModule):
         self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
 
         return tt_out_tok, self.tt_log_probs
-
-
-def clamp(value, min_value, max_value):
-    if value < min_value:
-        return min_value
-    elif value > max_value:
-        return max_value
-    return value

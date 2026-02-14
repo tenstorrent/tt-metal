@@ -10,6 +10,9 @@ penalties with optional trace capture.
   prompt/output state, and to run sampling with or without trace capture.
 - `format_sampling_params`: utility that pads/clamps sampling parameters to the
   hardware-friendly layout expected by `TTSampling`.
+- `LogProbsCalculator`: computes per-token log-probabilities across a sharded
+  vocabulary using numerically stable log-softmax (global max / sum-exp
+  reduction across devices).
 
 ## Quick Start
 ```python

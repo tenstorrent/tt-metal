@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 
+from ._utils import clamp, is_default_value
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -61,7 +62,7 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
-        self.seed_manager = SeedManager(self.tt_sampling)
+        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=self.tt_sampling.max_batch_size)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -85,13 +86,6 @@ class SamplingGenerator:
                 )
         self._trace_states.clear()
 
-    def _is_default_penalty(self, values, default):
-        if values is None:
-            return True
-        if isinstance(values, (int, float)):
-            return values == default
-        return all(value == default for value in values)
-
     def reset_prompt_tokens(self, prompt_tokens):
         if not self._penalties_active:
             return
@@ -106,24 +100,24 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
-        old_force_argmax_sampling = self.tt_sampling._force_argmax_sampling
+        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
         )
-        if self.tt_sampling._force_argmax_sampling != old_force_argmax_sampling:
+        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
-            self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
-            and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
-            and self._is_default_penalty(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
+            is_default_value(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
+            and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
+            and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
         if (
-            not self.tt_sampling._force_argmax_sampling
+            not self.tt_sampling.force_argmax_sampling
             or self._penalties_active
             or self._penalties_active != old_penalties_active
         ):
@@ -177,7 +171,7 @@ class SamplingGenerator:
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling._force_argmax_sampling
+        force_argmax = self.tt_sampling.force_argmax_sampling
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
@@ -238,7 +232,7 @@ class SamplingGenerator:
 
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
-        force_argmax = self.tt_sampling._force_argmax_sampling
+        force_argmax = self.tt_sampling.force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
@@ -266,14 +260,6 @@ class SamplingGenerator:
         return tt_out
 
 
-def clamp(value, min_value, max_value):
-    if value < min_value:
-        return min_value
-    elif value > max_value:
-        return max_value
-    return value
-
-
 def format_sampling_params(sampling_params, max_batch_size):
     """
     Format sampling parameters to a dictionary.
@@ -294,7 +280,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
     }
     target_len = max_batch_size
-    assert target_len == 32, "Sampling only support batch_size=32"
+    assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"
+
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
     ):
@@ -355,14 +342,13 @@ def format_sampling_params(sampling_params, max_batch_size):
         if sampling_params.repetition_penalty[i] == 0:
             sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
 
-        if sampling_params.top_k[i] < 1:
-            sampling_params.top_k[i] = 32  # k<1 means no restriction so set it to max k (32)
     return sampling_params
 
 
 class SeedManager:
-    def __init__(self, tt_sampling):
-        self.seeds = [secrets.randbits(64) for _ in range(32)]
+    def __init__(self, tt_sampling, max_batch_size=32):
+        self.max_batch_size = max_batch_size
+        self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
         self.rngs = [random.Random(seed) for seed in self.seeds]
         self.tt_sampling = tt_sampling
 
@@ -371,13 +357,15 @@ class SeedManager:
             self.rngs[user].seed(seeds[i])
             self.seeds[user] = seeds[i]
 
-    def get_new_values(self, empty_slots=range(32), replicate_seeds=False):
+    def get_new_values(self, empty_slots=None, replicate_seeds=False):
+        if empty_slots is None:
+            empty_slots = range(self.max_batch_size)
         # get new seeds for each user in empty_slots otherwise 0
         new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
 
         if replicate_seeds:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
-            new_seeds = 32 * [new_seeds[empty_slots[0]]]
+            new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
         new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
