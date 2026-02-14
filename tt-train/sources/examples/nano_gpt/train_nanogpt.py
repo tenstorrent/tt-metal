@@ -114,9 +114,7 @@ class ModelConfig:
     runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
     weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    experimental: ModelExperimentalConfig = field(
-        default_factory=ModelExperimentalConfig
-    )
+    experimental: ModelExperimentalConfig = field(default_factory=ModelExperimentalConfig)
 
 
 class LossAverageMeter:
@@ -262,9 +260,7 @@ def collate_fn(
     targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, sequence_length)
 
     # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
-    data_tensor = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
     targets_tensor = ttml.autograd.Tensor.from_numpy(
         targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
@@ -322,9 +318,7 @@ def train_step(
     logits = model(input_tokens, mask)
 
     # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(
-        logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN
-    )
+    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation (matching C++: gradient_accumulator_helper.scale(loss))
     loss = gradient_accumulator.scale(loss)
@@ -389,18 +383,12 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     if config.model_type == "gpt2":
         # GPT2 config fields are directly under transformer_config
         config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-        config.embedding_dim = transformer_config.get(
-            "embedding_dim", config.embedding_dim
-        )
+        config.embedding_dim = transformer_config.get("embedding_dim", config.embedding_dim)
         config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
         config.num_heads = transformer_config.get("num_heads", config.num_heads)
-        config.dropout_prob = transformer_config.get(
-            "dropout_prob", config.dropout_prob
-        )
+        config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
         config.bias = transformer_config.get("bias", config.bias)
-        config.max_sequence_length = transformer_config.get(
-            "max_sequence_length", config.max_sequence_length
-        )
+        config.max_sequence_length = transformer_config.get("max_sequence_length", config.max_sequence_length)
         config.positional_embedding_type = transformer_config.get(
             "positional_embedding_type", config.positional_embedding_type
         )
@@ -411,9 +399,7 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
 
         tc_weight_tying = transformer_config.get("weight_tying")
         if tc_weight_tying is not None:
-            config.weight_tying = ttml.models.WeightTyingType.from_string(
-                tc_weight_tying
-            )
+            config.weight_tying = ttml.models.WeightTyingType.from_string(tc_weight_tying)
 
         exp_config = transformer_config.get("experimental")
         if isinstance(exp_config, dict):
@@ -536,9 +522,7 @@ def sample_greedy(
                 ],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
-            reshaped = ttnn.reshape(
-                sliced_tensor, [logits_shape[0], 1, 1, logits_shape[4]]
-            )
+            reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[4]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         elif len(logits_shape) == 4:
             # [B, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, vocab_size]
@@ -550,9 +534,7 @@ def sample_greedy(
                 [logits_shape[0], logits_shape[1], seq_len, logits_shape[3]],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
-            reshaped = ttnn.reshape(
-                sliced_tensor, [logits_shape[0], 1, 1, logits_shape[3]]
-            )
+            reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[3]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         else:
             # Fallback: use reshape and take last element
@@ -607,9 +589,7 @@ def sample_greedy(
                     # Extract threshold (k-th largest = last element of topk_values)
                     # topk_values shape: [1, 1, 1, top_k_val]
                     # Get the last element which is the smallest of top-k (our threshold)
-                    threshold_tensor = ttnn.slice(
-                        topk_values, [0, 0, 0, top_k_val - 1], [1, 1, 1, top_k_val]
-                    )
+                    threshold_tensor = ttnn.slice(topk_values, [0, 0, 0, top_k_val - 1], [1, 1, 1, top_k_val])
                     # threshold_tensor shape: [1, 1, 1, 1]
                     # Use threshold_tensor directly - ttnn.lt() will automatically broadcast
                     # This avoids extracting scalar and recreating tensor with full_like
@@ -619,12 +599,8 @@ def sample_greedy(
                     topk_mask = ttnn.lt(last_logits_ttnn, threshold_tensor)
 
                     # Apply mask: set values below threshold to -1e9
-                    filter_value_tensor = ttnn.full_like(
-                        last_logits_ttnn, -1e9, dtype=ttnn.bfloat16
-                    )
-                    filtered_logits_ttnn = ttnn.where(
-                        topk_mask, filter_value_tensor, last_logits_ttnn
-                    )
+                    filter_value_tensor = ttnn.full_like(last_logits_ttnn, -1e9, dtype=ttnn.bfloat16)
+                    filtered_logits_ttnn = ttnn.where(topk_mask, filter_value_tensor, last_logits_ttnn)
 
                     # Cleanup intermediate tensors
                     ttnn.deallocate(topk_values)
@@ -637,9 +613,7 @@ def sample_greedy(
                     last_logits = ttml.autograd.Tensor(filtered_logits_ttnn, False)
 
             # Use ttml sampling operation
-            sampled_tensor = ttml.ops.sample.sample_op(
-                last_logits, temperature, seed, None  # logits_padding_mask
-            )
+            sampled_tensor = ttml.ops.sample.sample_op(last_logits, temperature, seed, None)  # logits_padding_mask
 
             # Extract the sampled token ID directly using .item() - avoids NumPy conversion
             next_id = int(sampled_tensor.get_value().item())
@@ -1008,24 +982,16 @@ def main():
             # Check if we're in the repo root (has tt_metal/ subdirectory)
             if os.path.exists(os.path.join(current_dir, "tt_metal")):
                 os.environ["TT_METAL_RUNTIME_ROOT"] = current_dir
-                print(
-                    f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)"
-                )
+                print(f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)")
             else:
                 # Try parent directories
                 parent_dir = os.path.dirname(current_dir)
                 if os.path.exists(os.path.join(parent_dir, "tt_metal")):
                     os.environ["TT_METAL_RUNTIME_ROOT"] = parent_dir
-                    print(
-                        f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)"
-                    )
+                    print(f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)")
                 else:
-                    print(
-                        "Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected."
-                    )
-                    print(
-                        "  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable"
-                    )
+                    print("Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected.")
+                    print("  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable")
                     print("  to point to the tt-metal repository root directory.")
     else:
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
@@ -1085,9 +1051,7 @@ def main():
     # Create checkpoint directory if it doesn't exist
     if checkpoint_save_path:
         checkpoint_dir = (
-            os.path.dirname(checkpoint_save_path)
-            if os.path.dirname(checkpoint_save_path)
-            else "checkpoints"
+            os.path.dirname(checkpoint_save_path) if os.path.dirname(checkpoint_save_path) else "checkpoints"
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
         print(f"Checkpoints will be saved to: {checkpoint_save_path}_step_*.pkl")
@@ -1150,9 +1114,7 @@ def main():
                 "tt-train/data/shakespeare.txt",
                 "../data/shakespeare.txt",
                 os.path.join(
-                    os.path.dirname(
-                        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    ),
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     "data",
                     "shakespeare.txt",
                 ),
@@ -1162,9 +1124,7 @@ def main():
                     training_config.data_path = path
                     break
             if not training_config.data_path:
-                print(
-                    "Warning: No data path specified and Shakespeare dataset not found."
-                )
+                print("Warning: No data path specified and Shakespeare dataset not found.")
                 print("Please specify --data_path or place shakespeare.txt in data/")
                 print(f"  Searched paths: {possible_paths}")
                 instance.close_device()
@@ -1307,9 +1267,7 @@ def main():
             print(f"   - Weight decay: {training_config.weight_decay}")
             print(f"   - Beta1: {beta1}, Beta2: {beta2}, Epsilon: {epsilon}")
             if training_config.use_kahan_summation:
-                print(
-                    "   - Note: Kahan summation requested but not available in Python API"
-                )
+                print("   - Note: Kahan summation requested but not available in Python API")
 
         # Memory snapshot after optimizer creation
         if args.track_memory:
@@ -1333,9 +1291,7 @@ def main():
     else:
         print("\n5. Creating attention mask...")
     mask_np = build_causal_mask(sequence_length)
-    mask = ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
     # Training or inference mode
     if args.prompt:
@@ -1345,21 +1301,15 @@ def main():
         print("\n6. Training...")
         print()
         remaining_steps = training_config.max_steps - start_step
-        print(
-            f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})..."
-        )
+        print(f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})...")
         print(f"  - Batch size: {training_config.batch_size}")
         print(f"  - Sequence length: {sequence_length}")
         print(f"  - Training data: {len(dataset)} samples")
         print(f"  - Scheduler: {training_config.scheduler_type}")
-        print(
-            f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}"
-        )
+        print(f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}")
         print(f"  - Dropout: {model_config.dropout_prob}")
         if training_config.use_clip_grad_norm:
-            print(
-                f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}"
-            )
+            print(f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}")
         print()
 
         # Set model to training mode (matching C++: model_to_train)
@@ -1367,9 +1317,7 @@ def main():
 
         # Training setup
         loss_meter = LossAverageMeter()
-        gradient_accumulator = GradientAccumulator(
-            training_config.gradient_accumulation_steps
-        )
+        gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
         # Training loop (matching C++ structure)
@@ -1397,9 +1345,7 @@ def main():
                     continue  # Skip incomplete batches
 
                 batch_samples = dataset[batch_start:batch_end]
-                input_tokens, target_tokens = collate_fn(
-                    batch_samples, batch_size, sequence_length
-                )
+                input_tokens, target_tokens = collate_fn(batch_samples, batch_size, sequence_length)
 
                 loss_float, step_time, should_step = train_step(
                     model,
@@ -1420,14 +1366,9 @@ def main():
                     global_step += 1
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(
-                        f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
-                    )
+                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
 
-                    if (
-                        checkpoint_save_path
-                        and global_step % training_config.model_save_interval == 0
-                    ):
+                    if checkpoint_save_path and global_step % training_config.model_save_interval == 0:
                         save_checkpoint(
                             f"{checkpoint_save_path}_step_{global_step}.pkl",
                             global_step,

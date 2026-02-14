@@ -45,19 +45,13 @@ def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
-                ml_dtypes.bfloat16
-            )
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                weight_np, layout=ttnn.Layout.TILE
-            )
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(ml_dtypes.bfloat16)
+            new_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
             tensor.assign(new_tensor)
         elif "bias" in name:
             # Re-initialize biases with 0
             bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
-            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
             tensor.assign(new_tensor)
 
 
@@ -75,21 +69,15 @@ class NanoGPTConfig:
     n_embd: int = 768  # Embedding dimension
     n_layer: int = 12  # Number of transformer blocks
     n_head: int = 12  # Number of attention heads
-    dropout: float = (
-        0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
-    )
+    dropout: float = 0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
     bias: bool = True  # Use bias in linear layers and layer norm
     runner_type: RunnerType = RunnerType.Default  # For memory efficient block execution
-    weight_tying: WeightTyingType = (
-        WeightTyingType.Disabled
-    )  # Ties tok_emb and fc weights
+    weight_tying: WeightTyingType = WeightTyingType.Disabled  # Ties tok_emb and fc weights
     # Selects positional embedding type:
     # - trainable positional embedding (trainable)
     # - sinusoidal positional embedding (fixed)
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    experimental: NanoGPTExperimentalConfig = field(
-        default_factory=NanoGPTExperimentalConfig
-    )
+    experimental: NanoGPTExperimentalConfig = field(default_factory=NanoGPTExperimentalConfig)
 
 
 class NanoGPT(AbstractModuleBase):
@@ -111,9 +99,7 @@ class NanoGPT(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Use get_run_mode() to check, train()/eval() to set
 
-        self.fc = LinearLayer(
-            config.n_embd, config.vocab_size, False
-        )  # False - no bias
+        self.fc = LinearLayer(config.n_embd, config.vocab_size, False)  # False - no bias
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(vocab_size_divisible_by_32, config.n_embd)
 
@@ -121,13 +107,9 @@ class NanoGPT(AbstractModuleBase):
             self.tok_emb.weight = self.fc.get_weight()
 
         if config.positional_embedding_type == "trainable":
-            self.pos_emb = TrainablePositionalEmbedding(
-                config.block_size, config.n_embd, config.dropout
-            )
+            self.pos_emb = TrainablePositionalEmbedding(config.block_size, config.n_embd, config.dropout)
         elif config.positional_embedding_type == "fixed":
-            self.pos_emb = PositionalEmbedding(
-                config.block_size, config.n_embd, config.dropout
-            )
+            self.pos_emb = PositionalEmbedding(config.block_size, config.n_embd, config.dropout)
         else:
             raise ValueError(
                 f"Unsupported positional_embedding_type="
@@ -152,16 +134,12 @@ class NanoGPT(AbstractModuleBase):
         # Layer norm parameters must be in TILE layout
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)
-        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_f_np, layout=ttnn.Layout.TILE
-        )
+        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(gamma_f_np, layout=ttnn.Layout.TILE)
         self.ln_f_gamma = Parameter(gamma_f_tensor)
 
         if config.bias:
             beta_f_np = np.zeros(ln_f_shape, dtype=ml_dtypes.bfloat16)
-            beta_f_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_f_np, layout=ttnn.Layout.TILE
-            )
+            beta_f_tensor = ttml.autograd.Tensor.from_numpy(beta_f_np, layout=ttnn.Layout.TILE)
             self.ln_f_beta = Parameter(beta_f_tensor)
         else:
             self.ln_f_beta = None
@@ -173,9 +151,7 @@ class NanoGPT(AbstractModuleBase):
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
-    def forward(
-        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         """Forward pass of NanoGPT.
 
         Args:

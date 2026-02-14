@@ -42,16 +42,12 @@ class LayerNorm(AbstractModuleBase):
         # Layer norm requires gamma (scale) and beta (shift) parameters
         ln_shape = (1, 1, 1, embedding_dim)
         gamma_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_np, layout=ttnn.Layout.TILE
-        )
+        gamma_tensor = ttml.autograd.Tensor.from_numpy(gamma_np, layout=ttnn.Layout.TILE)
         self.gamma = Parameter(gamma_tensor)
 
         if bias:
             beta_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_np, layout=ttnn.Layout.TILE
-            )
+            beta_tensor = ttml.autograd.Tensor.from_numpy(beta_np, layout=ttnn.Layout.TILE)
             self.beta = Parameter(beta_tensor)
         else:
             self.beta = None
@@ -71,9 +67,7 @@ class LayerNorm(AbstractModuleBase):
         else:
             layernorm_op = ttml.ops.layernorm.layernorm
 
-        return layernorm_op(
-            x, self.gamma.tensor, self.beta.tensor if self.beta else None
-        )
+        return layernorm_op(x, self.gamma.tensor, self.beta.tensor if self.beta else None)
 
 
 class GPTBlock(AbstractModuleBase):
@@ -113,9 +107,7 @@ class GPTBlock(AbstractModuleBase):
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
-    def forward(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         """Forward pass of GPT block.
 
         Args:

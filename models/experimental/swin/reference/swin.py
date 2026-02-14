@@ -60,11 +60,7 @@ def window_partition(input_feature, window_size):
         window_size,
         num_channels,
     )
-    windows = (
-        input_feature.permute(0, 1, 3, 2, 4, 5)
-        .contiguous()
-        .view(-1, window_size, window_size, num_channels)
-    )
+    windows = input_feature.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, num_channels)
     return windows
 
 
@@ -81,11 +77,7 @@ def window_reverse(windows, window_size, height, width):
         window_size,
         num_channels,
     )
-    windows = (
-        windows.permute(0, 1, 3, 2, 4, 5)
-        .contiguous()
-        .view(-1, height, width, num_channels)
-    )
+    windows = windows.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, height, width, num_channels)
     return windows
 
 
@@ -101,15 +93,11 @@ class SwinSelfAttention(nn.Module):
         self.attention_head_size = int(dim / num_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
         self.window_size = (
-            window_size
-            if isinstance(window_size, collections.abc.Iterable)
-            else (window_size, window_size)
+            window_size if isinstance(window_size, collections.abc.Iterable) else (window_size, window_size)
         )
 
         self.relative_position_bias_table = nn.Parameter(
-            torch.zeros(
-                (2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), num_heads
-            )
+            torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1), num_heads)
         )
 
         # get pair-wise relative position index for each token inside the window
@@ -125,15 +113,9 @@ class SwinSelfAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.query = nn.Linear(
-            self.all_head_size, self.all_head_size, bias=config.qkv_bias
-        )
-        self.key = nn.Linear(
-            self.all_head_size, self.all_head_size, bias=config.qkv_bias
-        )
-        self.value = nn.Linear(
-            self.all_head_size, self.all_head_size, bias=config.qkv_bias
-        )
+        self.query = nn.Linear(self.all_head_size, self.all_head_size, bias=config.qkv_bias)
+        self.key = nn.Linear(self.all_head_size, self.all_head_size, bias=config.qkv_bias)
+        self.value = nn.Linear(self.all_head_size, self.all_head_size, bias=config.qkv_bias)
 
     def transpose_for_scores(self, x):
         new_x_shape = x.size()[:-1] + (
@@ -162,9 +144,7 @@ class SwinSelfAttention(nn.Module):
 
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
 
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ]
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)]
         relative_position_bias = relative_position_bias.view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
@@ -180,12 +160,8 @@ class SwinSelfAttention(nn.Module):
             attention_scores = attention_scores.view(
                 batch_size // mask_shape, mask_shape, self.num_attention_heads, dim, dim
             )
-            attention_scores = attention_scores + attention_mask.unsqueeze(1).unsqueeze(
-                0
-            )
-            attention_scores = attention_scores.view(
-                -1, self.num_attention_heads, dim, dim
-            )
+            attention_scores = attention_scores + attention_mask.unsqueeze(1).unsqueeze(0)
+            attention_scores = attention_scores.view(-1, self.num_attention_heads, dim, dim)
 
         # Normalize the attention scores to probabilities.
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
@@ -199,9 +175,7 @@ class SwinSelfAttention(nn.Module):
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(new_context_layer_shape)
 
-        outputs = (
-            (context_layer, attention_probs) if output_attentions else (context_layer,)
-        )
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs
 
@@ -211,9 +185,7 @@ class SwinSelfOutput(nn.Module):
         super().__init__()
         self.dense = nn.Linear(dim, dim)
 
-    def forward(
-        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
 
         return hidden_states
@@ -244,9 +216,7 @@ class SwinAttention(nn.Module):
 
         # Update hyper params and store pruned heads
         self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = (
-            self.self.attention_head_size * self.self.num_attention_heads
-        )
+        self.self.all_head_size = self.self.attention_head_size * self.self.num_attention_heads
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def forward(
@@ -256,13 +226,9 @@ class SwinAttention(nn.Module):
         head_mask: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[torch.Tensor]:
-        self_outputs = self.self(
-            hidden_states, attention_mask, head_mask, output_attentions
-        )
+        self_outputs = self.self(hidden_states, attention_mask, head_mask, output_attentions)
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
 
 
@@ -292,18 +258,14 @@ class SwinOutput(nn.Module):
 
 
 class SwinLayer(nn.Module):
-    def __init__(
-        self, config: SwinConfig, dim, input_resolution, num_heads, shift_size=0
-    ):
+    def __init__(self, config: SwinConfig, dim, input_resolution, num_heads, shift_size=0):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.shift_size = shift_size
         self.window_size = config.window_size
         self.input_resolution = input_resolution
         self.layernorm_before = nn.LayerNorm(dim, eps=config.layer_norm_eps)
-        self.attention = SwinAttention(
-            config, dim, num_heads, window_size=self.window_size
-        )
+        self.attention = SwinAttention(config, dim, num_heads, window_size=self.window_size)
         self.layernorm_after = nn.LayerNorm(dim, eps=config.layer_norm_eps)
         self.intermediate = SwinIntermediate(config, dim)
         self.output = SwinOutput(config, dim)
@@ -337,9 +299,7 @@ class SwinLayer(nn.Module):
             mask_windows = window_partition(img_mask, self.window_size)
             mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(
-                attn_mask != 0, float(-100.0)
-            ).masked_fill(attn_mask == 0, float(0.0))
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         else:
             attn_mask = None
         return attn_mask
@@ -377,19 +337,13 @@ class SwinLayer(nn.Module):
         _, height_pad, width_pad, _ = hidden_states.shape
         # cyclic shift
         if self.shift_size > 0:
-            shifted_hidden_states = torch.roll(
-                hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
+            shifted_hidden_states = torch.roll(hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         else:
             shifted_hidden_states = hidden_states
 
         # partition windows
-        hidden_states_windows = window_partition(
-            shifted_hidden_states, self.window_size
-        )
-        hidden_states_windows = hidden_states_windows.view(
-            -1, self.window_size * self.window_size, channels
-        )
+        hidden_states_windows = window_partition(shifted_hidden_states, self.window_size)
+        hidden_states_windows = hidden_states_windows.view(-1, self.window_size * self.window_size, channels)
         attn_mask = self.get_attn_mask(height_pad, width_pad, dtype=hidden_states.dtype)
         if attn_mask is not None:
             attn_mask = attn_mask.to(hidden_states_windows.device)
@@ -403,18 +357,12 @@ class SwinLayer(nn.Module):
 
         attention_output = attention_outputs[0]
 
-        attention_windows = attention_output.view(
-            -1, self.window_size, self.window_size, channels
-        )
-        shifted_windows = window_reverse(
-            attention_windows, self.window_size, height_pad, width_pad
-        )
+        attention_windows = attention_output.view(-1, self.window_size, self.window_size, channels)
+        shifted_windows = window_reverse(attention_windows, self.window_size, height_pad, width_pad)
 
         # reverse cyclic shift
         if self.shift_size > 0:
-            attention_windows = torch.roll(
-                shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
+            attention_windows = torch.roll(shifted_windows, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             attention_windows = shifted_windows
 
@@ -430,18 +378,12 @@ class SwinLayer(nn.Module):
         layer_output = self.intermediate(layer_output)
         layer_output = hidden_states + self.output(layer_output)
 
-        layer_outputs = (
-            (layer_output, attention_outputs[1])
-            if output_attentions
-            else (layer_output,)
-        )
+        layer_outputs = (layer_output, attention_outputs[1]) if output_attentions else (layer_output,)
         return layer_outputs
 
 
 class SwinStage(nn.Module):
-    def __init__(
-        self, config: SwinConfig, dim, input_resolution, depth, num_heads, downsample
-    ):
+    def __init__(self, config: SwinConfig, dim, input_resolution, depth, num_heads, downsample):
         super().__init__()
         self.config = config
         self.dim = dim
@@ -460,9 +402,7 @@ class SwinStage(nn.Module):
 
         # patch merging layer
         if downsample is not None:
-            self.downsample = downsample(
-                input_resolution, dim=dim, norm_layer=nn.LayerNorm
-            )
+            self.downsample = downsample(input_resolution, dim=dim, norm_layer=nn.LayerNorm)
         else:
             self.downsample = None
 
@@ -494,9 +434,7 @@ class SwinStage(nn.Module):
         if self.downsample is not None:
             height_downsampled, width_downsampled = (height + 1) // 2, (width + 1) // 2
             output_dimensions = (height, width, height_downsampled, width_downsampled)
-            hidden_states = self.downsample(
-                hidden_states_before_downsampling, input_dimensions
-            )
+            hidden_states = self.downsample(hidden_states_before_downsampling, input_dimensions)
         else:
             output_dimensions = (height, width, height, width)
 
@@ -544,9 +482,7 @@ class SwinPatchMerging(nn.Module):
 
         return input_feature
 
-    def forward(
-        self, input_feature: torch.Tensor, input_dimensions: Tuple[int, int]
-    ) -> torch.Tensor:
+    def forward(self, input_feature: torch.Tensor, input_dimensions: Tuple[int, int]) -> torch.Tensor:
         height, width = input_dimensions
         # `dim` is height * width
         batch_size, dim, num_channels = input_feature.shape
@@ -563,12 +499,8 @@ class SwinPatchMerging(nn.Module):
         # [batch_size, height/2, width/2, num_channels]
         input_feature_3 = input_feature[:, 1::2, 1::2, :]
         # batch_size height/2 width/2 4*num_channels
-        input_feature = torch.cat(
-            [input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1
-        )
-        input_feature = input_feature.view(
-            batch_size, -1, 4 * num_channels
-        )  # batch_size height/2*width/2 4*C
+        input_feature = torch.cat([input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1)
+        input_feature = input_feature.view(batch_size, -1, 4 * num_channels)  # batch_size height/2*width/2 4*C
 
         input_feature = self.norm(input_feature)
         input_feature = self.reduction(input_feature)
@@ -588,19 +520,9 @@ class SwinPatchEmbeddings(nn.Module):
         self.config = config
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.embed_dim
-        image_size = (
-            image_size
-            if isinstance(image_size, collections.abc.Iterable)
-            else (image_size, image_size)
-        )
-        patch_size = (
-            patch_size
-            if isinstance(patch_size, collections.abc.Iterable)
-            else (patch_size, patch_size)
-        )
-        num_patches = (image_size[1] // patch_size[1]) * (
-            image_size[0] // patch_size[0]
-        )
+        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
+        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_channels = num_channels
@@ -610,9 +532,7 @@ class SwinPatchEmbeddings(nn.Module):
             image_size[1] // patch_size[1],
         )
 
-        self.projection = nn.Conv2d(
-            num_channels, hidden_size, kernel_size=patch_size, stride=patch_size
-        )
+        self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
 
     def maybe_pad(self, pixel_values, height, width):
         if width % self.patch_size[1] != 0:
@@ -623,9 +543,7 @@ class SwinPatchEmbeddings(nn.Module):
             pixel_values = nn.functional.pad(pixel_values, pad_values)
         return pixel_values
 
-    def forward(
-        self, pixel_values: Optional[torch.FloatTensor]
-    ) -> Tuple[torch.Tensor, Tuple[int]]:
+    def forward(self, pixel_values: Optional[torch.FloatTensor]) -> Tuple[torch.Tensor, Tuple[int]]:
         _, num_channels, height, width = pixel_values.shape
         if num_channels != self.num_channels:
             raise ValueError(
@@ -652,16 +570,10 @@ class SwinEmbeddings(nn.Module):
         self.patch_embeddings = SwinPatchEmbeddings(config)
         num_patches = self.patch_embeddings.num_patches
         self.patch_grid = self.patch_embeddings.grid_size
-        self.mask_token = (
-            nn.Parameter(torch.zeros(1, 1, config.embed_dim))
-            if use_mask_token
-            else None
-        )
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.embed_dim)) if use_mask_token else None
 
         if config.use_absolute_embeddings:
-            self.position_embeddings = nn.Parameter(
-                torch.zeros(1, num_patches + 1, config.embed_dim)
-            )
+            self.position_embeddings = nn.Parameter(torch.zeros(1, num_patches + 1, config.embed_dim))
         else:
             self.position_embeddings = None
 
@@ -704,9 +616,7 @@ class SwinEncoder(nn.Module):
                     ),
                     depth=config.depths[i_layer],
                     num_heads=config.num_heads[i_layer],
-                    downsample=SwinPatchMerging
-                    if (i_layer < self.num_layers - 1)
-                    else None,
+                    downsample=SwinPatchMerging if (i_layer < self.num_layers - 1) else None,
                 )
                 for i_layer in range(self.num_layers)
             ]
@@ -732,9 +642,7 @@ class SwinEncoder(nn.Module):
         if output_hidden_states:
             batch_size, _, hidden_size = hidden_states.shape
             # rearrange b (h w) c -> b c h w
-            reshaped_hidden_state = hidden_states.view(
-                batch_size, *input_dimensions, hidden_size
-            )
+            reshaped_hidden_state = hidden_states.view(batch_size, *input_dimensions, hidden_size)
             reshaped_hidden_state = reshaped_hidden_state.permute(0, 3, 1, 2)
             all_hidden_states += (hidden_states,)
             all_reshaped_hidden_states += (reshaped_hidden_state,)
@@ -786,9 +694,7 @@ class SwinEncoder(nn.Module):
             elif output_hidden_states and not output_hidden_states_before_downsampling:
                 batch_size, _, hidden_size = hidden_states.shape
                 # rearrange b (h w) c -> b c h w
-                reshaped_hidden_state = hidden_states.view(
-                    batch_size, *input_dimensions, hidden_size
-                )
+                reshaped_hidden_state = hidden_states.view(batch_size, *input_dimensions, hidden_size)
                 reshaped_hidden_state = reshaped_hidden_state.permute(0, 3, 1, 2)
                 all_hidden_states += (hidden_states,)
                 all_reshaped_hidden_states += (reshaped_hidden_state,)
@@ -797,11 +703,7 @@ class SwinEncoder(nn.Module):
                 all_self_attentions += layer_outputs[3:]
 
         if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, all_hidden_states, all_self_attentions]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
         return SwinEncoderOutput(
             last_hidden_state=hidden_states,
@@ -812,9 +714,7 @@ class SwinEncoder(nn.Module):
 
 
 class SwinModel(nn.Module):
-    def __init__(
-        self, config: SwinConfig, add_pooling_layer=True, use_mask_token=False
-    ):
+    def __init__(self, config: SwinConfig, add_pooling_layer=True, use_mask_token=False):
         super().__init__()
         self.config = config
         self.num_layers = len(config.depths)
@@ -852,19 +752,11 @@ class SwinModel(nn.Module):
         bool_masked_pos (`torch.BoolTensor` of shape `(batch_size, num_patches)`, *optional*):
             Boolean masked positions. Indicates which patches are masked (1) and which aren't (0).
         """
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if pixel_values is None:
             raise ValueError("You have to specify pixel_values")
@@ -876,9 +768,7 @@ class SwinModel(nn.Module):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, len(self.config.depths))
 
-        embedding_output, input_dimensions = self.embeddings(
-            pixel_values, bool_masked_pos=bool_masked_pos
-        )
+        embedding_output, input_dimensions = self.embeddings(pixel_values, bool_masked_pos=bool_masked_pos)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -921,9 +811,7 @@ class PytorchSwinForImageClassification(nn.Module):
 
         # Classifier head
         self.classifier = (
-            nn.Linear(self.swin.num_features, config.num_labels)
-            if config.num_labels > 0
-            else nn.Identity()
+            nn.Linear(self.swin.num_features, config.num_labels) if config.num_labels > 0 else nn.Identity()
         )
 
         # Initialize weights and apply final processing
@@ -943,9 +831,7 @@ class PytorchSwinForImageClassification(nn.Module):
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.swin(
             pixel_values,
@@ -964,9 +850,7 @@ class PytorchSwinForImageClassification(nn.Module):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (
-                    labels.dtype == torch.long or labels.dtype == torch.int
-                ):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"

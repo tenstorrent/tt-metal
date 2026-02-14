@@ -153,12 +153,8 @@ class PrimitiveEmbedding(AbstractModuleBase):
     def __init__(self, num_embeddings: int, embedding_dim: int) -> None:
         super().__init__()
         weight_shape = (1, 1, num_embeddings, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
+        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(ml_dtypes.bfloat16)
+        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
         self.weight = Parameter(weight_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -171,31 +167,21 @@ class PrimitiveEmbedding(AbstractModuleBase):
 class PrimitiveLinear(AbstractModuleBase):
     """Linear layer matching C++ LinearLayer parameter naming (weight, bias)."""
 
-    def __init__(
-        self, in_features: int, out_features: int, has_bias: bool = True
-    ) -> None:
+    def __init__(self, in_features: int, out_features: int, has_bias: bool = True) -> None:
         super().__init__()
         # Match C++ LinearLayer naming: creates "linear" as module name
         self.create_name("linear")
 
         init_k = np.sqrt(1.0 / in_features)
         weight_shape = (1, 1, out_features, in_features)
-        weight_np = np.random.uniform(-init_k, init_k, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
+        weight_np = np.random.uniform(-init_k, init_k, size=weight_shape).astype(ml_dtypes.bfloat16)
+        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
         self.weight = Parameter(weight_tensor)
 
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
-            bias_np = np.random.uniform(-init_k, init_k, size=bias_shape).astype(
-                ml_dtypes.bfloat16
-            )
-            bias_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
-            )
+            bias_np = np.random.uniform(-init_k, init_k, size=bias_shape).astype(ml_dtypes.bfloat16)
+            bias_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
             self.bias = Parameter(bias_tensor)
         else:
             self.bias = None
@@ -211,9 +197,7 @@ class PrimitiveLinear(AbstractModuleBase):
 class PrimitiveMLP(AbstractModuleBase):
     """GPT-style MLP layer matching full model parameter naming."""
 
-    def __init__(
-        self, embedding_dim: int, dropout: float = 0.0, bias: bool = True
-    ) -> None:
+    def __init__(self, embedding_dim: int, dropout: float = 0.0, bias: bool = True) -> None:
         super().__init__()
         self.dropout_prob = dropout
 
@@ -251,78 +235,54 @@ class PrimitiveMultiHeadAttention(AbstractModuleBase):
         self.dropout_prob = dropout
 
         # Use PrimitiveLinear to get qkv_linear/weight, qkv_linear/bias naming
-        self.qkv_linear = PrimitiveLinear(
-            embedding_dim, embedding_dim * 3, has_bias=bias
-        )
+        self.qkv_linear = PrimitiveLinear(embedding_dim, embedding_dim * 3, has_bias=bias)
         self.out_linear = PrimitiveLinear(embedding_dim, embedding_dim, has_bias=bias)
 
-    def forward(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         qkv = self.qkv_linear(x)
-        query, key, value = ttml.ops.multi_head_utils.heads_creation(
-            qkv, self.num_heads
-        )
-        attn_out = ttml.ops.attention.scaled_dot_product_attention(
-            query, key, value, mask
-        )
+        query, key, value = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads)
+        attn_out = ttml.ops.attention.scaled_dot_product_attention(query, key, value, mask)
         fused = ttml.ops.multi_head_utils.heads_fusion(attn_out)
         out = self.out_linear(fused)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             out = ttml.ops.dropout.dropout(out, self.dropout_prob)
         return out
 
-    def __call__(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def __call__(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         return self.forward(x, mask)
 
 
 class PrimitiveGPTBlock(AbstractModuleBase):
     """GPT transformer block using ttml ops only."""
 
-    def __init__(
-        self, embedding_dim: int, num_heads: int, dropout: float, bias: bool
-    ) -> None:
+    def __init__(self, embedding_dim: int, num_heads: int, dropout: float, bias: bool) -> None:
         super().__init__()
         ln_shape = (1, 1, 1, embedding_dim)
 
         gamma1_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma1_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma1_np, layout=ttnn.Layout.TILE
-        )
+        gamma1_tensor = ttml.autograd.Tensor.from_numpy(gamma1_np, layout=ttnn.Layout.TILE)
         self.ln1_gamma = Parameter(gamma1_tensor)
         if bias:
             beta1_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta1_tensor = ttml.autograd.Tensor.from_numpy(
-                beta1_np, layout=ttnn.Layout.TILE
-            )
+            beta1_tensor = ttml.autograd.Tensor.from_numpy(beta1_np, layout=ttnn.Layout.TILE)
             self.ln1_beta = Parameter(beta1_tensor)
         else:
             self.ln1_beta = None
 
         gamma2_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma2_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma2_np, layout=ttnn.Layout.TILE
-        )
+        gamma2_tensor = ttml.autograd.Tensor.from_numpy(gamma2_np, layout=ttnn.Layout.TILE)
         self.ln2_gamma = Parameter(gamma2_tensor)
         if bias:
             beta2_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta2_tensor = ttml.autograd.Tensor.from_numpy(
-                beta2_np, layout=ttnn.Layout.TILE
-            )
+            beta2_tensor = ttml.autograd.Tensor.from_numpy(beta2_np, layout=ttnn.Layout.TILE)
             self.ln2_beta = Parameter(beta2_tensor)
         else:
             self.ln2_beta = None
 
-        self.attention = PrimitiveMultiHeadAttention(
-            embedding_dim, num_heads, dropout, bias
-        )
+        self.attention = PrimitiveMultiHeadAttention(embedding_dim, num_heads, dropout, bias)
         self.mlp = PrimitiveMLP(embedding_dim, dropout, bias)
 
-    def forward(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         residual = x
         x = ttml.ops.layernorm.composite_layernorm(
             x, self.ln1_gamma.tensor, self.ln1_beta.tensor if self.ln1_beta else None
@@ -338,9 +298,7 @@ class PrimitiveGPTBlock(AbstractModuleBase):
         x = ttml.ops.binary.add(x, residual)
         return x
 
-    def __call__(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def __call__(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         return self.forward(x, mask)
 
 
@@ -367,25 +325,19 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
             [
-                PrimitiveGPTBlock(
-                    config.n_embd, config.n_head, config.dropout, config.bias
-                )
+                PrimitiveGPTBlock(config.n_embd, config.n_head, config.dropout, config.bias)
                 for _ in range(config.n_layer)
             ]
         )
 
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)
-        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_f_np, layout=ttnn.Layout.TILE
-        )
+        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(gamma_f_np, layout=ttnn.Layout.TILE)
         self.ln_f_gamma = Parameter(gamma_f_tensor)
 
         if config.bias:
             beta_f_np = np.zeros(ln_f_shape, dtype=ml_dtypes.bfloat16)
-            beta_f_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_f_np, layout=ttnn.Layout.TILE
-            )
+            beta_f_tensor = ttml.autograd.Tensor.from_numpy(beta_f_np, layout=ttnn.Layout.TILE)
             self.ln_f_beta = Parameter(beta_f_tensor)
         else:
             self.ln_f_beta = None
@@ -394,9 +346,7 @@ class PrimitiveNanoGPT(AbstractModuleBase):
         self._cached_pos_tensor = None
         self._cached_pos_seq_len = None
 
-    def forward(
-        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         tok_emb = self.tok_emb(idx)
 
         # Create position indices (cached for constant sequence length during training)
@@ -430,9 +380,7 @@ class PrimitiveNanoGPT(AbstractModuleBase):
             logits = ttml.ops.reshape.reshape(logits, new_shape)
         return logits
 
-    def __call__(
-        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def __call__(self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         return self.forward(idx, mask)
 
 
@@ -484,9 +432,7 @@ def create_dataset_from_text(
 
 def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
     mask_np = build_causal_mask(sequence_length)
-    return ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
 
 def collate_fn(
@@ -499,9 +445,7 @@ def collate_fn(
         targets.extend(target)
     data_np = np.array(data, dtype=np.uint32).reshape(batch_size, 1, 1, sequence_length)
     targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, sequence_length)
-    data_tensor = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
     targets_tensor = ttml.autograd.Tensor.from_numpy(
         targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
@@ -544,9 +488,7 @@ def train_step(
         optimizer.zero_grad()
 
     logits = model(input_tokens, mask)
-    loss = ttml.ops.loss.cross_entropy_loss(
-        logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN
-    )
+    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
     loss = gradient_accumulator.scale(loss)
     loss_float = get_loss_value(loss)
     loss.backward(False)
@@ -582,18 +524,12 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
 
     if config.model_type == "gpt2":
         config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-        config.embedding_dim = transformer_config.get(
-            "embedding_dim", config.embedding_dim
-        )
+        config.embedding_dim = transformer_config.get("embedding_dim", config.embedding_dim)
         config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
         config.num_heads = transformer_config.get("num_heads", config.num_heads)
-        config.dropout_prob = transformer_config.get(
-            "dropout_prob", config.dropout_prob
-        )
+        config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
         config.bias = transformer_config.get("bias", config.bias)
-        config.max_sequence_length = transformer_config.get(
-            "max_sequence_length", config.max_sequence_length
-        )
+        config.max_sequence_length = transformer_config.get("max_sequence_length", config.max_sequence_length)
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -640,25 +576,17 @@ def sample_greedy(
     print("=" * 70)
 
     for step in range(max_new_tokens):
-        inp = np.array(running[-sequence_length:], dtype=np.uint32).reshape(
-            1, 1, 1, sequence_length
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
+        inp = np.array(running[-sequence_length:], dtype=np.uint32).reshape(1, 1, 1, sequence_length)
+        input_tensor = ttml.autograd.Tensor.from_numpy(inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
         # Clone mask before each use to avoid TTNN memory reuse corrupting the original
         mask_for_model = ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
         logits = model(input_tensor, mask_for_model)
         logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
         logits_shape = logits_np.shape
         if len(logits_shape) == 5:
-            last_logits = logits_np.reshape(
-                logits_shape[0], logits_shape[3], logits_shape[4]
-            )[:, -1, :]
+            last_logits = logits_np.reshape(logits_shape[0], logits_shape[3], logits_shape[4])[:, -1, :]
         elif len(logits_shape) == 4:
-            last_logits = logits_np.reshape(
-                logits_shape[0], logits_shape[2], logits_shape[3]
-            )[:, -1, :]
+            last_logits = logits_np.reshape(logits_shape[0], logits_shape[2], logits_shape[3])[:, -1, :]
         else:
             last_logits = logits_np.reshape(-1, logits_np.shape[-1])[-1:]
 
@@ -674,9 +602,7 @@ def sample_greedy(
 
         if top_k > 0:
             top_k_val = min(top_k, vocab_size)
-            threshold = np.partition(last_logits, -top_k_val, axis=-1)[:, -top_k_val:][
-                :, 0:1
-            ]
+            threshold = np.partition(last_logits, -top_k_val, axis=-1)[:, -top_k_val:][:, 0:1]
             indices_to_remove = last_logits < threshold
             last_logits[indices_to_remove] = -1e9
 
@@ -955,23 +881,15 @@ def main():
             current_dir = os.getcwd()
             if os.path.exists(os.path.join(current_dir, "tt_metal")):
                 os.environ["TT_METAL_RUNTIME_ROOT"] = current_dir
-                print(
-                    f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)"
-                )
+                print(f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)")
             else:
                 parent_dir = os.path.dirname(current_dir)
                 if os.path.exists(os.path.join(parent_dir, "tt_metal")):
                     os.environ["TT_METAL_RUNTIME_ROOT"] = parent_dir
-                    print(
-                        f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)"
-                    )
+                    print(f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)")
                 else:
-                    print(
-                        "Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected."
-                    )
-                    print(
-                        "  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable"
-                    )
+                    print("Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected.")
+                    print("  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable")
                     print("  to point to the tt-metal repository root directory.")
     else:
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
@@ -1023,9 +941,7 @@ def main():
 
     if checkpoint_save_path:
         checkpoint_dir = (
-            os.path.dirname(checkpoint_save_path)
-            if os.path.dirname(checkpoint_save_path)
-            else "checkpoints"
+            os.path.dirname(checkpoint_save_path) if os.path.dirname(checkpoint_save_path) else "checkpoints"
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
         print(f"Checkpoints will be saved to: {checkpoint_save_path}_step_*.pkl")
@@ -1068,9 +984,7 @@ def main():
                 "tt-train/data/shakespeare.txt",
                 "../data/shakespeare.txt",
                 os.path.join(
-                    os.path.dirname(
-                        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    ),
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     "data",
                     "shakespeare.txt",
                 ),
@@ -1080,9 +994,7 @@ def main():
                     training_config.data_path = path
                     break
             if not training_config.data_path:
-                print(
-                    "Warning: No data path specified and Shakespeare dataset not found."
-                )
+                print("Warning: No data path specified and Shakespeare dataset not found.")
                 print("Please specify --data_path or place shakespeare.txt in data/")
                 print(f"  Searched paths: {possible_paths}")
                 instance.close_device()
@@ -1144,10 +1056,7 @@ def main():
                 bias=model_config.bias,
             )
             model = PrimitiveNanoGPT(nanogpt_config)
-            total_params = sum(
-                p.to_numpy(ttnn.DataType.FLOAT32).size
-                for p in model.parameters().values()
-            )
+            total_params = sum(p.to_numpy(ttnn.DataType.FLOAT32).size for p in model.parameters().values())
             print(
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
@@ -1187,9 +1096,7 @@ def main():
             print(f"   - Weight decay: {training_config.weight_decay}")
             print(f"   - Beta1: {beta1}, Beta2: {beta2}, Epsilon: {epsilon}")
             if training_config.use_kahan_summation:
-                print(
-                    "   - Note: Kahan summation requested but not available in Python API"
-                )
+                print("   - Note: Kahan summation requested but not available in Python API")
 
         print("\n4. Setting up learning rate scheduler...")
         scheduler_fn = None
@@ -1215,28 +1122,20 @@ def main():
         print("\n6. Training...")
         print()
         remaining_steps = training_config.max_steps - start_step
-        print(
-            f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})..."
-        )
+        print(f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})...")
         print(f"  - Batch size: {training_config.batch_size}")
         print(f"  - Sequence length: {sequence_length}")
         print(f"  - Training data: {len(dataset)} samples")
         print(f"  - Scheduler: {training_config.scheduler_type}")
-        print(
-            f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}"
-        )
+        print(f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}")
         print(f"  - Dropout: {model_config.dropout_prob}")
         if training_config.use_clip_grad_norm:
-            print(
-                f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}"
-            )
+            print(f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}")
         print()
 
         model.train()
         loss_meter = LossAverageMeter()
-        gradient_accumulator = GradientAccumulator(
-            training_config.gradient_accumulation_steps
-        )
+        gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
         # Cache batch_size to avoid repeated lookups in hot path
@@ -1274,16 +1173,9 @@ def main():
                 if should_step:
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(
-                        f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
-                    )
-                    if (
-                        checkpoint_save_path
-                        and global_step % training_config.model_save_interval == 0
-                    ):
-                        checkpoint_path = (
-                            f"{checkpoint_save_path}_step_{global_step}.pkl"
-                        )
+                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
+                    if checkpoint_save_path and global_step % training_config.model_save_interval == 0:
+                        checkpoint_path = f"{checkpoint_save_path}_step_{global_step}.pkl"
                         save_checkpoint(
                             checkpoint_path,
                             global_step,
