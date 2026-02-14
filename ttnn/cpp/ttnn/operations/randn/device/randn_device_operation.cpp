@@ -8,16 +8,16 @@
 namespace ttnn::operations::randn {
 
 RandnDeviceOperation::program_factory_t RandnDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    [[maybe_unused]] const operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const tensor_args_t& tensor_args) {
     return ProgramFactory{};
 }
 
 void RandnDeviceOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
     TT_FATAL(
         operation_attributes.dtype == DataType::FLOAT32 || operation_attributes.dtype == DataType::BFLOAT16,
         "Randn: Output tensor must be Float32 or Bfloat16");
-    TT_FATAL(operation_attributes.layout == Layout::TILE, "Randn: Not currently supporting row major layout");
 }
 
 void RandnDeviceOperation::validate_on_program_cache_miss(
@@ -31,7 +31,7 @@ void RandnDeviceOperation::validate_on_program_cache_hit(
 }
 
 TensorSpec RandnDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
     return ttnn::TensorSpec(
         operation_attributes.shape,
         tt::tt_metal::TensorLayout(
@@ -41,7 +41,7 @@ TensorSpec RandnDeviceOperation::compute_output_specs(
 }
 
 RandnDeviceOperation::tensor_return_value_t RandnDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
     return create_device_tensor(
         ttnn::TensorSpec(
             operation_attributes.shape,
