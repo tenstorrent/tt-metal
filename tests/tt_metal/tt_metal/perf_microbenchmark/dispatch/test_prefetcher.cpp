@@ -6,7 +6,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <chrono>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -19,6 +18,12 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
+
+#include <chrono>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+#include <vector>
 
 /*
  * FAST PREFETCHER MICROBENCHMARK SUITE
@@ -2437,6 +2442,173 @@ TEST_P(PrefetcherHostTextFixture, HostSmokeTest) {
         wait_for_host_writes);
 }
 
+// Throughput-focused test.
+// Stresses the prefetcher "issue queue -> device" path by issuing large paged DRAM writes with inline host payload.
+class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
+
+TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
+    log_info(tt::LogTest, "PrefetcherThroughputTestFixture - HostToDRAMPagedWriteThroughput - Test Start");
+
+    if (use_exec_buf_) {
+        GTEST_SKIP() << "Throughput test measures issue-queue prefetch; exec_buf enabled path is not supported";
+    }
+
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+    const uint32_t page_size_bytes = get_page_size();
+    const uint32_t requested_pages_per_cmd = get_num_pages();
+    TT_FATAL(page_size_bytes % sizeof(uint32_t) == 0U, "page_size_bytes must be a multiple of 4");
+
+    // Dummy worker range (not the destination of this test) for DeviceData init.
+    constexpr CoreCoord first_worker = default_worker_start;
+    constexpr CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreRange worker_range = {first_worker, last_worker};
+
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t page_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base, nullptr, /*is_banked=*/false, dram_data_size_words, cfg_);
+
+    // Find the maximum number of pages per command that fits within the configured max prefetch command size.
+    uint32_t pages_per_cmd = 1U;
+    for (uint32_t pages = 1U; pages <= requested_pages_per_cmd; ++pages) {
+        DeviceCommandCalculator calc;
+        calc.add_dispatch_write_paged<hugepage_write_>(page_size_bytes, pages);
+        if (calc.write_offset_bytes() > max_fetch_bytes_) {
+            break;
+        }
+        pages_per_cmd = pages;
+    }
+
+    // Generate a moderately-large command stream to measure steady-state throughput.
+    constexpr uint32_t total_cmds = 256U;
+    const uint64_t total_transfer_bytes =
+        static_cast<uint64_t>(total_cmds) * static_cast<uint64_t>(pages_per_cmd) * page_size_bytes;
+
+    log_info(
+        tt::LogTest,
+        "Throughput workload: {} cmds × {} pages/cmd × {} B/page = {} B total",
+        total_cmds,
+        pages_per_cmd,
+        page_size_bytes,
+        total_transfer_bytes);
+
+    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    commands_per_iteration.reserve(total_cmds);
+
+    const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+    uint32_t absolute_start_page = 0U;
+
+    for (uint32_t cmd_idx = 0U; cmd_idx < total_cmds; ++cmd_idx) {
+        std::vector<uint32_t> chunk_payload;
+        chunk_payload.reserve(pages_per_cmd * page_size_words);
+
+        for (uint32_t page = 0U; page < pages_per_cmd; ++page) {
+            const uint32_t page_id = absolute_start_page + page;
+            const uint32_t bank_id = page_id % num_banks_;
+
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+
+            std::vector<uint32_t> page_payload =
+                payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
+
+            Common::DeviceDataUpdater::update_paged_write(
+                page_payload, device_data, bank_core, bank_id, page_alignment_bytes);
+
+            chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
+        }
+
+        const uint32_t bank_offset =
+            tt::align(page_size_bytes, page_alignment_bytes) * (absolute_start_page / num_banks_);
+        const uint32_t base_addr = device_data.get_base_result_addr(tt::CoreType::DRAM) + bank_offset;
+        const uint16_t start_page_cmd = absolute_start_page % num_banks_;
+
+        HostMemDeviceCommand cmd_dispatch_dram = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
+            chunk_payload, base_addr, page_size_bytes, pages_per_cmd, start_page_cmd, /*is_dram=*/true);
+        commands_per_iteration.push_back(std::move(cmd_dispatch_dram));
+
+        absolute_start_page += pages_per_cmd;
+    }
+
+    // Execute + measure command-stream throughput locally in this test.
+    uint64_t per_iter_total = 0U;
+    for (const auto& cmd : commands_per_iteration) {
+        per_iter_total += cmd.size_bytes();
+    }
+
+    // Barrier wait command (same rationale as BaseTestFixture::execute_generated_commands).
+    DeviceCommandCalculator barrier_calc;
+    barrier_calc.add_dispatch_wait();
+    const uint64_t total_cmd_bytes =
+        (static_cast<uint64_t>(num_iterations) * per_iter_total) + barrier_calc.write_offset_bytes();
+
+    void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
+    HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
+
+    std::vector<uint32_t> entry_sizes;
+    entry_sizes.reserve((static_cast<size_t>(num_iterations) * commands_per_iteration.size()) + 1U);
+
+    for (uint32_t iter = 0U; iter < num_iterations; ++iter) {
+        for (const auto& cmd : commands_per_iteration) {
+            dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
+            entry_sizes.push_back(cmd.size_bytes());
+        }
+    }
+
+    HostMemDeviceCommand barrier_cmd(barrier_calc.write_offset_bytes());
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
+    dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
+    entry_sizes.push_back(barrier_cmd.size_bytes());
+
+    // Verifies destination memory bounds
+    device_data.overflow_check(device_);
+
+    // Submit and execute commands
+    mgr_->issue_queue_push_back(dc.write_offset_bytes(), fdcq_->id());
+
+    const auto start = std::chrono::steady_clock::now();
+    for (const uint32_t sz : entry_sizes) {
+        mgr_->fetch_queue_reserve_back(fdcq_->id());
+        mgr_->fetch_queue_write(sz, fdcq_->id());
+    }
+    distributed::Finish(mesh_device_->mesh_command_queue());
+    const auto end = std::chrono::steady_clock::now();
+
+    const std::chrono::duration<double> elapsed = end - start;
+    TT_FATAL(elapsed.count() > 0.0, "Measured elapsed time is zero");
+
+    const double gib = 1024.0 * 1024.0 * 1024.0;
+    const uint64_t cmd_stream_bytes = dc.write_offset_bytes();
+    const double cmd_stream_bw_gib_s = static_cast<double>(cmd_stream_bytes) / (elapsed.count() * gib);
+
+    log_info(
+        tt::LogTest,
+        "CMD stream BW: {:.3f} GiB/s ({} B in {:.3f} ms)",
+        cmd_stream_bw_gib_s,
+        cmd_stream_bytes,
+        elapsed.count() * 1000.0);
+
+    // Validate results
+    const bool pass = device_data.validate(device_);
+    EXPECT_TRUE(pass) << "Throughput test failed validation";
+
+    // Optional perf gate via env var:
+    //   TT_PREFETCHER_CMD_STREAM_GIB_S_MIN=<min GiB/s>
+    if (const char* env_min_bw = std::getenv("TT_PREFETCHER_CMD_STREAM_GIB_S_MIN")) {
+        if (env_min_bw[0U] != '\0') {
+            errno = 0;
+            char* end = nullptr;
+            const double min_bw = std::strtod(env_min_bw, &end);
+            TT_FATAL(
+                errno == 0 && end != env_min_bw, "Failed to parse TT_PREFETCHER_CMD_STREAM_GIB_S_MIN='{}'", env_min_bw);
+            EXPECT_GE(cmd_stream_bw_gib_s, min_bw) << "Command-stream throughput regression";
+        }
+    }
+}
+
 // All BasePrefetcherTestFixture tests with exec buff enabled / disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
@@ -2620,6 +2792,21 @@ INSTANTIATE_TEST_SUITE_P(
             DEFAULT_ITERATIONS,
             DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t),  // 20MB in words
             false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherThroughputTests,
+    PrefetcherThroughputTestFixture,
+    ::testing::Values(
+        PagedReadParams{/*page_size=*/4096,
+                        /*num_pages=*/64,  // clamp to max prefetch command size at runtime
+                        /*num_iterations=*/1,
+                        /*dram_data_size_words=*/Common::DRAM_DATA_SIZE_WORDS,
+                        /*use_exec_buf=*/false}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +

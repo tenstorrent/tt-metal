@@ -203,6 +203,7 @@ target_sources(
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_prefetch.hpp
             impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             ${COMPUTE_KERNEL_API}
