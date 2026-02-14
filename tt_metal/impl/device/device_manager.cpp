@@ -181,11 +181,11 @@ void DeviceManager::initialize(
     const std::vector<ChipId>& device_ids,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw,
-    std::shared_ptr<ContextDescriptor> descriptor) {
+    const std::shared_ptr<ContextDescriptor>& descriptor) {
     ZoneScoped;
     log_debug(tt::LogMetal, "DeviceManager initialize");
 
-    descriptor_ = std::move(descriptor);
+    descriptor_ = descriptor;
     num_hw_cqs_ = descriptor_->num_cqs();
     l1_small_size_ = descriptor_->l1_small_size();
     trace_region_size_ = descriptor_->trace_region_size();
@@ -197,7 +197,7 @@ void DeviceManager::initialize(
     worker_thread_to_cpu_core_map_ =
         device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs_, completion_queue_reader_to_cpu_core_map_);
 
-    l1_bank_remap_.assign(descriptor->l1_bank_remap().begin(), descriptor->l1_bank_remap().end());
+    l1_bank_remap_.assign(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
 
     open_devices(device_ids);
     is_initialized_ = true;
