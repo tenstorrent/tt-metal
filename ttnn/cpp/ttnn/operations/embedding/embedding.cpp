@@ -22,6 +22,11 @@ ttnn::Tensor EmbeddingOperation::invoke(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_FATAL(
+        input_tensor_arg.logical_shape().rank() <= 2,
+        "EmbeddingOp only supports input tensors of rank 1 or 2. Got rank = {}",
+        input_tensor_arg.logical_shape().rank());
+
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
