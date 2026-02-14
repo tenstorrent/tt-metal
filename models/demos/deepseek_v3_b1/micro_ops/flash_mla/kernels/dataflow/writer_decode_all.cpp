@@ -163,8 +163,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
 
-    bool needs_reduction = (k_chunk_end - k_chunk_start < k_num_chunks);
     uint32_t num_active_s_blocks = (k_num_chunks < num_cores_per_head) ? k_num_chunks : num_cores_per_head;
+    bool needs_reduction = (num_active_s_blocks > 1);
 
     if (needs_reduction) {
         for (uint32_t step = 0; step < num_tree_reduction_steps; ++step) {
