@@ -60,6 +60,8 @@ class _DecodeTraceSamplingState:
     logits_tt: ttnn.Tensor | None = None
     top1_values_tt: ttnn.Tensor | None = None
     top1_indices_tt: ttnn.Tensor | None = None
+    # MTP: hidden state preserved from before final_norm (persistent buffer)
+    mtp_hidden_tt: ttnn.Tensor | None = None
 
 
 def _torch_dtype_to_ttnn(dtype: torch.dtype) -> ttnn.DataType:
@@ -1078,6 +1080,8 @@ class Glm4MoeLiteDenseOnlyTT:
             logger.warning(msg)
             blocks_needed = int(page_table.shape[1])
 
+        # Save full-width page table for MTP (MTP position is +1, may need extra block)
+        page_table_full = page_table
         if blocks_needed < int(page_table.shape[1]):
             page_table = page_table[:, :blocks_needed].contiguous()
         page_table = page_table.clone()
@@ -1186,6 +1190,11 @@ class Glm4MoeLiteDenseOnlyTT:
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x, force=False)
             x = x_next
+
+        # Preserve hidden state for MTP before final_norm
+        mtp_hidden = None
+        if self.mtp_enabled:
+            mtp_hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if use_decode_rope:
             assert cos_decode is not None and sin_decode is not None and trans_decode is not None
@@ -1309,6 +1318,27 @@ class Glm4MoeLiteDenseOnlyTT:
                     token_count=active,
                     layer_filter=profile_layer,
                 )
+
+            # MTP draft token generation (eager, K=1)
+            if self.mtp_enabled and mtp_hidden is not None:
+                mtp_positions = start_pos[:active].to(torch.int32) + 1
+                try:
+                    draft_token_ids = self._mtp_forward_eager(
+                        main_token_ids=next_ids_flat.view(-1, 1),
+                        hidden_state=mtp_hidden,
+                        mtp_positions=mtp_positions,
+                        page_table=page_table_full,
+                        kv_cache=kv_cache,
+                    )
+                except Exception as e:
+                    logger.warning("MTP forward failed (non-fatal): {}", e)
+                    draft_token_ids = None
+                ttnn.deallocate(mtp_hidden, force=False)
+                if draft_token_ids is not None:
+                    return (next_ids_flat, draft_token_ids)
+            elif mtp_hidden is not None:
+                ttnn.deallocate(mtp_hidden, force=False)
+
             return next_ids_flat
 
         vocab = int(self.hparams.vocab_size)
@@ -1344,6 +1374,8 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.deallocate(cos_batch, force=False)
         ttnn.deallocate(sin_batch, force=False)
         ttnn.deallocate(page_table_tt, force=False)
+        if mtp_hidden is not None:
+            ttnn.deallocate(mtp_hidden, force=False)
         if profile_on:
             decode_profile["total_s"] = decode_profile.get("total_s", 0.0) + (time.perf_counter() - t_decode0)
             self._profile_record(
@@ -1354,6 +1386,184 @@ class Glm4MoeLiteDenseOnlyTT:
             )
 
         return logits
+
+    @torch.no_grad()
+    def _mtp_forward_eager(
+        self,
+        *,
+        main_token_ids: torch.Tensor,     # [B,1] int32
+        hidden_state: ttnn.Tensor,         # [1,1,B,hidden] TILE
+        mtp_positions: torch.Tensor,       # [B] int32 (= main start_pos + 1)
+        page_table: torch.Tensor,          # [B,W] int32
+        kv_cache: list[ttnn.Tensor],       # full list including kv_cache[47]
+    ) -> torch.Tensor:
+        """Run MTP layer 47 eagerly. Returns draft_token_ids [B] int32 on CPU."""
+        batch = int(main_token_ids.shape[0])
+        hidden = int(self.hparams.hidden_size)
+
+        # 1. Embed main model's predicted tokens (reuse shared embed_tokens)
+        x_embed = run_tt_embedding(
+            device=self.device, token_ids=main_token_ids, tt_weight=self.embed_w
+        )
+        if x_embed.layout != ttnn.TILE_LAYOUT:
+            x_embed = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT)
+        x_embed = ttnn.reshape(x_embed, (1, batch, 1, hidden))
+        x_embed = ttnn.permute(x_embed, (0, 2, 1, 3))  # [1,1,B,D]
+        x_embed_view = ttnn.slice(x_embed, [0, 0, 0, 0], [1, 1, batch, hidden])
+        x_embed_tight = ttnn.clone(x_embed_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x_embed, force=False)
+        x_embed = x_embed_tight
+
+        # 2. enorm(embedded), hnorm(hidden_state)
+        enorm_out = self.mtp_enorm(x_embed, mode="decode")
+        ttnn.deallocate(x_embed, force=False)
+        hnorm_out = self.mtp_hnorm(hidden_state, mode="decode")
+
+        # 3. concat + project: [1,1,B,2*hidden] -> [1,1,B,hidden]
+        concat = ttnn.concat([enorm_out, hnorm_out], dim=3)
+        ttnn.deallocate(enorm_out, force=False)
+        ttnn.deallocate(hnorm_out, force=False)
+        proj = ttnn.linear(concat, self.mtp_eh_proj_w)
+        ttnn.deallocate(concat, force=False)
+
+        # 4. Prepare RoPE and positions for MTP (reuse same helpers as eager decode)
+        mtp_positions_clamped = mtp_positions.to(torch.int32).clamp(
+            min=0, max=max(0, int(self.max_seq_len) - 1)
+        )
+        tt_positions, cos_batch, sin_batch = prepare_decode_rope_and_positions_tt(
+            device=self.device, rope=self.rope, positions=mtp_positions_clamped
+        )
+        cos_decode, sin_decode, trans_decode, rope_sharded_cfg = (
+            prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+                device=self.device,
+                cos_batch=cos_batch,
+                sin_batch=sin_batch,
+                trans_matrix=self.rope["trans_matrix"],
+                batch=batch,
+                rope_dim=int(self.hparams.qk_rope_head_dim),
+            )
+        )
+
+        # Page table to device
+        is_mesh_device = _is_mesh_device(self.device)
+        page_table_tt = ttnn.from_torch(
+            page_table[:batch].to(torch.int32).contiguous(),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
+        )
+
+        # 5. Run decoder layer 47 (full attention + MoE)
+        x = run_decoder_layer_decode_one_step_update_cache_tt(
+            device=self.device,
+            x_embed_tok=proj,
+            tt_positions=tt_positions,
+            page_table_tt=page_table_tt,
+            kvpe_cache=kv_cache[47],
+            cos_batch=cos_batch,
+            sin_batch=sin_batch,
+            trans_matrix=self.rope["trans_matrix"],
+            cos_decode=cos_decode,
+            sin_decode=sin_decode,
+            trans_decode=trans_decode,
+            rope_sharded_cfg=rope_sharded_cfg,
+            w=self.mtp_decoder_w,
+            hparams=self.hparams,
+            moe_runtime=self.moe_runtime,
+            profile=None,
+            use_decode_rope=True,
+        )
+        ttnn.deallocate(proj, force=False)
+
+        # 6. shared_head: norm + LM head
+        x = self.mtp_shared_head_norm(x, mode="decode")
+        logits_tt = ttnn.linear(x, self.mtp_shared_head_w)  # [1,1,B,vocab_shard]
+        ttnn.deallocate(x, force=False)
+
+        # 7. Argmax -> draft token
+        vocab = int(self.hparams.vocab_size)
+
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            # Vocab-sharded: per-device max+argmax, reduce on host
+            logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+            vocab_per_shard = int(self.lm_head_vocab_per_shard)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab_per_shard])
+            max_out = ttnn.max(logits_rm_view, dim=3, keepdim=True)
+            if isinstance(max_out, tuple):
+                local_max_tt, local_argmax_tt = max_out
+            else:
+                local_max_tt = max_out
+                local_argmax_tt = ttnn.argmax(logits_rm_view, dim=3, keepdim=False, use_multicore=True)
+
+            mesh_rows, mesh_cols = int(self.device.shape[0]), int(self.device.shape[1])
+            tp_axis = self.lm_head_tp_axis
+            if tp_axis is None:
+                tp_size = int(mesh_rows * mesh_cols)
+                selected_device_ids = list(range(tp_size))
+                shard_indices = list(range(tp_size))
+            elif int(tp_axis) == 1:
+                tp_size = mesh_cols
+                selected_device_ids = list(range(tp_size))
+                shard_indices = list(range(tp_size))
+            else:
+                tp_size = mesh_rows
+                selected_device_ids = [r * mesh_cols for r in range(tp_size)]
+                shard_indices = list(range(tp_size))
+
+            local_argmax_torch = _mesh_to_torch_selected(tensor=local_argmax_tt, device_ids=selected_device_ids)
+            local_max_torch = _mesh_to_torch_selected(tensor=local_max_tt, device_ids=selected_device_ids)
+            ttnn.deallocate(local_argmax_tt, force=False)
+            ttnn.deallocate(local_max_tt, force=False)
+            ttnn.deallocate(logits_rm, force=False)
+
+            draft_token_ids = torch.empty((batch,), dtype=torch.int32)
+            for b in range(batch):
+                best_val = None
+                best_global = None
+                for shard_idx, max_tensor, argmax_tensor in zip(
+                    shard_indices, local_max_torch, local_argmax_torch
+                ):
+                    max_val = float(max_tensor.reshape(-1)[b].item())
+                    local_idx = int(argmax_tensor.reshape(-1)[b].item())
+                    global_idx = int(shard_idx * vocab_per_shard + local_idx)
+                    if global_idx >= vocab:
+                        continue
+                    if best_val is None or max_val > best_val:
+                        best_val = max_val
+                        best_global = global_idx
+                if best_global is None:
+                    best_global = max(0, vocab - 1)
+                draft_token_ids[b] = int(best_global)
+        else:
+            logits_rm = ttnn.to_layout(logits_tt, ttnn.ROW_MAJOR_LAYOUT)
+            logits_rm_view = ttnn.slice(logits_rm, [0, 0, 0, 0], [1, 1, batch, vocab])
+            logits_rm_tight = ttnn.clone(logits_rm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            max_out = ttnn.max(logits_rm_tight, dim=3, keepdim=True)
+            if isinstance(max_out, tuple):
+                _, next_ids_tt = max_out
+            else:
+                next_ids_tt = ttnn.argmax(logits_rm_tight, dim=3, keepdim=False, use_multicore=True)
+            draft_token_ids = _tt_to_torch_for_vllm_output(
+                tensor=next_ids_tt, device=self.device
+            ).reshape(-1).to(dtype=torch.int32).cpu()
+            ttnn.deallocate(logits_rm, force=False)
+            ttnn.deallocate(logits_rm_tight, force=False)
+            ttnn.deallocate(next_ids_tt, force=False)
+
+        ttnn.deallocate(logits_tt, force=False)
+
+        # Cleanup RoPE temporaries
+        ttnn.deallocate(cos_decode, force=False)
+        ttnn.deallocate(sin_decode, force=False)
+        ttnn.deallocate(trans_decode, force=False)
+        ttnn.deallocate(cos_batch, force=False)
+        ttnn.deallocate(sin_batch, force=False)
+        ttnn.deallocate(tt_positions, force=False)
+        ttnn.deallocate(page_table_tt, force=False)
+
+        return draft_token_ids
 
     def _get_or_create_trace_state(self, *, batch: int, page_table_width: int) -> _DecodeTraceSamplingState:
         """Get or create a per-bucket decode trace state with persistent inputs."""
@@ -1497,6 +1707,18 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
+        # MTP hidden state buffer (persistent; trace writes via ttnn.copy)
+        if self.mtp_enabled:
+            hidden = int(self.hparams.hidden_size)
+            mtp_hidden_host = torch.zeros((1, 1, batch, hidden), dtype=torch.bfloat16)
+            state.mtp_hidden_tt = ttnn.from_torch(
+                mtp_hidden_host,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
         self._decode_trace_states[batch] = state
         return state
 
@@ -1694,6 +1916,10 @@ class Glm4MoeLiteDenseOnlyTT:
             ttnn.deallocate(x, force=False)
             x = x_next
 
+        # Preserve hidden state for MTP before final_norm consumes it
+        if self.mtp_enabled and state.mtp_hidden_tt is not None:
+            ttnn.copy(x, state.mtp_hidden_tt)
+
         x = self.final_norm(x, mode="decode")
         logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab_shard?]
         ttnn.deallocate(x, force=False)
@@ -1809,6 +2035,67 @@ class Glm4MoeLiteDenseOnlyTT:
         if os.environ.get("GLM4_MOE_LITE_SYNC_BEFORE_TRACE", "").strip() == "1":
             ttnn.synchronize_device(self.device)
         ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=True)
+
+        # MTP: run eagerly after trace completes
+        self._last_draft_token_ids = None
+        if self.mtp_enabled and state.mtp_hidden_tt is not None:
+            try:
+                # Resolve main token IDs from trace output
+                if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
+                    main_ids = _tt_to_torch_for_vllm_output(
+                        tensor=state.top1_indices_tt, device=self.device
+                    ).reshape(-1).to(torch.int32).cpu()
+                else:
+                    # Vocab-sharded: resolve global token from per-shard max/argmax
+                    assert state.top1_values_tt is not None
+                    mesh_rows, mesh_cols = int(self.device.shape[0]), int(self.device.shape[1])
+                    tp_axis = self.lm_head_tp_axis
+                    if tp_axis is None:
+                        tp_size = int(mesh_rows * mesh_cols)
+                        selected_device_ids = list(range(tp_size))
+                        shard_indices = list(range(tp_size))
+                    elif int(tp_axis) == 1:
+                        tp_size = mesh_cols
+                        selected_device_ids = list(range(tp_size))
+                        shard_indices = list(range(tp_size))
+                    else:
+                        tp_size = mesh_rows
+                        selected_device_ids = [r * mesh_cols for r in range(tp_size)]
+                        shard_indices = list(range(tp_size))
+                    vocab = int(self.hparams.vocab_size)
+                    vocab_per_shard = int(self.lm_head_vocab_per_shard)
+                    local_argmax_torch = _mesh_to_torch_selected(tensor=state.top1_indices_tt, device_ids=selected_device_ids)
+                    local_max_torch = _mesh_to_torch_selected(tensor=state.top1_values_tt, device_ids=selected_device_ids)
+                    main_ids = torch.empty((batch,), dtype=torch.int32)
+                    for b in range(batch):
+                        best_val = None
+                        best_global = None
+                        for shard_idx, max_tensor, argmax_tensor in zip(
+                            shard_indices, local_max_torch, local_argmax_torch
+                        ):
+                            max_val = float(max_tensor.reshape(-1)[b].item())
+                            local_idx = int(argmax_tensor.reshape(-1)[b].item())
+                            global_idx = int(shard_idx * vocab_per_shard + local_idx)
+                            if global_idx >= vocab:
+                                continue
+                            if best_val is None or max_val > best_val:
+                                best_val = max_val
+                                best_global = global_idx
+                        if best_global is None:
+                            best_global = max(0, vocab - 1)
+                        main_ids[b] = int(best_global)
+
+                mtp_positions = start_pos[:batch].to(torch.int32) + 1
+                self._last_draft_token_ids = self._mtp_forward_eager(
+                    main_token_ids=main_ids.view(-1, 1),
+                    hidden_state=state.mtp_hidden_tt,
+                    mtp_positions=mtp_positions,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                )
+            except Exception as e:
+                logger.warning("MTP forward (trace path) failed (non-fatal): {}", e)
+                self._last_draft_token_ids = None
 
         if not (self.lm_head_sharded_vocab and _is_mesh_device(self.device)):
             return state.top1_indices_tt
