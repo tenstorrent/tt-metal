@@ -74,7 +74,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
         input_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
-        output_tensor.buffer()->page_size(),
+        output_tensor.mesh_buffer()->page_size(),
         num_banks,
         output_tensor.buffer()->alignment());
 
@@ -83,7 +83,10 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
+        output_tensor.buffer()->size(),
+        output_tensor.mesh_buffer()->page_size(),
+        num_l1_banks,
+        hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {

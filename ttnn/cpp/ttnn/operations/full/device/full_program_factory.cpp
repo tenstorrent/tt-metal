@@ -25,11 +25,11 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto fill_value = operation_attributes.fill_value;
 
     auto grid = operation_attributes.mesh_device->compute_with_storage_grid_size();
-    auto num_pages = (uint32_t)output.buffer()->num_pages();
+    auto num_pages = (uint32_t)output.mesh_buffer()->num_pages();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_pages);
 
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer()->page_size();
     TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
     uint32_t elems_per_page = page_size / output.element_size();
 

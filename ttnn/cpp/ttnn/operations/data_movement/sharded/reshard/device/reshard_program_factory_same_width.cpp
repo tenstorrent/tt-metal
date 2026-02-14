@@ -40,7 +40,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
-    uint32_t num_units = local_tensor.buffer()->num_pages();
+    uint32_t num_units = local_tensor.mesh_buffer()->num_pages();
     if (local_tensor.layout() == Layout::TILE) {
         unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;

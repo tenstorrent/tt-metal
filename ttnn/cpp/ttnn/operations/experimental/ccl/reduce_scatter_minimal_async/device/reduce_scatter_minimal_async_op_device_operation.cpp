@@ -177,7 +177,7 @@ void reduce_scatter_common_validates(
     uint32_t ring_size,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    const auto page_size = input_tensor.buffer()->page_size();
+    const auto page_size = input_tensor.mesh_buffer()->page_size();
     TT_FATAL(
         topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
         "Topology must be either Ring or Linear");

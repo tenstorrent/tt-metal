@@ -84,8 +84,8 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     const auto output_data_format = datatype_to_dataformat_converter(output_tensors.at(0).dtype());
     const auto compute_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
 
-    const uint32_t input_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_page_size = output_tensors.at(0).buffer()->page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer()->page_size();
+    const uint32_t output_page_size = output_tensors.at(0).mesh_buffer()->page_size();
     const uint32_t compute_page_size = tt::tile_size(compute_data_format);
 
     const uint32_t input_tensor_buffer_factor = input_granularity * 2;

@@ -89,7 +89,7 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
     uint32_t input_outer_dim_size = input_tensor_shape[0];
     uint32_t output_outer_dim_size = output_tensor_shape[0];

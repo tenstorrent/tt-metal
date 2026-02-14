@@ -18,7 +18,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
 

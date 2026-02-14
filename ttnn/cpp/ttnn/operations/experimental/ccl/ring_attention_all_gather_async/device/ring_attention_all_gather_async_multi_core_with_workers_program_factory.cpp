@@ -240,7 +240,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor[0].mesh_buffer()->num_pages();
     const auto input_tensor_shape = input_tensor[0].padded_shape();
     const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();

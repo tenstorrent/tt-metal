@@ -147,7 +147,7 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
 
     // KERNEL CREATION
     // Reader

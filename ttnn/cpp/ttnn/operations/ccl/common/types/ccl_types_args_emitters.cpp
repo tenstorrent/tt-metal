@@ -35,7 +35,7 @@ args_list_t legacy_emit_address_generator_runtime_args(
             break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            TT_ASSERT(t.buffer()->page_size() != 1024);
+            TT_ASSERT(t.mesh_buffer()->page_size() != 1024);
             // For now we won't emit args for interleaved here... assume these are passed in elsewhere
             // This is during some transitionary period
             return {};
@@ -61,7 +61,7 @@ args_list_t emit_address_generator_runtime_args(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return shard_builder::generate_run_time_args(t); break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            TT_ASSERT(t.buffer()->page_size() != 1024);
+            TT_ASSERT(t.mesh_buffer()->page_size() != 1024);
             // For now we won't emit args for interleaved here... assume these are passed in elsewhere
             // This is during some transitionary period
             return {};

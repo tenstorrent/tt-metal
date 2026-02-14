@@ -261,7 +261,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     create_receiver_buffer(program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = calculate_chunk_params(
-        tensor_args.input_tensor.buffer()->num_pages() /
+        tensor_args.input_tensor.mesh_buffer()->num_pages() /
             operation_attributes.ring_size,  // number of pages sent between each pair of devices
         pages_per_packet);
 
@@ -281,7 +281,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     // Tensor Info
-    const auto input_tensor_num_pages = tensor_args.input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = tensor_args.input_tensor.mesh_buffer()->num_pages();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 
@@ -421,13 +421,14 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         (contig_pages_advanced * N_DRAM_BANKS * (final_packet_global_id / N_DRAM_BANKS));
     const uint32_t final_packet_second_tile_id = final_packet_first_tile_id + N_DRAM_BANKS;
     TT_FATAL(
-        final_packet_second_tile_id < tensor_args.persistent_intermediate_buffer.buffer()->num_pages(),
+        final_packet_second_tile_id < tensor_args.persistent_intermediate_buffer.mesh_buffer()->num_pages(),
         "Final packet would overflow intermediate buffer. This is unexpected and dangerous. "
-        "final_packet_first_tile_id: {}, final_packet_second_tile_id: {}, intermediate_buffer.buffer()->num_pages(): "
+        "final_packet_first_tile_id: {}, final_packet_second_tile_id: {}, "
+        "intermediate_buffer.mesh_buffer()->num_pages(): "
         "{}",
         final_packet_first_tile_id,
         final_packet_second_tile_id,
-        tensor_args.persistent_intermediate_buffer.buffer()->num_pages());
+        tensor_args.persistent_intermediate_buffer.mesh_buffer()->num_pages());
 
     // Kernel Runtime Args
     const uint32_t receiver_core_x = device->worker_core_from_logical_core(receiver_worker_cores[ring_index]).x;

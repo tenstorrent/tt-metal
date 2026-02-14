@@ -69,7 +69,7 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
-    const uint32_t page_size = input.buffer()->page_size();
+    const uint32_t page_size = input.mesh_buffer()->page_size();
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
@@ -81,7 +81,10 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
+        output.mesh_buffer()->size(),
+        output.mesh_buffer()->page_size(),
+        num_l1_banks,
+        tt::tt_metal::hal::get_l1_alignment());
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;

@@ -98,7 +98,7 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     noc_transfer_burst.bank_base_address = tensor.mesh_buffer()->address();
 
     const auto& tensor_slice = std::get<ttnn::ccl::v2::TensorSlice>(command.command_args);
-    auto page_size = tensor.buffer()->page_size();
+    auto page_size = tensor.mesh_buffer()->page_size();
 
     auto coord_lookup = tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup();
 

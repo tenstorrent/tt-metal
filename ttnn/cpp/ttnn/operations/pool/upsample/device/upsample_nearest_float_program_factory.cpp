@@ -49,7 +49,7 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
     // Work distribution - Total work units = N * H_out * W_out (one output stick per work unit)
 
-    const uint32_t total_pages_in_output = output_tensor.buffer()->num_pages();
+    const uint32_t total_pages_in_output = output_tensor.mesh_buffer()->num_pages();
 
     const tt::tt_metal::Shape& output_shape = output_tensor.padded_shape();
 
@@ -59,8 +59,8 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
     const uint32_t aligned_input_page_size = input.buffer()->aligned_page_size();
     const uint32_t aligned_output_page_size = output_tensor.buffer()->aligned_page_size();
 
-    const uint32_t input_page_size = input.buffer()->page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->page_size();
+    const uint32_t input_page_size = input.mesh_buffer()->page_size();
+    const uint32_t output_page_size = output_tensor.mesh_buffer()->page_size();
 
     TT_FATAL(
         input_page_size == output_page_size,

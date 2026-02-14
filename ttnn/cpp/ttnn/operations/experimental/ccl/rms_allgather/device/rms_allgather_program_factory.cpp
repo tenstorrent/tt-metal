@@ -99,12 +99,12 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     if (output.layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
     } else {
-        output_page_size = output.buffer()->page_size();
+        output_page_size = output.mesh_buffer()->page_size();
     }
     if (stats.value().layout() == Layout::TILE) {
         stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats_data_format);
     } else {
-        stats_page_size = stats.value().buffer()->page_size();
+        stats_page_size = stats.value().mesh_buffer()->page_size();
     }
 
     size_t num_targets_forward = 0;

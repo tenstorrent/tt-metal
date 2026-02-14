@@ -40,7 +40,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         "Worker cores used by links are parallelized over rows");
 
     // Page alignment check
-    auto page_size = input_tensor.buffer()->page_size();
+    auto page_size = input_tensor.mesh_buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     // Memory layout validations

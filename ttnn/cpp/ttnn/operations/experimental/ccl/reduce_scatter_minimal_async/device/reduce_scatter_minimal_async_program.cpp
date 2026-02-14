@@ -621,7 +621,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
@@ -710,7 +710,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
@@ -1231,7 +1231,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     bool fuse_op = fused_op_signaler.has_value();
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
@@ -1351,7 +1351,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;

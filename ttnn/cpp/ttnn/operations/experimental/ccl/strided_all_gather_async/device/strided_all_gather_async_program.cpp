@@ -268,7 +268,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     std::optional<uint32_t> mm_block_wt,
     const CoreCoord core_grid_offset) {
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -308,7 +308,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     }
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(

@@ -23,7 +23,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
 
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||

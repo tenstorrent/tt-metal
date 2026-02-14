@@ -132,7 +132,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     Buffer* output_buffer = tensor_return_value.buffer();
 
     // Get OP Config, topology config
-    uint32_t page_size = tensor_args.input_tensor.buffer()->page_size();
+    uint32_t page_size = tensor_args.input_tensor.mesh_buffer()->page_size();
     uint32_t num_sticks_per_halo_dim = 1;
     for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];

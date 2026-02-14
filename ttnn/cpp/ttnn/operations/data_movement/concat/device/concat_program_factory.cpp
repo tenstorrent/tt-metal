@@ -271,7 +271,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
+                dst_buffer->address(), output.mesh_buffer()->page_size(), num_pages_per_core, num_pages_written};
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }

@@ -19,7 +19,7 @@ void AllGatherAsync::validate_with_output_tensors(
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
-    const auto& page_size = input_tensors[0].buffer()->page_size();
+    const auto& page_size = input_tensors[0].mesh_buffer()->page_size();
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||

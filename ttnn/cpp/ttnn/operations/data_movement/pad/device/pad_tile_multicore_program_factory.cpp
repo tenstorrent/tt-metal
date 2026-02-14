@@ -48,7 +48,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer()->page_size();
     uint32_t multi_buffering_size = 2;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config =

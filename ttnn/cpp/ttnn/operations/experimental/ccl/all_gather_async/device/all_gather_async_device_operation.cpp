@@ -50,7 +50,7 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||

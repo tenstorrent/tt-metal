@@ -33,7 +33,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     tt::tt_metal::Program program{};
 
     auto grid = device->compute_with_storage_grid_size();
-    auto num_tiles = scores.buffer()->num_pages();
+    auto num_tiles = scores.mesh_buffer()->num_pages();
     uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
@@ -72,21 +72,21 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     //       * The reader pushes scores and bias together.
     //   - If the bias CB is too small, the reader can block, causing a deadlock.
     tt::tt_metal::create_cb(
-        cb_in_scores, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+        cb_in_scores, program, all_cores, scores.mesh_buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        cb_in_bias, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
+        cb_in_bias, program, all_cores, bias.mesh_buffer()->page_size(), 2 * width_tiles, bias_data_format);
     tt::tt_metal::create_cb(
         cb_out_weights,
         program,
         all_cores,
-        output_weights.buffer()->page_size(),
+        output_weights.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         weights_data_format);
     tt::tt_metal::create_cb(
         cb_out_indices,
         program,
         all_cores,
-        output_indices.buffer()->page_size(),
+        output_indices.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         indices_data_format);
 
@@ -96,9 +96,9 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     auto cb_sigmoid_scores = tt::CBIndex::c_4;
     auto cb_biased_scores = tt::CBIndex::c_5;
     tt::tt_metal::create_cb(
-        cb_sigmoid_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        cb_sigmoid_scores, program, all_cores, scores.mesh_buffer()->page_size(), width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        cb_biased_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        cb_biased_scores, program, all_cores, scores.mesh_buffer()->page_size(), width_tiles, scores_data_format);
 
     // Per-group sorting CBs
     // cb_sorted_group_scores is consumed one tile at a time by writer's generate_summed_experts_tiles
@@ -108,14 +108,19 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
     auto cb_expert_index_template = tt::CBIndex::c_8;
     tt::tt_metal::create_cb(
-        cb_sorted_group_scores, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
+        cb_sorted_group_scores, program, all_cores, scores.mesh_buffer()->page_size(), 2, scores_data_format);
     tt::tt_metal::create_cb(
-        cb_sorted_expert_indices_temp, program, all_cores, scores.buffer()->page_size(), 2, tt::DataFormat::UInt16);
+        cb_sorted_expert_indices_temp,
+        program,
+        all_cores,
+        scores.mesh_buffer()->page_size(),
+        2,
+        tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
         cb_expert_index_template,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         width_tiles,
         tt::DataFormat::UInt16);
 
@@ -129,23 +134,28 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_group_index_template,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         num_group_tiles,
         tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
         cb_top_experts_per_group,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         operation_attributes.summed_experts_per_group,
         scores_data_format);
     tt::tt_metal::create_cb(
-        cb_group_summed_scores, program, all_cores, scores.buffer()->page_size(), num_group_tiles, scores_data_format);
+        cb_group_summed_scores,
+        program,
+        all_cores,
+        scores.mesh_buffer()->page_size(),
+        num_group_tiles,
+        scores_data_format);
     tt::tt_metal::create_cb(
         cb_sorted_group_order,
         program,
         all_cores,
-        output_indices.buffer()->page_size(),
+        output_indices.mesh_buffer()->page_size(),
         num_group_tiles,
         tt::DataFormat::UInt16);
 
@@ -156,14 +166,14 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_winning_group_scores,
         program,
         all_cores,
-        output_weights.buffer()->page_size(),
+        output_weights.mesh_buffer()->page_size(),
         operation_attributes.topk_groups,
         scores_data_format);
     tt::tt_metal::create_cb(
         cb_winning_group_indices,
         program,
         all_cores,
-        output_indices.buffer()->page_size(),
+        output_indices.mesh_buffer()->page_size(),
         operation_attributes.topk_groups,
         tt::DataFormat::UInt16);
 
@@ -174,28 +184,29 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_reduce_intermediate,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
     tt::tt_metal::create_cb(
         cb_final_indices_transposed,
         program,
         all_cores,
-        output_indices.buffer()->page_size(),
+        output_indices.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         tt::DataFormat::UInt16);
 
     // Normalization scalar CBs
     auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
     tt::tt_metal::create_cb(
-        cb_reduce_ones_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+        cb_reduce_ones_scalar, program, all_cores, scores.mesh_buffer()->page_size(), 1, scores_data_format);
 
     auto cb_epsilon_scalar = tt::CBIndex::c_18;
-    tt::tt_metal::create_cb(cb_epsilon_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+    tt::tt_metal::create_cb(
+        cb_epsilon_scalar, program, all_cores, scores.mesh_buffer()->page_size(), 1, scores_data_format);
 
     auto cb_route_scale_scalar = tt::CBIndex::c_19;
     tt::tt_metal::create_cb(
-        cb_route_scale_scalar, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+        cb_route_scale_scalar, program, all_cores, scores.mesh_buffer()->page_size(), 1, scores_data_format);
 
     // Normalization intermediate CBs
     auto cb_normalized_scores = tt::CBIndex::c_20;
@@ -203,7 +214,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_normalized_scores,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
 
@@ -212,7 +223,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_reciprocal_sums,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
 
@@ -222,7 +233,7 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         cb_gathered_sigmoid,
         program,
         all_cores,
-        scores.buffer()->page_size(),
+        scores.mesh_buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
 
@@ -232,8 +243,8 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"cb_in_bias", cb_in_bias},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"width_tiles", width_tiles},
-        {"scores_page_size", scores.buffer()->page_size()},
-        {"bias_page_size", bias.buffer()->page_size()},
+        {"scores_page_size", scores.mesh_buffer()->page_size()},
+        {"bias_page_size", bias.mesh_buffer()->page_size()},
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
@@ -261,10 +272,10 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"cb_top_experts_per_group", cb_top_experts_per_group},
         {"cb_sorted_group_order", cb_sorted_group_order},
         {"width_tiles", width_tiles},
-        {"scores_page_size", scores.buffer()->page_size()},
-        {"bias_page_size", bias.buffer()->page_size()},
-        {"weights_page_size", output_weights.buffer()->page_size()},
-        {"indices_page_size", output_indices.buffer()->page_size()},
+        {"scores_page_size", scores.mesh_buffer()->page_size()},
+        {"bias_page_size", bias.mesh_buffer()->page_size()},
+        {"weights_page_size", output_weights.mesh_buffer()->page_size()},
+        {"indices_page_size", output_indices.mesh_buffer()->page_size()},
         {"cb_sorted_group_scores", cb_sorted_group_scores},
         {"cb_sorted_expert_indices_temp", cb_sorted_expert_indices_temp},
         {"cb_expert_index_template", cb_expert_index_template},
@@ -316,8 +327,8 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"cb_top_experts_per_group", cb_top_experts_per_group},
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
         {"cb_sorted_group_scores", cb_sorted_group_scores},
-        {"weights_page_size", output_weights.buffer()->page_size()},
-        {"indices_page_size", output_indices.buffer()->page_size()},
+        {"weights_page_size", output_weights.mesh_buffer()->page_size()},
+        {"indices_page_size", output_indices.mesh_buffer()->page_size()},
         {"experts", experts},
         {"width_tiles", width_tiles},
         {"tile_width", tile_width},

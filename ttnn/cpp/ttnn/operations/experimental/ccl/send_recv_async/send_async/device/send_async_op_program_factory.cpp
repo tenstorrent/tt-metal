@@ -99,7 +99,7 @@ SendAsyncMeshWorkloadFactory::create_at(
         input_tensor.buffer()->alignment());
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
-    auto total_num_pages = input_tensor.buffer()->num_pages();
+    auto total_num_pages = input_tensor.mesh_buffer()->num_pages();
 
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;

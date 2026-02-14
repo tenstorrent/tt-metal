@@ -143,7 +143,7 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
     // 1(4) if there is padding in the rightmost shard and target is L1(DRAM),
     // and 2(5) otherwise for L1(DRAM)
     shard_addr_gen_consts::ContiguityType contiguity;
-    if (t.buffer()->aligned_page_size() != t.buffer()->page_size()) {
+    if (t.buffer()->aligned_page_size() != t.mesh_buffer()->page_size()) {
         contiguity = is_dram ? shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES
                              : shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES;
     } else if (buf_shard_spec.tensor2d_shape_in_pages[1] == (pages_per_shard_x * get_sharding_core_count(t))) {

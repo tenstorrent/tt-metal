@@ -87,7 +87,7 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
-    auto input_page_size = input_tensor.buffer()->page_size();
+    auto input_page_size = input_tensor.mesh_buffer()->page_size();
     auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
     TT_FATAL(
