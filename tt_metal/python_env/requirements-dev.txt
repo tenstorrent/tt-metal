@@ -104,3 +104,5 @@ mmcv-full==1.7.2 #Required for UniAD model
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.7.1 ; platform_machine == 'x86_64'
 torchvision==0.22.1 ; platform_machine == 'x86_64'
+
+trimesh>=4.10.1  # Required for point cloud processing in 3DETR model

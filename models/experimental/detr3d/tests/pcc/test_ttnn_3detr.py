@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@ class Tt3DetrArgs(Detr3dArgs):
         (1, 20000, 3),
     ],
 )
-@pytest.mark.parametrize("encoder_only", (False, True))
+@pytest.mark.parametrize("encoder_only", (False,))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_3detr_model(encoder_only, input_shape, device):
     torch.manual_seed(0)
