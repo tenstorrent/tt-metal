@@ -78,9 +78,7 @@ def tiny_config():
 def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
     """Create a causal attention mask as a tensor using common utility."""
     mask_np = build_causal_mask(seq_len)
-    return ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
 
 # =============================================================================
@@ -122,9 +120,7 @@ class TestEmbedding:
         embedding = Embedding(num_embeddings, embedding_dim)
 
         # Create input token indices
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        indices = np.random.randint(0, num_embeddings, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -152,9 +148,7 @@ class TestEmbedding:
         embedding = Embedding(num_embeddings, embedding_dim)
 
         # Create input
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        indices = np.random.randint(0, num_embeddings, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -165,9 +159,7 @@ class TestEmbedding:
         loss.backward(False)
 
         # Check gradient exists on weight
-        assert (
-            embedding.weight.tensor.is_grad_initialized()
-        ), "Embedding weight should have gradient"
+        assert embedding.weight.tensor.is_grad_initialized(), "Embedding weight should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -216,12 +208,8 @@ class TestGPTMLP:
         mlp.eval()  # Disable dropout
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Forward pass
         output = mlp(input_tensor)
@@ -242,12 +230,8 @@ class TestGPTMLP:
         mlp.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Forward and backward
         output = mlp(input_tensor)
@@ -321,12 +305,8 @@ class TestMultiHeadAttention:
         attention.eval()
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Create causal mask
         mask = create_causal_mask(seq_len)
@@ -351,12 +331,8 @@ class TestMultiHeadAttention:
         attention.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward and backward
@@ -365,12 +341,8 @@ class TestMultiHeadAttention:
         loss.backward(False)
 
         # Check gradients exist
-        assert (
-            attention.qkv_linear.get_weight().is_grad_initialized()
-        ), "qkv should have gradient"
-        assert (
-            attention.out_linear.get_weight().is_grad_initialized()
-        ), "out_proj should have gradient"
+        assert attention.qkv_linear.get_weight().is_grad_initialized(), "qkv should have gradient"
+        assert attention.out_linear.get_weight().is_grad_initialized(), "out_proj should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -413,12 +385,8 @@ class TestGPTBlock:
         block.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward pass
@@ -441,12 +409,8 @@ class TestGPTBlock:
         block.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward and backward
@@ -562,19 +526,13 @@ class TestNanoGPT:
         cfg = replace(tiny_config, weight_tying=ttml.models.WeightTyingType.Disabled)
         model = create_nanogpt(cfg)
 
-        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(
-            ttnn.DataType.FLOAT32
-        ).copy()
+        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
         fc_before = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # Set fc weights to a random value
-        model.fc.get_weight().set_value(
-            ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand()
-        )
+        model.fc.get_weight().set_value(ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand())
 
-        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(
-            ttnn.DataType.FLOAT32
-        ).copy()
+        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
         fc_after = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # fc weight got updated
@@ -590,22 +548,16 @@ class TestNanoGPT:
         cfg = replace(tiny_config, weight_tying=ttml.models.WeightTyingType.Enabled)
         model = create_nanogpt(cfg)
 
-        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(
-            ttnn.DataType.FLOAT32
-        ).copy()
+        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
         fc_before = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # tok_emb and fc have the same initial value
         assert np.allclose(tok_emb_before, fc_before)
 
         # Set weights to a random value
-        model.fc.get_weight().set_value(
-            ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand()
-        )
+        model.fc.get_weight().set_value(ttml.core.ones_like(model.fc.get_weight().get_value()) * np.random.rand())
 
-        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(
-            ttnn.DataType.FLOAT32
-        ).copy()
+        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
         fc_after = model.fc.get_weight().to_numpy(ttnn.DataType.FLOAT32).copy()
 
         # fc weight got updated
@@ -625,9 +577,7 @@ class TestNanoGPT:
         seq_len = tiny_config.block_size
 
         # Create input tokens
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -655,9 +605,7 @@ class TestNanoGPT:
         batch_size = 2
         seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -716,9 +664,7 @@ class TestNanoGPT:
         seq_len = tiny_config.block_size
 
         # Create input
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -745,9 +691,7 @@ class TestNanoGPT:
         batch_size = 2
         seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -829,15 +773,11 @@ class TestNanoGPTIntegration:
         optimizer = ttml.optimizers.SGD(params, opt_cfg)
 
         # Create input and targets
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -846,9 +786,7 @@ class TestNanoGPTIntegration:
         # Training step
         optimizer.zero_grad()
         logits = model(input_tensor, mask)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         optimizer.step()
 
@@ -866,9 +804,7 @@ class TestNanoGPTIntegration:
         batch_size = 2
         seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -910,12 +846,8 @@ def test_model_various_configs(n_layer, n_head):
     batch_size = 2
     seq_len = config.block_size
 
-    tokens = np.random.randint(
-        0, config.vocab_size, size=(batch_size, 1, 1, seq_len)
-    ).astype(np.uint32)
-    input_tensor = ttml.autograd.Tensor.from_numpy(
-        tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    tokens = np.random.randint(0, config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
+    input_tensor = ttml.autograd.Tensor.from_numpy(tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
 
     output = model(input_tensor)
 

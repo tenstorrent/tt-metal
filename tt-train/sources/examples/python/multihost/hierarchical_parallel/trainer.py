@@ -19,9 +19,7 @@ from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import no_grad, PerformanceMeter
 
 
-def get_batch_ttml(
-    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
-):
+def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -45,18 +43,14 @@ def get_batch_ttml(
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
     return tt_x, tt_y
 
 
@@ -92,9 +86,7 @@ def worker(
     reduce = ttml.ops.ReduceType.MEAN
 
     causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )
+    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -216,14 +208,10 @@ def aggregator(model, cfg, use_ddp: bool = False):
 
     # Create sub-contexts for communication
     workers_and_aggregator_ranks = list(range(num_workers + 1))
-    workers_and_aggregator_ctx = distributed_ctx.create_sub_context(
-        workers_and_aggregator_ranks
-    )
+    workers_and_aggregator_ctx = distributed_ctx.create_sub_context(workers_and_aggregator_ranks)
 
     aggregator_and_optimizer_ranks = [rank, rank + 1]
-    aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(
-        aggregator_and_optimizer_ranks
-    )
+    aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks)
 
     # In sub-context: aggregator is local rank 0, optimizer is local rank 1
     optimizer_local_rank = 1
@@ -231,9 +219,7 @@ def aggregator(model, cfg, use_ddp: bool = False):
     # Receive and broadcast initial weights from optimizer to workers
     print(f"[Aggregator {rank}] Waiting for initial weights from optimizer {rank + 1}")
     for name, tensor_ptr in sorted_parameters.items():
-        socket_manager.recv(
-            tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank
-        )
+        socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
         # Broadcast to all workers
         for worker_id in range(num_workers):
@@ -262,15 +248,11 @@ def aggregator(model, cfg, use_ddp: bool = False):
                 tensor_ptr = ttml.ops.distributed.all_reduce(tensor_ptr)
 
             # Send averaged gradient to optimizer (local rank 1 in sub-context)
-            socket_manager.send(
-                tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank
-            )
+            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
         # Receive updated weights from optimizer and broadcast to all workers
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.recv(
-                tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank
-            )
+            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
             # Broadcast to all workers
             for worker_id in range(num_workers):
@@ -307,21 +289,15 @@ def optimizer(model, cfg, optimizer_instance):
     # Create sub-context for aggregator-optimizer communication
     aggregator_global_rank = rank - 1
     aggregator_and_optimizer_ranks = [aggregator_global_rank, rank]
-    aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(
-        aggregator_and_optimizer_ranks
-    )
+    aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks)
 
     # In sub-context: aggregator is local rank 0, optimizer is local rank 1
     aggregator_local_rank = 0
 
     # Send initial weights to aggregator
-    print(
-        f"[Optimizer {rank}] Sending initial weights to aggregator {aggregator_global_rank}"
-    )
+    print(f"[Optimizer {rank}] Sending initial weights to aggregator {aggregator_global_rank}")
     for name, tensor_ptr in sorted_parameters.items():
-        socket_manager.send(
-            tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank
-        )
+        socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank)
 
     print(f"[Optimizer {rank}] Starting training loop for {cfg.steps} steps")
 
@@ -341,9 +317,7 @@ def optimizer(model, cfg, optimizer_instance):
 
         # Send updated weights back to aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.send(
-                tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank
-            )
+            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank)
 
     print(f"[Optimizer {rank}] Completed {cfg.steps} steps")
 
@@ -386,9 +360,7 @@ def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
     all_ctx = distributed_ctx.create_sub_context(all_ranks)
 
     # Send initial weights to all workers
-    print(
-        f"[AggregatorOptimizer {rank}] Sending initial weights to {num_workers} workers"
-    )
+    print(f"[AggregatorOptimizer {rank}] Sending initial weights to {num_workers} workers")
     for worker_id in range(num_workers):
         for name, tensor_ptr in sorted_parameters.items():
             socket_manager.send(tensor_ptr, all_ctx, worker_id)

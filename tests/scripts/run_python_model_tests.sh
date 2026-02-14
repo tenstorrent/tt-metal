@@ -59,6 +59,10 @@ run_python_model_tests_wormhole_b0() {
     HF_MODEL=$llama8b TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama8b completed"
 
+    # Depth Anything V2
+    pytest -svv models/demos/depth_anything_v2/tests/test_model.py ; fail+=$?
+    echo "LOG_METAL: Depth Anything V2 tests completed"
+
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {

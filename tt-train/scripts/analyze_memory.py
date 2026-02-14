@@ -159,9 +159,7 @@ def create_peak_memory_visualization(
     # Calculate common y-axis limit (max of all peaks and device memory)
     max_y = 0
     for name, breakdown in summaries_data:
-        max_y = max(
-            max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0)
-        )
+        max_y = max(max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0))
     common_y_limit = max_y * 1.1
 
     for idx, (name, breakdown) in enumerate(summaries_data):
@@ -351,9 +349,7 @@ def analyze_memory_summary(
         if gradients_size_bytes is not None:
             gradients_expected_mb = bytes_to_mb(gradients_size_bytes)
             print(f"  Expected (input):     {gradients_expected_mb:,.2f} MB")
-            diff_pct = calculate_percentage_diff(
-                gradients_actual_mb, gradients_expected_mb
-            )
+            diff_pct = calculate_percentage_diff(gradients_actual_mb, gradients_expected_mb)
             print(f"  Difference:           {diff_pct:+.2f}%")
 
     # Peak DRAM usage
@@ -372,18 +368,14 @@ def analyze_memory_summary(
         if use_actual_sizes:
             # Use actual measured values from logs
             model_mb = metrics.get("MODEL_CREATION", {}).get("segment_change", 0.0)
-            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get(
-                "segment_change", 0.0
-            )
+            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get("segment_change", 0.0)
         else:
             # Use theoretical values
             model_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
             optimizer_mb = bytes_to_mb(optimizer_size_bytes)
 
         activations_mb = metrics.get("FORWARD_PASS", {}).get("segment_change", 0.0)
-        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get(
-            "segment_peak", 0.0
-        )
+        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get("segment_peak", 0.0)
 
         # Calculate "other" as the difference
         accounted_mb = model_mb + optimizer_mb + activations_mb + gradients_overhead_mb
@@ -451,9 +443,7 @@ def main():
         help="Use actual measured values from logs for model/optimizer sizes in visualization instead of theoretical values",
     )
 
-    parser.add_argument(
-        "--title", type=str, help="Optional title for the visualization"
-    )
+    parser.add_argument("--title", type=str, help="Optional title for the visualization")
 
     parser.add_argument(
         "--output",
@@ -492,21 +482,13 @@ def main():
                 break
 
     if model_size_bytes is None:
-        raise ValueError(
-            "Error: Model size not provided and could not be extracted from logs"
-        )
+        raise ValueError("Error: Model size not provided and could not be extracted from logs")
 
     # Determine optimizer size (default: 2 * model_size, bf16)
-    optimizer_size_bytes = (
-        args.optimizer_size
-        if args.optimizer_size is not None
-        else (2 * model_size_bytes)
-    )
+    optimizer_size_bytes = args.optimizer_size if args.optimizer_size is not None else (2 * model_size_bytes)
 
     # Gradients size (default: same as model_size for bf16, will be compared with logs)
-    gradients_size_bytes = (
-        args.gradients_size if args.gradients_size is not None else model_size_bytes
-    )
+    gradients_size_bytes = args.gradients_size if args.gradients_size is not None else model_size_bytes
 
     # Analyze each summary
     visualization_data = []
@@ -536,9 +518,7 @@ def main():
                 file=sys.stderr,
             )
         elif visualization_data:
-            create_peak_memory_visualization(
-                visualization_data, title=args.title, output_file=args.output
-            )
+            create_peak_memory_visualization(visualization_data, title=args.title, output_file=args.output)
 
 
 if __name__ == "__main__":

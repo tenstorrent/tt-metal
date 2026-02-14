@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 """Validate #include directives in C++ source files."""
 
 import re
@@ -233,7 +234,8 @@ class Include(NamedTuple):
     def check_for_forward_header_advice(self) -> Optional[str]:
         """Check if include should use a TTNN forward header instead of experimental tensor headers."""
         # Skip if this file is itself a forward header (it's allowed to include experimental headers)
-        if self.source_file in TENSOR_FORWARD_CHECK_EXCLUDE:
+        normalized_source = self.source_file.replace("\\", "/")
+        if normalized_source in TENSOR_FORWARD_CHECK_EXCLUDE:
             return None
         if self.path in EXPERIMENTAL_TENSOR_FORWARD_HEADERS:
             forward_header = EXPERIMENTAL_TENSOR_FORWARD_HEADERS[self.path]

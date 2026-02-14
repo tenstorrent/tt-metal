@@ -16,6 +16,8 @@ The script performs the following actions:
 This automation helps enforce consistency between notebooks and their corresponding Python scripts in version control.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import subprocess
 import sys
@@ -42,7 +44,7 @@ def get_staged_notebooks() -> list[Path]:
     return [
         Path(f)
         for f in staged_files
-        if f.endswith(".ipynb") and Path(f).is_relative_to(NOTEBOOKS_DIR) and f not in EXCLUDED_TUTORIALS
+        if f.endswith(".ipynb") and str(Path(f)).startswith(str(NOTEBOOKS_DIR)) and f not in EXCLUDED_TUTORIALS
     ]
 
 
@@ -109,7 +111,7 @@ def main() -> None:
 
     staged_notebooks = get_staged_notebooks()
     if not staged_notebooks:
-        print("✅ No staged notebooks to process.")
+        print("[OK] No staged notebooks to process.")
         return
 
     # Get all currently staged .py files (under OUTPUT_DIR)
@@ -119,7 +121,7 @@ def main() -> None:
         text=True,
     )
     staged_files = set(Path(f) for f in result.stdout.splitlines())
-    staged_py_files = {f for f in staged_files if f.suffix == ".py" and f.is_relative_to(OUTPUT_DIR)}
+    staged_py_files = {f for f in staged_files if f.suffix == ".py" and str(f).startswith(str(OUTPUT_DIR))}
 
     new_files = []
     updated_files = []
@@ -129,14 +131,14 @@ def main() -> None:
 
         # If the .py file is already staged, skip processing
         if output_file in staged_py_files:
-            print(f"⏭ Skipping {notebook} — {output_file.name} already staged.")
+            print(f"[SKIP] Skipping {notebook} - {output_file.name} already staged.")
             continue
 
         tmp_file = OUTPUT_DIR / f".tmp_{notebook.stem}.py"
         try:
             convert_with_nbconvert(notebook, tmp_file)
         except subprocess.CalledProcessError:
-            print(f"⚠️ Failed to convert {notebook}, continuing.")
+            print(f"[WARN] Failed to convert {notebook}, continuing.")
             continue
 
         if not output_file.exists():
@@ -161,12 +163,12 @@ def main() -> None:
 
     if files_to_add:
         subprocess.run(["git", "add"] + [str(f) for f in files_to_add], check=True)
-        print("🟢 Staged files:")
+        print("[STAGED] Staged files:")
         for f in files_to_add:
-            print(f" → {f}")
+            print(f" -> {f}")
         sys.exit(1)  # Fail to force user to review
     else:
-        print("✅ No changes to generated files.")
+        print("[OK] No changes to generated files.")
 
 
 if __name__ == "__main__":
