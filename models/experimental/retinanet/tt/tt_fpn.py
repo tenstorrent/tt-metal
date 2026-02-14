@@ -1,11 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 
 import ttnn
 from dataclasses import dataclass
-from models.experimental.retinanet.tt.utils import TTConv2D, TTUpsample
+from models.experimental.retinanet.tt.utils import TTUpsample
 from collections import OrderedDict
+
+from models.tt_cnn.tt.builder import TtConv2d
+from models.tt_cnn.tt.builder import Conv2dConfiguration
 
 
 @dataclass
@@ -22,66 +25,52 @@ class FpnOptimizer:
 
 fpn_optimisations = FpnOptimizer(
     conv1={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv2={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv3={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv4={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
-        "dtype": ttnn.bfloat16,
+        "enable_act_double_buffer": True,
+        "enable_weights_double_buffer": True,
     },
     conv5={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv6={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv7={
-        "shard_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
     conv8={
-        "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "deallocate_activation": True,
         "reallocate_halo_output": True,
         "enable_act_double_buffer": True,
         "enable_weights_double_buffer": True,
-        "dtype": ttnn.bfloat16,
     },
 )
 
@@ -89,89 +78,99 @@ fpn_optimisations = FpnOptimizer(
 class resnet50Fpn:
     def __init__(
         self,
+        device,
         parameters,
         model_config,
+        model_args,
         layer_optimisations=fpn_optimisations,
     ) -> None:
-        self.conv1 = TTConv2D(
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            parameters=parameters["inner_blocks"].get("0", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_1 = Conv2dConfiguration.from_model_args(
+            model_args["inner_blocks"][0],
+            weights=parameters["inner_blocks"].get("0", {}).get("0", None)["weight"],
+            bias=parameters["inner_blocks"].get("0", {}).get("0", None)["bias"],
             **layer_optimisations.conv1,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv1 = TtConv2d(self.conv_config_1, device)
 
-        self.conv2 = TTConv2D(
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            parameters=parameters["inner_blocks"].get("1", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_2 = Conv2dConfiguration.from_model_args(
+            model_args["inner_blocks"][1],
+            weights=parameters["inner_blocks"].get("1", {}).get("0", None)["weight"],
+            bias=parameters["inner_blocks"].get("1", {}).get("0", None)["bias"],
             **layer_optimisations.conv2,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv2 = TtConv2d(self.conv_config_2, device)
 
-        self.conv3 = TTConv2D(
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            parameters=parameters["inner_blocks"].get("2", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_3 = Conv2dConfiguration.from_model_args(
+            model_args["inner_blocks"][2],
+            weights=parameters["inner_blocks"].get("2", {}).get("0", None)["weight"],
+            bias=parameters["inner_blocks"].get("2", {}).get("0", None)["bias"],
             **layer_optimisations.conv3,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv3 = TtConv2d(self.conv_config_3, device)
 
-        self.conv4 = TTConv2D(
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            parameters=parameters["layer_blocks"].get("0", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_4 = Conv2dConfiguration.from_model_args(
+            model_args["layer_blocks"][0],
+            weights=parameters["layer_blocks"].get("0", {}).get("0", None)["weight"],
+            bias=parameters["layer_blocks"].get("0", {}).get("0", None)["bias"],
             **layer_optimisations.conv4,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv4 = TtConv2d(self.conv_config_4, device)
 
-        self.conv5 = TTConv2D(
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            parameters=parameters["layer_blocks"].get("1", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_5 = Conv2dConfiguration.from_model_args(
+            model_args["layer_blocks"][1],
+            weights=parameters["layer_blocks"].get("1", {}).get("0", None)["weight"],
+            bias=parameters["layer_blocks"].get("1", {}).get("0", None)["bias"],
             **layer_optimisations.conv5,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv5 = TtConv2d(self.conv_config_5, device)
 
-        self.conv6 = TTConv2D(
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            parameters=parameters["layer_blocks"].get("2", {}).get("0", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_6 = Conv2dConfiguration.from_model_args(
+            model_args["layer_blocks"][2],
+            weights=parameters["layer_blocks"].get("2", {}).get("0", None)["weight"],
+            bias=parameters["layer_blocks"].get("2", {}).get("0", None)["bias"],
             **layer_optimisations.conv6,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv6 = TtConv2d(self.conv_config_6, device)
 
-        self.conv7 = TTConv2D(
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            parameters=getattr(parameters.extra_blocks, "p6", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_7 = Conv2dConfiguration.from_model_args(
+            model_args["extra_blocks"]["p6"],
+            weights=getattr(parameters.extra_blocks, "p6", None)["weight"],
+            bias=getattr(parameters.extra_blocks, "p6", None)["bias"],
             **layer_optimisations.conv7,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv7 = TtConv2d(self.conv_config_7, device)
 
-        self.conv8 = TTConv2D(
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            parameters=getattr(parameters.extra_blocks, "p7", None),
-            kernel_fidelity=model_config,
-            activation=None,
+        self.conv_config_8 = Conv2dConfiguration.from_model_args(
+            model_args["extra_blocks"]["p7"],
+            weights=getattr(parameters.extra_blocks, "p7", None)["weight"],
+            bias=getattr(parameters.extra_blocks, "p7", None)["bias"],
             **layer_optimisations.conv8,
+            math_fidelity=model_config["MATH_FIDELITY"],
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            activation_dtype=model_config["ACTIVATIONS_DTYPE"],
         )
+        self.conv8 = TtConv2d(self.conv_config_8, device)
 
         self.upsample1 = TTUpsample(
             scale_factor=(2),
@@ -197,25 +196,27 @@ class resnet50Fpn:
         C3, C4, C5 = x.values()
         C5_clone = ttnn.clone(C5)
 
-        L3, _ = self.conv1(device, C3, C3.shape)
-        L4, _ = self.conv2(device, C4, C4.shape)
-        L5, _ = self.conv3(device, C5, C5.shape)
+        L3, [_out_height, _out_width] = self.conv1(C3, return_output_dim=True)
+        L4, [_out_height, _out_width] = self.conv2(C4, return_output_dim=True)
+        L5, [_out_height, _out_width] = self.conv3(C5, return_output_dim=True)
 
         P5 = L5
-        P5_interpolated = self.upsample1(device, P5, P5.shape, reshape_output=False, sent_to_dram=False)
+        P5_shape = (1, _out_height, _out_width, 256)
+        P5_interpolated = self.upsample1(device, P5, P5_shape, reshape_output=True, sent_to_dram=False)
 
         P4 = ttnn.add(L4, P5_interpolated)
-        P4_interpolated = self.upsample1(device, P4, P4.shape, reshape_output=False, sent_to_dram=False)
+        P4_shape = (1, 32, 32, 256)
+        P4_interpolated = self.upsample1(device, P4, P4_shape, reshape_output=True, sent_to_dram=False)
 
         P3 = ttnn.add(L3, P4_interpolated)
 
-        P3, _ = self.conv4(device, P3, P3.shape)
-        P4, _ = self.conv5(device, P4, P4.shape)
-        P5, _ = self.conv6(device, P5, P5.shape)
+        P3, [_out_height, _out_width] = self.conv4(P3, return_output_dim=True)
+        P4, [_out_height, _out_width] = self.conv5(P4, return_output_dim=True)
+        P5, [_out_height, _out_width] = self.conv6(P5, return_output_dim=True)
 
-        P6, _ = self.conv7(device, C5_clone, C5_clone.shape)
+        P6, [_out_height, _out_width] = self.conv7(C5_clone, return_output_dim=True)
         P6_relu = ttnn.relu(P6)
-        P7, _ = self.conv8(device, P6_relu, P6_relu.shape)
+        P7, [_out_height, _out_width] = self.conv8(P6_relu, return_output_dim=True)
 
         out = OrderedDict([("0", P3), ("1", P4), ("2", P5), ("p6", P6), ("p7", P7)])
         return out
