@@ -57,6 +57,11 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+
+private:
+    void wait_for_cores_idle();
+
+    std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 };
 
 }  // namespace tt::tt_metal::distributed
