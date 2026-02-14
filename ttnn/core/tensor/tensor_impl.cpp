@@ -1215,12 +1215,12 @@ Tensor pad_impl(
     return Tensor(
         tensor.host_storage().transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
         TensorSpec(
-            tensor.logical_shape(),
+            output_padded_shape,
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
                 PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
                 MemoryConfig{},
-                tensor.logical_shape(),
+                output_padded_shape,
                 output_padded_shape)),
         tensor.tensor_topology());
 }
