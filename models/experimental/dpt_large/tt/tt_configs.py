@@ -194,6 +194,10 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         # For attention we height-shard the flattened [B*H*seqL_t, ...] tiles
         # across the full core grid (x*y), not just across x.
         head_seqL_t__x = max(1, (head_num * seqL_t + num_cores - 1) // num_cores)
+        # Matmul+softmax subblock sizing: for larger seq (e.g., 640 tokens -> 20 tiles),
+        # keeping out_subblock_w/subblock_w <= 8 avoids register pressure limits.
+        qk_out_subblock_w = seqL_t if seqL_t <= 8 else 1
+        softmax_subblock_w = seqL_t if seqL_t <= 8 else 1
         # LayerNorm runs on block-sharded tokens across the same grid. When seqL
         # tiles divide cleanly along grid_y, each core sees seqL_t/grid_y tiles.
         ln_block_h = seqL_t
@@ -222,13 +226,13 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
                 compute_with_storage_grid_size=core_grid,
                 in0_block_w=head_size_t,
                 out_subblock_h=1,
-                out_subblock_w=seqL_t,
+                out_subblock_w=qk_out_subblock_w,
                 per_core_M=head_seqL_t__x,
                 per_core_N=seqL_t,
             ),
             "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=core_grid,
-                subblock_w=seqL_t,
+                subblock_w=softmax_subblock_w,
                 block_h=head_seqL_t__x,
                 block_w=seqL_t,
             ),
