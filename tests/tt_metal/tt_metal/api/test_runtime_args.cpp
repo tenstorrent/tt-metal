@@ -409,6 +409,14 @@ void verify_quasar_crtas(
 
 namespace tt::tt_metal {
 
+// Returns the maximum number of user runtime arguments allowed, accounting for watcher overhead if enabled.
+inline uint32_t get_max_runtime_args_user() {
+    bool watcher_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+                           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+    uint32_t watcher_overhead = watcher_enabled ? 1 : 0;
+    return tt::tt_metal::get_effective_max_runtime_args() - watcher_overhead;
+}
+
 // Write unique and common runtime args to device and readback to verify written correctly.
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -645,16 +653,18 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
+        uint32_t max_rt_args = get_max_runtime_args_user();
+
         // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> common_runtime_args(max_rt_args + 1);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
         // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> more_unique_args(max_rt_args + 1);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }

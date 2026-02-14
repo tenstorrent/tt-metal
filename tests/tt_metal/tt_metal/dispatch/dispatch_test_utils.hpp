@@ -15,6 +15,14 @@
 
 namespace tt::tt_metal {
 
+// Returns the maximum number of user runtime arguments allowed, accounting for watcher overhead if enabled.
+inline uint32_t get_max_runtime_args_user() {
+    bool watcher_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+                           !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled();
+    uint32_t watcher_overhead = watcher_enabled ? 1 : 0;
+    return tt::tt_metal::get_effective_max_runtime_args() - watcher_overhead;
+}
+
 struct TestBufferConfig {
     uint32_t num_pages{};
     uint32_t page_size{};
@@ -56,10 +64,11 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
     const uint32_t num_common_rt_args,
     const uint32_t unique_base,
     const uint32_t common_base) {
+    uint32_t max_rt_args = get_max_runtime_args_user();
     TT_FATAL(
-        num_unique_rt_args + num_common_rt_args <= tt::tt_metal::max_runtime_args,
+        num_unique_rt_args + num_common_rt_args <= max_rt_args,
         "Number of unique runtime args and common runtime args exceeds the maximum limit of {} runtime args",
-        tt::tt_metal::max_runtime_args);
+        max_rt_args);
 
     std::vector<uint32_t> common_rt_args;
     common_rt_args.reserve(num_common_rt_args);
@@ -80,17 +89,18 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 // Optionally force the max size for one of the vectors.
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
-    uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
-    uint32_t num_rt_args_common = num_rt_args_unique < tt::tt_metal::max_runtime_args
-                                      ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1)
+    uint32_t max_rt_args = get_max_runtime_args_user();
+    uint32_t num_rt_args_unique = rand() % (max_rt_args + 1);
+    uint32_t num_rt_args_common = num_rt_args_unique < max_rt_args
+                                      ? rand() % (max_rt_args - num_rt_args_unique + 1)
                                       : 0;
 
     if (force_max_size) {
         if (rand() % 2) {
-            num_rt_args_unique = tt::tt_metal::max_runtime_args;
+            num_rt_args_unique = max_rt_args;
             num_rt_args_common = 0;
         } else {
-            num_rt_args_common = tt::tt_metal::max_runtime_args;
+            num_rt_args_common = max_rt_args;
             num_rt_args_unique = 0;
         }
     }
