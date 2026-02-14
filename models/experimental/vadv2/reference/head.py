@@ -9,7 +9,7 @@ from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, 
 from models.experimental.vadv2.reference.decoder import CustomTransformerDecoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
 from models.experimental.vadv2.reference.utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
-from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
+from mmdet3d.structures import LiDARInstance3DBoxes
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -176,14 +176,14 @@ class VADHead(nn.Module):
         else:
             self.map_code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
 
-        self.bbox_coder = bbox_coder
-        self.pc_range = self.bbox_coder["pc_range"]
+        self.bbox_code = bbox_coder
+        self.pc_range = self.bbox_code["pc_range"]
 
         self.real_w = self.pc_range[3] - self.pc_range[0]
         self.real_h = self.pc_range[4] - self.pc_range[1]
         self.num_cls_fcs = num_cls_fcs - 1
 
-        self.map_bbox_coder = map_bbox_coder
+        self.map_bbox_code = map_bbox_coder
         self.map_query_embed_type = map_query_embed_type
         self.map_transform_method = map_transform_method
         self.map_gt_shift_pts_pattern = map_gt_shift_pts_pattern
@@ -375,18 +375,18 @@ class VADHead(nn.Module):
         dtype = mlvl_feats[0].dtype
         object_query_embeds = self.query_embedding.weight.to(dtype)
         self.bbox_coder = CustomNMSFreeCoder(
-            self.bbox_coder["pc_range"],
-            voxel_size=self.bbox_coder["voxel_size"],
-            post_center_range=self.bbox_coder["post_center_range"],
-            max_num=self.bbox_coder["max_num"],
-            num_classes=self.bbox_coder["num_classes"],
+            self.bbox_code["pc_range"],
+            voxel_size=self.bbox_code["voxel_size"],
+            post_center_range=self.bbox_code["post_center_range"],
+            max_num=self.bbox_code["max_num"],
+            num_classes=self.bbox_code["num_classes"],
         )
         self.map_bbox_coder = MapNMSFreeCoder(
-            self.map_bbox_coder["pc_range"],
-            voxel_size=self.map_bbox_coder["voxel_size"],
-            post_center_range=self.map_bbox_coder["post_center_range"],
-            max_num=self.map_bbox_coder["max_num"],
-            num_classes=self.map_bbox_coder["num_classes"],
+            self.map_bbox_code["pc_range"],
+            voxel_size=self.map_bbox_code["voxel_size"],
+            post_center_range=self.map_bbox_code["post_center_range"],
+            max_num=self.map_bbox_code["max_num"],
+            num_classes=self.map_bbox_code["num_classes"],
         )
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight.to(dtype)

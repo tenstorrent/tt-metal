@@ -85,6 +85,8 @@ class TtTemporalSelfAttention:
         _, num_value, _ = value.shape
         assert self.num_bev_queue == 2
 
+        # Ensure both tensors have the same layout for concat
+        value = ttnn.to_layout(value, query.layout)
         query = ttnn.concat([value[:bs], query], dim=-1)
 
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
@@ -104,8 +106,9 @@ class TtTemporalSelfAttention:
         sampling_offsets = ttnn.reallocate(sampling_offsets)
 
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
-        ttnn.deallocate(params.attention_weights.weight)
-        ttnn.deallocate(params.attention_weights.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.attention_weights.weight)
+        # ttnn.deallocate(params.attention_weights.bias)
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
@@ -176,14 +179,36 @@ class TtTemporalSelfAttention:
         ttnn.deallocate(sampling_locations)
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
-        output = ttnn.permute(output, (1, 2, 0))
-        output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+
+        # Track and deallocate intermediate tensors to prevent memory accumulation
+        tmp = output
+        output = ttnn.permute(tmp, (1, 2, 0))
+        ttnn.deallocate(tmp)
+
+        tmp = output
+        output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
+        ttnn.deallocate(tmp)
+        # output = ttnn.permute(output, (1, 2, 0))
+        # output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+
+        # Optimization: swap dims 1 and 2 for more efficient tiled layout (32x smaller, 32x faster)
+        output = ttnn.permute(output, (0, 2, 1, 3))  # [num_query, bs, embed_dims, num_bev_queue]
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.mean(output, dim=-1)
+
+        # BUG WORKAROUND: ttnn.mean with L1_MEMORY_CONFIG has a bug that causes it to
+        # allocate 512-1024x more memory than needed (tries to allocate 5GB for 10MB tensor).
+        # Using DRAM or default memory config works correctly.
+        # See test_ttnn_mean_isolated.py for reproduction.
+        output = ttnn.mean(
+            output, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # mean over num_bev_queue -> [num_query, bs, embed_dims]
+        output = ttnn.permute(output, (0, 2, 1))  # swap back -> [num_query, embed_dims, bs]
+
         output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
-        ttnn.deallocate(params.output_proj.weight)
-        ttnn.deallocate(params.output_proj.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.output_proj.weight)
+        # ttnn.deallocate(params.output_proj.bias)
 
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
