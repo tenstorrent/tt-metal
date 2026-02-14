@@ -1,0 +1,8 @@
+﻿ttnn.moe\_routing\_remap
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.moe_routing_remap:
+
+.. autooperation:: ttnn.moe_routing_remap

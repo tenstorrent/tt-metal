@@ -1,0 +1,8 @@
+﻿ttnn.glu
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.glu:
+
+.. autooperation:: ttnn.glu
