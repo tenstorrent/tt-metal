@@ -138,13 +138,6 @@ struct ProgramOffsetsState {
     uint32_t kernel_text_size = 0;
 };
 
-// Callable types for dependency injection
-using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
-using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
-using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
-
 // Internal class for holding a group of programs for parallel compilation.
 class ProgramCompileGroup {
 private:
@@ -252,17 +245,6 @@ public:
     void populate_dispatch_data(IDevice* device);
 
     void finalize_offsets(IDevice* device);
-
-    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
-    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
-    // it.
-    static uint32_t finalize_program_offsets(
-        IDevice* device,
-        const KernelsGetter& kernels_getter,
-        const KernelGroupsGetter& kernel_groups_getter,
-        const SemaphoresGetter& semaphores_getter,
-        const DataflowBuffersGetter& dataflow_buffers_getter,
-        tt::stl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 

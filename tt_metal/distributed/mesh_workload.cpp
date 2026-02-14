@@ -73,13 +73,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
-    // A MeshWorkload tracks maintains its own handles to kernels across all
-    // encapsulated programs
-    kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
-    Inspector::mesh_workload_created(this);
-}
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
@@ -247,62 +241,17 @@ bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
     return stored_in_ring_buf;
 }
 
-std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
-    uint32_t programmable_core_type_index) {
-    // Get all kernels across all programs in the MeshWorkload
-    if (kernels_.at(programmable_core_type_index).empty()) {
-        uint32_t device_range_idx = 0;
-        for (auto& [device_range, program] : programs_) {
-            const uint32_t device_range_handle = (device_range_idx++) << 16;
-            for (const auto& kernel : program.impl().get_kernels(programmable_core_type_index)) {
-                KernelHandle handle = (device_range_handle | kernel.first);
-                kernels_.at(programmable_core_type_index).insert({handle, kernel.second});
-            }
-        }
-    }
-    return kernels_.at(programmable_core_type_index);
-}
-
-std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
-    // Get all kernel groups across all programs in the MeshWorkload
-    if (kernel_groups_.at(programmable_core_type_index).empty()) {
-        uint32_t device_range_idx = 0;
-        for (auto& [device_range, program] : programs_) {
-            const uint32_t device_range_handle = (device_range_idx++) << 16;
-            for (auto& kg : program.impl().get_kernel_groups(programmable_core_type_index)) {
-                for (auto& kernel_id : kg->kernel_ids) {
-                    kernel_id |= device_range_handle;
-                }
-                kernel_groups_.at(programmable_core_type_index).push_back(kg);
-            }
-        }
-    }
-    return kernel_groups_.at(programmable_core_type_index);
-}
-
-std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
-    // Get all semaphores across all programs in the MeshWorkload
-    if (semaphores_.empty()) {
-        for (auto& [device_range, program] : programs_) {
-            semaphores_.insert(
-                semaphores_.end(), program.impl().semaphores().begin(), program.impl().semaphores().end());
-        }
-    }
-    return semaphores_;
-}
-
 std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
-    // Get the config sizes for all L1 Program Data Structures
+    // Get the max config sizes across all programs for L1 Program Data Structures
     std::vector<uint32_t> global_program_config_sizes;
-    for (auto& program_on_grid : programs_) {
-        if (!global_program_config_sizes.empty()) {
-            for (int i = 0; i < global_program_config_sizes.size(); i++) {
-                TT_FATAL(
-                    global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
-                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
-            }
+    for (auto& [_, program] : programs_) {
+        auto& sizes = program.impl().get_program_config_sizes();
+        if (global_program_config_sizes.empty()) {
+            global_program_config_sizes = sizes;
         } else {
-            global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
+            for (size_t i = 0; i < global_program_config_sizes.size(); i++) {
+                global_program_config_sizes[i] = std::max(global_program_config_sizes[i], sizes[i]);
+            }
         }
     }
     return global_program_config_sizes;
@@ -353,14 +302,8 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
 uint32_t MeshWorkloadImpl::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
-    uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
-        if (program_idx) {
-            TT_ASSERT(sem_size == program.impl().get_sem_size(mesh_device.get(), logical_core, core_type));
-        } else {
-            sem_size = program.impl().get_sem_size(mesh_device.get(), logical_core, core_type);
-        }
-        program_idx++;
+        sem_size = std::max(sem_size, program.impl().get_sem_size(mesh_device.get(), logical_core, core_type));
     }
     return sem_size;
 }
@@ -379,14 +322,8 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
 uint32_t MeshWorkloadImpl::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
-    uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
-        if (program_idx) {
-            TT_ASSERT(cb_size == program.impl().get_cb_size(mesh_device.get(), logical_core, core_type));
-        } else {
-            cb_size = program.impl().get_cb_size(mesh_device.get(), logical_core, core_type);
-        }
-        program_idx++;
+        cb_size = std::max(cb_size, program.impl().get_cb_size(mesh_device.get(), logical_core, core_type));
     }
     return cb_size;
 }
@@ -396,36 +333,16 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return;
     }
 
-    tt::tt_metal::detail::KernelsGetter kernels_getter =
-        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
-        return this->get_kernels(index);
-    };
-
-    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
-        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
-
-    tt::tt_metal::detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
-        return this->semaphores();
-    };
-
-    // TODO: Add dataflow buffer support to MeshWorkload
-    static const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
-        empty_dataflow_buffers;
-    tt::tt_metal::detail::DataflowBuffersGetter dataflow_buffers_getter =
-        []() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
-        return empty_dataflow_buffers;
-    };
-
-    // Create a span with all programs
-    std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
-    program_impls.reserve(programs_.size());
+    // Finalize each program independently using its own data
     for (auto& [_, program] : programs_) {
-        program_impls.push_back(&program.impl());
+        program.impl().finalize_offsets(mesh_device);
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
-    this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
+    // Determine max kernel binary size across all programs
+    this->max_program_kernels_sizeB_ = 0;
+    for (auto& [_, program] : programs_) {
+        this->max_program_kernels_sizeB_ = std::max(this->max_program_kernels_sizeB_, program.impl().kernel_bins_sizeB);
+    }
 
     set_finalized();
 }

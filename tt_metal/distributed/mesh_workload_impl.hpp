@@ -43,9 +43,6 @@ private:
     void compile(MeshDevice* mesh_device);
     void load_binaries(MeshCommandQueue& mesh_cq);
     void generate_dispatch_commands(MeshCommandQueue& mesh_cq);
-    std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
-    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
-    std::vector<Semaphore>& semaphores();
     std::vector<uint32_t> get_program_config_sizes();
     std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
     bool kernel_binary_always_stored_in_ringbuffer();
@@ -60,9 +57,6 @@ private:
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
-    std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
-    std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
-    std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
