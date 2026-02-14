@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <functional>
@@ -31,6 +32,33 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+static std::string regex_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '\\':
+            case '^':
+            case '$':
+            case '.':
+            case '|':
+            case '?':
+            case '*':
+            case '+':
+            case '(':
+            case ')':
+            case '[':
+            case ']':
+            case '{':
+            case '}': out += '\\'; break;
+            default: break;
+        }
+        out += c;
+    }
+    return out;
+}
+
 static void RunTest(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -158,22 +186,23 @@ static void RunTest(
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    std::string expected;
+    std::string expected_regex;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 63;
-        expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
-            "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
-            "from a different file. Current kernel: {}.",
+        std::string before = fmt::format(
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line ",
             device->id(),
             (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
             virtual_core.y,
-            risc,
-            line_num,
+            risc);
+        std::string after = fmt::format(
+            ". Note that file name reporting is not yet implemented, and the reported line number for the assert may "
+            "be "
+            "from a different file. Current kernel: {}.",
             kernel);
+        expected_regex = regex_escape(before) + "[0-9]+" + regex_escape(after);
     } else {
         std::string barrier;
         if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
@@ -186,7 +215,7 @@ static void RunTest(
             barrier = "NOC reads flushed";
         }
 
-        expected = fmt::format(
+        std::string expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} detected an inter-kernel data race due to "
             "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
             "{}.",
@@ -199,13 +228,14 @@ static void RunTest(
             risc,
             barrier,
             kernel);
+        expected_regex = regex_escape(expected);
     }
 
     std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
-    EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
+    EXPECT_THAT(exception, testing::MatchesRegex(expected_regex));
 }
 }
 
