@@ -22,32 +22,6 @@ static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 static const float FRAC_2_PI = 0.636619747f;
 
-static sfpi_inline vFloat _tan_(vFloat s) {
-    vFloat r;
-
-    r = 4.38117981e-3f;          // 0x1.1f2000p-8
-    r = r * s + 8.94600598e-5f;  // 0x1.773902p-14
-    r = r * s + 1.08341556e-2f;  // 0x1.63037cp-7
-    r = r * s + 2.12811474e-2f;  // 0x1.5cab9ap-6
-    r = r * s + 5.40602170e-2f;  // 0x1.badc7ep-5
-    r = r * s + 1.33326918e-1f;  // 0x1.110db4p-3
-    r = r * s + 3.33333433e-1f;  // 0x1.110db4p-3
-    r = r * s;
-
-    return r;
-}
-
-static sfpi_inline vFloat _tan_bf16_(vFloat s) {
-    vFloat r;
-
-    r = 0x1.4f1f4ep-4f;
-    r = r * s + 0x1.02b98p-3f;
-    r = r * s + 0x1.55953p-2f;
-    r = r * s;
-
-    return r;
-}
-
 template <bool is_fp32_dest_acc_en>
 static vFloat sfpu_tan(vFloat x, vInt i);
 
@@ -55,7 +29,16 @@ template <>
 sfpi_inline vFloat sfpu_tan<true>(vFloat a, vInt i) {
     vFloat s = a * a;
 
-    vFloat t = _tan_(s);
+    // tan(x) for x in [-PI/4, PI/4]
+    vFloat t = 4.38117981e-3f;   // 0x1.1f2000p-8
+    t = t * s + 8.94600598e-5f;  // 0x1.773902p-14
+    t = t * s + 1.08341556e-2f;  // 0x1.63037cp-7
+    t = t * s + 2.12811474e-2f;  // 0x1.5cab9ap-6
+    t = t * s + 5.40602170e-2f;  // 0x1.badc7ep-5
+    t = t * s + 1.33326918e-1f;  // 0x1.110db4p-3
+    t = t * s + 3.33333433e-1f;  // 0x1.110db4p-3
+    t = t * s;
+
     vFloat r = t * a + a;
 
     v_if(i < 0) {
@@ -78,7 +61,12 @@ template <>
 sfpi_inline vFloat sfpu_tan<false>(vFloat a, vInt i) {
     vFloat s = a * a;
 
-    vFloat t = _tan_bf16_(s);
+    // tan(x) for x in [-PI/4, PI/4]
+    vFloat t = 0x1.4f1f4ep-4f;
+    t = t * s + 0x1.02b98p-3f;
+    t = t * s + 0x1.55953p-2f;
+    t = t * s;
+
     vFloat r = t * a + a;
 
     v_if(i < 0) {
@@ -100,13 +88,15 @@ inline void calculate_tangent() {
     const float P2 = -0x1.51p-22f;      // requires fp32
     const float P3 = -0x1.0b4612p-34f;  // requires fp32
 
+    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
+
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         vInt i;
 
         sfpi::vFloat rounding_bias;
         sfpi::vFloat j;
-        sfpi::vFloat inv_pio2 = FRAC_2_PI;
+        sfpi::vFloat inv_pio2 = sfpi::vConstFloatPrgm2;
 
         // j = round(v / (PI/2))
         // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
