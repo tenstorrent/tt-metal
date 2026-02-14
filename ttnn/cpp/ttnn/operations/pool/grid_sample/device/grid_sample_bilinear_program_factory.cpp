@@ -237,14 +237,19 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
             pre_tilize_cb_id,                  // ct_arg[20]: pre_tilize_cb_id
             is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
             is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
-            false,                             // ct_arg[23]: return_indices (unused)
-            1,                                 // ct_arg[24]: stride_h (unused)
-            1,                                 // ct_arg[25]: stride_w (unused)
-            1,                                 // ct_arg[26]: in_h_padded (unused)
-            1,                                 // ct_arg[27]: in_w_padded (unused)
-            1,                                 // ct_arg[28]: eff_kernel_h (unused)
-            1,                                 // ct_arg[29]: eff_kernel_w (unused)
-            1,                                 // ct_arg[30]: pad_l (unused)
+            1,                                 // ct_arg[23]: stride_h (unused)
+            1,                                 // ct_arg[24]: stride_w (unused)
+            1,                                 // ct_arg[25]: in_h_padded (unused)
+            1,                                 // ct_arg[26]: in_w_padded (unused)
+            1,                                 // ct_arg[27]: eff_kernel_h (unused)
+            1,                                 // ct_arg[28]: eff_kernel_w (unused)
+            1,                                 // ct_arg[29]: pad_l (unused)
+            DUMMY_CB_ID,                       // ct_arg[30]: intra_kernel_right_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_down_left_wrap_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[32]: compute_tmp_idx_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[33]: clear_value_cb_id (unused)
+            1,                                 // ct_arg[34]: kernel_h (unused)
+            1,                                 // ct_arg[35]: kernel_w (unused)
         };
 
         return tt::tt_metal::CreateKernel(

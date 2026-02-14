@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 1
 
@@ -12,15 +13,6 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #endif
-
-#define ALWI inline __attribute__((always_inline))
-
-#define TILE_HEIGHT 32
-#define TILE_WIDTH 32
-#define FACE_WIDTH 16
-#define FACE_HEIGHT 16
-#define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
-#define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
 
 template <bool B>
 struct IndexType;
@@ -34,38 +26,6 @@ template <>
 struct IndexType<false> {
     using type = uint16_t;
 };
-
-// Zero out a single page (where wr ptr points) for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_page() {
-    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
-
-// Fill an L1 buffer with the given val
-// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-// WARNING: This function assumes n is even
-ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
-    // simplest impl:
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    uint32_t value = val | (val << 16);
-    if (ptr[0] != value || unconditionally) {
-        for (uint32_t i = 0; i < n / 2; ++i) {
-            ptr[i] = (value);
-        }
-    }
-
-    return true;
-}
 
 template <
     typename IndexType,
@@ -97,34 +57,6 @@ void fill_indexes(uint32_t init_index) {
         }
         kernel_idx += row_stride;
     }
-}
-
-template <uint32_t cb_id, uint32_t clear_value_cb_id>
-ALWI void clear_out_tiles() {
-    constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
-    const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
-    uint64_t write_addr = get_noc_addr(get_write_ptr(cb_id));
-
-    for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
-        noc_async_read(clear_value_addr, write_addr, tile_size);
-        write_addr += tile_size;
-    }
-    noc_async_read_barrier();
-}
-
-template <uint32_t config_dram_addr, uint32_t config_page_size, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(uint32_t core_index) {
-    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
-    // cores in the row.
-    constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
-    uint64_t src_noc_addr = get_noc_addr(core_index, config_accessor);
-
-    noc_async_read(src_noc_addr, get_write_ptr(cb_reader_index), config_page_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_reader_index, 1);
 }
 
 // Initialize indices and increment tiles for return_indices functionality
@@ -207,50 +139,77 @@ ALWI void initialize_return_indices_data() {
     cb_push_back(in_idx_cb_id, 1);
 
     // initialize the increment CBs
-    auto fill_inc = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-        if constexpr (indexes_32_bit) {
+    // TODO we used to fill the 16 bit values two at a time, but this techincally resulted in overflow with odd
+    // c dimensions so for now we do it one at a time for both 16 and 32 bit indexes
+    if constexpr (indexes_32_bit) {
+        auto fill_inc_32 = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {
+            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     ptr[k * TILE_WIDTH + c] = inc;
                 }
             }
-        } else {
-            uint16_t inc_16 = static_cast<uint16_t>(inc);
-            uint32_t inc_packed = static_cast<uint32_t>(inc_16) | (static_cast<uint32_t>(inc_16) << 16);
+        };
+
+        cb_reserve_back(right_inc_cb_id, 1);
+        fill_inc_32(right_inc_cb_id, right_inc);
+        cb_push_back(right_inc_cb_id, 1);
+
+        cb_reserve_back(down_left_wrap_inc_cb_id, 1);
+        fill_inc_32(down_left_wrap_inc_cb_id, down_left_wrap_inc);
+        cb_push_back(down_left_wrap_inc_cb_id, 1);
+
+        cb_reserve_back(up_left_wrap_inc_cb_id, 1);
+        fill_inc_32(up_left_wrap_inc_cb_id, up_left_wrap_inc);
+        cb_push_back(up_left_wrap_inc_cb_id, 1);
+
+        if constexpr (is_large_kernel) {
+            cb_reserve_back(intra_kernel_right_inc_cb_id, 1);
+            fill_inc_32(intra_kernel_right_inc_cb_id, intra_kernel_right_inc);
+            cb_push_back(intra_kernel_right_inc_cb_id, 1);
+
+            cb_reserve_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
+            fill_inc_32(intra_kernel_down_left_wrap_inc_cb_id, intra_kernel_down_left_wrap_inc);
+            cb_push_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
+        }
+    } else {
+        auto fill_inc = [&](uint32_t cb_id, uint32_t inc) __attribute__((always_inline)) {
+            uint16_t inc_16 = (uint16_t)inc;
+            uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
+            volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
             for (uint32_t k = 0; k < window_size_hw; ++k) {
                 for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
-                    ptr[k * HALF_TILE_WIDTH + c] = inc_packed;
+                    ptr[k * HALF_TILE_WIDTH + c] = inc_32_bit;
                 }
             }
+        };
+
+        cb_reserve_back(right_inc_cb_id, 1);
+        fill_inc(right_inc_cb_id, right_inc);
+        cb_push_back(right_inc_cb_id, 1);
+
+        cb_reserve_back(down_left_wrap_inc_cb_id, 1);
+        fill_inc(down_left_wrap_inc_cb_id, down_left_wrap_inc);
+        cb_push_back(down_left_wrap_inc_cb_id, 1);
+
+        cb_reserve_back(up_left_wrap_inc_cb_id, 1);
+        fill_inc(up_left_wrap_inc_cb_id, up_left_wrap_inc);
+        cb_push_back(up_left_wrap_inc_cb_id, 1);
+
+        if constexpr (is_large_kernel) {
+            cb_reserve_back(intra_kernel_right_inc_cb_id, 1);
+            fill_inc(intra_kernel_right_inc_cb_id, intra_kernel_right_inc);
+            cb_push_back(intra_kernel_right_inc_cb_id, 1);
+
+            cb_reserve_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
+            fill_inc(intra_kernel_down_left_wrap_inc_cb_id, intra_kernel_down_left_wrap_inc);
+            cb_push_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
         }
-    };
-
-    cb_reserve_back(right_inc_cb_id, 1);
-    fill_inc(right_inc_cb_id, right_inc);
-    cb_push_back(right_inc_cb_id, 1);
-
-    cb_reserve_back(down_left_wrap_inc_cb_id, 1);
-    fill_inc(down_left_wrap_inc_cb_id, down_left_wrap_inc);
-    cb_push_back(down_left_wrap_inc_cb_id, 1);
-
-    cb_reserve_back(up_left_wrap_inc_cb_id, 1);
-    fill_inc(up_left_wrap_inc_cb_id, up_left_wrap_inc);
-    cb_push_back(up_left_wrap_inc_cb_id, 1);
-
-    if constexpr (is_large_kernel) {
-        cb_reserve_back(intra_kernel_right_inc_cb_id, 1);
-        fill_inc(intra_kernel_right_inc_cb_id, intra_kernel_right_inc);
-        cb_push_back(intra_kernel_right_inc_cb_id, 1);
-
-        cb_reserve_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
-        fill_inc(intra_kernel_down_left_wrap_inc_cb_id, intra_kernel_down_left_wrap_inc);
-        cb_push_back(intra_kernel_down_left_wrap_inc_cb_id, 1);
     }
 }
 
-// Fill an L1 buffer with the given val
-// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
+// Read kernel data for MPWI (Max Pool With Indices)
+// This handles reading input data and managing index tracking for max pooling with index output
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
@@ -270,7 +229,6 @@ template <
     bool last_tile_is_partial,
     uint32_t dilation_h,
     uint32_t dilation_w,
-    bool return_indices,
     bool zero_pages,
     uint32_t out_cb_id,
     uint32_t out_idx_cb_id,
@@ -280,12 +238,11 @@ template <
     uint32_t indexes_32_bit>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
+    // MPWI requires 1 tile at a time for max reduction with indices
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
-    static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+    static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for MPWI");
     constexpr uint32_t max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
@@ -418,26 +375,25 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(38);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(39);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
+    constexpr bool zero_pages = (bool)get_compile_time_arg_val(39);
     constexpr uint32_t right_inc = get_compile_time_arg_val(40);
     constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(41);
     constexpr uint32_t up_left_wrap_inc = get_compile_time_arg_val(42);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
-    constexpr uint32_t intra_kernel_right_inc = get_compile_time_arg_val(46);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc = get_compile_time_arg_val(47);
-    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(48);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(49);
-    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(50);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(51);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(52);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(53);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(54);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(55);
-    constexpr uint32_t reader_tensor_args_index = 56;
+    constexpr uint32_t intra_kernel_right_inc = get_compile_time_arg_val(43);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc = get_compile_time_arg_val(44);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(45);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(46);
+    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(47);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(48);
+    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(49);
+    constexpr uint32_t config_in_dram = get_compile_time_arg_val(50);
+    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(51);
+    constexpr uint32_t config_page_size = get_compile_time_arg_val(52);
+    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(53);
+    constexpr uint32_t reader_page_size = get_compile_time_arg_val(54);
+    constexpr uint32_t reader_tensor_args_index = 55;
 
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -451,18 +407,13 @@ void kernel_main() {
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    // and MPWI compute uses the clear value CB to initialize DST 1 and 3 (the accumulation tiles) for large kernels
-    constexpr bool need_to_initialize_in_cb = true;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (need_to_initialize_in_cb) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-        }
+    if constexpr (reader_id == 0) {
+        fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+        cb_push_back(clear_value_cb_id, 1);
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
 
     if constexpr (reader_id == 0) {
@@ -560,7 +511,6 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-                return_indices,
                 zero_pages,
                 out_cb_id,
                 out_idx_cb_id,
