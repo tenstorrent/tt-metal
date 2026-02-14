@@ -427,19 +427,34 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 self._attn_mask_cache[cache_key] = attn_mask_tt
             mm_opts["attn_mask"] = attn_mask_tt
 
-        hidden_states_tt: List[ttnn.Tensor] = [tokens_tt]
-        for blk in self.tt_blocks[: self.config.num_hidden_layers]:
+        max_idx = max(0, int(self.config.num_hidden_layers) - 1)
+        safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
+        # Encoder blocks are 1-indexed: block 1 produces layer output 1.
+        # Cache only what the DPT head uses so sharded intermediates can be
+        # deallocated safely during Stage-2 sharding bring-up.
+        needed_block_layers = {int(i) + 1 for i in safe_layers}
+        needed_block_layers.add(int(self.config.num_hidden_layers))
+
+        tokens_by_layer: Dict[int, ttnn.Tensor] = {}
+        for layer_idx, blk in enumerate(self.tt_blocks[: self.config.num_hidden_layers], start=1):
             tokens_tt = blk(tokens_tt, **mm_opts)
-            hidden_states_tt.append(tokens_tt)
+            if int(layer_idx) in needed_block_layers:
+                # Make a non-aliasing interleaved copy; later blocks may deallocate
+                # the sharded `tokens_tt` storage to reduce L1 pressure.
+                saved = ttnn.to_memory_config(tokens_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                try:
+                    if hasattr(ttnn, "reallocate"):
+                        saved = ttnn.reallocate(saved)
+                except Exception:
+                    pass
+                tokens_by_layer[int(layer_idx)] = saved
 
         feats: Dict[int, Any] = {}
         token_maps: Dict[int, Any] = {}
 
-        max_idx = max(0, int(self.config.num_hidden_layers) - 1)
-        safe_layers = [min(max(int(i), 0), max_idx) for i in self.config.output_layers]
         for idx in safe_layers:
-            # +1 offset because hidden_states_tt[0] holds embeddings.
-            h_tt = hidden_states_tt[idx + 1]
+            layer_out_idx = int(idx) + 1
+            h_tt = tokens_by_layer[layer_out_idx]
             if return_tt:
                 try:
                     tokens_tt4 = h_tt
