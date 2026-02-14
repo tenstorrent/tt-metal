@@ -291,11 +291,11 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Use a 1-row grid for encoder token sharding so sharded QKV tensors
-        # remain compatible with `split_query_key_value_and_split_heads` on
-        # current runtimes (its sharded create_qkv_heads path expects
-        # batch_size == grid_y).
-        grid = (8, 1)
+        # Use a 2D grid for better attention-score sharding and L1 fit at
+        # 384x384 (seq padded to 640 tokens). Attention itself will explicitly
+        # keep split-heads height-sharded; QKV split uses an interleaved input
+        # tensor to avoid runtime constraints on sharded create_qkv_heads.
+        grid = (8, 4)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -312,7 +312,8 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     mlp_grid = None
     mlp_prog_cfgs = {}
     if config.device.endswith("n300"):
-        mlp_grid = grid
+        # Keep MLP on the same grid as the encoder for now.
+        mlp_grid = (8, 4)
         mlp_prog_cfgs = _build_perf_program_configs(config, mlp_grid)
         # `_build_perf_program_configs` defaults `per_core_M` to the full padded
         # sequence tile count. For block-sharded MLP activations across (x,y),

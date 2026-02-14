@@ -679,16 +679,13 @@ class TTAttention:
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # For explicit sharded attention, keep QKV projection output in the
-            # same block-sharded layout as the incoming tokens. The next
-            # split-heads op will reshard into the requested height-sharded
-            # memory_config for Q/K/V.
+            # `split_query_key_value_and_split_heads` has runtime constraints on
+            # sharded inputs for the DPT perf shapes (B per chip is 1, but the
+            # sharded create_qkv_heads path expects batch_size == grid_y). Keep
+            # QKV output interleaved, then request height-sharded Q/K/V outputs
+            # via the split-heads memory_config.
             if explicit_sharded_attn:
-                try:
-                    memcfg = ttnn.get_memory_config(x4)
-                except Exception:
-                    if tokens_shard_mc is not None:
-                        memcfg = tokens_shard_mc
+                memcfg = attn_island_memcfg
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
