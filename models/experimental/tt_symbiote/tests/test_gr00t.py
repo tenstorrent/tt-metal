@@ -4,17 +4,17 @@
 import os
 import subprocess
 import sys
-from types import SimpleNamespace
 import time
 import torch
 import ttnn
 import pytest
 import requests
 import numpy as np
-from PIL import Image
-from pathlib import Path
 from torch import nn
+from PIL import Image
 from tqdm import tqdm
+from pathlib import Path
+from types import SimpleNamespace
 from torch.distributions import Beta
 from transformers import PretrainedConfig, AutoTokenizer
 
