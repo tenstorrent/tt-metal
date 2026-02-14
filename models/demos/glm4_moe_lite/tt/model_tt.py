@@ -183,6 +183,14 @@ class Glm4MoeLiteDenseOnlyTT:
     num_layers_to_run: int
     enable_moe: bool
     moe_runtime: Any | None
+    # ---- MTP (Multi-Token Prediction) state ----
+    mtp_enabled: bool = False
+    mtp_enorm: Any | None = None
+    mtp_hnorm: Any | None = None
+    mtp_eh_proj_w: ttnn.Tensor | None = None
+    mtp_shared_head_norm: Any | None = None
+    mtp_shared_head_w: ttnn.Tensor | None = None
+    mtp_decoder_w: Any | None = None
     # ---- Decode trace state (vLLM trace_mode=all) ----
     # Batch-bucketed traces: one _DecodeTraceSamplingState per batch bucket.
     # At runtime, decode pads to the nearest bucket instead of MAX_NUM_SEQS,
@@ -288,6 +296,94 @@ class Glm4MoeLiteDenseOnlyTT:
 
             moe_runtime = create_moe_runtime(device=device, hparams=hparams)
 
+        # ---- MTP Layer 47 (optional) ----
+        mtp_enabled = os.environ.get("GLM4_MOE_LITE_MTP", "").strip() == "1"
+        mtp_enorm = None
+        mtp_hnorm = None
+        mtp_eh_proj_w = None
+        mtp_shared_head_norm = None
+        mtp_shared_head_w = None
+        mtp_decoder_w = None
+
+        if mtp_enabled:
+            logger.info("MTP enabled: loading layer 47 weights")
+            mtp_cache = cache_dir / "mtp"
+            mtp_cache.mkdir(parents=True, exist_ok=True)
+
+            # Unfiltered state dict that includes layer 47
+            mtp_state = load_glm_lazy_state_dict(snapshot_dir)
+
+            hidden = int(hparams.hidden_size)
+
+            # enorm: RMSNorm(hidden_size)
+            mtp_enorm = RMSNorm(
+                device=device,
+                dim=hidden,
+                eps=float(hparams.rms_norm_eps),
+                state_dict=mtp_state,
+                state_dict_prefix="model.layers.47.",
+                weight_key="enorm",
+                weight_cache_path=mtp_cache,
+                weight_dtype=ttnn.bfloat16,
+                is_distributed=False,
+            )
+
+            # hnorm: RMSNorm(hidden_size)
+            mtp_hnorm = RMSNorm(
+                device=device,
+                dim=hidden,
+                eps=float(hparams.rms_norm_eps),
+                state_dict=mtp_state,
+                state_dict_prefix="model.layers.47.",
+                weight_key="hnorm",
+                weight_cache_path=mtp_cache,
+                weight_dtype=ttnn.bfloat16,
+                is_distributed=False,
+            )
+
+            # eh_proj: Linear(2*hidden -> hidden, no bias)
+            mtp_eh_proj_w = _linear_weight_tt(
+                device=device,
+                torch_weight_out_in=mtp_state["model.layers.47.eh_proj.weight"],
+                cache_file=mtp_cache / "eh_proj_w",
+                dtype=dense_dtype,
+            )
+
+            # shared_head.norm: RMSNorm(hidden_size)
+            mtp_shared_head_norm = RMSNorm(
+                device=device,
+                dim=hidden,
+                eps=float(hparams.rms_norm_eps),
+                state_dict=mtp_state,
+                state_dict_prefix="model.layers.47.shared_head.",
+                weight_key="norm",
+                weight_cache_path=mtp_cache,
+                weight_dtype=ttnn.bfloat16,
+                is_distributed=False,
+            )
+
+            # shared_head.head: Linear(hidden -> vocab_size), SEPARATE from main lm_head
+            mtp_shared_head_w = _linear_weight_tt(
+                device=device,
+                torch_weight_out_in=mtp_state["model.layers.47.shared_head.head.weight"],
+                cache_file=mtp_cache / f"shared_head_w_{lm_head_variant}" if lm_head_variant else mtp_cache / "shared_head_w",
+                dtype=dense_dtype,
+                mesh_mapper=lm_head_mapper,
+            )
+
+            # Full decoder layer 47 (attention + MoE)
+            mtp_decoder_w = convert_decoder_layer_weights(
+                device=device,
+                state=mtp_state,
+                layer_idx=47,
+                hparams=hparams,
+                cache_dir=cache_dir / "layers",
+                force_shared_expert_dense=False,
+                enable_moe=enable_moe,
+            )
+
+            logger.info("MTP layer 47 weights loaded successfully")
+
         return cls(
             device=device,
             snapshot_dir=snapshot_dir,
@@ -307,6 +403,13 @@ class Glm4MoeLiteDenseOnlyTT:
             num_layers_to_run=num_layers_to_run,
             enable_moe=enable_moe,
             moe_runtime=moe_runtime,
+            mtp_enabled=mtp_enabled,
+            mtp_enorm=mtp_enorm,
+            mtp_hnorm=mtp_hnorm,
+            mtp_eh_proj_w=mtp_eh_proj_w,
+            mtp_shared_head_norm=mtp_shared_head_norm,
+            mtp_shared_head_w=mtp_shared_head_w,
+            mtp_decoder_w=mtp_decoder_w,
         )
 
     def _ensure_layer_weights(self, layer_idx: int) -> Any:

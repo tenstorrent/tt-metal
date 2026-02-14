@@ -197,6 +197,22 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                     cache_file_name=None,
                 )
             )
+        # Allocate 1 extra KV cache layer for MTP (layer 47)
+        mtp_enabled = os.environ.get("GLM4_MOE_LITE_MTP", "").strip() == "1"
+        if mtp_enabled:
+            logger.info("Allocating MTP KV cache layer (layer {})", num_layers_to_alloc)
+            kv_cache.append(
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=self.mesh_device,
+                    mesh_mapper=mesh_mapper,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=tt_dtype,
+                    cache_file_name=None,
+                )
+            )
+
         self._kv_cache = kv_cache
         return kv_cache
 
