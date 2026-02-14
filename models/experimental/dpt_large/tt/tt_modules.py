@@ -696,6 +696,11 @@ class TTAttention:
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not (_ttnn_is_sharded(x) or _ttnn_is_sharded(x3)):
                 qkv_pc = None
+            # On some TTNN builds, the explicit QKV program_config can over-allocate static
+            # circular buffers on small grids (e.g., 8x1) and clash with L1 buffers.
+            # Prefer the default kernel here; attention/softmax program configs remain enabled.
+            if explicit_sharded_attn:
+                qkv_pc = None
             qkv_dtype = ttnn.bfloat16
             if explicit_sharded_attn and hasattr(ttnn, "bfloat8_b"):
                 # Split-heads sharded path is sensitive to L1 circular-buffer pressure.
