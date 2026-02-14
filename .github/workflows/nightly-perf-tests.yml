@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   checks: write
   contents: read
   packages: write
@@ -19,26 +18,11 @@ jobs:
     uses: ./.github/workflows/run-perf-tests.yml
     secrets: inherit
 
-  rerun-failed-jobs:
-    name: "🔄 Rerun failed jobs"
-    needs: nightly-performance-tests
-    if: ${{ failure() && fromJSON(github.run_attempt) < 3 }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Rerun only failed jobs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "🔄 Retrying failed jobs (attempt ${{ github.run_attempt }})..."
-          gh run rerun ${{ github.run_id }} --failed --repo ${{ github.repository }}
-
   report-status:
     name: "🔔 Report status"
     runs-on: ubuntu-latest
-    if: >-
-      always() &&
-      (fromJSON(github.run_attempt) > 2 || needs.nightly-performance-tests.result == 'success')
-    needs: [nightly-performance-tests, rerun-failed-jobs]
+    if: always()
+    needs: nightly-performance-tests
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
