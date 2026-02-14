@@ -17,6 +17,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.efficientdetd0.common import load_torch_model_state
+from models.experimental.efficientdetd0.tt.utils import prepare_sharded_inputs
 from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
@@ -39,10 +40,10 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 
         features, regression, classification = ttnn_model(l1_input_tensor)
 
-        # Move features to DRAM (result not needed, just ensuring memory placement)
-        for feat in features:
-            feat_rm = ttnn.to_layout(feat, ttnn.ROW_MAJOR_LAYOUT) if feat.layout != ttnn.ROW_MAJOR_LAYOUT else feat
-            ttnn.to_memory_config(feat_rm, ttnn.DRAM_MEMORY_CONFIG)
+        for feature in features:
+            if feature.layout != ttnn.ROW_MAJOR_LAYOUT:
+                feature = ttnn.to_layout(feature, ttnn.ROW_MAJOR_LAYOUT)
+            feature = ttnn.to_memory_config(feature, ttnn.DRAM_MEMORY_CONFIG)
 
         if regression.layout != ttnn.ROW_MAJOR_LAYOUT:
             regression = ttnn.to_layout(regression, ttnn.ROW_MAJOR_LAYOUT)
@@ -71,8 +72,8 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 )
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
-    "batch_size, size, expected_compile_time, expected_throughput_fps, use_torch_maxpool",
-    [(1, 512, 25.4, 11.3, True)],
+    "batch_size, size, expected_compile_time, expected_throughput_fps",
+    [(1, 512, 6.19, 31.60)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_efficientdet_d0_e2e_performant(
@@ -82,7 +83,6 @@ def test_efficientdet_d0_e2e_performant(
     size,
     expected_compile_time,
     expected_throughput_fps,
-    use_torch_maxpool,
     model_location_generator,
 ):
     """
@@ -113,7 +113,6 @@ def test_efficientdet_d0_e2e_performant(
         parameters=parameters,
         module_args=module_args,
         num_classes=num_classes,
-        use_torch_maxpool=use_torch_maxpool,
     )
 
     ttnn.synchronize_device(device)
@@ -122,21 +121,15 @@ def test_efficientdet_d0_e2e_performant(
     pipeline_model = create_efficientdet_d0_pipeline_model(ttnn_model)
 
     logger.info("Preparing input tensor...")
-    ttnn_input_tensor = ttnn.from_torch(
-        sample_input,
-        device=None,
-        dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    ttnn_input_tensor, dram_memory_config, l1_memory_config = prepare_sharded_inputs(device, sample_input, dtype=dtype)
 
-    # TODO: 2CQ with trace and overlapped input
-    logger.info(f"Configuring pipeline...")
+    logger.info(f"Configuring pipeline (2CQ with trace)...")
     pipeline = create_pipeline_from_config(
-        config=PipelineConfig(use_trace=False, num_command_queues=1, all_transfers_on_separate_command_queue=False),
+        config=PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False),
         model=pipeline_model,
         device=device,
-        dram_input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        l1_input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        dram_input_memory_config=dram_memory_config,
+        l1_input_memory_config=l1_memory_config,
     )
 
     input_tensors = [ttnn_input_tensor] * num_iterations
@@ -152,7 +145,7 @@ def test_efficientdet_d0_e2e_performant(
 
     logger.info(f"Running {num_iterations} inference iterations...")
     start = time.time()
-    pipeline.enqueue(input_tensors).pop_all()
+    outputs = pipeline.enqueue(input_tensors).pop_all()
     end = time.time()
 
     pipeline.cleanup()

@@ -276,7 +276,19 @@ class TtEfficientNet:
         )
 
     def __call__(self, x):
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        N, C, H, W = x.shape
+        min_channels = 16  # Padding from image channels (3) to min channels (16) for performant sharding
+        if x.is_sharded() and (C < min_channels):
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
+        x = nhwc
+        x = ttnn.reallocate(x)
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(nhwc)
+
         x = self._conv_stem(x)
         x = ttnn.swish(x)
         x = self._blocks0(x)

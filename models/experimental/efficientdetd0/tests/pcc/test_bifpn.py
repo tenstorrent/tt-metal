@@ -25,7 +25,7 @@ torch.manual_seed(0)
 
 
 @pytest.mark.parametrize(
-    "num_channels, conv_channels, first_time, attention, inputs, weight_key, use_torch_maxpool",
+    "num_channels, conv_channels, first_time, attention, inputs, weight_key",
     [
         (
             64,  # num_channels
@@ -38,7 +38,6 @@ torch.manual_seed(0)
                 torch.randn(1, 320, 16, 16),
             ),
             "bifpn.0",
-            True,
         ),
         (
             64,
@@ -53,7 +52,6 @@ torch.manual_seed(0)
                 torch.randn([1, 64, 4, 4]),
             ),
             "bifpn.1",
-            True,
         ),
     ],
 )
@@ -65,9 +63,7 @@ def test_bifpn(
     attention,
     inputs,
     weight_key,
-    use_torch_maxpool,
     device,
-    model_location_generator,
 ):
     PCC_THRESHOLD = 0.99
 
@@ -81,7 +77,7 @@ def test_bifpn(
         attention=attention,
         use_p8=False,
     ).eval()
-    load_torch_model_state(torch_model, weight_key, model_location_generator=model_location_generator)
+    load_torch_model_state(torch_model, weight_key)
 
     # Run PyTorch forward pass
     with torch.no_grad():
@@ -110,7 +106,6 @@ def test_bifpn(
         use_p8=False,
         sharding_strategy=HeightShardedStrategyConfiguration(reshard_if_not_optimal=True),
         deallocate_activation=True,
-        use_torch_maxpool=use_torch_maxpool,
     )
 
     # Convert inputs to TTNN format

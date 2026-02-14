@@ -46,7 +46,6 @@ def test_regressor(
     box_class_repeats,
     num_anchors,
     device,
-    model_location_generator,
 ):
     PCC_THRESHOLD = 0.99
     pyramid_levels = len(features)
@@ -56,7 +55,7 @@ def test_regressor(
         num_layers=box_class_repeats,
         pyramid_levels=pyramid_levels,
     ).eval()
-    load_torch_model_state(torch_model, "regressor", model_location_generator=model_location_generator)
+    load_torch_model_state(torch_model, "regressor")
 
     torch_out = torch_model(features)
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
