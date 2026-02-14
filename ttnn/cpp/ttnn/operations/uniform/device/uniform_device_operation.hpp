@@ -13,7 +13,7 @@ struct UniformDeviceOperation {
     struct operation_attributes_t {
         const float from;
         const float to;
-        uint32_t seed;
+        std::optional<uint32_t> seed;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -64,7 +64,7 @@ ttnn::Tensor uniform(
     const Tensor& input,
     float from,
     float to,
-    uint32_t seed,
+    std::optional<uint32_t> seed,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

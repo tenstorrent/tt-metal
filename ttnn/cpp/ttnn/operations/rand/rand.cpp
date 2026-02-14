@@ -20,7 +20,7 @@ Tensor Rand::invoke(
     const MemoryConfig& memory_config,
     float from,
     float to,
-    uint32_t seed) {
+    std::optional<uint32_t> seed) {
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
     auto tensor = ttnn::prim::uniform(shape, DataType::FLOAT32, Layout::TILE, memory_config, device, from, to, seed);

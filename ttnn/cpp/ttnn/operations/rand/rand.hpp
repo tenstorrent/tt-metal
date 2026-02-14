@@ -15,7 +15,7 @@ struct Rand {
         const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
         float from = 0.0f,
         float to = 1.0f,
-        uint32_t seed = 0);
+        std::optional<uint32_t> seed = std::nullopt);
 };
 }  // namespace ttnn::operations::rand
 

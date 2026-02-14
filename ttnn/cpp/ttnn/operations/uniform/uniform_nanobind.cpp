@@ -59,7 +59,7 @@ void bind_uniform_operation(nb::module_& mod) {
             nb::arg("input"),
             nb::arg("from") = 0,
             nb::arg("to") = 1,
-            nb::arg("seed") = 0,
+            nb::arg("seed") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none()});

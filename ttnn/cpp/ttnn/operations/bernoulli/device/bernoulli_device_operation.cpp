@@ -69,7 +69,7 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
 tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
+    cached_operation_attributes.seed = std::nullopt;
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
@@ -78,7 +78,7 @@ tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t bernoulli(
     const Tensor& input,
-    uint32_t seed,
+    std::optional<uint32_t> seed,
     const std::optional<Tensor>& output,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,

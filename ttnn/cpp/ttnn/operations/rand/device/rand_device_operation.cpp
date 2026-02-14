@@ -49,7 +49,7 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
 tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
+    cached_operation_attributes.seed = std::nullopt;
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
@@ -64,7 +64,7 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed) {
+    std::optional<uint32_t> seed) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
