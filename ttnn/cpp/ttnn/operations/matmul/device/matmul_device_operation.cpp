@@ -1375,9 +1375,6 @@ MatmulParams create_matmul_attributes(
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
          (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-    bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
-    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
@@ -1415,14 +1412,17 @@ MatmulParams create_matmul_attributes(
             output_dtype = input_tensor_a.dtype();
         }
     }
-    bool is_float_32 = output_dtype == DataType::FLOAT32;
+    bool is_float_32 = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32) ||
+                       (output_dtype == DataType::FLOAT32);
+    auto math_fidelity =
+        is_float_32 ? MathFidelity::HiFi4 : (increase_fidelity ? MathFidelity::HiFi3 : MathFidelity::LoFi);
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
         parameters.compute_kernel_config,
         math_fidelity,
         /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/is_float_32,
-        /*default_l1_acc=*/!is_float_32);
+        /*default_fp32_acc=*/is_float_32 || increase_fidelity,
+        /*default_l1_acc=*/true);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);
 

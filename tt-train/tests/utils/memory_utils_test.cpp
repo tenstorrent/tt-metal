@@ -80,7 +80,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
 
-    size_t binary_size = 16384;          // Size of DRAM buffer used for matmul program
+    size_t binary_size = 18432;          // Size of DRAM buffer used for matmul program
     size_t expected_size = binary_size;  // Allocated left over is program cache
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
 
