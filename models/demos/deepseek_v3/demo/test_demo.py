@@ -14,7 +14,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 
 
 @pytest.mark.parametrize(
-    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name",
+    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
     [
         pytest.param(
             56,
@@ -23,6 +23,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             5,
             False,
             None,
+            False,
             id="tg_stress",
             marks=pytest.mark.requires_device(["TG"]),
         ),
@@ -33,6 +34,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "dual_demo_full_results",
+            False,
             id="dual_full_demo",
             marks=pytest.mark.requires_device(["DUAL"]),
         ),
@@ -43,6 +45,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "dual_demo_stress_results",
+            False,
             id="dual_stress_demo",
             marks=pytest.mark.requires_device(["DUAL"]),
         ),
@@ -53,6 +56,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "quad_demo_full_results",
+            False,
             id="quad_full_demo",
             marks=pytest.mark.requires_device(["QUAD"]),
         ),
@@ -63,8 +67,20 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "quad_demo_stress_results",
+            False,
             id="quad_stress_demo",
             marks=pytest.mark.requires_device(["QUAD"]),
+        ),
+        pytest.param(
+            1,
+            1,
+            13,
+            5,
+            True,
+            None,
+            True,
+            id="profile_decode",
+            marks=pytest.mark.timeout(1800),
         ),
     ],
 )
@@ -75,6 +91,7 @@ def test_demo(
     override_num_layers: int,
     enable_trace: bool,
     artifact_name: str,
+    profile_decode: bool,
 ):
     """
     DeepSeek v3 demo test with prompts loaded from JSON file.
@@ -85,6 +102,7 @@ def test_demo(
     - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
     - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity
     - quad_stress_demo (QUAD): 56 prompts, 20 batches - tests stability under repeated execution
+    - profile_decode: Profile decode for non-moe and moe layers
     """
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
@@ -100,6 +118,8 @@ def test_demo(
         random_weights=False,
         max_new_tokens=max_new_tokens,
         repeat_batches=repeat_batches,
+        profile_decode=profile_decode,
+        signpost=True,
     )
     if override_num_layers is not None:
         run_kwargs["override_num_layers"] = override_num_layers
