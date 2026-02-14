@@ -135,6 +135,19 @@ void PadDeviceOperation::validate_on_program_cache_miss(
             "Cannot pad RM tensor with specified format");
     }
 
+    // Special conditions for sub_core_grids
+    if (operation_attributes.sub_core_grids.has_value()) {
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "ttnn.pad: Input memory layout must be interleaved when sub_core_grids argument is provided");
+        TT_FATAL(
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "ttnn.pad: Output memory layout must be interleaved when sub_core_grids argument is provided");
+        TT_FATAL(
+            operation_attributes.use_multicore,
+            "ttnn.pad: sub_core_grids is only supported when use_multicore is true");
+    }
+
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
@@ -180,11 +193,18 @@ PadDeviceOperation::tensor_return_value_t pad(
     float pad_value,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool use_multicore,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = PadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            output_logical_shape, output_padded_shape, input_tensor_start, pad_value, output_mem_config, use_multicore},
+            output_logical_shape,
+            output_padded_shape,
+            input_tensor_start,
+            pad_value,
+            output_mem_config,
+            use_multicore,
+            sub_core_grids},
         OperationType::tensor_args_t{input, preallocated_output});
 }
 }  // namespace ttnn::prim

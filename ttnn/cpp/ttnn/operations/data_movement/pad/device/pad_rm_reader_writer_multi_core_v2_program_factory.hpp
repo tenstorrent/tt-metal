@@ -16,6 +16,8 @@ struct PadRmReaderWriterMultiCoreV2SharedVariables {
     tt::tt_metal::KernelHandle writer_kernel_id{};
     CoreCoord compute_with_storage_grid_size;
     ttnn::Shape input_tensor_start{};
+    std::optional<CoreRangeSet> sub_core_grids;
+    std::vector<CoreCoord> cores_with_rtargs;
 };
 
 struct PadRmReaderWriterMultiCoreV2ProgramFactory {
