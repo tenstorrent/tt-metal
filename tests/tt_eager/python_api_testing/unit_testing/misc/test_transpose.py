@@ -29,20 +29,23 @@ def transpose(
     dim0,
     dim1,
     input_mem_config=ttnn.MemoryConfig(),
-    output_mem_config=ttnn.MemoryConfig(),
+    output_mem_config=None,
     input_dtype=ttnn.bfloat16,
     expected_program_cache_size=None,
+    layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(2005)
     output_shape = list(input_shape)
     output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
     x = random_torch_tensor(input_dtype, input_shape)
 
-    ttnn_input = ttnn.from_torch(
-        x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device, memory_config=input_mem_config
-    )
+    ttnn_input = ttnn.from_torch(x, layout=layout, dtype=input_dtype, device=device, memory_config=input_mem_config)
     xtt = ttnn.transpose(ttnn_input, dim0, dim1, memory_config=output_mem_config)
 
+    xtt_mem_config = xtt.memory_config()
+    assert (
+        output_mem_config is None or xtt_mem_config == output_mem_config
+    ), "Output memory config does not match expected"
     assert list(xtt.shape) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
@@ -78,7 +81,7 @@ def test_fold_transpose(device):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=sharded_config)
+    transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=None)
 
 
 @pytest.mark.parametrize(
@@ -265,15 +268,24 @@ def test_transpose_wh_sharded_program_cache(dtype, device):
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [
+            input_shape.numel() // input_shape[-2] // num_cores,
+            input_shape[-2],
+        ],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     transpose(
         input_shape,
         device,
         dim0=-2,
         dim1=-1,
-        input_mem_config=mem_config,
-        output_mem_config=mem_config,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
         input_dtype=input_dtype,
         expected_program_cache_size=1,
     )
@@ -296,16 +308,25 @@ def test_transpose_wh_sharded_program_cache(dtype, device):
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+    output_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [
+            input_shape.numel() // input_shape[-2] // num_cores,
+            input_shape[-2],
+        ],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     transpose(
         input_shape,
         device,
         dim0=-2,
         dim1=-1,
-        input_mem_config=mem_config,
-        output_mem_config=mem_config,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
         input_dtype=input_dtype,
         expected_program_cache_size=2,
     )
@@ -328,8 +349,16 @@ def test_transpose_wh_sharded_program_cache(dtype, device):
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [
+            input_shape.numel() // input_shape[-2] // num_cores,
+            input_shape[-2],
+        ],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     # tensor cannot fit in L1 for fp32
@@ -339,8 +368,8 @@ def test_transpose_wh_sharded_program_cache(dtype, device):
             device,
             dim0=-2,
             dim1=-1,
-            input_mem_config=mem_config,
-            output_mem_config=mem_config,
+            input_mem_config=input_mem_config,
+            output_mem_config=output_mem_config,
             input_dtype=input_dtype,
             expected_program_cache_size=3,
         )
@@ -469,7 +498,7 @@ def test_transpose_hw_sharded_rm(device, n, c, h, w):
     )
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3)
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -500,7 +529,7 @@ def run_transpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
     )
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3)
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -782,6 +811,7 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
 )
 def test_transpose_4d_wh_rm(shape, device):
     torch.manual_seed(2005)
+    print(shape)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(-1, -2)
 
@@ -877,6 +907,7 @@ def test_transpose_former_failures(config, memory_config, device):
     )
     tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
     tt_output = ttnn.to_torch(tt_output)
+    print(config[0], config[1][0], config[1][1], config[2], memory_config)
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
@@ -1302,12 +1333,25 @@ def test_transpose_29126(device):
     h = 1024 * dram_cores
     w = 2048
 
-    shard_spec = ttnn.ShardSpec(
-        dram_weight_grid,
-        (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
-        ttnn.ShardOrientation.ROW_MAJOR,
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_weight_grid,
+            (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
-    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_weight_grid,
+            (ttnn.core.roundup(ttnn.core.divup(w, dram_cores), ttnn.TILE_SIZE), h),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
     torch_input = torch.randn(h, w)
     torch_output = torch_input.transpose(-1, -2)
@@ -1320,7 +1364,7 @@ def test_transpose_29126(device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory_config,
     )
-    ttnn_output = ttnn.transpose(ttnn_input, -1, -2, memory_config=memory_config)
+    ttnn_output = ttnn.transpose(ttnn_input, -1, -2, memory_config=output_memory_config)
     ttnn_output = ttnn.to_torch(ttnn_output.cpu())
 
     assert_with_pcc(torch_output, ttnn_output, 0.9999)
@@ -1348,8 +1392,248 @@ def test_transpose_hc_mem_config(device, n, c, h, w):
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     tt_output_tensor = ttnn.transpose(tt_input_tensor, 1, 2, memory_config=sharded_mem_config)
+    tt_output_tensor_mem_config = tt_output_tensor.memory_config()
+    assert tt_output_tensor_mem_config == sharded_mem_config, "Output memory config does not match expected"
+
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(["dim0", "dim1"], [(2, 3), (2, 1), (0, 1)], ids=["wh", "hc", "cn"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+@pytest.mark.parametrize(
+    "output_sharding",
+    [None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["output_none", "output_height", "output_width", "output_block"],
+)
+@pytest.mark.parametrize(
+    "input_sharding",
+    [None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["input_dram", "input_height", "input_width", "input_block"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.bfloat8_b],
+    ids=["bfloat16", "float32", "int32", "bfloat8_b"],
+)
+def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sharding, dtype):
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b is only supported for TILE layout")
+
+    if dtype == ttnn.bfloat8_b and dim0 == 2 and dim1 == 1:
+        pytest.skip("sharded bfloat8_b is not supported for HC transpose")
+
+    N = 2
+    C = 4
+    H = 256
+    W = 256
+    if dtype in [ttnn.float32, ttnn.int32, ttnn.bfloat8_b]:
+        N //= 2
+        C //= 2
+    input_shape = (N, C, H, W)
+    output_shape = list(input_shape)
+    output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
+
+    # if layout tile
+    if layout == ttnn.TILE_LAYOUT:
+        output_shape[3] = ttnn.core.roundup(output_shape[3], ttnn.TILE_SIZE)
+        output_shape[2] = ttnn.core.roundup(output_shape[2], ttnn.TILE_SIZE)
+    ## 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    print(f"Compute grid size: {compute_grid_size}")
+    if input_sharding:
+        input_memory_config = ttnn.create_sharded_memory_config(
+            input_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=input_sharding
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if output_sharding:
+        output_memory_config = ttnn.create_sharded_memory_config(
+            output_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=output_sharding
+        )
+    else:
+        output_memory_config = None
+    transpose(
+        input_shape,
+        device,
+        dim0=dim0,
+        dim1=dim1,
+        input_mem_config=input_memory_config,
+        output_mem_config=output_memory_config,
+        layout=layout,
+        input_dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize(["dim0", "dim1"], [(2, 3), (1, 2)], ids=["wh", "hc"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+@pytest.mark.parametrize("output_sharding", [None], ids=["output_none"])
+@pytest.mark.parametrize("input_sharding", [None], ids=["input_dram"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32], ids=["bfloat16", "float32", "int32"])
+@pytest.mark.parametrize("H", [5, 13])
+def test_transpose_sharded_dummy(device, dim0, dim1, layout, input_sharding, output_sharding, dtype, H):
+    N = 2
+    C = 4
+    H = H * 32
+    W = 76
+    # if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+    #    pytest.skip("bfloat8_b not supported for this test case")
+    input_shape = (N, C, H, W)
+    output_shape = list(input_shape)
+    output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
+
+    # if layout tile
+    if layout == ttnn.TILE_LAYOUT:
+        output_shape[3] = ttnn.core.roundup(output_shape[3], ttnn.TILE_SIZE)
+        output_shape[2] = ttnn.core.roundup(output_shape[2], ttnn.TILE_SIZE)
+    ## 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    print(f"Compute grid size: {compute_grid_size}")
+    if input_sharding:
+        input_memory_config = ttnn.create_sharded_memory_config(
+            input_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=input_sharding
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if output_sharding:
+        output_memory_config = ttnn.create_sharded_memory_config(
+            output_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=output_sharding
+        )
+    else:
+        output_memory_config = None
+    transpose(
+        input_shape,
+        device,
+        dim0=dim0,
+        dim1=dim1,
+        input_mem_config=input_memory_config,
+        output_mem_config=output_memory_config,
+        layout=layout,
+        input_dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize(["dim0", "dim1"], [(2, 3)], ids=["wh"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT], ids=["tile"])
+@pytest.mark.parametrize("output_sharding", [None], ids=["output_none"])
+@pytest.mark.parametrize("input_sharding", [ttnn.ShardStrategy.HEIGHT], ids=["input_height"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32], ids=["bfloat16", "float32", "int32"])
+@pytest.mark.parametrize("H", [128])
+@pytest.mark.parametrize("W", [128])
+def test_transpose_sharded_mda(device, dim0, dim1, layout, input_sharding, output_sharding, dtype, H, W):
+    N = 1
+    C = 8
+    # if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+    #    pytest.skip("bfloat8_b not supported for this test case")
+    input_shape = (N, C, H, W)
+    output_shape = list(input_shape)
+    output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
+
+    # if layout tile
+    if layout == ttnn.TILE_LAYOUT:
+        output_shape[3] = ttnn.core.roundup(output_shape[3], ttnn.TILE_SIZE)
+        output_shape[2] = ttnn.core.roundup(output_shape[2], ttnn.TILE_SIZE)
+    ## 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    print(f"Compute grid size: {compute_grid_size}")
+    if input_sharding:
+        input_memory_config = ttnn.create_sharded_memory_config(
+            input_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=input_sharding
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if output_sharding:
+        output_memory_config = ttnn.create_sharded_memory_config(
+            output_shape, core_grid=ttnn.CoreGrid(x=2, y=4), strategy=output_sharding
+        )
+    else:
+        output_memory_config = None
+    transpose(
+        input_shape,
+        device,
+        dim0=dim0,
+        dim1=dim1,
+        input_mem_config=input_memory_config,
+        output_mem_config=output_memory_config,
+        layout=layout,
+        input_dtype=dtype,
+    )
+
+
+def test_hc_transpose(device):
+    B, C, H, W = 1, 32, 1, 32
+    input_tensor = torch.range(0, B * C * H * C - 1).reshape([B, C, H, W])
+    memory_config = ttnn.create_sharded_memory_config(
+        [B, C, 32, W],
+        ttnn.CoreGrid(x=1, y=1),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    x = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    x = ttnn.to_memory_config(x, memory_config)
+    x = ttnn.transpose(x, 1, 2)
+    actual = ttnn.to_torch(x)
+    expected = torch.transpose(input_tensor, 1, 2)
+    assert_with_pcc(expected, actual, 0.99999)
+
+
+def test_permute_sharded_tilized(device):
+    """
+    Test permute operation with sharded tilized tensors.
+
+    Input: L1 height sharded, tile layout, [1, 4, 128, 512]
+    Output: L1 height sharded, tile layout, [1, 128, 4, 512]
+    """
+    torch.manual_seed(0)
+
+    # Original tensor shape
+    orig_torch_input = torch.randn([1, 4, 128, 512], dtype=torch.bfloat16)
+
+    # Torch reference: permute [1, 4, 128, 512] -> [1, 128, 4, 512]
+    permute_spec = (0, 2, 1, 3)
+    torch_output = torch.permute(orig_torch_input, permute_spec)
+
+    # TTNN Version with sharded memory
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+
+    input_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        (64, 512),  # (shard_height, shard_width)
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+
+    tt_input = ttnn.from_torch(
+        orig_torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+
+    output_shard_spec = ttnn.ShardSpec(
+        core_grid,
+        (64, 512),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+
+    # Try the HC permute: [1, 4, 128, 512] -> [1, 128, 4, 512]
+    tt_output = ttnn.permute(tt_input, permute_spec, memory_config=output_memory_config)
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+    passing, pcc_msg = comp_pcc(torch_output, tt_output_torch)
+    logger.info(pcc_msg)
+
+    assert passing

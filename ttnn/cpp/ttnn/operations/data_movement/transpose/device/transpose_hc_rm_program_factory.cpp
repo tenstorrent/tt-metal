@@ -155,24 +155,30 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
 
     auto num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                 : num_sticks_per_core_group_2;
-    auto stick_size = W * input_tensor.element_size();
+
+    Buffer* src0_buffer = input_tensor.buffer();
+    uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
+    auto stick_size = std::max(W * input_tensor.element_size(), aligned_page);
+
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_sticks * stick_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size);
     CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    std::cout << "stick:" << stick_size << ", src_page:" << src0_buffer->page_size()
+              << ", src_al_page:" << src0_buffer->aligned_page_size() << ", dst_page:" << dst_buffer->page_size()
+              << ", dst_al_page" << dst_buffer->aligned_page_size() << std::endl;
     std::vector<uint32_t> reader_compile_time_args;
     reader_compile_time_args.push_back(N);
     reader_compile_time_args.push_back(H);
     reader_compile_time_args.push_back(C);
-    reader_compile_time_args.push_back(W * input_tensor.element_size());
-    reader_compile_time_args.push_back(W * input_tensor.element_size());
+    reader_compile_time_args.push_back(stick_size);
+    reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
-    writer_compile_time_args.push_back(W * input_tensor.element_size());
-    writer_compile_time_args.push_back(W * input_tensor.element_size());
+    writer_compile_time_args.push_back(stick_size);
+    writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
