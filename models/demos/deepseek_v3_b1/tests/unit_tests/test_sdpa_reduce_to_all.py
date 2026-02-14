@@ -62,7 +62,10 @@ def compute_forwarder_scratch_size(
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
-def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
+@pytest.mark.parametrize(
+    "position_vector", [[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0]]
+)
+def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -119,6 +122,9 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     l_data_per_device = [torch.randn(l_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
     ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
 
+    position_mask = torch.tensor(position_vector, dtype=torch.bfloat16)
+    final_reduction = position_mask.sum() > 1.0
+
     m_data_per_device = []
     s_data_per_device = []
     for d in range(num_devices):
@@ -137,11 +143,43 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, _, _ = SdpaReduceToAll.golden(l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value)
+    ref_l, _, _ = SdpaReduceToAll.golden(
+        l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value, position_mask, final_reduction
+    )
     ref_l = ref_l.to(torch.bfloat16)
 
     l_data_all = torch.stack(l_data_per_device, dim=0)
     ms_data_all = torch.stack(ms_data_per_device, dim=0)
+
+    position_shape = [num_cores, 32]
+    position_data_base = torch.zeros(position_shape, dtype=torch.int32)
+
+    # Fill all rows identically: replicate position mask across each row
+    for row in range(num_cores):
+        for d in range(num_devices):
+            position_data_base[row, d] = int(position_mask[d])
+
+    # Replicate this same tensor on all devices
+    position_data_per_device = [position_data_base.clone() for _ in range(num_devices)]
+    position_data_all = torch.stack(position_data_per_device, dim=0)
+
+    # HEIGHT_SHARDED: each core gets [1, 32] shard
+    shard_spec_position = ttnn.ShardSpec(shard_grid, [1, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    position_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_position
+    )
+
+    position_mesh = ttnn.from_torch(
+        position_data_all,
+        device=submesh_device,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=ttnn.uint32,
+        memory_config=position_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    if position_vector == [1.0, 1.0, 1.0, 1.0]:
+        position_mesh = None
 
     input_l_mesh = ttnn.from_torch(
         l_data_all,
@@ -266,6 +304,8 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
         input_forwarder_cores=forwarder_cores,
         scatter_dest_tensor_mesh=scatter_dest_mesh,
         scatter_dest_grid=scatter_grid,
+        position_tensor_mesh=position_mesh,
+        final_reduction=final_reduction,
     )
     ttnn.synchronize_device(submesh_device)
 

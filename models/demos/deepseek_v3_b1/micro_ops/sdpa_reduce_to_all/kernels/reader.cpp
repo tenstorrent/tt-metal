@@ -36,6 +36,10 @@ static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(7);
 static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(8);
 static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(9);
 
+// Position CB compile-time args (added for conditional reduction)
+static constexpr uint32_t cb_position = get_compile_time_arg_val(10);
+static constexpr uint32_t position_enabled = get_compile_time_arg_val(11);
+
 static constexpr uint32_t out_tiles = num_l_chunks * tiles_per_l_chunk;
 static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
 
@@ -95,7 +99,6 @@ FORCE_INLINE void prepare_data_for_compute(
     for (uint32_t i = 0; i < num_l_chunks; i++) {
         prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
     }
-
     noc_semaphore_set(sem_ptr, 0);
 }
 
@@ -109,7 +112,6 @@ void kernel_main() {
     const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_recv_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
-
     // =========================================================================
     // Push local input (aliased CBs, no copy needed)
     // =========================================================================
@@ -119,13 +121,53 @@ void kernel_main() {
     cb_reserve_back(cb_local_ms, 1);
     cb_push_back(cb_local_ms, 1);
 
+    bool r2_neighbor_r1_valid = true;
+    bool r1_neighbor_valid = true;
+
+    if constexpr (position_enabled) {
+        // Get r2_neighbor_r1_neighbor_idx from runtime args
+        uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+        cb_reserve_back(cb_position, 1);
+        uint64_t position_cb_addr = get_write_ptr(cb_position);
+        volatile tt_l1_ptr uint32_t* position_data_base =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_cb_addr);
+        cb_push_back(cb_position, 1);
+
+        // R2 neighbor's R1 result is valid if at least one device in that pair was valid
+        uint32_t r1_neighbor_val = position_data_base[r1_neighbor_device_idx];
+        uint32_t r2_neighbor_val = position_data_base[r2_neighbor_device_idx];
+        uint32_t r2_neighbor_r1_neighbor_val = position_data_base[r2_neighbor_r1_neighbor_idx];
+        r2_neighbor_r1_valid = (r2_neighbor_val != 0) || (r2_neighbor_r1_neighbor_val != 0);
+        r1_neighbor_valid = (r1_neighbor_val != 0);
+    }
+
     // =========================================================================
     // Prepare R1 neighbor data for compute
     // =========================================================================
-    prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    if (r1_neighbor_valid) {
+        prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
+    } else {
+        cb_reserve_back(cb_r1_neighbor_ms, 1);
+        cb_push_back(cb_r1_neighbor_ms, 1);
 
+        cb_reserve_back(cb_r1_neighbor_l, out_tiles);
+        cb_push_back(cb_r1_neighbor_l, out_tiles);
+    }
     // =========================================================================
     // Prepare R2 neighbor data for compute
     // =========================================================================
-    prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+
+    // Only receive R2 data if R2 neighbor's R1 result is valid
+    if (r2_neighbor_r1_valid) {
+        prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
+    } else {
+        cb_reserve_back(cb_r2_neighbor_ms, 1);
+        cb_push_back(cb_r2_neighbor_ms, 1);
+
+        cb_reserve_back(cb_r2_neighbor_l, out_tiles);
+        cb_push_back(cb_r2_neighbor_l, out_tiles);
+    }
 }

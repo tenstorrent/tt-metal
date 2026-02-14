@@ -39,6 +39,11 @@ static constexpr uint32_t scale_fp32 = get_compile_time_arg_val(10);
 static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);  // tiles per L chunk (max 8)
 static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(12);       // number of L chunks
 
+// Position mask parameters (for conditional reduction)
+static constexpr uint32_t cb_position = get_compile_time_arg_val(13);
+static constexpr uint32_t position_enabled = get_compile_time_arg_val(14);
+static constexpr bool final_reduction = get_compile_time_arg_val(15);
+
 // SDPA uses "block_size" terminology - alias for clarity
 static constexpr uint32_t block_size = tiles_per_l_chunk;
 
@@ -104,33 +109,169 @@ ALWI void sdpa_tail_streaming(
     ckernel::sdpa_tail_finalize(cb_worker_max_sum, cb_prev_max_sum);
 }
 
+ALWI void forward_data(
+    uint32_t cb_prev_max_sum,
+    uint32_t cb_cur_max_sum,
+    uint32_t num_l_chunks,
+    uint32_t cb_l1,
+    uint32_t cb_l_out,
+    uint32_t block_size) {
+    cb_wait_front(cb_prev_max_sum, 1);
+    cb_reserve_back(cb_cur_max_sum, 1);
+
+    tile_regs_acquire();
+    copy_tile_init(cb_prev_max_sum);
+    copy_tile(cb_prev_max_sum, 0, 0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile(0, cb_cur_max_sum);
+    tile_regs_release();
+
+    cb_push_back(cb_cur_max_sum, 1);
+
+    // Copy neighbor L to output L
+    for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+        cb_wait_front(cb_l1, (chunk + 1) * block_size);
+        cb_reserve_back(cb_l_out, block_size);
+
+        uint32_t tile_index = chunk * block_size;
+        for (uint32_t i = 0; i < block_size; i++) {
+            tile_regs_acquire();
+            copy_tile_init(cb_l1);
+            copy_tile(cb_l1, tile_index + i, i);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(i, cb_l_out);
+            tile_regs_release();
+        }
+
+        cb_push_back(cb_l_out, block_size);
+    }
+}
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    bool normalize,
+    uint32_t block_size,
+    uint32_t scale_fp32,
+    uint32_t num_l_chunks,
+    int vector_mode = (int)VectorMode::C>
+ALWI void sdpa_tail_streaming_conditional(
+    uint32_t cb_worker_max_sum,
+    uint32_t cb_prev_max_sum,
+    uint32_t cb_cur_max_sum,
+    uint32_t cb_l1,
+    uint32_t cb_l2,
+    uint32_t cb_l_out,
+    bool neighbor_valid,
+    bool local_valid) {
+    // Only local valid - copy local data to output
+    if (!neighbor_valid && local_valid) {
+        if constexpr (normalize) {
+            // Normalize local data: pass same CB twice to trigger single-input path
+            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
+                cb_prev_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l2, cb_l2, cb_l_out);
+        } else {
+            // No normalization - just copy
+            forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
+        }
+        return;
+    }
+
+    // Only neighbor valid - copy neighbor data to output
+    if (neighbor_valid && !local_valid) {
+        if constexpr (normalize) {
+            // Normalize neighbor data: pass same CB twice to trigger single-input path
+            sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
+                cb_worker_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l1, cb_l1, cb_l_out);
+        } else {
+            // No normalization - just copy
+            forward_data(cb_worker_max_sum, cb_cur_max_sum, num_l_chunks, cb_l1, cb_l_out, block_size);
+        }
+        return;
+    }
+
+    // Both valid - perform normal SDPA reduction
+    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
+        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
+}
+
 void kernel_main() {
     constexpr int vector_mode = VectorMode::RC_custom;
 
     binary_op_init_common(cb_local_l, cb_local_l, cb_l_out);
     exp_tile_init<EXP_APPROX_MODE, false>();
 
+    // Runtime args: device indices for position lookup (when position_enabled)
+    bool local_valid = true;
+    bool r1_neighbor_valid = true;
+    bool r2_neighbor_valid = true;
+
+    uint32_t device_idx = 0;
+    uint32_t r1_neighbor_device_idx = 0;
+    uint32_t r2_neighbor_device_idx = 0;
+
+    if constexpr (position_enabled) {
+        // Read device indices from runtime args
+        size_t arg_idx = 0;
+        device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);
+
+        cb_wait_front(cb_position, 1);
+        uint32_t local_val = read_tile_value(cb_position, 0, device_idx);
+        uint32_t r1_val = read_tile_value(cb_position, 0, r1_neighbor_device_idx);
+        uint32_t r2_val = read_tile_value(cb_position, 0, r2_neighbor_device_idx);
+        uint32_t r2_neighbor_r1_val = read_tile_value(cb_position, 0, r2_neighbor_r1_neighbor_idx);
+        cb_pop_front(cb_position, 1);
+
+        local_valid = (local_val != 0);
+        r1_neighbor_valid = (r1_val != 0);
+        r2_neighbor_valid =
+            (r2_val != 0) || (r2_neighbor_r1_val != 0);  // R2 neighbor's R1 result is valid if either device was valid
+    }
+
     // =========================================================================
-    // ROUND 1: reduce(local, r1_neighbor) → r1_result
+    // ROUND 1: reduce(local, r1_neighbor) → r1_result (unnormalized)
     // =========================================================================
-    // Non-final reduction: outputs L and MS (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, false /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
+    sdpa_tail_streaming_conditional<
+        EXP_APPROX_MODE,
+        false /* no normalize - R1 doesn't normalize */,
+        block_size,
+        scale_fp32,
+        num_l_chunks,
+        vector_mode>(
         cb_r1_neighbor_ms,  // worker (neighbor)
         cb_local_ms,        // prev (local)
         cb_r1_result_ms,    // cur output MS
         cb_r1_neighbor_l,   // l1 (neighbor)
         cb_local_l,         // l2 (local)
-        cb_r1_result_l);    // l_out
+        cb_r1_result_l,     // l_out
+        r1_neighbor_valid,
+        local_valid);
 
     // =========================================================================
     // ROUND 2: reduce(r1_result, r2_neighbor) → final output (normalized L)
     // =========================================================================
-    // Final reduction with normalization: outputs only normalized L (streaming)
-    sdpa_tail_streaming<EXP_APPROX_MODE, true /* normalize */, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_r2_neighbor_ms,  // worker (neighbor)
-        cb_r1_result_ms,    // prev (R1 result)
-        cb_ms_out,          // cur output MS (unused when final=true)
-        cb_r2_neighbor_l,   // l1 (neighbor)
-        cb_r1_result_l,     // l2 (R1 result)
-        cb_l_out);          // l_out (normalized, aliased to output tensor)
+    // Compute R1 result validity: valid if at least one device in the pair was valid
+    bool local_r1_valid = local_valid || r1_neighbor_valid;
+    bool r2_neighbor_r1_valid = r2_neighbor_valid;
+
+    sdpa_tail_streaming_conditional<
+        EXP_APPROX_MODE,
+        final_reduction, /* don't normalize if data only on a single device */
+        block_size,
+        scale_fp32,
+        num_l_chunks,
+        vector_mode>(
+        cb_r2_neighbor_ms,     // worker (neighbor's R1 result)
+        cb_r1_result_ms,       // prev (local R1 result)
+        cb_ms_out,             // cur output MS
+        cb_r2_neighbor_l,      // l1 (neighbor's R1 result)
+        cb_r1_result_l,        // l2 (local R1 result)
+        cb_l_out,              // l_out
+        r2_neighbor_r1_valid,  // R2 neighbor R1 result validity
+        local_r1_valid);       // Local R1 result validity
 }

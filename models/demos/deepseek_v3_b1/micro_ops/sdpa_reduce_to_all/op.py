@@ -36,7 +36,15 @@ def _get_element_size_bytes(dtype):
 
 class SdpaReduceToAll:
     @staticmethod
-    def golden(l_data_per_device, s_data_per_device, m_data_per_device, num_cores=8, scale_value=1.0):
+    def golden(
+        l_data_per_device,
+        s_data_per_device,
+        m_data_per_device,
+        num_cores=8,
+        scale_value=1.0,
+        position_mask=None,
+        final_reduction=True,
+    ):
         """
         PyTorch reference implementation for SDPA reduce-to-all.
 
@@ -44,17 +52,42 @@ class SdpaReduceToAll:
             l_data_per_device: list of L tensors [batch, l_width * num_cores]
             s_data_per_device: list of S tensors [batch, num_cores]
             m_data_per_device: list of M tensors [batch, num_cores]
+            position_mask: optional tensor [num_devices] with 1.0 for valid devices, 0.0 for masked devices
         """
 
-        def compute_reduction(l1, s1, m1, l2, s2, m2, scale):
-            m_new = torch.maximum(m1, m2)
-            exp_m1 = torch.exp((m1 - m_new) * scale)
-            exp_m2 = torch.exp((m2 - m_new) * scale)
-            s_new = s1 * exp_m1 + s2 * exp_m2
-            l_new = l1 * exp_m1 + l2 * exp_m2
-            return l_new, s_new, m_new
+        def compute_reduction(l1, s1, m1, l2, s2, m2, scale, valid1, valid2):
+            """Conditional reduction based on validity flags.
+
+            Args:
+                normalize: If True, normalize the output L by dividing by S
+            """
+            if not valid1 and not valid2:
+                l_out = l1
+                s_out = s1
+                m_out = m1
+            elif valid1 and not valid2:
+                l_out = l1
+                s_out = s1
+                m_out = m1
+            elif not valid1 and valid2:
+                l_out = l2
+                s_out = s2
+                m_out = m2
+            # Both valid: perform normal reduction
+            else:
+                m_new = torch.maximum(m1, m2)
+                exp_m1 = torch.exp((m1 - m_new) * scale)
+                exp_m2 = torch.exp((m2 - m_new) * scale)
+                s_out = s1 * exp_m1 + s2 * exp_m2
+                l_out = l1 * exp_m1 + l2 * exp_m2
+                m_out = m_new
+            return l_out, s_out, m_out
 
         num_devices = len(l_data_per_device)
+
+        # Default mask: all devices valid
+        if position_mask is None:
+            position_mask = torch.ones(num_devices, dtype=torch.float32)
 
         def split_by_cores(tensor_list, num_cores):
             result = []
@@ -75,17 +108,47 @@ class SdpaReduceToAll:
             m_dev = [m_data_per_device[d][:, core_idx : core_idx + 1] for d in range(num_devices)]
 
             l_r1_01, s_r1_01, m_r1_01 = compute_reduction(
-                l_dev[0], s_dev[0], m_dev[0], l_dev[1], s_dev[1], m_dev[1], scale_value
+                l_dev[0],
+                s_dev[0],
+                m_dev[0],
+                l_dev[1],
+                s_dev[1],
+                m_dev[1],
+                scale_value,
+                position_mask[0].item() > 0.5,
+                position_mask[1].item() > 0.5,
             )
             l_r1_23, s_r1_23, m_r1_23 = compute_reduction(
-                l_dev[2], s_dev[2], m_dev[2], l_dev[3], s_dev[3], m_dev[3], scale_value
-            )
-            l_final, s_final, m_final = compute_reduction(
-                l_r1_01, s_r1_01, m_r1_01, l_r1_23, s_r1_23, m_r1_23, scale_value
+                l_dev[2],
+                s_dev[2],
+                m_dev[2],
+                l_dev[3],
+                s_dev[3],
+                m_dev[3],
+                scale_value,
+                position_mask[2].item() > 0.5,
+                position_mask[3].item() > 0.5,
             )
 
-            l_out = l_final / s_final.expand(-1, l_final.shape[1])
-            l_final_cores.append(l_out)
+            r1_01_valid = (position_mask[0].item() > 0.5) or (position_mask[1].item() > 0.5)
+            r1_23_valid = (position_mask[2].item() > 0.5) or (position_mask[3].item() > 0.5)
+
+            # Always normalize in R2 (simplest approach)
+            l_final, s_final, m_final = compute_reduction(
+                l_r1_01,
+                s_r1_01,
+                m_r1_01,
+                l_r1_23,
+                s_r1_23,
+                m_r1_23,
+                scale_value,
+                r1_01_valid,
+                r1_23_valid,
+            )
+            # skip final reduction if data on a single device
+            if final_reduction:
+                l_final = l_final / s_final.expand(-1, l_final.shape[1])
+            l_final_cores.append(l_final)
             s_final_cores.append(s_final)
             m_final_cores.append(m_final)
 
@@ -105,11 +168,14 @@ class SdpaReduceToAll:
         input_forwarder_cores=None,
         scatter_dest_tensor_mesh=None,
         scatter_dest_grid=None,
+        position_tensor_mesh=None,
+        final_reduction=True,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+        num_devices = mesh_rows * mesh_cols
 
         if input_forwarder_cores is None or len(input_forwarder_cores) != 2:
             raise ValueError("input_forwarder_cores must be provided with exactly 2 cores")
@@ -117,12 +183,18 @@ class SdpaReduceToAll:
         forwarder_cores = input_forwarder_cores
         forwarder_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in forwarder_cores])
 
+        position_enabled = position_tensor_mesh is not None
+
         input_l_per_device = ttnn.get_device_tensors(input_tensor_l_mesh)
         input_ms_per_device = ttnn.get_device_tensors(input_tensor_ms_mesh)
         output_l_per_device = ttnn.get_device_tensors(output_tensor_l_mesh)
         r1_recv_per_device = ttnn.get_device_tensors(r1_recv_tensor_mesh)
         r2_recv_per_device = ttnn.get_device_tensors(r2_recv_tensor_mesh)
         fwd_scratch_per_device = ttnn.get_device_tensors(forwarder_scratch_mesh)
+        position_per_device = None
+
+        if position_enabled:
+            position_per_device = ttnn.get_device_tensors(position_tensor_mesh)
 
         # Scatter destination setup (optional)
         scatter_enabled = scatter_dest_tensor_mesh is not None and scatter_dest_grid is not None
@@ -157,6 +229,10 @@ class SdpaReduceToAll:
                 r1_recv_device = r1_recv_per_device[device_idx]
                 r2_recv_device = r2_recv_per_device[device_idx]
                 fwd_scratch_device = fwd_scratch_per_device[device_idx]
+
+                position_device = None
+                if position_enabled:
+                    position_device = position_per_device[device_idx]
 
                 device = input_l_device.device()
 
@@ -229,6 +305,7 @@ class SdpaReduceToAll:
                 cb_l_out = 8
                 cb_ms_out = 9
                 cb_packet_slot = 10
+                cb_position = 11
 
                 # Kernel compile-time args
                 reader_ct_args = [
@@ -242,6 +319,8 @@ class SdpaReduceToAll:
                     l_chunk_size_bytes,
                     num_l_chunks,
                     tiles_per_l_chunk,
+                    cb_position,  # Position CB index
+                    1 if position_enabled else 0,  # Enable/disable position
                 ]
 
                 # Scatter compile-time parameters
@@ -301,6 +380,9 @@ class SdpaReduceToAll:
                     scale_val,
                     tiles_per_l_chunk,
                     num_l_chunks,
+                    cb_position,  # Position CB index
+                    1 if position_enabled else 0,
+                    final_reduction,
                 ]
 
                 forwarder_ct_args = [slots_per_round, slot_size, r2_buffer_offset]
@@ -450,6 +532,24 @@ class SdpaReduceToAll:
                     ],
                 )
 
+                # Position CB (aliased from position tensor)
+                if position_enabled:
+                    cb_position_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_position, position_device)
+                else:
+                    # Dummy CB when position is disabled
+                    cb_position_desc = ttnn.CBDescriptor(
+                        total_size=aligned_page_size,
+                        core_ranges=shard_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=cb_position,
+                                data_format=input_dtype,
+                                page_size=aligned_page_size,
+                                tile=tile_desc,
+                            )
+                        ],
+                    )
+
                 # Semaphores
                 forwarder_semaphores = [
                     ttnn.SemaphoreDescriptor(id=fwd_r1_sem_id, core_ranges=forwarder_core_range_set, initial_value=0),
@@ -479,12 +579,14 @@ class SdpaReduceToAll:
                         cb_l_out_desc,
                         cb_ms_out_desc,
                         cb_packet_slot_desc,
+                        cb_position_desc,
                     ],
                 )
 
                 # Runtime args
                 reader_rt_args = ttnn.RuntimeArgs()
                 writer_rt_args = ttnn.RuntimeArgs()
+                compute_rt_args = ttnn.RuntimeArgs()
                 forwarder_brisc_rt_args = ttnn.RuntimeArgs()
                 forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
 
@@ -497,6 +599,10 @@ class SdpaReduceToAll:
 
                 fwd_coord = ttnn.MeshCoordinate(fwd_row, fwd_col)
                 bwd_coord = ttnn.MeshCoordinate(bwd_row, bwd_col)
+
+                # Calculate forward and backward device indices (for position mask lookup)
+                fwd_device_idx = fwd_row * mesh_cols + fwd_col
+                bwd_device_idx = bwd_row * mesh_cols + bwd_col
 
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
@@ -575,6 +681,49 @@ class SdpaReduceToAll:
                             r2_slot_idx,
                         ]
 
+                        # Compute runtime args: device indices for position lookup
+                        if position_enabled:
+                            # Determine this core's neighbor device IDs based on direction
+                            # Type A: R1=forward, R2=backward
+                            # Type B: R1=backward, R2=forward
+                            if is_type_a:
+                                r1_neighbor_device_idx = fwd_device_idx
+                                r2_neighbor_device_idx = bwd_device_idx
+                            else:
+                                r1_neighbor_device_idx = bwd_device_idx
+                                r2_neighbor_device_idx = fwd_device_idx
+
+                            # Compute R2 neighbor's R1 neighbor based on R2 neighbor's type
+                            # R2 neighbor's worker_idx at the same core position
+                            r2_neighbor_worker_idx = worker_idx  # Same relative position in the link
+                            r2_neighbor_row = r2_neighbor_device_idx // mesh_cols
+                            r2_neighbor_is_type_a = ((r2_neighbor_row + r2_neighbor_worker_idx) % 2) == 0
+
+                            # R2 neighbor's R1 direction
+                            if r2_neighbor_is_type_a:
+                                # R2 neighbor is Type A → its R1 is forward
+                                r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx + 1) % num_devices
+                            else:
+                                # R2 neighbor is Type B → its R1 is backward
+                                r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx - 1 + num_devices) % num_devices
+
+                            # Pass device indices - kernel will read position values from CB
+                            compute_rt_args[core.x][core.y] = [
+                                device_idx,
+                                r1_neighbor_device_idx,
+                                r2_neighbor_device_idx,
+                                r2_neighbor_r1_neighbor_idx,
+                            ]
+
+                            reader_rt_args[core.x][core.y].extend(
+                                [
+                                    device_idx,
+                                    r1_neighbor_device_idx,
+                                    r2_neighbor_device_idx,
+                                    r2_neighbor_r1_neighbor_idx,
+                                ]
+                            )
+
                         # Append scatter runtime args (only when scatter is enabled)
                         if scatter_enabled:
                             global_worker_idx = link_idx * cores_per_link + worker_idx
@@ -618,6 +767,7 @@ class SdpaReduceToAll:
 
                 program.kernels[0].runtime_args = reader_rt_args
                 program.kernels[1].runtime_args = writer_rt_args
+                program.kernels[2].runtime_args = compute_rt_args
                 program.kernels[3].runtime_args = forwarder_brisc_rt_args
                 program.kernels[4].runtime_args = forwarder_ncrisc_rt_args
 
@@ -633,6 +783,8 @@ class SdpaReduceToAll:
         ]
         if scatter_enabled:
             io_tensors.append(scatter_dest_tensor_mesh)
+        if position_enabled:
+            io_tensors.append(position_tensor_mesh)
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return output_tensor_l_mesh
