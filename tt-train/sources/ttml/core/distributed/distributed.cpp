@@ -5,7 +5,7 @@
 #include "core/distributed/distributed.hpp"
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/operations/creation.hpp>
+#include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
