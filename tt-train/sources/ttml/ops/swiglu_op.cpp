@@ -30,17 +30,18 @@ autograd::TensorPtr swiglu(
     auto out = autograd::create_tensor(swiglu_fw_result);
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {
+        using ttnn::operations::matmul::matmul_full_grid_precise;
         auto dL_dout = out->get_grad();
         // Recompute forward intermediates for backward pass
-        auto linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value());  // x @ w1
-        auto gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value());     // x @ w3
+        auto linear1 = matmul_full_grid_precise(tensor->get_value(), w1->get_value());  // x @ w1
+        auto gate = matmul_full_grid_precise(tensor->get_value(), w3->get_value());     // x @ w3
         auto sigmoid_linear1 = ttnn::sigmoid(linear1);                            // sigmoid(x @ w1)
         auto swished = ttnn::multiply(linear1, sigmoid_linear1);                  // silu(x @ w1)
         auto gated = ttnn::multiply(swished, gate);                               // silu(x @ w1) * (x @ w3)
-        auto projected = ttnn_fixed::matmul(gated, w2->get_value());              // gated @ w2
+        auto projected = matmul_full_grid_precise(gated, w2->get_value());        // gated @ w2
 
         // Backward through final matmul: dL_dgated = dL_dout @ w2^T
-        auto dL_dgated = ttnn_fixed::matmul(dL_dout, w2->get_value(), false, true);
+        auto dL_dgated = matmul_full_grid_precise(dL_dout, w2->get_value(), false, true);
 
         // Backward through element-wise multiply:
         // dL_dswished = dL_dgated * gate
@@ -56,24 +57,24 @@ autograd::TensorPtr swiglu(
                 ttnn::multiply(linear1, ttnn::subtract(ttnn::ones_like(sigmoid_linear1), sigmoid_linear1))));
 
         auto dL_dlinear1 = ttnn::multiply(dL_dswished, silu_grad);
-        auto dL_dtensor_from_w1 = ttnn_fixed::matmul(dL_dlinear1, w1->get_value(), false, true);
+        auto dL_dtensor_from_w1 = matmul_full_grid_precise(dL_dlinear1, w1->get_value(), false, true);
 
-        auto dL_dtensor_from_w3 = ttnn_fixed::matmul(dL_dgate, w3->get_value(), false, true);
+        auto dL_dtensor_from_w3 = matmul_full_grid_precise(dL_dgate, w3->get_value(), false, true);
 
         // Combine gradients from both paths
         auto dL_dtensor = ttnn::add(dL_dtensor_from_w1, dL_dtensor_from_w3);
         tensor->add_grad(dL_dtensor);
 
         // W2 grad: g^T @ dL_dout
-        auto dL_dW2 = ttnn_fixed::matmul(gated, dL_dout, true, false);
+        auto dL_dW2 = matmul_full_grid_precise(gated, dL_dout, true, false);
         w2->add_grad(ttnn::sum(dL_dW2, 0, true));
 
         // W1 grad: x^T @ dL_dlinear1
-        auto dL_dW1 = ttnn_fixed::matmul(tensor->get_value(), dL_dlinear1, true, false);
+        auto dL_dW1 = matmul_full_grid_precise(tensor->get_value(), dL_dlinear1, true, false);
         w1->add_grad(ttnn::sum(dL_dW1, 0, true));
 
         // W3 grad: x^T @ dL_dgate
-        auto dL_dW3 = ttnn_fixed::matmul(tensor->get_value(), dL_dgate, true, false);
+        auto dL_dW3 = matmul_full_grid_precise(tensor->get_value(), dL_dgate, true, false);
         w3->add_grad(ttnn::sum(dL_dW3, 0, true));
     };
 

@@ -36,6 +36,7 @@ ttnn::Tensor group_shared_matmul(
     const ttnn::Tensor& kv_tensor,
     bool transpose_a = false,
     bool transpose_b = false) {
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
@@ -46,7 +47,7 @@ ttnn::Tensor group_shared_matmul(
     }
     if (heads == groups) {
         // no broadcasting needed
-        return ttnn_fixed::matmul(query_tensor, kv_tensor, transpose_a, transpose_b);
+        return matmul_full_grid_precise(query_tensor, kv_tensor, transpose_a, transpose_b);
     }
     // result will have shape (batch_num, heads, M, N)
     // we determine M,N based on the transpose options
@@ -62,7 +63,7 @@ ttnn::Tensor group_shared_matmul(
 
     // repeat kv_tensor to group size for each group (manual bcast)
     ttnn::Tensor kv_tensor_repeated = ttnn::repeat(kv_tensor_batched, ttnn::Shape{1U, heads / groups, 1U, 1U});
-    auto bcasted_mm = ttnn_fixed::matmul(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
+    auto bcasted_mm = matmul_full_grid_precise(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
     auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{batch_num, heads, M, N});
     return reshaped_mm;
 }
@@ -213,9 +214,9 @@ autograd::TensorPtr scaled_dot_product_attention(
             // dL_dQ = dL_dscaled_dot @ key
             ttnn::Tensor dL_dQ =
                 group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
-
+            using ttnn::operations::matmul::matmul_full_grid_precise;
             // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
-            ttnn::Tensor dL_dK = ttnn_fixed::matmul(
+            ttnn::Tensor dL_dK = matmul_full_grid_precise(
                 dL_dscaled_dot,
                 query->get_value(),
                 /*transpose_a=*/true,
@@ -223,7 +224,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
 
             // dL_dV = Σ_g [attention_weights^T @ dL_dout]
-            ttnn::Tensor dL_dV = ttnn_fixed::matmul(
+            ttnn::Tensor dL_dV = matmul_full_grid_precise(
                 attention_weights,
                 dL_dout,
                 /*transpose_a=*/true,
@@ -309,10 +310,11 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     const float scale = 1.0F / std::sqrt(static_cast<float>(query->get_value().logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
     auto qk_t =
-        ttnn_fixed::matmul(query->get_value(), key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+        matmul_full_grid_precise(query->get_value(), key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
     // (B, H, S, S) * scale
     auto qk_scaled = ttnn::multiply(qk_t, scale);
     if (mask.has_value()) {
@@ -324,18 +326,18 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
         ttnn::sigmoid(ttnn::subtract(qk_scaled, std::log(static_cast<float>(query->get_value().logical_shape()[-2]))));
 
     // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-    auto attention_qkv =
-        ttnn_fixed::matmul(attention_weights, value->get_value(), /* transpose_a */ false, /* transpose_b */ false);
+    auto attention_qkv = matmul_full_grid_precise(
+        attention_weights, value->get_value(), /* transpose_a */ false, /* transpose_b */ false);
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, qk_t, qk_scaled, attention_weights, attention_qkv, out, mask]() {
             auto grad_output = out->get_grad();
             // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-            auto grad_v =
-                ttnn_fixed::matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
-            auto grad_attention_weights =
-                ttnn_fixed::matmul(grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+            auto grad_v = matmul_full_grid_precise(
+                attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
+            auto grad_attention_weights = matmul_full_grid_precise(
+                grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
             auto grad_scaled_dot =
                 ttnn::sigmoid_bw(
                     grad_attention_weights,
@@ -346,14 +348,14 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
                 grad_scaled_dot = ttnn::where(mask.value()->get_value(), grad_scaled_dot, /* other */ 0.0F);
             }
 
-            auto grad_q = ttnn_fixed::matmul(
+            auto grad_q = matmul_full_grid_precise(
                 grad_scaled_dot,
                 key->get_value(),
                 /* transpose_a */ false,
                 /* transpose_b */ false);
             grad_q = ttnn::multiply(grad_q, scale);
 
-            auto grad_k = ttnn_fixed::matmul(
+            auto grad_k = matmul_full_grid_precise(
                 grad_scaled_dot,
                 query->get_value(),
                 /* transpose_a */ true,

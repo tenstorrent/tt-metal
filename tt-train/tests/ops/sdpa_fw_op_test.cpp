@@ -365,6 +365,7 @@ ttnn::Tensor group_shared_matmul(
     bool transpose_a = false,
     bool transpose_b = false) {
     using namespace ttml;
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
@@ -376,7 +377,7 @@ ttnn::Tensor group_shared_matmul(
     }
     if (heads == groups) {
         // no broadcasting needed
-        return ttnn_fixed::matmul(query_tensor, kv_tensor, transpose_a, transpose_b);
+        return matmul_full_grid_precise(query_tensor, kv_tensor, transpose_a, transpose_b);
     }
     // result will have shape (batch_num, heads, M, N)
     // we determine M,N based on the transpose options
@@ -392,7 +393,7 @@ ttnn::Tensor group_shared_matmul(
 
     // repeat kv_tensor to group size for each group (manual bcast)
     ttnn::Tensor kv_tensor_repeated = ttnn::repeat(kv_tensor_batched, ttnn::Shape{1U, heads / groups, 1U, 1U});
-    auto bcasted_mm = ttnn_fixed::matmul(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
+    auto bcasted_mm = matmul_full_grid_precise(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
     auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{batch_num, heads, M, N});
     return reshaped_mm;
 }

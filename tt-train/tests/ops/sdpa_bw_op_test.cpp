@@ -311,6 +311,7 @@ ttnn::Tensor groups_shared_matmul(
     const bool transpose_a = false,
     const bool transpose_b = false) {
     using namespace ttml;
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     const auto [batch_num, heads, seq_len, embedding_dim] = query_tensor.logical_shape().to_array_4D();
     const auto [batch_num_v, groups, seq_len_v, embedding_dim_v] = kv_tensor.logical_shape().to_array_4D();
     if (batch_num != batch_num_v) {
@@ -322,7 +323,7 @@ ttnn::Tensor groups_shared_matmul(
     }
     if (heads == groups) {
         // no broadcasting needed
-        return ttnn_fixed::matmul(query_tensor, kv_tensor, transpose_a, transpose_b);
+        return matmul_full_grid_precise(query_tensor, kv_tensor, transpose_a, transpose_b);
     }
     // result will have shape (batch_num, heads, M, N)
     // we determine M,N based on the transpose options
@@ -338,7 +339,7 @@ ttnn::Tensor groups_shared_matmul(
 
     // repeat kv_tensor to group size for each group (manual bcast)
     ttnn::Tensor kv_tensor_repeated = ttnn::repeat(kv_tensor_batched, ttnn::Shape{1U, heads / groups, 1U, 1U});
-    auto bcasted_mm = ttnn_fixed::matmul(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
+    auto bcasted_mm = matmul_full_grid_precise(query_tensor_grouped, kv_tensor_repeated, transpose_a, transpose_b);
     auto reshaped_mm = ttnn::reshape(bcasted_mm, ttnn::Shape{batch_num, heads, M, N});
     return reshaped_mm;
 }
@@ -446,8 +447,9 @@ std::vector<ttnn::Tensor> composite_sdpa(
     // dL_dQ = dL_dscaled_dot @ key
     ttnn::Tensor dL_dQ = groups_shared_matmul(dL_dscaled_dot, key, /*transpose_a=*/false, /*transpose_b=*/false);
 
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
-    ttnn::Tensor dL_dK = ttnn_fixed::matmul(
+    ttnn::Tensor dL_dK = matmul_full_grid_precise(
         dL_dscaled_dot,
         query,
         /*transpose_a=*/true,
@@ -455,7 +457,7 @@ std::vector<ttnn::Tensor> composite_sdpa(
     dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
 
     // dL_dV = Σ_g [attention_weights^T @ dL_dout]
-    ttnn::Tensor dL_dV = ttnn_fixed::matmul(
+    ttnn::Tensor dL_dV = matmul_full_grid_precise(
         attention_weights,
         dL_dout,
         /*transpose_a=*/true,

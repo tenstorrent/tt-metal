@@ -9,7 +9,6 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 using namespace tt::constants;
@@ -27,13 +26,14 @@ void ttnn_linear_backward(
     auto reshaped_tensor = ttnn::reshape(
         tensor_value, ttnn::Shape({static_cast<uint32_t>(volume_without_features), tensor_value.logical_shape()[-1]}));
 
+    using ttnn::operations::matmul::matmul_full_grid_precise;
     auto reshaped_grad = ttnn::reshape(
         out->get_grad(),
         ttnn::Shape({static_cast<uint32_t>(volume_without_features), out->get_grad().logical_shape()[-1]}));
     auto reshaped_weight_grad =
-        ttnn_fixed::matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false);
+        matmul_full_grid_precise(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false);
     auto reshaped_tensor_grad =
-        ttnn_fixed::matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false);
+        matmul_full_grid_precise(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false);
     if (bias) {
         auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
         auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape());
