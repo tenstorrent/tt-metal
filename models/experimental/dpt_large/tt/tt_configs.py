@@ -283,8 +283,9 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Single-card N300 often exposes a harvested 8x7 worker grid.
-        grid = (8, 7)
+        # Use a 2-row sharding-friendly grid so padded seq tiles divide cleanly
+        # (e.g., 384->seq_len=640 -> 20 tiles; 20 % 4 == 0).
+        grid = (8, 4)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
