@@ -152,12 +152,13 @@ def build_mpi_args(cfg: ModeConfig) -> str:
     return (
         f"--host {cfg.hosts_str} "
         f"--map-by rankfile:file={cfg.rankfile} "
-        "--mca btl self,tcp "
-        "--mca btl_tcp_if_include cnx1 "
         "--bind-to none "
         "--output-filename logs/mpi_job "
-        "--tag-output"
     )
+
+
+def tcp_interface() -> str:
+    return "cnx1"
 
 
 def build_inner_command(
@@ -237,7 +238,18 @@ def build_tt_run_command(
     else:
         inner_bash_cmd = build_inner_command(command, config_type, host_cfg, tt_metal_home)
 
-    tt_run_cmd = ["tt-run", "--rank-binding", rank_binding_path, "--mpi-args", mpi_args, "bash", "-c", inner_bash_cmd]
+    tt_run_cmd = [
+        "tt-run",
+        "--tcp-interface",
+        tcp_interface(),
+        "--rank-binding",
+        rank_binding_path,
+        "--mpi-args",
+        mpi_args,
+        "bash",
+        "-c",
+        inner_bash_cmd,
+    ]
 
     return tt_run_cmd, cfg, host_cfg, hostname
 

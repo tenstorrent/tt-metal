@@ -14,22 +14,29 @@ fi
 run_quad_galaxy_unit_tests() {
   fail=0
 
-  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
+  # tt-run --tcp-interface handles tcp and tag flags
+  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
+  local tcp_interface="cnx1"
+  local mpi_host="--host g05glx04,g05glx03,g05glx02,g05glx01"
+  local mpi_args="$mpi_host $mpi_args_base"
+
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args="$mpi_host $mpirun_args_base"
+
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
-  #mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
-  #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
+  #tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -44,7 +51,8 @@ setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output"
+    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -66,7 +74,8 @@ setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
     export RANKFILE=/etc/mpirun/rankfile
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output"
+    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -86,9 +95,9 @@ setup_quad_galaxy_env() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
+    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
-        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && source ./python_env/bin/activate && $1"
+        "$1"
 }
 
 ###############################################################################
