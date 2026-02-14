@@ -204,7 +204,6 @@ int __attribute__((noinline)) main(void) {
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
-    disable_interrupts();
     update_next_link_status_check_timestamp();
 
     noc_index = 0;
