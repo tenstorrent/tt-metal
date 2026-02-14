@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -461,16 +462,10 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
+        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));

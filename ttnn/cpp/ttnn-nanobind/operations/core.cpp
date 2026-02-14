@@ -272,7 +272,7 @@ void py_module(nb::module_& mod) {
     mod.def(
         "copy_host_to_device_tensor",
         [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, const std::optional<QueueId>& cq_id) {
-            tt::tt_metal::tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
+            copy_to_device(host_tensor, device_tensor, cq_id);
         },
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),
@@ -312,7 +312,7 @@ void py_module(nb::module_& mod) {
            ttnn::Tensor& host_tensor,
            bool blocking = true,
            std::optional<ttnn::QueueId> cq_id = std::nullopt) {
-            tt::tt_metal::tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+            copy_to_host(device_tensor, host_tensor, blocking, cq_id);
         },
         nb::arg("device_tensor"),
         nb::arg("host_tensor"),

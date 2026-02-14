@@ -6,6 +6,7 @@
 #include "attn_matmul_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
@@ -110,14 +111,14 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
 
 tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_a),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_a.storage_type());
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_b),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_b.storage_type());
 
     auto program_factory = select_program_factory(args, tensor_args);
 
