@@ -783,9 +783,17 @@ class TTAttention:
 
             if explicit_sharded_attn and getattr(self, "_q_bias_tt", None) is not None:
                 # Apply Q/K/V biases post-split to avoid large sharded broadcast in QKV linear.
-                q_tt = ttnn.add(q_tt, self._q_bias_tt)
-                k_tt = ttnn.add(k_tt, self._k_bias_tt)
-                v_tt = ttnn.add(v_tt, self._v_bias_tt)
+                qb, kb, vb = self._q_bias_tt, self._k_bias_tt, self._v_bias_tt
+                # Broadcast+add kernels are sensitive to bias placement; keep biases in L1.
+                try:
+                    qb = ttnn.to_memory_config(qb, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    kb = ttnn.to_memory_config(kb, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    vb = ttnn.to_memory_config(vb, memory_config=ttnn.L1_MEMORY_CONFIG)
+                except Exception:
+                    pass
+                q_tt = ttnn.add(q_tt, qb)
+                k_tt = ttnn.add(k_tt, kb)
+                v_tt = ttnn.add(v_tt, vb)
 
             if explicit_sharded_attn:
                 # Explicit attention path (ViT TTNN pattern) on sharded operands:
