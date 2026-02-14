@@ -145,7 +145,7 @@ class TTLidarCenterNetHead:
             height,
             width,
         )
-        center_heatmap_pred = ttnn.sigmoid(center_heatmap_pred, vector_mode=4, fast_and_approximate_mode=False)
+        center_heatmap_pred = ttnn.sigmoid(center_heatmap_pred, vector_mode=4, mode=ttnn.SigmoidMode.Accurate)
 
         # Apply wh head (outputs 2 channels)
         wh_pred = self._apply_head(

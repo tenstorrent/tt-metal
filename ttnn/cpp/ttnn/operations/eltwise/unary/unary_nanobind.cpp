@@ -1164,6 +1164,8 @@ template <typename unary_operation_t>
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
+        Deprecated in favor of ttnn.sigmoid.
+
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1214,7 +1216,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
 }
 
 template <typename unary_operation_t>
-void bind_sigmoid_mode_appx(nb::module_& mod) {
+void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -1227,7 +1229,7 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
 
         Keyword Args:
             vector_mode (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            mode (ttnn.SigmoidMode, optional): Select sigmoid mode to use. Defaults to `SigmoidMode.Accurate`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1248,6 +1250,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
         ttnn::sigmoid.base_name(),
         ttnn::sigmoid.python_fully_qualified_name());
 
+    mod.attr("SigmoidMode") =
+        nb::enum_<Sigmoid::SigmoidMode>(mod, "SigmoidMode")
+            .value("Accurate", Sigmoid::SigmoidMode::ACCURATE, "Most accurate, but least performant.")
+            .value(
+                "AccurateWithFastExp",
+                Sigmoid::SigmoidMode::ACCURATE_FAST_EXP,
+                "Similar to accurate, but uses fast and approximate exp")
+            .value("FastApproximate", Sigmoid::SigmoidMode::FAST_APPROXIMATE, "Fastest, but least accurate.");
+
     bind_registered_operation(
         mod,
         ttnn::sigmoid,
@@ -1256,15 +1267,15 @@ void bind_sigmoid_mode_appx(nb::module_& mod) {
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const int vector_mode,
-               const bool parameter,
+               const Sigmoid::SigmoidMode sigmoid_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
+                return self(input_tensor, vector_mode, sigmoid_mode, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("vector_mode") = 4,
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("mode") = Sigmoid::SigmoidMode::ACCURATE,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }
@@ -2313,7 +2324,7 @@ void py_module(nb::module_& mod) {
     bind_tanh_like(mod, ttnn::tanh);
     bind_tanh_like(mod, ttnn::tanhshrink);
     bind_sigmoid_accurate<decltype(ttnn::sigmoid_accurate)>(mod);
-    bind_sigmoid_mode_appx<decltype(ttnn::sigmoid)>(mod);
+    bind_sigmoid<decltype(ttnn::sigmoid)>(mod);
 
     bind_unary_chain<decltype(ttnn::unary_chain)>(mod);
     bind_identity<decltype(ttnn::identity)>(mod);

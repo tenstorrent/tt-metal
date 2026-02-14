@@ -116,7 +116,8 @@ class Conv2dDynamicSamePadding:
         ih, iw = self.input_height, self.input_width
         kh, kw = self.kernel_size
         sh, sw = self.stride
-        oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
+        # change the output size according to stride ! ! !
+        oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)
         self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
 
@@ -215,9 +216,9 @@ class MBConvBlock:
     def __call__(self, x):
         if not self.is_depthwise_first:
             x = self._expand_conv(x)
-            x = x * ttnn.sigmoid_accurate(x, True)
+            x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         x = self._depthwise_conv(x)
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         mul1 = x
 
         if x.is_sharded():
@@ -228,10 +229,10 @@ class MBConvBlock:
 
         x = self._se_reduce(x)
 
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         x = self._se_expand(x)
 
-        x = ttnn.sigmoid_accurate(x, True)
+        x = ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
         mul1_interleaved = mul1
         if mul1.is_sharded():
             mul1_interleaved = ttnn.sharded_to_interleaved(mul1, ttnn.L1_MEMORY_CONFIG)
@@ -397,7 +398,8 @@ class Efficientnetb0:
 
     def __call__(self, x):
         N, C, H, W = x.shape
-        min_channels = 16  # Padding from image channels (3) to min channels (16)
+        # Padding from image channels (3) to min channels (16)
+        min_channels = 16
         if C < min_channels:
             channel_padding_needed = min_channels - C
             nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
@@ -475,7 +477,7 @@ class Efficientnetb0:
 
         x = self._conv_head(x)
 
-        x = x * ttnn.sigmoid_accurate(x, True)
+        x = x * ttnn.sigmoid(x, mode=ttnn.SigmoidMode.AccurateWithFastExp)
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.global_avg_pool2d(x)

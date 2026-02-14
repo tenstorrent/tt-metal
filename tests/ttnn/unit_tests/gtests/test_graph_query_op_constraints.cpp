@@ -264,13 +264,12 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         const auto& output_spec = input_spec;
         // Add default parameters
         int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
-        bool approximateMode = false;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::sigmoid,
             device,
             input_spec,
             vectorMode,
-            approximateMode,
+            ::ttnn::operations::unary::Sigmoid::SigmoidMode::ACCURATE,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);

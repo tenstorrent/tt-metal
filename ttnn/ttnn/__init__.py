@@ -366,6 +366,8 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+from ttnn.operations.unary import SigmoidMode
+
 divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
