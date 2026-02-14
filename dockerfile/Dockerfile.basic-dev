@@ -1,51 +1,119 @@
+# Basic Development Dockerfile
+# Optimized with multi-stage builds for tool caching.
+#
+# Uses pre-built tool images from GHCR for cmake, SFPI, OpenMPI, and ccache
+# to avoid repeated downloads from upstream sources.
+#
+# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
+# For local builds, you MUST build the tool images first (see build-local.sh or below).
+#
+# To build locally, first build tool images:
+#   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
+#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
+#   docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
+#
+# Then build with:
+#   docker build -f dockerfile/Dockerfile.basic-dev \
+#     --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
+#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
+#     --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
+#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local .
+
+#############################################################
+# Tool image configuration
+# NOTE: ARGs used in FROM must be declared before any FROM statement
+#############################################################
+
 ARG UBUNTU_VERSION=22.04
+
+# Tool images from GHCR (built by Dockerfile.tools)
+ARG TOOL_CMAKE_IMAGE=scratch
+ARG TOOL_SFPI_IMAGE=scratch
+ARG TOOL_OPENMPI_IMAGE=scratch
+ARG TOOL_CCACHE_IMAGE=scratch
+
+#############################################################
+# Tool layers - pulled from pre-built GHCR images
+#############################################################
+
+# cmake layer - pre-built from GHCR
+FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
+
+# SFPI layer - pre-built from GHCR
+FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
+# OpenMPI layer - pre-built from GHCR (ULFM support)
+FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
+
+# ccache layer - pre-built from GHCR
+FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
+
+#############################################################
+# uv layer - copy from official distroless image
+# Using SHA256 pinning for reproducible builds
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+#############################################################
+# Base image
+#############################################################
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
-# Re-declare ARG make it available in the build stage
+# Re-declare ARG to make it available in the build stage
 ARG UBUNTU_VERSION
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+ARG OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
+
+# Copy uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Copy cmake from pre-built tool image
+COPY --from=cmake-layer /install/ /usr/local/
+
+# Copy OpenMPI from pre-built tool image
+COPY --from=openmpi-layer /install/ /opt/
+
+# Copy ccache from pre-built tool image
+COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+
 # Install basic tools to build
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
-    && apt-get update && apt-get install -y \
-    cmake \
     ninja-build \
     g++-12 \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install mpi-ulfm from the tenstorrent repository
-RUN set -eux; \
-    apt-get update && \
-    apt-get install -y -f \
-        wget ca-certificates && \
-    TMP_DIR="$(mktemp -d)" && \
-    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
-    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
-    apt-get install -f -y "$TMP_DIR/ompi.deb" && \
-    rm -rf "$TMP_DIR" && \
-    rm -rf /var/lib/apt/lists/*
-
+#############################################################
+# Basic TTNN Runtime image
 #############################################################
 
 FROM base AS basic-ttnn-runtime
 
 # Install basic runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     python3-dev \
     python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
-
-# Install the SFPI compiler
-COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
-COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
 # Set up virtual environment using uv
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -53,7 +121,7 @@ ENV PYTHON_ENV_DIR=/opt/venv
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv $PYTHON_ENV_DIR
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"

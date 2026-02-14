@@ -1,6 +1,9 @@
 name: "Build all Docker images"
 # =============================================================================
-# This workflow builds ALL Docker images needed by the CI pipeline in parallel.
+# This workflow builds ALL Docker images needed by the CI pipeline by calling
+# build-docker-artifact.yaml once per platform in parallel. build-docker-artifact
+# is the single source of truth for hash calculation, tool images, and image builds.
+#
 # It should be called once at the start of the pipeline (e.g., by merge-gate.yaml),
 # and all subsequent jobs should use the pre-built images via the outputs.
 #
@@ -12,380 +15,74 @@ name: "Build all Docker images"
 on:
   workflow_call:
     outputs:
-      # Ubuntu 22.04 images
+      # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
       ubuntu-2204-ci-build-tag:
         description: "Docker tag for Ubuntu 22.04 CI Build image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2204-ci-build-tag }}
+        value: ${{ jobs.build-2204.outputs.ci-build-tag }}
       ubuntu-2204-ci-test-tag:
         description: "Docker tag for Ubuntu 22.04 CI Test image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2204-ci-test-tag }}
+        value: ${{ jobs.build-2204.outputs.ci-test-tag }}
       ubuntu-2204-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Dev image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2204-dev-tag }}
+        value: ${{ jobs.build-2204.outputs.dev-tag }}
       ubuntu-2204-basic-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Basic Dev image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
+        value: ${{ jobs.build-2204.outputs.basic-dev-tag }}
       ubuntu-2204-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 22.04 Basic TTNN Runtime image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-      # Ubuntu 24.04 images
+        value: ${{ jobs.build-2204.outputs.basic-ttnn-runtime-tag }}
+      # Ubuntu 24.04 images (from build-docker-artifact platform=Ubuntu 24.04)
       ubuntu-2404-ci-build-tag:
         description: "Docker tag for Ubuntu 24.04 CI Build image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2404-ci-build-tag }}
+        value: ${{ jobs.build-2404.outputs.ci-build-tag }}
       ubuntu-2404-ci-test-tag:
         description: "Docker tag for Ubuntu 24.04 CI Test image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2404-ci-test-tag }}
+        value: ${{ jobs.build-2404.outputs.ci-test-tag }}
       ubuntu-2404-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Dev image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2404-dev-tag }}
+        value: ${{ jobs.build-2404.outputs.dev-tag }}
       ubuntu-2404-basic-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Basic Dev image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
+        value: ${{ jobs.build-2404.outputs.basic-dev-tag }}
       ubuntu-2404-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 24.04 Basic TTNN Runtime image"
-        value: ${{ jobs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-      # ManyLinux image (shared)
+        value: ${{ jobs.build-2404.outputs.basic-ttnn-runtime-tag }}
+      # ManyLinux image (shared; same tag from either platform run)
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
-        value: ${{ jobs.check-images.outputs.manylinux-tag }}
+        value: ${{ jobs.build-2204.outputs.manylinux-tag }}
   workflow_dispatch:
 
 permissions:
   packages: write
 
 jobs:
-  check-images:
-    name: "🔍 Check existing images"
-    runs-on: ubuntu-latest
-    outputs:
-      # Ubuntu 22.04
-      ubuntu-2204-ci-build-tag: ${{ steps.ubuntu-2204-tags.outputs.ci-build-tag }}
-      ubuntu-2204-ci-test-tag: ${{ steps.ubuntu-2204-tags.outputs.ci-test-tag }}
-      ubuntu-2204-dev-tag: ${{ steps.ubuntu-2204-tags.outputs.dev-tag }}
-      ubuntu-2204-basic-dev-tag: ${{ steps.ubuntu-2204-tags.outputs.basic-dev-tag }}
-      ubuntu-2204-basic-ttnn-runtime-tag: ${{ steps.ubuntu-2204-tags.outputs.basic-ttnn-runtime-tag }}
-      ubuntu-2204-needs-build: ${{ steps.ubuntu-2204-check.outputs.needs-build }}
-      # Ubuntu 24.04
-      ubuntu-2404-ci-build-tag: ${{ steps.ubuntu-2404-tags.outputs.ci-build-tag }}
-      ubuntu-2404-ci-test-tag: ${{ steps.ubuntu-2404-tags.outputs.ci-test-tag }}
-      ubuntu-2404-dev-tag: ${{ steps.ubuntu-2404-tags.outputs.dev-tag }}
-      ubuntu-2404-basic-dev-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-dev-tag }}
-      ubuntu-2404-basic-ttnn-runtime-tag: ${{ steps.ubuntu-2404-tags.outputs.basic-ttnn-runtime-tag }}
-      ubuntu-2404-needs-build: ${{ steps.ubuntu-2404-check.outputs.needs-build }}
-      # ManyLinux
-      manylinux-tag: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
-      manylinux-needs-build: ${{ steps.manylinux-check.outputs.needs-build }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+  # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share
+  build-tools:
+    name: "🔧 Build tool images"
+    uses: ./.github/workflows/build-docker-tools.yaml
+    secrets: inherit
 
-      # Compute Ubuntu 22.04 tags
-      - name: Compute Ubuntu 22.04 tags
-        id: ubuntu-2204-tags
-        run: |
-          # Extra files not in COPY but affect the image
-          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
-
-          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
-
-      - name: Check Ubuntu 22.04 images exist
-        id: ubuntu-2204-check
-        run: |
-          if docker manifest inspect ${{ steps.ubuntu-2204-tags.outputs.dev-tag }} > /dev/null 2>&1; then
-            echo "Ubuntu 22.04 images exist"
-            echo "needs-build=false" >> $GITHUB_OUTPUT
-          else
-            echo "Ubuntu 22.04 images need to be built"
-            echo "needs-build=true" >> $GITHUB_OUTPUT
-          fi
-
-      # Compute Ubuntu 24.04 tags
-      - name: Compute Ubuntu 24.04 tags
-        id: ubuntu-2404-tags
-        run: |
-          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
-
-          HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
-
-      - name: Check Ubuntu 24.04 images exist
-        id: ubuntu-2404-check
-        run: |
-          if docker manifest inspect ${{ steps.ubuntu-2404-tags.outputs.dev-tag }} > /dev/null 2>&1; then
-            echo "Ubuntu 24.04 images exist"
-            echo "needs-build=false" >> $GITHUB_OUTPUT
-          else
-            echo "Ubuntu 24.04 images need to be built"
-            echo "needs-build=true" >> $GITHUB_OUTPUT
-          fi
-
-      # Compute ManyLinux tags
-      - name: Compute ManyLinux tags
-        id: manylinux-tags
-        run: |
-          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
-
-          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
-
-      - name: Check ManyLinux image exists
-        id: manylinux-check
-        run: |
-          if docker manifest inspect ${{ steps.manylinux-tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
-            echo "ManyLinux image exists"
-            echo "needs-build=false" >> $GITHUB_OUTPUT
-          else
-            echo "ManyLinux image needs to be built"
-            echo "needs-build=true" >> $GITHUB_OUTPUT
-          fi
-
-  # Build Ubuntu 22.04 images
-  build-ubuntu-2204:
+  # Ubuntu 22.04: full build via single source of truth; this run also builds manylinux (once for all platforms)
+  build-2204:
     name: "🐳 Ubuntu 22.04"
-    needs: check-images
-    if: needs.check-images.outputs.ubuntu-2204-needs-build == 'true'
-    timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push CI Build image
-        id: build-ci-build
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-build
-          tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}
-          build-args: UBUNTU_VERSION=22.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push CI Test image
-        id: build-ci-test
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-test
-          tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}
-          build-args: UBUNTU_VERSION=22.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Dev image
-        id: build-dev
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: dev
-          tags: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
-          build-args: UBUNTU_VERSION=22.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic Dev image
-        id: build-basic-dev
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: base
-          tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
-          build-args: UBUNTU_VERSION=22.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic TTNN runtime image
-        id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: basic-ttnn-runtime
-          tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=22.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+    needs: [build-tools]
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    with:
+      platform: "Ubuntu 22.04"
+      architecture: "amd64"
+      build-manylinux: true
+      tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
+    secrets: inherit
 
-  # Build Ubuntu 24.04 images
-  build-ubuntu-2404:
+  # Ubuntu 24.04: full build via single source of truth (runs in parallel with build-2204); skip manylinux (handled by build-2204)
+  build-2404:
     name: "🐳 Ubuntu 24.04"
-    needs: check-images
-    if: needs.check-images.outputs.ubuntu-2404-needs-build == 'true'
-    timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push CI Build image
-        id: build-ci-build
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-build
-          tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}
-          build-args: UBUNTU_VERSION=24.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push CI Test image
-        id: build-ci-test
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-test
-          tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}
-          build-args: UBUNTU_VERSION=24.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Dev image
-        id: build-dev
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: dev
-          tags: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
-          build-args: UBUNTU_VERSION=24.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic Dev image
-        id: build-basic-dev
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: base
-          tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
-          build-args: UBUNTU_VERSION=24.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic TTNN runtime image
-        id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: basic-ttnn-runtime
-          tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=24.04
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-  # Build ManyLinux image
-  build-manylinux:
-    name: "🐳 ManyLinux"
-    needs: check-images
-    if: needs.check-images.outputs.manylinux-needs-build == 'true'
-    timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push ManyLinux image
-        id: build-manylinux
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.manylinux
-          tags: ${{ needs.check-images.outputs.manylinux-tag }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-  # Update latest tags on main
-  tag-latest:
-    name: "🔄 Update latest tags"
-    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux]
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions/push-latest-image-to-ghcr
-          sparse-checkout-cone-mode: false
-
-      - name: "Push latest Ubuntu 22.04 Dev tag"
-        if: needs.check-images.outputs.ubuntu-2204-needs-build != 'true' || needs.build-ubuntu-2204.result == 'success'
-        uses: ./.github/actions/push-latest-image-to-ghcr
-        with:
-          docker-image-tag: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: "Push latest Ubuntu 24.04 Dev tag"
-        if: needs.check-images.outputs.ubuntu-2404-needs-build != 'true' || needs.build-ubuntu-2404.result == 'success'
-        uses: ./.github/actions/push-latest-image-to-ghcr
-        with:
-          docker-image-tag: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: "Push latest ManyLinux tag"
-        if: needs.check-images.outputs.manylinux-needs-build != 'true' || needs.build-manylinux.result == 'success'
-        uses: ./.github/actions/push-latest-image-to-ghcr
-        with:
-          docker-image-tag: ${{ needs.check-images.outputs.manylinux-tag }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+    needs: [build-tools]
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    with:
+      platform: "Ubuntu 24.04"
+      architecture: "amd64"
+      build-manylinux: false
+      tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
+    secrets: inherit

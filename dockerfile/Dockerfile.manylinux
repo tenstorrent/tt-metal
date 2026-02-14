@@ -1,24 +1,76 @@
+# ManyLinux Dockerfile
+# Uses pre-built tool images from GHCR for ccache, mold, SFPI, and OpenMPI (ULFM).
+# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
+# Tool layers are expected to be available when this image is built (no fallbacks).
+
+#############################################################
+# Tool image configuration
+# NOTE: ARGs used in FROM must be declared before any FROM statement
+#############################################################
+
+# Tool images from GHCR (built by Dockerfile.tools)
+ARG TOOL_CCACHE_IMAGE=scratch
+ARG TOOL_MOLD_IMAGE=scratch
+ARG TOOL_SFPI_IMAGE=scratch
+ARG TOOL_OPENMPI_IMAGE=scratch
+
+#############################################################
+# Tool layers - pulled from pre-built GHCR images
+#############################################################
+
+# ccache layer - pre-built from GHCR
+FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
+
+# mold layer - pre-built from GHCR
+FROM ${TOOL_MOLD_IMAGE} AS mold-layer
+
+# SFPI layer - pre-built from GHCR
+FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
+# OpenMPI layer - pre-built from GHCR (ULFM support)
+FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
+
+#############################################################
+# Main manylinux image
+#############################################################
+
 FROM quay.io/pypa/manylinux_2_34_x86_64
 
 # manylinux_2_34_x86_64 is AlmaLinux 9.7
+
+# OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
+# The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
+ARG OMPI_TAG=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+
+# Environment setup for OpenMPI and build tools
+ENV PATH=${OMPI_PREFIX}/bin:/usr/local/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
+ENV CC=clang
+ENV CXX=clang++
+ENV TRACY_NO_INVARIANT_CHECK=1
+ENV TRACY_NO_ISA_EXTENSIONS=1
+
+# Copy mold linker from pre-built tool image
+RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
+    cp -a /mold-staging/bin/* /usr/local/bin/ && \
+    cp -a /mold-staging/lib/* /usr/local/lib/ && \
+    mold --version
+
+# Copy ccache from pre-built tool image
+RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
+    cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
+    ccache --version
+
+# Copy OpenMPI (ULFM) from pre-built tool image
+COPY --from=openmpi-layer /install/ /opt/
 
 # Hack for CIv2
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
-RUN dnf remove -y epel-release || true
-
-# Copy install dependencies script and required files
-COPY install_dependencies.sh /tmp/install_dependencies.sh
-COPY tt_metal/sfpi-info.sh /tmp/tt_metal/sfpi-info.sh
-COPY tt_metal/sfpi-version /tmp/tt_metal/sfpi-version
-
-# Install system dependencies using the install_dependencies.sh script
-# Use --docker flag for Docker-specific optimizations and --no-distributed
-# since we build OpenMPI from source with ULFM support
-RUN chmod +x /tmp/install_dependencies.sh && \
-    /tmp/install_dependencies.sh --docker --no-distributed && \
-    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
 
 # Install additional packages needed for manylinux builds and OpenMPI compilation
 # that are not covered by the install_dependencies.sh script
@@ -26,6 +78,7 @@ RUN dnf install -y \
     autoconf \
     automake \
     bison \
+    bzip2 \
     ca-certificates \
     expat-devel \
     flex \
@@ -39,70 +92,21 @@ RUN dnf install -y \
     mpfr-devel \
     patchutils \
     pmix-devel \
+    slurm-devel \
     texinfo \
     wget \
     zlib-devel \
     && dnf clean all
 
-# Install mold linker for faster linking
-ARG MOLD_VERSION=2.40.4
-ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
-RUN wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
-    echo "${MOLD_SHA256}  /tmp/mold.tar.gz" | sha256sum -c - && \
-    tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
-    rm /tmp/mold.tar.gz && \
-    mold --version
+# Install system dependencies using the install_dependencies.sh script
+# Use --docker flag for Docker-specific optimizations and --no-distributed
 
-# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PATH="/usr/local/bin:$PATH"
+COPY install_dependencies.sh /tmp/install_dependencies.sh
+RUN chmod +x /tmp/install_dependencies.sh && \
+    /tmp/install_dependencies.sh --docker --no-distributed && \
+    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
 
-# Build ccache 4.7 from source
-WORKDIR /tmp
-RUN wget https://github.com/ccache/ccache/releases/download/v4.7/ccache-4.7.tar.gz && \
-    tar xzf ccache-4.7.tar.gz && \
-    cd ccache-4.7 && \
-    mkdir build && \
-    cd build && \
-    cmake \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DENABLE_TESTING=OFF \
-        -DWARNINGS_AS_ERRORS=FALSE \
-        -GNinja \
-        .. && \
-    ninja && \
-    ninja install && \
-    cd /tmp && \
-    rm -rf ccache-4.7* && \
-    echo "Installed ccache from source: $(ccache --version)"
-
-# Build OpenMPI 5.0.7 with ULFM support from source
-ARG OMPI_TAG=v5.0.7
-ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
-WORKDIR /tmp
-RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
-    cd ompi-src && \
-    git submodule update --init --recursive && \
-    ./autogen.pl && \
-    ./configure \
-        --prefix=${OMPI_PREFIX} \
-        --with-ft=ulfm \
-        --enable-wrapper-rpath \
-        --enable-mpirun-prefix-by-default \
-        --disable-mca-dso \
-        --disable-dlopen && \
-    make -j$(nproc) && \
-    make install && \
-    cd .. && \
-    rm -rf ompi-src
-
-
-# ENV needed
-ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
-ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
-ENV CC=clang
-ENV CXX=clang++
-ENV TRACY_NO_INVARIANT_CHECK=1
-ENV TRACY_NO_ISA_EXTENSIONS=1
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/

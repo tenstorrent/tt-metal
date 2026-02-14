@@ -80,3 +80,6 @@ build-verbosity = 2
 # To change: Set to "hardlink" for better disk space usage on local filesystems,
 # or "symlink" for fastest operations (requires same filesystem for cache and venv).
 link-mode = "copy"
+
+[tool.uv.extra-build-dependencies]
+mmcv = ["setuptools"]

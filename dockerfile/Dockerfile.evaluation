@@ -1,38 +1,110 @@
-FROM ubuntu:24.04
+# Evaluation Dockerfile
+# Optimized with multi-stage builds for tool caching.
+#
+# Uses pre-built tool images from GHCR for ccache and SFPI to avoid
+# repeated downloads from upstream sources during evaluation builds.
+#
+# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
+# For local builds without GHCR, tools default to scratch (build will fail without tools).
+#
+# To build locally, first build tool images:
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
+#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
+#
+# Then build with:
+#   docker build -f dockerfile/Dockerfile.evaluation \
+#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
+#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local .
+
+#############################################################
+# Tool image configuration
+# NOTE: ARGs used in FROM must be declared before any FROM statement
+#############################################################
+
+ARG UBUNTU_VERSION=24.04
+
+# Tool images from GHCR (built by Dockerfile.tools)
+ARG TOOL_CCACHE_IMAGE=scratch
+ARG TOOL_SFPI_IMAGE=scratch
+
+#############################################################
+# Tool layers - pulled from pre-built GHCR images
+#############################################################
+
+# ccache layer - pre-built from GHCR
+FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
+
+# SFPI layer - pre-built from GHCR
+FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
+#############################################################
+# uv layer - copy from official distroless image
+# Using SHA256 pinning for reproducible builds
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+#############################################################
+# Base image with system dependencies
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Copy uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Copy ccache from pre-built tool image
+COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+
+# Install system dependencies
+# Note: These are installed early as they change infrequently
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    git \
+    wget \
+    xz-utils \
+    ca-certificates \
+    slurmd \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+#############################################################
+# Build image
+#############################################################
+
+FROM base AS build
 
 RUN mkdir /tt-metal
 WORKDIR /tt-metal
 
-RUN apt update && apt install -y python3 python3-pip git
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY scripts/install-uv.sh /tmp/install-uv.sh
-RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
-
-# Install Python deps (skip venv)
+# Install Python deps (skip venv for evaluation)
+# Copy requirements files first for better layer caching
 COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
 COPY docs/requirements-docs.txt docs/
 COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
-RUN uv pip install --system --no-cache setuptools
-RUN uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
 
-## Install Metal dependencies
+RUN uv pip install --system --no-cache setuptools==80 && \
+    uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
+
+# Install Metal dependencies
+# Copy dependency scripts before full source for better caching
 COPY install_dependencies.sh .
 COPY tt_metal/sfpi-info.sh tt_metal/
 COPY tt_metal/sfpi-version tt_metal/
 COPY scripts/ttexalens_ref.txt scripts/
 RUN ./install_dependencies.sh --docker
 
-# Install ccache
-RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.12.2/ccache-4.12.2-linux-x86_64.tar.xz && \
-    tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
-    rm /tmp/ccache.tar.xz
-
-# Install slurmd
-RUN apt update && apt install -y slurmd && rm -rf /var/lib/apt/lists/*
-
-# Build & install Metal
+# Copy full source (this layer changes most frequently)
 COPY . .
 
 ARG BUILD_METAL_ARGS=""

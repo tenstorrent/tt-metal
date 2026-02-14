@@ -1,0 +1,137 @@
+# Python Virtual Environment Images for TT-Metalium
+# These images are built once and pushed to GHCR to avoid installing Python
+# packages repeatedly. Each venv is built as a separate target that outputs
+# to /install/venv, which can then be used as a source for COPY --from.
+#
+# The Ubuntu version is parameterized via the UBUNTU_VERSION build arg,
+# which controls the base image and thus the system Python version:
+#   22.04 -> Python 3.10
+#   24.04 -> Python 3.12
+#
+# Usage:
+#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
+#     --build-arg UBUNTU_VERSION=22.04 \
+#     -t ghcr.io/.../python-ci-test-venv:2204-<hash> .
+#
+# The main Dockerfile can then use:
+#   FROM ghcr.io/.../python-ci-test-venv:2204-<hash> AS ci-test-venv-layer
+#   COPY --from=ci-test-venv-layer /install/venv /opt/venv
+
+# Ubuntu base image version (controls Python version: 22.04->3.10, 24.04->3.12)
+ARG UBUNTU_VERSION=22.04
+
+#############################################################
+# uv layer - copy from official distroless image
+# Pinned to specific SHA256 for reproducible builds
+# This must match the UV version in the main Dockerfile
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+#############################################################
+# ci-build-venv
+# Packages: build, numpy, setuptools (base packages for building)
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Install Python and required build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create relocatable virtual environment
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+
+# Set environment variables for the venv (must be Docker ENV so they persist
+# across RUN layers and are visible to uv's build subprocesses)
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Install base packages
+RUN umask 000 && uv pip install --no-cache build numpy setuptools==80
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-build-venv
+COPY --from=ci-build-venv-builder /opt/venv /install/venv
+
+#############################################################
+# ci-test-venv
+# Packages: torch (CPU) + requirements-dev.txt + docs + triage
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-test-venv-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Install Python and required build dependencies
+# Some packages require compilation, so we need build-essential and dev headers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    python3-pkg-resources \
+    build-essential \
+    pkg-config \
+    libhdf5-dev \
+    libsndfile1-dev \
+    libgl1 \
+    git \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create relocatable virtual environment (separate RUN so the venv is fully
+# materialized on disk before any pip installs reference it)
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+
+# Set environment variables for the venv (must be Docker ENV, not shell export,
+# so they persist across RUN layers and are inherited by uv's build subprocesses)
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Pre-install setuptools so pkg_resources is available for packages like mmcv
+# that use it at build time. This must be a separate RUN from the requirements
+# install so the package is fully on disk when uv resolves build dependencies.
+RUN umask 000 && uv pip install --no-cache setuptools==80
+
+# Create directory structure for requirements files
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Copy requirements files maintaining relative path structure for -r includes
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Install all packages
+# - torch from CPU index first
+# - Then requirements files with unsafe-best-match to avoid transitive dep conflicts
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# no-build-isolation to handle pkg_resources/mmcv/setuptools
+RUN umask 000 && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-test-venv
+COPY --from=ci-test-venv-builder /opt/venv /install/venv

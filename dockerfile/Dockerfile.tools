@@ -1,0 +1,277 @@
+# Tool Images for TT-Metalium
+# These images are built once and pushed to GHCR to avoid hitting third-party
+# endpoints repeatedly. Each tool is built as a separate target that outputs
+# to /install, which can then be used as a source for COPY --from.
+#
+# Usage:
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t ghcr.io/.../tool-ccache:v4.10.2 .
+#   docker build -f dockerfile/Dockerfile.tools --target mold -t ghcr.io/.../tool-mold:v2.40.4 .
+#
+# The main Dockerfile can then use:
+#   FROM ghcr.io/.../tool-ccache:v4.10.2 AS ccache-layer
+
+#############################################################
+# Version and hash configuration
+# These must match the versions in the main Dockerfile
+#############################################################
+
+ARG CCACHE_VERSION=4.10.2
+ARG CCACHE_SHA256=80cab87bd510eca796467aee8e663c398239e0df1c4800a0b5dff11dca0b4f18
+
+ARG MOLD_VERSION=2.40.4
+ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
+
+ARG DOXYGEN_VERSION=1.16.1
+ARG DOXYGEN_SHA256=a56f885d37e3aae08a99f638d17bbb381224c03a878d9e2dda4f9fa4baf1d8bd
+
+ARG CBA_VERSION=1.6.0
+ARG CBA_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
+
+ARG GDB_VERSION=14.2
+ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
+
+ARG CMAKE_VERSION=4.2.3
+ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
+
+ARG YQ_VERSION=v4.44.6
+ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
+
+# NOTE: OMPI_TAG is the single source of truth for the OpenMPI version.
+# If you change this value, you MUST also update the OMPI_TAG ARG default in:
+#   - dockerfile/Dockerfile (base stage)
+#   - dockerfile/Dockerfile.manylinux
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_SHA256=119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd
+
+# NOTE: SFPI version/hash are NOT defined here as ARGs.
+# The single source of truth for SFPI version information is:
+#   - tt_metal/sfpi-version (version number, hashes for all platforms)
+#   - tt_metal/sfpi-info.sh (helper script to parse version info)
+# The install-sfpi.sh script sources these files directly.
+
+#############################################################
+# ccache - simple binary extraction
+# Outputs: /install/bin/ccache
+#############################################################
+
+FROM alpine:3.19 AS ccache-builder
+ARG CCACHE_VERSION
+ARG CCACHE_SHA256
+COPY dockerfile/scripts/install-ccache.sh /tmp/install-ccache.sh
+RUN apk add --no-cache bash wget && \
+    CCACHE_VERSION=${CCACHE_VERSION} \
+    CCACHE_SHA256=${CCACHE_SHA256} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-ccache.sh
+
+FROM scratch AS ccache
+COPY --from=ccache-builder /install/ /install/
+
+#############################################################
+# mold - simple binary extraction
+# Outputs: /install/bin/mold, /install/lib/mold/...
+#############################################################
+
+FROM alpine:3.19 AS mold-builder
+ARG MOLD_VERSION
+ARG MOLD_SHA256
+COPY dockerfile/scripts/install-mold.sh /tmp/install-mold.sh
+RUN apk add --no-cache bash wget && \
+    MOLD_VERSION=${MOLD_VERSION} \
+    MOLD_SHA256=${MOLD_SHA256} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-mold.sh
+
+FROM scratch AS mold
+COPY --from=mold-builder /install/ /install/
+
+#############################################################
+# doxygen - binary extraction with make install
+# Outputs: /install/bin/doxygen
+#############################################################
+
+FROM ubuntu:22.04 AS doxygen-builder
+ARG DOXYGEN_VERSION
+ARG DOXYGEN_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dockerfile/scripts/install-doxygen.sh /tmp/install-doxygen.sh
+RUN DOXYGEN_VERSION=${DOXYGEN_VERSION} \
+    DOXYGEN_SHA256=${DOXYGEN_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-doxygen.sh
+
+FROM scratch AS doxygen
+COPY --from=doxygen-builder /install/ /install/
+
+#############################################################
+# ClangBuildAnalyzer - requires cmake to build
+# Outputs: /install/bin/ClangBuildAnalyzer
+#############################################################
+
+FROM ubuntu:22.04 AS cba-builder
+ARG CBA_VERSION
+ARG CBA_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dockerfile/scripts/install-clangbuildanalyzer.sh /tmp/install-clangbuildanalyzer.sh
+RUN CBA_VERSION=${CBA_VERSION} \
+    CBA_SHA256=${CBA_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-clangbuildanalyzer.sh
+
+FROM scratch AS cba
+COPY --from=cba-builder /install/ /install/
+
+#############################################################
+# GDB - requires configure/make to build
+# Outputs: /install/bin/gdb, /install/share/gdb/...
+#############################################################
+
+FROM ubuntu:22.04 AS gdb-builder
+ARG GDB_VERSION
+ARG GDB_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates build-essential texinfo libgmp-dev libmpfr-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY dockerfile/scripts/install-gdb.sh /tmp/install-gdb.sh
+RUN GDB_VERSION=${GDB_VERSION} \
+    GDB_SHA256=${GDB_SHA256} \
+    INSTALL_PREFIX=/install \
+    /bin/bash /tmp/install-gdb.sh
+
+FROM scratch AS gdb
+COPY --from=gdb-builder /install/ /install/
+
+#############################################################
+# cmake - simple tarball extraction
+# Outputs: /install/bin/cmake, /install/share/cmake-*/, ...
+#############################################################
+
+FROM alpine:3.19 AS cmake-builder
+ARG CMAKE_VERSION
+ARG CMAKE_SHA256
+COPY dockerfile/scripts/install-cmake.sh /tmp/install-cmake.sh
+RUN apk add --no-cache bash wget && \
+    CMAKE_VERSION=${CMAKE_VERSION} \
+    CMAKE_SHA256=${CMAKE_SHA256} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-cmake.sh
+
+FROM scratch AS cmake
+COPY --from=cmake-builder /install/ /install/
+
+#############################################################
+# yq - simple binary extraction
+# Outputs: /install/bin/yq
+#############################################################
+
+FROM alpine:3.19 AS yq-builder
+ARG YQ_VERSION
+ARG YQ_SHA256
+COPY dockerfile/scripts/install-yq.sh /tmp/install-yq.sh
+RUN apk add --no-cache bash wget && \
+    YQ_VERSION=${YQ_VERSION} \
+    YQ_SHA256=${YQ_SHA256} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-yq.sh
+
+FROM scratch AS yq
+COPY --from=yq-builder /install/ /install/
+
+#############################################################
+# SFPI - Tenstorrent SFPI compiler
+# Outputs: /install/opt/tenstorrent/sfpi/...
+#
+# NOTE: SFPI version and hash information come from:
+#   - tt_metal/sfpi-version (single source of truth)
+#   - tt_metal/sfpi-info.sh (helper script)
+# These files are copied into the build and sourced by install-sfpi.sh.
+# Do NOT hardcode version/hash ARGs here.
+#############################################################
+
+FROM ubuntu:22.04 AS sfpi-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates binutils xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy SFPI version info files (single source of truth)
+COPY tt_metal/sfpi-version /tmp/sfpi-version
+COPY tt_metal/sfpi-info.sh /tmp/sfpi-info.sh
+COPY dockerfile/scripts/install-sfpi.sh /tmp/install-sfpi.sh
+
+# Install SFPI - version/hash are read from sfpi-version file
+RUN SFPI_INFO_SCRIPT=/tmp/sfpi-info.sh \
+    SFPI_VERSION_FILE=/tmp/sfpi-version \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-sfpi.sh
+
+FROM scratch AS sfpi
+COPY --from=sfpi-builder /install/ /install/
+
+#############################################################
+# OpenMPI - built from source with ULFM for manylinux
+# Outputs: /install/openmpi-<tag>-ulfm/bin, lib, include, ...
+# Consumed by Dockerfile and Dockerfile.manylinux via:
+#   COPY --from=openmpi-layer /install/ /opt/
+# which produces /opt/openmpi-<tag>-ulfm/ in the final image.
+#############################################################
+
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
+ARG OMPI_TAG
+ARG OMPI_SHA256
+
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+  sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+RUN dnf remove -y epel-release || true
+# Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
+# Note: slurm-devel is required for --with-slurm in install-openmpi.sh
+RUN dnf install -y \
+    autoconf \
+    automake \
+    bison \
+    bzip2 \
+    ca-certificates \
+    flex \
+    gcc \
+    make \
+    hwloc-devel \
+    gfortran \
+    gmp-devel \
+    gawk \
+    git \
+    libevent-devel \
+    libibverbs-devel \
+    libmpc-devel \
+    libzstd-devel \
+    mpfr-devel \
+    pmix-devel \
+    slurm-devel \
+    zlib-devel \
+    wget \
+    && dnf clean all
+
+COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
+RUN OMPI_TAG=${OMPI_TAG} \
+    OMPI_SHA256=${OMPI_SHA256} \
+    INSTALL_DIR=/opt \
+    /bin/bash /tmp/install-openmpi.sh
+
+# Destination path must match consumers: Dockerfile copies /install/ to /opt/, yielding /opt/openmpi-<tag>-ulfm/
+FROM scratch AS openmpi
+ARG OMPI_TAG
+COPY --from=openmpi-builder /opt/openmpi-${OMPI_TAG}-ulfm/ /install/openmpi-${OMPI_TAG}-ulfm/

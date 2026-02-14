@@ -17,7 +17,18 @@ name: "Build tt-metal docker artifact"
 #     uses: ./.github/workflows/build-artifact.yaml
 #     with:
 #       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+#
+# TOOL IMAGES:
+# Third-party tools (ccache, mold, doxygen, etc.) are built once and pushed to
+# GHCR to avoid repeatedly hitting upstream endpoints. These tool images are
+# versioned by tool version + install script hash, and are pulled by the main
+# Dockerfile during builds.
 # =============================================================================
+
+# Required to push images to GHCR (organization or user). Without this you may see:
+# "denied: installation not allowed to Create organization package"
+permissions:
+  packages: write
 
 on:
   workflow_call:
@@ -31,25 +42,55 @@ on:
         required: false
         type: string
         default: "amd64"
+      build-manylinux:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          When true, build the manylinux image. Set to false when build-all-docker-images
+          calls this workflow for both platforms (22.04 and 24.04) in parallel—only the
+          22.04 run should build manylinux to avoid duplicate work. Standalone callers
+          should leave true.
+      tool-tags:
+        required: false
+        type: string
+        default: ""
+        description: |
+          JSON object containing all tool image tags (from build-docker-tools.yaml).
+          When provided, skips building tool images and uses these tags instead.
+          Use with .github/actions/setup-tool-buildargs to extract individual tags.
+          Example: needs.build-tools.outputs.tool-tags
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
+        value: ${{ jobs.image-tags.outputs.ci-build-tag }}
       ci-test-tag:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+        value: ${{ jobs.image-tags.outputs.ci-test-tag }}
       dev-tag:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.dev-tag }}
+        value: ${{ jobs.image-tags.outputs.dev-tag }}
       basic-dev-tag:
         description: "Docker tag for the basic dev Docker image for basic development"
-        value: ${{ jobs.check-docker-images.outputs.basic-dev-tag }}
+        value: ${{ jobs.image-tags.outputs.basic-dev-tag }}
       basic-ttnn-runtime-tag:
         description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
-        value: ${{ jobs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
+        value: ${{ jobs.image-tags.outputs.basic-ttnn-runtime-tag }}
       manylinux-tag:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
+        value: ${{ jobs.image-tags.outputs.manylinux-tag }}
+      # Tool image tags as JSON bundle
+      # Use with .github/actions/setup-tool-buildargs to extract individual tags
+      tool-tags:
+        description: "JSON object containing all tool image tags"
+        value: ${{ inputs.tool-tags || jobs.tools.outputs.tool-tags }}
+      # Python venv image tags
+      python-ci-build-venv-tag:
+        description: "Docker tag for the Python CI Build venv image"
+        value: ${{ jobs.venvs.outputs.ci-build-venv-tag }}
+      python-ci-test-venv-tag:
+        description: "Docker tag for the Python CI Test venv image"
+        value: ${{ jobs.venvs.outputs.ci-test-venv-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -66,9 +107,41 @@ on:
         default: "amd64"
         options:
             - "amd64"
+      build-manylinux:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          When true, build the manylinux image. Set to false when build-all-docker-images
+          calls this workflow for both platforms (22.04 and 24.04) in parallel—only the
+          22.04 run should build manylinux to avoid duplicate work. Standalone callers
+          should leave true.
 
 jobs:
-  check-docker-images:
+  # =============================================================================
+  # TOOL IMAGES: Build third-party tool images if not provided via input
+  # =============================================================================
+  tools:
+    name: "🔧 Tool images"
+    if: inputs.tool-tags == ''
+    uses: ./.github/workflows/build-docker-tools.yaml
+    secrets: inherit
+
+  # =============================================================================
+  # PYTHON VENV IMAGES: Pre-built Python virtual environments
+  # =============================================================================
+  venvs:
+    name: "🐍 Python venvs"
+    uses: ./.github/workflows/build-docker-python-venvs.yaml
+    with:
+      platform: ${{ inputs.platform }}
+    secrets: inherit
+
+  # =============================================================================
+  # MAIN DOCKER IMAGES: Compute tags and check existence
+  # =============================================================================
+  image-tags:
+    name: "📋 Compute image tags"
     runs-on: ubuntu-latest
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
@@ -113,20 +186,30 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
+          # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from
+          # any Dockerfile passed as extra, so Dockerfile.tools brings in all tool install
+          # scripts (install-sfpi.sh, etc.). When a tool is updated, both tool image tag and
+          # main image hash change, triggering a rebuild.
+          EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          # basic-dev uses tool images (cmake, sfpi, openmpi, ccache), so include tool-related files in hash
+          BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
+          BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
-          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
+          BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
-          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
+          # Manylinux image uses tool images (ccache, mold, sfpi, openmpi). EXTRA_FILES
+          # already includes all tool install scripts, so manylinux hash updates when any
+          # tool changes (e.g. OpenMPI build method change affecting library SONAMEs).
+          MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
+          MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
@@ -168,11 +251,18 @@ jobs:
             echo "manylinux-exists=false" >> $GITHUB_OUTPUT
           fi
 
-  # Build Ubuntu images
-  build-ubuntu-images:
-    name: "🐳️ Build Ubuntu images"
-    needs: check-docker-images
-    if: needs.check-docker-images.outputs.distro == 'ubuntu' && (needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true')
+  # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
+  ubuntu:
+    name: "🐳 Ubuntu images"
+    needs: [image-tags, tools, venvs]
+    # Run if distro is ubuntu AND (main images missing OR basic images missing)
+    # Use always() to run even when tools job is skipped (tool-tags provided via input)
+    if: |
+      always() && !failure() && !cancelled() &&
+      needs.image-tags.outputs.distro == 'ubuntu' &&
+      (needs.image-tags.outputs.dev-exists != 'true' ||
+       needs.image-tags.outputs.basic-dev-exists != 'true' ||
+       needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true')
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -186,77 +276,111 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup tool build args
+        id: tool-args
+        uses: ./.github/actions/setup-tool-buildargs
+        with:
+          # Resolve tool-tags: use input if provided, otherwise use tools job output
+          tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
+      - name: Setup build args
+        id: buildargs
+        run: |
+          # Main images need all tools + python venvs
+          {
+            echo "main<<EOF"
+            echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
+            echo "${{ steps.tool-args.outputs.build-args }}"
+            echo "PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.venvs.outputs.ci-build-venv-tag }}"
+            echo "PYTHON_CI_TEST_VENV_IMAGE=${{ needs.venvs.outputs.ci-test-venv-tag }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          # Basic-dev needs only a subset of tools
+          {
+            echo "basic-dev<<EOF"
+            echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
+            echo "TOOL_CMAKE_IMAGE=${{ steps.tool-args.outputs.cmake-tag }}"
+            echo "TOOL_SFPI_IMAGE=${{ steps.tool-args.outputs.sfpi-tag }}"
+            echo "TOOL_OPENMPI_IMAGE=${{ steps.tool-args.outputs.openmpi-tag }}"
+            echo "TOOL_CCACHE_IMAGE=${{ steps.tool-args.outputs.ccache-tag }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
       - name: Build and push CI Build image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        if: needs.image-tags.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          tags: ${{ needs.image-tags.outputs.ci-build-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        if: needs.image-tags.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          tags: ${{ needs.image-tags.outputs.ci-test-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
-        if: needs.check-docker-images.outputs.dev-exists != 'true'
+        if: needs.image-tags.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          tags: ${{ needs.image-tags.outputs.dev-tag }}
+          build-args: ${{ steps.buildargs.outputs.main }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
-        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+        if: needs.image-tags.outputs.basic-dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          tags: ${{ needs.image-tags.outputs.basic-dev-tag }}
+          build-args: ${{ steps.buildargs.outputs.basic-dev }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
-        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
+        if: needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          tags: ${{ needs.image-tags.outputs.basic-ttnn-runtime-tag }}
+          build-args: ${{ steps.buildargs.outputs.basic-dev }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
-  build-manylinux-image:
-    name: "🐳️ Build ManyLinux image"
-    needs: check-docker-images
-    if: needs.check-docker-images.outputs.manylinux-exists != 'true'
+  manylinux:
+    name: "🐳 ManyLinux image"
+    needs: [image-tags, tools]
+    # Run if manylinux needs build AND this run is responsible for manylinux
+    # Use always() to run even when tools job is skipped (tool-tags provided via input)
+    # When build-manylinux input is false (e.g. second platform in build-all-docker-images), skip
+    if: |
+      always() && !failure() && !cancelled() &&
+      needs.image-tags.outputs.manylinux-exists != 'true' &&
+      inputs.build-manylinux != false
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -270,24 +394,41 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup tool build args
+        id: tool-args
+        uses: ./.github/actions/setup-tool-buildargs
+        with:
+          # Resolve tool-tags: use input if provided, otherwise use tools job output
+          tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
+          include: ccache,mold,sfpi,openmpi
+      - name: Setup build args
+        id: buildargs
+        run: |
+          {
+            echo "manylinux<<EOF"
+            echo "${{ steps.tool-args.outputs.build-args }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
       - name: Build and push ManyLinux image
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
-          tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          tags: ${{ needs.image-tags.outputs.manylinux-tag }}
+          build-args: ${{ steps.buildargs.outputs.manylinux }}
           cache-to: type=inline
           pull: true
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
-  # Cannot use needs.build-*-images to ensure this job runs sequentially after the build jobs because it would break when the build jobs are skipped
-  # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
-  # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
-  # the problem would self-correct on the next merge to main, which happens frequently.
+  # tag-latest runs after image-tags only (not after build jobs) because adding
+  # needs.ubuntu would cause this job to be skipped when builds are skipped
+  # (images already exist). The trade-off: on a push to main where images were just built
+  # on a branch, tag-latest may run before the build jobs complete, so "latest" could lag
+  # one run. This self-corrects on the next merge.
   tag-latest:
-    name: "🔄 Update latest tag"
-    needs: check-docker-images
+    name: "🏷️ Update latest tags"
+    needs: image-tags
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -297,43 +438,43 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
-        if: needs.check-docker-images.outputs.ci-build-exists == 'true'
+        if: needs.image-tags.outputs.ci-build-exists == 'true'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.ci-build-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest CI Test tag"
-        if: needs.check-docker-images.outputs.ci-test-exists == 'true'
+        if: needs.image-tags.outputs.ci-test-exists == 'true'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.ci-test-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.ci-test-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"
-        if: needs.check-docker-images.outputs.dev-exists == 'true'
+        if: needs.image-tags.outputs.dev-exists == 'true'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.dev-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.dev-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"
-        if: needs.check-docker-images.outputs.basic-dev-exists == 'true'
+        if: needs.image-tags.outputs.basic-dev-exists == 'true'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.basic-dev-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists == 'true'
+        if: needs.image-tags.outputs.basic-ttnn-runtime-exists == 'true'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.basic-ttnn-runtime-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Manylinux tag"
-        if: needs.check-docker-images.outputs.manylinux-exists == 'true'
+        if: needs.image-tags.outputs.manylinux-exists == 'true' && inputs.build-manylinux != false
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          docker-image-tag: ${{ needs.image-tags.outputs.manylinux-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

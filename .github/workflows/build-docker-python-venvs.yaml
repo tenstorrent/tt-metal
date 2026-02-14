@@ -1,0 +1,138 @@
+name: "[internal] Build Docker Python venv images"
+
+# Reusable workflow that checks and builds Python venv images (ci-build-venv, ci-test-venv).
+# Called by build-docker-artifact.yaml. Venv images are pushed to GHCR.
+permissions:
+  packages: write
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+        description: "Platform (e.g. Ubuntu 22.04) for venv base image"
+    outputs:
+      ci-build-venv-tag:
+        description: "Docker tag for ci-build venv image"
+        value: ${{ jobs.tags.outputs.ci-build-venv-tag }}
+      ci-test-venv-tag:
+        description: "Docker tag for ci-test venv image"
+        value: ${{ jobs.tags.outputs.ci-test-venv-tag }}
+      ubuntu-version:
+        description: "Ubuntu version (e.g. 22.04) for build args"
+        value: ${{ jobs.tags.outputs.ubuntu-version }}
+
+jobs:
+  # Compute content-addressed tags and check which venv images already exist
+  tags:
+    name: "📋 Compute venv tags"
+    runs-on: ubuntu-latest
+    outputs:
+      ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
+      ci-build-venv-exists: ${{ steps.check.outputs.ci-build-venv-exists }}
+      ci-test-venv-tag: ${{ steps.tags.outputs.ci-test-venv-tag }}
+      ci-test-venv-exists: ${{ steps.check.outputs.ci-test-venv-exists }}
+      any-missing: ${{ steps.check.outputs.any-missing }}
+      ubuntu-version: ${{ steps.platform.outputs.version }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Parse platform
+        id: platform
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
+      - name: Compute Python venv image tags
+        id: tags
+        run: |
+          VERSION="${{ steps.platform.outputs.version }}"
+          # Remove dots from version for image tag (22.04 -> 2204)
+          VERSION_NODOT="${VERSION//.}"
+
+          # Hash Dockerfile.python + its COPY source files (requirements files)
+          # dockerfile-hash.sh automatically discovers COPY sources from the Dockerfile
+          VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
+
+          # Generate tags: ghcr.io/<repo>/tt-metalium/python-venv/<type>:<ubuntu-version>-<hash>
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
+          echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
+
+          # Store version and target suffix for build step
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version-nodot=${VERSION_NODOT}" >> $GITHUB_OUTPUT
+
+      - name: Check if Python venv images exist
+        id: check
+        run: |
+          any_missing=false
+          check_image() {
+            local tag="$1"
+            local name="$2"
+            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+              echo "$tag exists"
+              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "$tag does not exist"
+              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+              any_missing=true
+            fi
+          }
+
+          check_image "${{ steps.tags.outputs.ci-build-venv-tag }}" "ci-build-venv"
+          check_image "${{ steps.tags.outputs.ci-test-venv-tag }}" "ci-test-venv"
+
+          echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
+
+  # Build any venv images that don't exist yet
+  build:
+    name: "🐍 Build missing venvs"
+    needs: tags
+    if: needs.tags.outputs.any-missing == 'true'
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ci-build-venv image
+        if: needs.tags.outputs.ci-build-venv-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.python
+          target: ci-build-venv
+          push: true
+          tags: ${{ needs.tags.outputs.ci-build-venv-tag }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push ci-test-venv image
+        if: needs.tags.outputs.ci-test-venv-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.python
+          target: ci-test-venv
+          push: true
+          tags: ${{ needs.tags.outputs.ci-test-venv-tag }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
