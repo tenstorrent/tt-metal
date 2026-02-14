@@ -54,15 +54,12 @@ int main() {
                     OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
                     {src0_dram_buffer})
                 .runtime_args({src0_dram_buffer->address(), n_tiles})
-                .done()
                 .compute(OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp")
                 .runtime_args({n_tiles})
-                .done()
                 .writer(
                     OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
                     {dst_dram_buffer})
                 .runtime_args({dst_dram_buffer->address(), n_tiles})
-                .done()
                 .build();
 
         ctx.run(std::move(program));

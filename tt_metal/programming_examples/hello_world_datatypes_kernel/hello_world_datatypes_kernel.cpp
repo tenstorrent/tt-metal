@@ -46,7 +46,6 @@ int main() {
                 OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default})
             .runtime_args({dram_buffer->address()})
-            .done()
             .build();
 
     fmt::print("Hello, Core (0, 0) on Device 0, please handle the data.\n");

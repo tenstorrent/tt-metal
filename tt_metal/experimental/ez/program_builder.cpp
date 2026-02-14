@@ -32,62 +32,214 @@ std::variant<CoreRange, CoreRangeSet> to_semaphore_core_spec(const CoreSpec& cs)
 
 // --- KernelRef ---
 
-KernelRef::KernelRef(ProgramBuilder& builder, KernelHandle handle, CoreSpec core_spec) :
-    builder_(builder), handle_(handle), core_spec_(std::move(core_spec)) {}
+KernelRef::KernelRef(ProgramBuilder& builder, Type type, std::string path, CoreSpec core_spec) :
+    builder_(builder), type_(type), path_(std::move(path)), core_spec_(std::move(core_spec)) {}
+
+KernelRef& KernelRef::defines(const std::map<std::string, std::string>& defs) {
+    for (const auto& [k, v] : defs) {
+        defines_[k] = v;
+    }
+    return *this;
+}
+
+KernelRef& KernelRef::named_args(const std::unordered_map<std::string, uint32_t>& args) {
+    for (const auto& [k, v] : args) {
+        named_compile_args_[k] = v;
+    }
+    return *this;
+}
 
 KernelRef& KernelRef::runtime_args(std::initializer_list<uint32_t> args) {
-    SetRuntimeArgs(builder_.program_, handle_, core_spec_, args);
+    auto captured = std::vector<uint32_t>(args);
+    deferred_runtime_args_.emplace_back(
+        [captured](Program& program, KernelHandle handle, const CoreSpec& cs) {
+            SetRuntimeArgs(program, handle, cs, captured);
+        });
     return *this;
 }
 
 KernelRef& KernelRef::runtime_args(const std::vector<uint32_t>& args) {
-    SetRuntimeArgs(builder_.program_, handle_, core_spec_, tt::stl::Span<const uint32_t>(args));
+    deferred_runtime_args_.emplace_back(
+        [args](Program& program, KernelHandle handle, const CoreSpec& cs) {
+            SetRuntimeArgs(program, handle, cs, tt::stl::Span<const uint32_t>(args));
+        });
     return *this;
 }
 
 KernelRef& KernelRef::runtime_args(std::function<std::vector<uint32_t>(const CoreCoord&)> fn) {
-    auto set_for_core = [&](const CoreCoord& core) {
-        auto args = fn(core);
-        SetRuntimeArgs(
-            builder_.program_,
-            handle_,
-            std::variant<CoreCoord, CoreRange, CoreRangeSet>(core),
-            tt::stl::Span<const uint32_t>(args));
-    };
+    deferred_runtime_args_.emplace_back(
+        [fn = std::move(fn)](Program& program, KernelHandle handle, const CoreSpec& cs) {
+            auto set_for_core = [&](const CoreCoord& core) {
+                auto args = fn(core);
+                SetRuntimeArgs(
+                    program,
+                    handle,
+                    std::variant<CoreCoord, CoreRange, CoreRangeSet>(core),
+                    tt::stl::Span<const uint32_t>(args));
+            };
 
-    std::visit(
-        [&](auto&& cs) {
-            using T = std::decay_t<decltype(cs)>;
-            if constexpr (std::is_same_v<T, CoreCoord>) {
-                set_for_core(cs);
-            } else if constexpr (std::is_same_v<T, CoreRange>) {
-                for (const auto& core : cs) {
-                    set_for_core(core);
-                }
-            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
-                for (const auto& range : cs.ranges()) {
-                    for (const auto& core : range) {
-                        set_for_core(core);
+            std::visit(
+                [&](auto&& v) {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, CoreCoord>) {
+                        set_for_core(v);
+                    } else if constexpr (std::is_same_v<T, CoreRange>) {
+                        for (const auto& core : v) {
+                            set_for_core(core);
+                        }
+                    } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                        for (const auto& range : v.ranges()) {
+                            for (const auto& core : range) {
+                                set_for_core(core);
+                            }
+                        }
                     }
-                }
-            }
-        },
-        core_spec_);
+                },
+                cs);
+        });
     return *this;
 }
 
 KernelRef& KernelRef::runtime_args_at(const CoreCoord& core, const std::vector<uint32_t>& args) {
-    SetRuntimeArgs(
-        builder_.program_,
-        handle_,
-        std::variant<CoreCoord, CoreRange, CoreRangeSet>(core),
-        tt::stl::Span<const uint32_t>(args));
+    deferred_runtime_args_.emplace_back(
+        [core, args](Program& program, KernelHandle handle, const CoreSpec&) {
+            SetRuntimeArgs(
+                program,
+                handle,
+                std::variant<CoreCoord, CoreRange, CoreRangeSet>(core),
+                tt::stl::Span<const uint32_t>(args));
+        });
     return *this;
 }
 
-ProgramBuilder& KernelRef::done() { return builder_; }
+// Forwarding methods to ProgramBuilder.
 
-KernelHandle KernelRef::handle() const { return handle_; }
+ProgramBuilder& KernelRef::cb(tt::CBIndex index, uint32_t num_tiles, tt::DataFormat fmt) {
+    return builder_.cb(index, num_tiles, fmt);
+}
+
+ProgramBuilder& KernelRef::cb(tt::CBIndex index, tt::DataFormat fmt, uint32_t num_tiles, uint32_t page_size) {
+    return builder_.cb(index, fmt, num_tiles, page_size);
+}
+
+ProgramBuilder& KernelRef::cb(
+    tt::CBIndex index,
+    const std::shared_ptr<distributed::MeshBuffer>& l1_buffer,
+    uint32_t num_tiles,
+    tt::DataFormat fmt) {
+    return builder_.cb(index, l1_buffer, num_tiles, fmt);
+}
+
+ProgramBuilder& KernelRef::cb(const CircularBufferConfig& config) {
+    return builder_.cb(config);
+}
+
+KernelRef& KernelRef::reader(
+    const std::string& path,
+    const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers,
+    const std::vector<uint32_t>& compile_args) {
+    return builder_.reader(path, buffers, compile_args);
+}
+
+KernelRef& KernelRef::writer(
+    const std::string& path,
+    const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers,
+    const std::vector<uint32_t>& compile_args) {
+    return builder_.writer(path, buffers, compile_args);
+}
+
+KernelRef& KernelRef::compute(
+    const std::string& path,
+    MathFidelity fidelity,
+    const std::vector<uint32_t>& compile_args) {
+    return builder_.compute(path, fidelity, compile_args);
+}
+
+KernelRef& KernelRef::compute(const std::string& path, const ComputeConfig& config) {
+    return builder_.compute(path, config);
+}
+
+KernelRef& KernelRef::kernel(
+    const std::string& path,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    return builder_.kernel(path, config);
+}
+
+ProgramBuilder& KernelRef::on(const CoreSpec& core_spec) {
+    return builder_.on(core_spec);
+}
+
+ProgramBuilder& KernelRef::defines_next(const std::map<std::string, std::string>& defs) {
+    return builder_.defines(defs);
+}
+
+ProgramBuilder& KernelRef::named_args_next(const std::unordered_map<std::string, uint32_t>& args) {
+    return builder_.named_args(args);
+}
+
+uint32_t KernelRef::semaphore(uint32_t initial_value) {
+    return builder_.semaphore(initial_value);
+}
+
+uint32_t KernelRef::semaphore(const CoreSpec& cores, uint32_t initial_value) {
+    return builder_.semaphore(cores, initial_value);
+}
+
+Program KernelRef::build() {
+    return builder_.build();
+}
+
+void KernelRef::materialize(Program& program) {
+    KernelHandle handle;
+
+    switch (type_) {
+        case Type::Reader: {
+            std::vector<uint32_t> all_args(compile_args_);
+            for (const auto& buf : buffers_) {
+                TT_FATAL(
+                    !is_sharded(buf->device_local_config().sharding_args.buffer_layout()),
+                    "reader() requires interleaved buffers; use the lower-level CreateKernel API for sharded buffers");
+                TensorAccessorArgs(*buf).append_to(all_args);
+            }
+            handle = CreateKernel(
+                program, path_, core_spec_, ReaderDataMovementConfig{all_args, defines_, named_compile_args_});
+            break;
+        }
+        case Type::Writer: {
+            std::vector<uint32_t> all_args(compile_args_);
+            for (const auto& buf : buffers_) {
+                TT_FATAL(
+                    !is_sharded(buf->device_local_config().sharding_args.buffer_layout()),
+                    "writer() requires interleaved buffers; use the lower-level CreateKernel API for sharded buffers");
+                TensorAccessorArgs(*buf).append_to(all_args);
+            }
+            handle = CreateKernel(
+                program, path_, core_spec_, WriterDataMovementConfig{all_args, defines_, named_compile_args_});
+            break;
+        }
+        case Type::Compute: {
+            handle = CreateKernel(
+                program,
+                path_,
+                core_spec_,
+                ComputeConfig{
+                    .math_fidelity = fidelity_,
+                    .compile_args = compile_args_,
+                    .defines = defines_,
+                    .named_compile_args = named_compile_args_});
+            break;
+        }
+        case Type::Custom: {
+            TT_FATAL(custom_config_.has_value(), "Custom kernel has no config");
+            handle = CreateKernel(program, path_, core_spec_, *custom_config_);
+            break;
+        }
+    }
+
+    for (const auto& action : deferred_runtime_args_) {
+        action(program, handle, core_spec_);
+    }
+}
 
 // --- ProgramBuilder ---
 
@@ -159,44 +311,36 @@ KernelRef& ProgramBuilder::reader(
     const std::string& path,
     const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers,
     const std::vector<uint32_t>& compile_args) {
-    // compile_args first, then TensorAccessorArgs — matches the dominant codebase convention.
-    std::vector<uint32_t> all_args(compile_args);
-    for (const auto& buf : buffers) {
-        TT_FATAL(
-            !is_sharded(buf->device_local_config().sharding_args.buffer_layout()),
-            "reader() requires interleaved buffers; use the lower-level CreateKernel API for sharded buffers");
-        TensorAccessorArgs(*buf).append_to(all_args);
-    }
-
     auto cs = active_core_spec();
     auto defs = active_defines();
     auto nca = active_named_compile_args();
 
-    auto handle = CreateKernel(program_, path, cs, ReaderDataMovementConfig{all_args, defs, nca});
-    kernel_refs_.push_back(std::unique_ptr<KernelRef>(new KernelRef(*this, handle, cs)));
-    return *kernel_refs_.back();
+    kernel_refs_.push_back(
+        std::unique_ptr<KernelRef>(new KernelRef(*this, KernelRef::Type::Reader, path, cs)));
+    auto& ref = *kernel_refs_.back();
+    ref.buffers_ = buffers;
+    ref.compile_args_ = compile_args;
+    ref.defines_ = std::move(defs);
+    ref.named_compile_args_ = std::move(nca);
+    return ref;
 }
 
 KernelRef& ProgramBuilder::writer(
     const std::string& path,
     const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers,
     const std::vector<uint32_t>& compile_args) {
-    // compile_args first, then TensorAccessorArgs — matches the dominant codebase convention.
-    std::vector<uint32_t> all_args(compile_args);
-    for (const auto& buf : buffers) {
-        TT_FATAL(
-            !is_sharded(buf->device_local_config().sharding_args.buffer_layout()),
-            "writer() requires interleaved buffers; use the lower-level CreateKernel API for sharded buffers");
-        TensorAccessorArgs(*buf).append_to(all_args);
-    }
-
     auto cs = active_core_spec();
     auto defs = active_defines();
     auto nca = active_named_compile_args();
 
-    auto handle = CreateKernel(program_, path, cs, WriterDataMovementConfig{all_args, defs, nca});
-    kernel_refs_.push_back(std::unique_ptr<KernelRef>(new KernelRef(*this, handle, cs)));
-    return *kernel_refs_.back();
+    kernel_refs_.push_back(
+        std::unique_ptr<KernelRef>(new KernelRef(*this, KernelRef::Type::Writer, path, cs)));
+    auto& ref = *kernel_refs_.back();
+    ref.buffers_ = buffers;
+    ref.compile_args_ = compile_args;
+    ref.defines_ = std::move(defs);
+    ref.named_compile_args_ = std::move(nca);
+    return ref;
 }
 
 KernelRef& ProgramBuilder::compute(
@@ -207,25 +351,24 @@ KernelRef& ProgramBuilder::compute(
     auto defs = active_defines();
     auto nca = active_named_compile_args();
 
-    auto handle = CreateKernel(
-        program_,
-        path,
-        cs,
-        ComputeConfig{
-            .math_fidelity = fidelity,
-            .compile_args = compile_args,
-            .defines = defs,
-            .named_compile_args = nca});
-    kernel_refs_.push_back(std::unique_ptr<KernelRef>(new KernelRef(*this, handle, cs)));
-    return *kernel_refs_.back();
+    kernel_refs_.push_back(
+        std::unique_ptr<KernelRef>(new KernelRef(*this, KernelRef::Type::Compute, path, cs)));
+    auto& ref = *kernel_refs_.back();
+    ref.fidelity_ = fidelity;
+    ref.compile_args_ = compile_args;
+    ref.defines_ = std::move(defs);
+    ref.named_compile_args_ = std::move(nca);
+    return ref;
 }
 
 KernelRef& ProgramBuilder::compute(const std::string& path, const ComputeConfig& config) {
     auto cs = active_core_spec();
 
-    auto handle = CreateKernel(program_, path, cs, config);
-    kernel_refs_.push_back(std::unique_ptr<KernelRef>(new KernelRef(*this, handle, cs)));
-    return *kernel_refs_.back();
+    kernel_refs_.push_back(
+        std::unique_ptr<KernelRef>(new KernelRef(*this, KernelRef::Type::Custom, path, cs)));
+    auto& ref = *kernel_refs_.back();
+    ref.custom_config_ = config;
+    return ref;
 }
 
 KernelRef& ProgramBuilder::kernel(
@@ -233,9 +376,11 @@ KernelRef& ProgramBuilder::kernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     auto cs = active_core_spec();
 
-    auto handle = CreateKernel(program_, path, cs, config);
-    kernel_refs_.push_back(std::unique_ptr<KernelRef>(new KernelRef(*this, handle, cs)));
-    return *kernel_refs_.back();
+    kernel_refs_.push_back(
+        std::unique_ptr<KernelRef>(new KernelRef(*this, KernelRef::Type::Custom, path, cs)));
+    auto& ref = *kernel_refs_.back();
+    ref.custom_config_ = config;
+    return ref;
 }
 
 ProgramBuilder& ProgramBuilder::on(const CoreSpec& core_spec) {
@@ -282,6 +427,11 @@ uint32_t ProgramBuilder::semaphore(const CoreSpec& cores, uint32_t initial_value
 Program ProgramBuilder::build() {
     TT_FATAL(!built_, "ProgramBuilder::build() can only be called once");
     built_ = true;
+
+    for (auto& ref : kernel_refs_) {
+        ref->materialize(program_);
+    }
+
     return std::move(program_);
 }
 

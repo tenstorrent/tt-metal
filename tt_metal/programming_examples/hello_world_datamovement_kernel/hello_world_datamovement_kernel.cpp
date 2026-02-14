@@ -29,9 +29,7 @@ int main() {
     auto program =
         ProgramBuilder(CoreCoord{0, 0})
             .reader(OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp")
-            .done()
             .writer(OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp")
-            .done()
             .build();
 
     fmt::print("Hello, Core (0, 0) on Device 0, Please start execution. I will standby for your communication.\n");

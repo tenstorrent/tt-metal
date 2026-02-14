@@ -190,7 +190,6 @@ int main(int /*argc*/, char** argv) {
              src0_dram_buffer->address(),
              sizeof(bfloat16) * TILE_HW,
              (uint32_t)num_dests})
-        .done()
 
         ////////// DATAFLOW KERNELS SETUP //////////
         // Inbound kernel: receiver cores wait for the multicast from the sender core.
@@ -201,8 +200,7 @@ int main(int /*argc*/, char** argv) {
             {(uint32_t)(sender_core_physical.x),
              (uint32_t)(sender_core_physical.y),
              sender_sem,
-             receiver_sem})
-        .done();
+             receiver_sem});
 
     // Outbound kernel: receiver cores write the received tile from cb_16 back to DRAM.
     // Per-core runtime args: each receiver writes to a different tile index.

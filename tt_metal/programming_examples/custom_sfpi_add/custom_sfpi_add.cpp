@@ -71,7 +71,6 @@ int main() {
                     OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/read_tiles.cpp",
                     {src0, src1})
                 .runtime_args({src0->address(), src1->address(), n_tiles})
-                .done()
                 .compute(
                     OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/compute/tiles_add.cpp",
                     // HiFi4 is the most accurate math fidelity mode. The ComputeConfig also supports
@@ -79,12 +78,10 @@ int main() {
                     // our inputs and outputs are BFloat16 and don't need FP32 accumulation precision.
                     MathFidelity::HiFi4)
                 .runtime_args({n_tiles})
-                .done()
                 .writer(
                     OVERRIDE_KERNEL_PREFIX "custom_sfpi_add/kernels/dataflow/write_tile.cpp",
                     {dst})
                 .runtime_args({dst->address(), n_tiles})
-                .done()
                 .build();
 
         // Execute the program and read the result back to the host.

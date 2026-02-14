@@ -30,7 +30,6 @@ int main() {
 
     auto program = ProgramBuilder(CoreCoord{0, 0})
                        .compute(OVERRIDE_KERNEL_PREFIX "hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp")
-                       .done()
                        .build();
 
     fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");

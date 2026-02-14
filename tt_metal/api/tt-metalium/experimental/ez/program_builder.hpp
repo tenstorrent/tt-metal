@@ -27,9 +27,23 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 class ProgramBuilder;
 
-// Handle to a kernel added via ProgramBuilder, supporting fluent runtime_args configuration.
+// Deferred kernel descriptor added via ProgramBuilder. Stores all configuration
+// and defers CreateKernel + SetRuntimeArgs to build() time.
+// Supports fluent chaining: methods for kernel configuration (defines, named_args,
+// runtime_args) return KernelRef&, while builder methods (cb, reader, writer,
+// compute, kernel, on, semaphore, build) forward to the parent ProgramBuilder.
 class KernelRef {
 public:
+    enum class Type { Reader, Writer, Compute, Custom };
+
+    // Kernel configuration methods (return KernelRef& for chaining).
+
+    // Set preprocessor defines for this kernel.
+    KernelRef& defines(const std::map<std::string, std::string>& defs);
+
+    // Set named compile-time args for this kernel.
+    KernelRef& named_args(const std::unordered_map<std::string, uint32_t>& args);
+
     // Set runtime args applied uniformly across all cores in the kernel's core spec.
     KernelRef& runtime_args(std::initializer_list<uint32_t> args);
     KernelRef& runtime_args(const std::vector<uint32_t>& args);
@@ -40,19 +54,70 @@ public:
     // Set runtime args for a specific core.
     KernelRef& runtime_args_at(const CoreCoord& core, const std::vector<uint32_t>& args);
 
-    // Return to the ProgramBuilder for chaining.
-    ProgramBuilder& done();
+    // Forwarding methods to ProgramBuilder (return appropriate type for chaining).
 
-    // Access the underlying kernel handle.
-    KernelHandle handle() const;
+    ProgramBuilder& cb(tt::CBIndex index, uint32_t num_tiles = 2,
+                       tt::DataFormat fmt = tt::DataFormat::Float16_b);
+    ProgramBuilder& cb(tt::CBIndex index, tt::DataFormat fmt, uint32_t num_tiles, uint32_t page_size);
+    ProgramBuilder& cb(tt::CBIndex index, const std::shared_ptr<distributed::MeshBuffer>& l1_buffer,
+                       uint32_t num_tiles = 0, tt::DataFormat fmt = tt::DataFormat::Float16_b);
+    ProgramBuilder& cb(const CircularBufferConfig& config);
+
+    KernelRef& reader(
+        const std::string& path,
+        const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers = {},
+        const std::vector<uint32_t>& compile_args = {});
+    KernelRef& writer(
+        const std::string& path,
+        const std::vector<std::shared_ptr<distributed::MeshBuffer>>& buffers = {},
+        const std::vector<uint32_t>& compile_args = {});
+    KernelRef& compute(
+        const std::string& path,
+        MathFidelity fidelity = MathFidelity::HiFi4,
+        const std::vector<uint32_t>& compile_args = {});
+    KernelRef& compute(const std::string& path, const ComputeConfig& config);
+    KernelRef& kernel(
+        const std::string& path,
+        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+
+    ProgramBuilder& on(const CoreSpec& core_spec);
+    ProgramBuilder& defines_next(const std::map<std::string, std::string>& defs);
+    ProgramBuilder& named_args_next(const std::unordered_map<std::string, uint32_t>& args);
+    uint32_t semaphore(uint32_t initial_value = 0);
+    uint32_t semaphore(const CoreSpec& cores, uint32_t initial_value = 0);
+    Program build();
 
 private:
     friend class ProgramBuilder;
-    KernelRef(ProgramBuilder& builder, KernelHandle handle, CoreSpec core_spec);
+
+    using DeferredRuntimeArgs = std::function<void(Program&, KernelHandle, const CoreSpec&)>;
+
+    KernelRef(ProgramBuilder& builder, Type type, std::string path, CoreSpec core_spec);
 
     ProgramBuilder& builder_;
-    KernelHandle handle_;
+    Type type_;
+    std::string path_;
     CoreSpec core_spec_;
+
+    // Reader/Writer specific.
+    std::vector<std::shared_ptr<distributed::MeshBuffer>> buffers_;
+    std::vector<uint32_t> compile_args_;
+
+    // Compute specific.
+    MathFidelity fidelity_ = MathFidelity::HiFi4;
+
+    // Custom kernel config (for kernel() with full config).
+    std::optional<std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>> custom_config_;
+
+    // Shared.
+    std::map<std::string, std::string> defines_;
+    std::unordered_map<std::string, uint32_t> named_compile_args_;
+
+    // Deferred runtime args — replayed at build() time.
+    std::vector<DeferredRuntimeArgs> deferred_runtime_args_;
+
+    // Materialize this kernel into the program. Called by ProgramBuilder::build().
+    void materialize(Program& program);
 };
 
 // Fluent builder for constructing a Program with circular buffers and kernels.

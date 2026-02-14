@@ -150,18 +150,15 @@ int main() {
                 {src_dram_buffer},
                 {src_cb_index, ones_cb_index})
             .runtime_args({src_dram_buffer->address()})
-            .done()
             .writer(
                 OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/dataflow/writer.cpp",
                 {dst_dram_buffer},
                 {result_cb_index})
             .runtime_args({dst_dram_buffer->address()})
-            .done()
             .compute(
                 OVERRIDE_KERNEL_PREFIX "sfpu_eltwise_chain/kernels/compute/compute.cpp",
                 MathFidelity::HiFi4,
                 {src_cb_index, ones_cb_index, result_cb_index})
-            .done()
             .build();
 
     // Execute program and read result back to host.

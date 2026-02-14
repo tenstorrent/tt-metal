@@ -79,15 +79,12 @@ int main(int /*argc*/, char** /*argv*/) {
                     OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
                     {src0_dram_buffer, src1_dram_buffer})
                 .runtime_args({src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles})
-                .done()
                 .compute(OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp")
                 .runtime_args({n_tiles})
-                .done()
                 .writer(
                     OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
                     {dst_dram_buffer})
                 .runtime_args({dst_dram_buffer->address(), n_tiles})
-                .done()
                 .build();
 
         // Execute the program synchronously (enqueue + wait for completion).

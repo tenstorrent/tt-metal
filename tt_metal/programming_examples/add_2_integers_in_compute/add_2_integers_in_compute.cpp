@@ -72,12 +72,9 @@ int main() {
             .cb(tt::CBIndex::c_16, /*num_tiles=*/1)
             .reader(OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp")
             .runtime_args({src0->address(), src1->address()})
-            .done()
             .compute(OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp")
-            .done()
             .writer(OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp")
             .runtime_args({dst->address()})
-            .done()
             .build();
 
     // Execute the program and read the result back to the host.

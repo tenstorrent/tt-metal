@@ -116,7 +116,6 @@ int main() {
                 uint32_t stick_id = idx_h * shard_width / values_per_stick;
                 return {src_addr, shard_size, padded_offset_bytes, stick_id};
             })
-            .done()
             .build();
 
     fmt::print("Original tensor values: ");

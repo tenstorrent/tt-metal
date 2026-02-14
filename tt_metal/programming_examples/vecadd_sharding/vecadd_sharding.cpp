@@ -160,7 +160,6 @@ int main(int argc, char** argv) {
                     .math_approx_mode = false,
                     .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}})
             .runtime_args({num_tiles_per_core})
-            .done()
             .build();
 
     ctx.run(std::move(program));

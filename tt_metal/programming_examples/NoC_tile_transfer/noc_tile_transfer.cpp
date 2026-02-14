@@ -81,7 +81,6 @@ int main() {
             {src_dram_buffer},
             {src0_cb_index})
         .runtime_args({src_dram_buffer->address()})
-        .done()
 
         // Core 0: writer sends cb_0 to Core 1's cb_1 via NoC.
         .on(core0)
@@ -90,7 +89,6 @@ int main() {
             {},  // No DRAM buffer access
             {src0_cb_index, src1_cb_index})
         .runtime_args({core1_physical.x, core1_physical.y, sem_id})
-        .done()
 
         // Core 1: reader waits for data from Core 0.
         .on(core1)
@@ -99,7 +97,6 @@ int main() {
             {},  // No DRAM buffer access
             {src0_cb_index, src1_cb_index})
         .runtime_args({core0_physical.x, core0_physical.y, sem_id})
-        .done()
 
         // Core 1: writer writes cb_1 to DRAM.
         .on(core1)
@@ -107,8 +104,7 @@ int main() {
             OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer1.cpp",
             {dst_dram_buffer},
             {src1_cb_index})
-        .runtime_args({dst_dram_buffer->address()})
-        .done();
+        .runtime_args({dst_dram_buffer->address()});
 
     auto program = builder.build();
 

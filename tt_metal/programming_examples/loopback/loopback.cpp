@@ -66,7 +66,6 @@ int main() {
                     {input_dram_buffer, output_dram_buffer})
                 .runtime_args({l1_buffer->address(), input_dram_buffer->address(),
                                output_dram_buffer->address(), num_tiles})
-                .done()
                 .build();
 
         ctx.run(std::move(program));
