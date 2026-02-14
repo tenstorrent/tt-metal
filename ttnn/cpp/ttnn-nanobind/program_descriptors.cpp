@@ -669,21 +669,28 @@ void py_module_types(nb::module_& mod) {
             nb::init<
                 tt::tt_metal::ProgramDescriptor::KernelDescriptors,
                 tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors,
-                tt::tt_metal::ProgramDescriptor::CBDescriptors>(),
+                tt::tt_metal::ProgramDescriptor::CBDescriptors,
+                std::optional<uint64_t>>(),
             nb::arg("kernels") = nb::cast(tt::tt_metal::ProgramDescriptor::KernelDescriptors()),
             nb::arg("semaphores") = nb::cast(tt::tt_metal::ProgramDescriptor::SemaphoreDescriptors()),
             nb::arg("cbs") = nb::cast(tt::tt_metal::ProgramDescriptor::CBDescriptors()),
+            nb::arg("custom_program_hash") = nb::none(),
             R"pbdoc(
-                Initialize a ProgramDescriptor with kernels, semaphores, and command buffers.
+                Initialize a ProgramDescriptor with kernels, semaphores, command buffers, and optional program hash.
 
                 Args:
                     kernels: Collection of kernel descriptors
                     semaphores: Collection of semaphore descriptors
                     cbs: Collection of command buffer descriptors
+                    custom_program_hash: Optional hash for program caching
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "custom_program_hash",
+            &tt::tt_metal::ProgramDescriptor::custom_program_hash,
+            "Optional hash for program caching");
 
     mod.def(
         "merge_program_descriptors",
