@@ -727,6 +727,13 @@ class TTMLP:
                 B, _, N, C = shape
             else:
                 raise ValueError(f"TTMLP expects 3D/4D TT tensor, got {shape}")
+            # Stage-2: keep transformer tokens sharded across blocks, but use a
+            # stable "MLP island" sharding spec for FC1/FC2. If the incoming
+            # tokens are already sharded (e.g., encoder-wide sharding), first
+            # interleave them so we can reshard deterministically for the MLP.
+            tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
+            if tokens_shard_mc is not None and _ttnn_is_sharded(x4):
+                x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             cfg = getattr(self, "program_config", None)
             memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
             if memcfg is None:
@@ -777,8 +784,12 @@ class TTMLP:
                 program_config=ff2_pc,
                 op_name="mlp_ff2",
             )
-            if reshardened and _ttnn_is_sharded(y2):
-                # Return interleaved so residual adds in the transformer block remain stable.
+            if tokens_shard_mc is not None:
+                # Restore the encoder-wide token sharding spec for residual adds.
+                y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+            if tokens_shard_mc is None and reshardened and _ttnn_is_sharded(y2):
+                # Legacy path: when only MLP is sharded, return interleaved so
+                # residual adds (which may be interleaved) remain stable.
                 try:
                     y2 = ttnn.to_memory_config(y2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
                 except Exception:
