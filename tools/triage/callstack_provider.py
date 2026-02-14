@@ -209,11 +209,50 @@ class CallstackProvider:
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
         self.force_active_eth = force_active_eth
+        self._callstack_cache: dict[tuple, CallstacksData] = {}
+        self.lock = threading.Lock()  # For thread-safe cache access
 
     def __del__(self):
         # After all callstacks are dumped, stop GDB server if it was started
         if self.gdb_server is not None:
             self.gdb_server.stop()
+
+    def get_cached_callstacks(
+        self,
+        location: OnChipCoordinate,
+        risc_name: str,
+        rewind_pc_for_ebreak: bool = False,
+        use_full_callstack: bool | None = None,
+        use_gdb_callstack: bool | None = None,
+    ) -> CallstacksData:
+        full = use_full_callstack if use_full_callstack is not None else self.full_callstack
+        gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
+
+        cache_key = (
+            location._device.id,
+            location.to_str("noc0"),
+            risc_name,
+            full,
+            gdb,
+            rewind_pc_for_ebreak,
+        )
+
+        with self.lock:
+            if cache_key in self._callstack_cache:
+                return self._callstack_cache[cache_key]
+
+        callstacks = self.get_callstacks(
+            location,
+            risc_name,
+            rewind_pc_for_ebreak=rewind_pc_for_ebreak,
+            use_full_callstack=use_full_callstack,
+            use_gdb_callstack=use_gdb_callstack,
+        )
+
+        with self.lock:
+            self._callstack_cache[cache_key] = callstacks
+
+        return callstacks
 
     def get_callstacks(
         self,
@@ -225,12 +264,14 @@ class CallstackProvider:
     ) -> CallstacksData:
         dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
+
         if risc_debug.is_in_reset():
             return CallstacksData(
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
+
         if location in location._device.active_eth_block_locations and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
