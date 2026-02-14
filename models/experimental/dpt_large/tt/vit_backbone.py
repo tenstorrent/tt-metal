@@ -382,9 +382,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
         tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
-        # Stage-2: keep tokens sharded across encoder blocks for better core utilization.
-        # SDPA currently requires interleaved operands; attention handles a hybrid
-        # island by interleaving/resharding around SDPA.
+        # Stage-2+: keep tokens sharded across encoder blocks for better core utilization.
+        # Attention runs the explicit sharded QK-softmax-AV path on these sharded
+        # operands in perf/trace mode (no host fallbacks, no interleaving islands).
         tokens_shard_mc = None
         try:
             if bool(getattr(self.config, "tt_perf_encoder", False)) and self.tt_layer_cfg is not None:

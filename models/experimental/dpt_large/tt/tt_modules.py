@@ -567,7 +567,8 @@ class TTAttention:
         program_config=None,
         allow_cpu_fallback: bool = True,
     ):
-        # Fused QKV weights: stack [Q;K;V] along out_dim
+        # Fused QKV weights: pack as [Q_head0, K_head0, V_head0, Q_head1, K_head1, V_head1, ...]
+        # to match TTNN sharded split-heads expectations (see vit.md custom_preprocessor).
         # Keep the raw torch weights around for a host-based attention path.
         self.q_w = q_w
         self.q_b = q_b
@@ -578,12 +579,21 @@ class TTAttention:
         self.proj_w = proj_w
         self.proj_b = proj_b
 
-        # Prepare fused QKV weights for device-side linear: shape [in, 3*out]
-        q_w_t = torch.transpose(q_w.detach(), -1, -2).contiguous()
-        k_w_t = torch.transpose(k_w.detach(), -1, -2).contiguous()
-        v_w_t = torch.transpose(v_w.detach(), -1, -2).contiguous()
-        wqkv_t = torch.cat([q_w_t, k_w_t, v_w_t], dim=-1)
-        bqkv = torch.cat([q_b.detach(), k_b.detach(), v_b.detach()], dim=0)
+        # Prepare fused QKV weights for device-side linear.
+        # Torch linear weights are [out, in]; ttnn.linear expects [in, out] in TILE.
+        H = int(num_heads)
+        D = int(head_dim)
+        # Reshape to [heads, head_dim, in] then interleave along head_dim axis.
+        q_w_hdi = q_w.detach().reshape(H, D, -1)
+        k_w_hdi = k_w.detach().reshape(H, D, -1)
+        v_w_hdi = v_w.detach().reshape(H, D, -1)
+        qkv_w = torch.cat([q_w_hdi, k_w_hdi, v_w_hdi], dim=1).reshape(H * 3 * D, -1)  # [3*out, in]
+        wqkv_t = torch.transpose(qkv_w, -1, -2).contiguous()  # [in, 3*out]
+
+        q_b_hd = q_b.detach().reshape(H, D)
+        k_b_hd = k_b.detach().reshape(H, D)
+        v_b_hd = v_b.detach().reshape(H, D)
+        bqkv = torch.cat([q_b_hd, k_b_hd, v_b_hd], dim=1).reshape(H * 3 * D)  # [3*out]
         try:
             self._wqkv_tt = ttnn.from_torch(
                 wqkv_t,
@@ -609,6 +619,8 @@ class TTAttention:
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
         # Cache height-sharded memory configs for [B, N] attention shapes.
         self._height_shard_mc_cache: dict[tuple[int, int, int, int], dict[str, object]] = {}
+        # Cache block-sharded QKV output specs keyed by (B, N, C, grid_x, grid_y).
+        self._qkv_block_shard_mc_cache: dict[tuple[int, int, int, int, int], object] = {}
         # Pre-create TTNN projection weights for device-side output matmul
         try:
             # Use transposed weights to avoid transpose_b flag during linear
@@ -664,11 +676,6 @@ class TTAttention:
         # Stage-2/3: tokens may be block-sharded across the encoder.
         tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
         cfg = getattr(self, "program_config", None)
-        attn_island_memcfg = (
-            mm_opts.get("attn_island_memcfg", None)
-            or getattr(cfg, "attn_island_memcfg", None)
-            or ttnn.DRAM_MEMORY_CONFIG
-        )
         input_is_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
         use_default_attn_programs = bool(getattr(cfg, "use_default_attention_programs", False)) if cfg is not None else False
         # Prefer explicit attention on sharded operands; fall back to the SDPA island
@@ -678,16 +685,34 @@ class TTAttention:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
             split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
+            if split_memcfg is None:
+                split_memcfg = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
+
+            # QKV fused linear output must be block-sharded across the encoder grid so
+            # `split_query_key_value_and_split_heads` can run its sharded program
+            # factory (no interleaving islands in perf/trace mode).
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
+            if explicit_sharded_attn:
+                grid = getattr(cfg, "grid", None) if cfg is not None else None
+                if grid is None:
+                    raise RuntimeError("Missing encoder core grid in TT config")
+                grid_x, grid_y = int(grid[0]), int(grid[1])
+                cache_key = (int(B), int(N), int(C), int(grid_x), int(grid_y))
+                qkv_shard_mc = self._qkv_block_shard_mc_cache.get(cache_key)
+                if qkv_shard_mc is None:
+                    if not hasattr(ttnn, "create_sharded_memory_config"):
+                        raise RuntimeError("ttnn.create_sharded_memory_config unavailable; cannot shard QKV output")
+                    core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
+                    qkv_shard_mc = ttnn.create_sharded_memory_config(
+                        (int(B), 1, int(N), int(3 * C)),
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    self._qkv_block_shard_mc_cache[cache_key] = qkv_shard_mc
+                memcfg = qkv_shard_mc
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # `split_query_key_value_and_split_heads` has runtime constraints on
-            # sharded inputs for the DPT perf shapes (B per chip is 1, but the
-            # sharded create_qkv_heads path expects batch_size == grid_y). Keep
-            # QKV output interleaved, then request height-sharded Q/K/V outputs
-            # via the split-heads memory_config.
-            if explicit_sharded_attn:
-                memcfg = attn_island_memcfg
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -700,81 +725,23 @@ class TTAttention:
                 program_config=qkv_pc,
                 op_name="attn_qkv",
             )
-            # [B, 1, N, 3C] -> [B, N, 3C]
-            qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
             try:
-                if explicit_sharded_attn:
-                    # The split-heads op's sharded output path currently shards
-                    # across heads with TILE_HEIGHT shards and can exceed core
-                    # counts for long sequences (e.g., 640 tokens). Split
-                    # interleaved, then explicitly reshard Q/K/V to height-sharded
-                    # layouts across the full core grid for matmul+softmax.
-                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                        qkv3, num_heads=H, transpose_key=True
-                    )
-                else:
-                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                        qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
-                    )
+                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                    qkv4, num_heads=H, transpose_key=True, memory_config=split_memcfg
+                )
             except TypeError:
                 # Backward compat: older runtimes may not expose these kwargs.
-                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
+                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv4, num_heads=H)
 
             if explicit_sharded_attn:
-                # Height-shard Q/K/V across the full core grid so attention
-                # scores/probs fit in L1 at seq=640.
-                grid = (getattr(cfg, "attn_grid", None) or getattr(cfg, "grid", None)) if cfg is not None else None
-                if grid is None:
-                    raise RuntimeError("Missing attention core grid in TT config")
-                grid_x, grid_y = int(grid[0]), int(grid[1])
-                cache_key = (int(B), int(N), int(grid_x), int(grid_y))
-                cached = self._height_shard_mc_cache.get(cache_key)
-                if cached is None:
-                    if not hasattr(ttnn, "create_sharded_memory_config"):
-                        raise RuntimeError("ttnn.create_sharded_memory_config unavailable; cannot height-shard attention")
-                    core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
-                    qv_mc = ttnn.create_sharded_memory_config(
-                        (int(B), int(H), int(N), int(D)),
-                        core_grid=core_grid,
-                        strategy=ttnn.ShardStrategy.HEIGHT,
-                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    )
-                    k_mc = ttnn.create_sharded_memory_config(
-                        (int(B), int(H), int(D), int(N)),
-                        core_grid=core_grid,
-                        strategy=ttnn.ShardStrategy.HEIGHT,
-                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    )
-                    scores_mc = ttnn.create_sharded_memory_config(
-                        (int(B), int(H), int(N), int(N)),
-                        core_grid=core_grid,
-                        strategy=ttnn.ShardStrategy.HEIGHT,
-                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    )
-                    cached = {"qv": qv_mc, "k": k_mc, "scores": scores_mc}
-                    self._height_shard_mc_cache[cache_key] = cached
-
-                qv_mc = cached["qv"]
-                k_mc = cached["k"]
-                scores_mc = cached["scores"]
-
-                try:
-                    q_tt = ttnn.to_memory_config(q_tt, memory_config=qv_mc, dtype=ttnn.bfloat16)
-                    k_tt = ttnn.to_memory_config(k_tt, memory_config=k_mc, dtype=ttnn.bfloat16)
-                    v_tt = ttnn.to_memory_config(v_tt, memory_config=qv_mc, dtype=ttnn.bfloat16)
-                except TypeError:
-                    q_tt = ttnn.to_memory_config(q_tt, memory_config=qv_mc)
-                    k_tt = ttnn.to_memory_config(k_tt, memory_config=k_mc)
-                    v_tt = ttnn.to_memory_config(v_tt, memory_config=qv_mc)
-
-                # Explicit attention path supports sharded operands: QK -> fused scale+mask+softmax -> AV.
+                # Explicit attention path (ViT TTNN pattern) on sharded operands:
+                # QK -> fused scale+mask+softmax -> AV, all height-sharded.
                 qk_pc = None if use_default_attn_programs else getattr(cfg, "qk_program_config", None)
                 softmax_pc = None if use_default_attn_programs else getattr(cfg, "softmax_program_config", None)
                 av_pc = None if use_default_attn_programs else getattr(cfg, "av_program_config", None)
 
-                # Scores and probs stay height-sharded for softmax.
-                scores_memcfg = scores_mc
+                scores_memcfg = split_memcfg
                 attn_scores = _ttnn_matmul_with_optional_program_config(
                     a=q_tt,
                     b=k_tt,
@@ -796,7 +763,7 @@ class TTAttention:
                     a=attn_probs,
                     b=v_tt,
                     dtype=ttnn.bfloat16,
-                    memory_config=qv_mc,
+                    memory_config=scores_memcfg,
                     program_config=av_pc,
                     op_name="attn_av_matmul",
                 )
@@ -808,17 +775,12 @@ class TTAttention:
                     pass
 
                 try:
-                    # Concatenate-heads has tight constraints on sharded output
-                    # layouts when num_heads > grid_x. Emit an interleaved
-                    # tensor, then reshard back to the encoder token layout.
-                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=attn_island_memcfg)
+                    merged = ttnn.transformer.concatenate_heads(
+                        ctx_tt,
+                        memory_config=(tokens_shard_mc if tokens_shard_mc is not None else ttnn.L1_MEMORY_CONFIG),
+                    )
                 except TypeError:
                     merged = ttnn.transformer.concatenate_heads(ctx_tt)
-                if tokens_shard_mc is not None:
-                    try:
-                        merged = ttnn.to_memory_config(merged, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
-                    except TypeError:
-                        merged = ttnn.to_memory_config(merged, memory_config=tokens_shard_mc)
                 ctx = merged
             else:
                 # Legacy SDPA path (interleaved). Keep it for non-sharded / debug.
@@ -882,11 +844,8 @@ class TTAttention:
             memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # For the sharded attention path, emit projection output interleaved
-            # to avoid L1 static-CB clashes on the full encoder grid; reshard
-            # back to tokens_shard_mc for residual adds.
-            if input_is_sharded:
-                memcfg = attn_island_memcfg
+            if input_is_sharded and tokens_shard_mc is not None:
+                memcfg = tokens_shard_mc
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
             if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
@@ -899,8 +858,6 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
-            if input_is_sharded:
-                out_tt4 = ttnn.to_memory_config(out_tt4, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
             # Keep rank stable for residual adds.
             out = out_tt4
             if len(getattr(out_tt4, "shape", [])) == 3:

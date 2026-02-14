@@ -187,13 +187,13 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         dim_t = config.hidden_size // TILE
 
         core_grid_x, core_grid_y = core_grid
-        num_cores = max(1, int(core_grid_x) * int(core_grid_y))
         dim_t__x = max(1, dim_t // core_grid_x)
         head_num = config.num_attention_heads
         head_size_t = max(1, (config.hidden_size // head_num) // TILE)
-        # For attention we height-shard the flattened [B*H*seqL_t, ...] tiles
-        # across the full core grid (x*y), not just across x.
-        head_seqL_t__x = max(1, (head_num * seqL_t + num_cores - 1) // num_cores)
+        # TTNN split-heads sharded path (vit.md) shards the flattened (H*seqL)
+        # dimension across the grid *columns* when shard orientation is ROW_MAJOR.
+        # Keep program_config tile counts aligned with that expectation.
+        head_seqL_t__x = max(1, (head_num * seqL_t) // max(1, int(core_grid_x)))
         # Matmul+softmax subblock sizing: for larger seq (e.g., 640 tokens -> 20 tiles),
         # keeping out_subblock_w/subblock_w <= 8 avoids register pressure limits.
         qk_out_subblock_w = seqL_t if seqL_t <= 8 else 1
@@ -299,13 +299,12 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Use a 2D grid for better attention-score sharding and L1 fit at
-        # 384x384 (seq padded to 640 tokens). Attention itself will explicitly
-        # keep split-heads height-sharded; QKV split uses an interleaved input
-        # tensor to avoid runtime constraints on sharded create_qkv_heads.
-        grid = (8, 4)
-        # Height-shard attention across 16 cores (one per head) on N300.
-        attn_grid = (8, 2)
+        # Sharded transformer ops (split-heads/concat-heads) assume ROW_MAJOR block
+        # sharding where the QKV fused width is partitioned across grid columns and
+        # batch (per chip) maps to grid rows. In our perf path (dp=2, batch=2),
+        # per-chip batch is 1, so keep `grid_y=1` to match vit.md's assumptions.
+        grid = (8, 1)
+        attn_grid = grid
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -317,16 +316,13 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         math = "hi-fi3"
 
     prog_cfgs = _build_perf_program_configs(config, grid)
-    attn_prog_cfgs = _build_perf_program_configs(config, attn_grid)
-    # MLP dominates ViT-Large runtime. In practice, attention SDPA op constraints
-    # vary across runtimes; keep attention operands interleaved for stability,
-    # but compute separate MLP program configs for a simple 1-row core grid so
-    # we can optionally reshard only for FC1/FC2.
+    attn_prog_cfgs = prog_cfgs if attn_grid == grid else _build_perf_program_configs(config, attn_grid)
+    # MLP dominates ViT-Large runtime. Keep MLP on the same grid as the encoder
+    # so residual adds and norms can stay sharded without reshards.
     mlp_grid = None
     mlp_prog_cfgs = {}
     if config.device.endswith("n300"):
-        # Keep MLP on the same grid as the encoder for now.
-        mlp_grid = (8, 4)
+        mlp_grid = grid
         mlp_prog_cfgs = _build_perf_program_configs(config, mlp_grid)
         # `_build_perf_program_configs` defaults `per_core_M` to the full padded
         # sequence tile count. For block-sharded MLP activations across (x,y),
