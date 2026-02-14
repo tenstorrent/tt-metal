@@ -619,9 +619,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             )
             ttnn.deallocate(x_sharded, force=False)
 
-            # 4. silu(gate) * up → stays in L1 WIDTH_SHARDED.
-            gate = ttnn.silu(gate)
-            x_ff = ttnn.mul(gate, up, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+            # 4. fused silu(gate) * up → stays in L1 WIDTH_SHARDED.
+            x_ff = ttnn.mul(gate, up, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
             ttnn.deallocate(gate, force=False)
             ttnn.deallocate(up, force=False)
 
@@ -1126,8 +1125,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             gate = _mlp_linear(x, w.w_mlp_gate)
             up = _mlp_linear(x, w.w_mlp_up)
             ttnn.deallocate(x, force=False)
-            gate = ttnn.silu(gate)
-            x_ff = gate * up
+            x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
             ttnn.deallocate(gate, force=False)
             ttnn.deallocate(up, force=False)
             mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
@@ -1204,8 +1202,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     else:
         gate_shared = _mlp_linear(x, w.w_mlp_gate)
         up_shared = _mlp_linear(x, w.w_mlp_up)
-        gate_shared = ttnn.silu(gate_shared)
-        x_ff_shared = gate_shared * up_shared
+        x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down, memory_config=moe_decode_mc)
@@ -1670,8 +1667,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         up = _mlp_linear(x, w.w_mlp_up)
         ttnn.deallocate(x, force=False)
 
-        gate = ttnn.silu(gate)
-        x_ff = gate * up
+        x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
 
@@ -1724,8 +1720,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         t0 = time.perf_counter() if profile is not None else 0.0
         gate_shared = _mlp_linear(x, w.w_mlp_gate)
         up_shared = _mlp_linear(x, w.w_mlp_up)
-        gate_shared = ttnn.silu(gate_shared)
-        x_ff_shared = gate_shared * up_shared
+        x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
