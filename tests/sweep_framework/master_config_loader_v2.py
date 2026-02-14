@@ -22,7 +22,7 @@ from tests.sweep_framework.framework.constants import LEAD_MODELS
 
 # Set up logger
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -799,6 +799,7 @@ class MasterConfigLoader:
             config_dict["traced_source"] = source
             config_dict["traced_machine_info"] = machine_info
             config_dict["config_id"] = config_id
+            config_dict["config_hash"] = config_hash
 
             traced_config_list.append(config_dict)
 
