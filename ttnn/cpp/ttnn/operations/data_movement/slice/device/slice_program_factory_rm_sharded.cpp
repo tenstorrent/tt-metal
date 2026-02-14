@@ -244,8 +244,7 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =

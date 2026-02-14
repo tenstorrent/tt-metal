@@ -638,7 +638,7 @@ void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
             reader_runtime_args[0] = input_tensor_buffer->address();
             reader_runtime_args[1] = index_tensor_buffer->address();
-            reader_runtime_args[2] = physical_core_lookup_table_tensor.buffer()->address();
+            reader_runtime_args[2] = physical_core_lookup_table_tensor.mesh_buffer()->address();
 
             auto& writer_runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core_coord);

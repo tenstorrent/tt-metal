@@ -922,7 +922,7 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
             "Bias tensor must be on device, got storage type: {}",
             c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+        TT_FATAL(c.is_allocated(), "Operands to matmul need to be allocated in buffers on device!");
 
         bias_buffer = c.buffer();
 
@@ -1009,8 +1009,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     tt_metal::Buffer* out_buffer = output.buffer();
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -1107,7 +1107,7 @@ void MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::override_runtime_ar
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             writer_runtime_args[1] = src_buffer_b->address();
             if (bias_tensor.has_value()) {
-                writer_runtime_args[2] = bias_tensor.value().buffer()->address();
+                writer_runtime_args[2] = bias_tensor.value().mesh_buffer()->address();
             } else {
                 writer_runtime_args[2] = 0;
             }

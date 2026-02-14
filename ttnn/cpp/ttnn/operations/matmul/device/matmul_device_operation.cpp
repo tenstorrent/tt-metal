@@ -199,7 +199,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
 
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
@@ -219,7 +219,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
-        attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
+        attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.memory_config().is_dram()) {
         for (uint32_t i = 1; i < input_tensors.size(); ++i) {
             TT_FATAL(
                 input_tensor_b.logical_shape() == input_tensors[i].logical_shape(),
@@ -368,10 +368,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
+                             input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                        if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                                 "Input tensor A and B must be sharded on the same cores "
@@ -479,7 +479,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
                             "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
-                    if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
+                    if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
                         TT_FATAL(
                             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -761,9 +761,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
                         TT_FATAL(
-                            input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+                            input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM,
                             "HEIGHT_SHARDED input B is only supported in DRAM, got: {}",
-                            input_tensor_b.buffer()->buffer_type());
+                            input_tensor_b.memory_config().buffer_type());
                         TT_FATAL(
                             !program_config.fuse_batch,
                             "HEIGHT_SHARDED input B requires fuse_batch=false for batched matmul");
@@ -802,7 +802,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             batches_per_bank * num_banks,
                             B);
                     }
-                    if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+                    if (input_tensor_b.memory_config().buffer_type() != tt_metal::BufferType::DRAM) {
                         const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
                         TT_FATAL(
                             (input_tensor_a.memory_config().is_sharded() &&

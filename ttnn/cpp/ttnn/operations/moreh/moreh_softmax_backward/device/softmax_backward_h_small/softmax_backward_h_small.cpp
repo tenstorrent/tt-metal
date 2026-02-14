@@ -69,8 +69,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     std::map<std::string, std::string> writer_defines;
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/reader_moreh_softmax_backward_h.cpp",
@@ -78,7 +78,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         reader_ct_args,
         reader_defines);
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_h.cpp",
@@ -135,8 +135,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
             mask_h = tt::constants::TILE_HEIGHT;
         }
         std::vector<uint32_t> reader_args = {
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
+            output.mesh_buffer()->address(),
+            output_grad.mesh_buffer()->address(),
             num_tiles_per_core,
             tile_offset,
             Ht,
@@ -144,7 +144,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
             *reinterpret_cast<uint32_t*>(&scaler),
             mask_h};
 
-        std::vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
+        std::vector<uint32_t> writer_args = {
+            input_grad.mesh_buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -169,12 +170,12 @@ void MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::override_
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.output_tensor.buffer()->address();
-            runtime_args[1] = tensor_args.output_grad_tensor.buffer()->address();
+            runtime_args[0] = tensor_args.output_tensor.mesh_buffer()->address();
+            runtime_args[1] = tensor_args.output_grad_tensor.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = input_grad.buffer()->address();
+            runtime_args[0] = input_grad.mesh_buffer()->address();
         }
     }
 }

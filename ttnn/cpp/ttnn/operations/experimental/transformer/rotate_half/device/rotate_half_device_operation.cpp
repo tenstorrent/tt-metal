@@ -22,7 +22,7 @@ void RotateHalfDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to rotate half need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
     TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     TT_FATAL(

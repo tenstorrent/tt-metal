@@ -143,8 +143,8 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     Program program = CreateProgram();
 
     Buffer* src_buffer = input_tensor.buffer();
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
 

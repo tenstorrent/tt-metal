@@ -354,8 +354,8 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // Load kernels on all device cores, because we use cached program for input shapes with changing shapes
     CoreCoord device_compute_with_storage_grid = device->compute_with_storage_grid_size();

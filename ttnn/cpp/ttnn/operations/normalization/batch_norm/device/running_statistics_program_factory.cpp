@@ -79,7 +79,7 @@ void set_or_update_runtime_arguments(
                                                 : pack_two_bfloat16_into_uint32({scalar, scalar});
         std::array reader_runtime_args = {
             packed_scalar_momentum,
-            batch_mean_tensor.buffer()->address(),
+            (uint32_t)batch_mean_tensor.mesh_buffer()->address(),
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -94,10 +94,10 @@ void set_or_update_runtime_arguments(
         const auto running_mean_addr = running_mean_has_value ? running_mean_tensor->buffer()->address() : 0;
         const auto running_var_addr = running_var_has_value ? running_var_tensor->buffer()->address() : 0;
         std::array writer_runtime_args = {
-            batch_var_tensor.buffer()->address(),  //  batch var
-            running_mean_addr,                     // old running mean
-            running_var_addr,                      // old running var
-            c.buffer()->address(),                 // output
+            (uint32_t)batch_var_tensor.mesh_buffer()->address(),  //  batch var
+            running_mean_addr,                                    // old running mean
+            running_var_addr,                                     // old running var
+            (uint32_t)c.mesh_buffer()->address(),                 // output
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -239,7 +239,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         momentum_cb,
         one_cb,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(running_mean_has_value),
@@ -251,11 +251,11 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         updated_m_cb,
         updated_v_cb,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16

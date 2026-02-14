@@ -75,7 +75,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
 
     // For DRAM reads, we need DRAM-aligned size
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
     uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);
@@ -123,12 +123,12 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
         static_cast<uint32_t>(output_cb_index),
         static_cast<uint32_t>(scratch_cb_index),
     };
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(output_cb_index),
     };
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
@@ -156,7 +156,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
         aligned = aligned && !is_blackhole;
 
         std::vector<uint32_t> reader_args = {
-            input.buffer()->address(),
+            input.mesh_buffer()->address(),
             N,
             C,
             H,
@@ -179,7 +179,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
             aligned};
 
         std::vector<uint32_t> writer_args = {
-            output.buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core};
+            output.mesh_buffer()->address(), aligned_output_cb_page_size, start_id, num_units_per_core};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -198,8 +198,8 @@ void MorehFoldOperation::ProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
-    auto input_buffer_address = tensor_args.input.buffer()->address();
-    auto output_buffer_address = output.buffer()->address();
+    auto input_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto output_buffer_address = output.mesh_buffer()->address();
 
     for (const auto& core : cores) {
         {

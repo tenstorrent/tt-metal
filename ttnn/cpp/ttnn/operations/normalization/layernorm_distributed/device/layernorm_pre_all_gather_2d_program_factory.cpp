@@ -79,8 +79,8 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto dst_addr = output.mesh_buffer()->address();
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
@@ -139,10 +139,10 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
         (std::uint32_t)reducer_semaphore_id,
         (std::uint32_t)cores_y,
     };
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
 
@@ -262,8 +262,8 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     const Tensor& tensor_args,
     Tensor& output) {
     const auto& input_tensor = tensor_args;
-    const auto input_addr = input_tensor.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    const auto input_addr = input_tensor.mesh_buffer()->address();
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

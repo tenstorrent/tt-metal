@@ -78,13 +78,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -131,11 +132,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         fp32_dest_acc_en,
         math_approx_mode);
 
-    const auto target_addr = target.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0;
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_grad_addr = input_grad.buffer()->address();
+    const auto target_addr = target.mesh_buffer()->address();
+    const auto weight_addr = weight_has_value ? weight.value().mesh_buffer()->address() : 0;
+    const auto divisor_addr = divisor_has_value ? divisor.value().mesh_buffer()->address() : 0;
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_grad_addr = input_grad.mesh_buffer()->address();
 
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
@@ -256,13 +257,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -309,11 +311,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         fp32_dest_acc_en,
         math_approx_mode);
 
-    const auto target_addr = target.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0;
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_grad_addr = input_grad.buffer()->address();
+    const auto target_addr = target.mesh_buffer()->address();
+    const auto weight_addr = weight_has_value ? weight.value().mesh_buffer()->address() : 0;
+    const auto divisor_addr = divisor_has_value ? divisor.value().mesh_buffer()->address() : 0;
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_grad_addr = input_grad.mesh_buffer()->address();
 
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
@@ -437,13 +439,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -490,11 +493,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         fp32_dest_acc_en,
         math_approx_mode);
 
-    const auto target_addr = target.buffer()->address();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0;
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_grad_addr = input_grad.buffer()->address();
+    const auto target_addr = target.mesh_buffer()->address();
+    const auto weight_addr = weight_has_value ? weight.value().mesh_buffer()->address() : 0;
+    const auto divisor_addr = divisor_has_value ? divisor.value().mesh_buffer()->address() : 0;
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_grad_addr = input_grad.mesh_buffer()->address();
 
     // Set Runtime Args
     auto element_size = weight_has_value ? weight.value().element_size() : 0;
@@ -598,15 +601,15 @@ void MorehNllLossBackwardDeviceOperation::Factory::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
-    const uint32_t output_grad_addr = tensor_args.output_grad_tensor.buffer()->address();
+    const uint32_t target_addr = tensor_args.target_tensor.mesh_buffer()->address();
+    const uint32_t output_grad_addr = tensor_args.output_grad_tensor.mesh_buffer()->address();
     const uint32_t weight_addr =
-        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
+        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().mesh_buffer()->address() : 0;
     const uint32_t divisor_addr =
-        tensor_args.divisor_tensor.has_value() ? tensor_args.divisor_tensor.value().buffer()->address() : 0;
+        tensor_args.divisor_tensor.has_value() ? tensor_args.divisor_tensor.value().mesh_buffer()->address() : 0;
     const uint32_t ignore_index = operation_attributes.ignore_index;
 
-    const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
+    const uint32_t input_grad_addr = tensor_return_value.mesh_buffer()->address();
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

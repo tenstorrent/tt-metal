@@ -184,7 +184,7 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         element_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -255,7 +255,7 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
     if (!any_sharded) {
         const uint32_t output_stick_size = input_channels * element_size;
         std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_stick_size, out_ntiles_c};
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -294,7 +294,7 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         }
 
         std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(),
+            input_tensor.mesh_buffer()->address(),
             num_sticks,
             start_stick_id,
             static_cast<uint32_t>(cos_angle_q16),
@@ -306,7 +306,8 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         if (!any_sharded) {
-            std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(), num_sticks, start_stick_id};
+            std::vector<uint32_t> writer_runtime_args = {
+                output_tensor.mesh_buffer()->address(), num_sticks, start_stick_id};
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 

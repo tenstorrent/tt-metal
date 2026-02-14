@@ -62,9 +62,9 @@ void override_multi_core_runtime_args(
         const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_ids[i];
 
         auto& reader_runtime_args = GetRuntimeArgs(cached_program.program, reader_kernel_id, core);
-        reader_runtime_args[0] = user_ids_tensor.buffer()->address();
+        reader_runtime_args[0] = user_ids_tensor.mesh_buffer()->address();
         if (seeds_tensor.has_value()) {
-            reader_runtime_args[1] = seeds_tensor.value().buffer()->address();
+            reader_runtime_args[1] = seeds_tensor.value().mesh_buffer()->address();
         }
     }
 }

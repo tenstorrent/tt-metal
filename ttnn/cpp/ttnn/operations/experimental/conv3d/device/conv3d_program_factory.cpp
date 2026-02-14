@@ -232,7 +232,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.stride[0],
         operation_attributes.stride[1],
         operation_attributes.stride[2]};
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -331,8 +331,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id};
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
@@ -342,10 +342,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t input_addr = input_tensor.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t weight_addr = weight_tensor.buffer()->address();
-    uint32_t bias_addr = bias_tensor.has_value() ? bias_tensor.value().buffer()->address() : 0;
+    uint32_t input_addr = input_tensor.mesh_buffer()->address();
+    uint32_t out_addr = output_tensor.mesh_buffer()->address();
+    uint32_t weight_addr = weight_tensor.mesh_buffer()->address();
+    uint32_t bias_addr = bias_tensor.has_value() ? bias_tensor.value().mesh_buffer()->address() : 0;
 
     /**
      * Compute parallelism for multi-core.
@@ -676,10 +676,10 @@ void Conv3dProgramFactory::override_runtime_arguments(
     auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
 
-    auto input_addr = tensor_args.input_tensor.buffer()->address();
-    auto weight_addr = tensor_args.weight_tensor.buffer()->address();
-    auto output_addr = tensor_return_value.buffer()->address();
-    auto bias_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+    auto input_addr = tensor_args.input_tensor.mesh_buffer()->address();
+    auto weight_addr = tensor_args.weight_tensor.mesh_buffer()->address();
+    auto output_addr = tensor_return_value.mesh_buffer()->address();
+    auto bias_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().mesh_buffer()->address() : 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = cores.at(i);

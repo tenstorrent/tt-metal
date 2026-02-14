@@ -261,7 +261,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     create_receiver_buffer(program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = calculate_chunk_params(
-        tensor_args.input_tensor.buffer()->num_pages() /
+        tensor_args.input_tensor.mesh_buffer()->num_pages() /
             operation_attributes.ring_size,  // number of pages sent between each pair of devices
         pages_per_packet);
 
@@ -281,7 +281,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     // Tensor Info
-    const auto input_tensor_num_pages = tensor_args.input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = tensor_args.input_tensor.mesh_buffer()->num_pages();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 
@@ -304,7 +304,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         num_targets_forward,             // num_targets_forward_direction
         num_targets_backward             // num_targets_backward_direction
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(reader_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer())
+        .append_to(reader_kernel_config.compile_args);
     log_trace(tt::LogOp, "Reader Compile Args:");
     for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -333,9 +334,9 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         contig_pages_advanced,           // contig_pages_advanced
         N_DRAM_BANKS                     // num_dram_banks
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_buffer())
         .append_to(writer_kernel_config.compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_buffer())
         .append_to(writer_kernel_config.compile_args);
     for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -358,7 +359,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_buffer())
         .append_to(receiver_writer_kernel_config.compile_args);
 
     auto receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -380,9 +381,9 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         receiver_cb_index,
         pages_per_packet,
         N_DRAM_BANKS};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer())
         .append_to(receiver_reader_kernel_config.compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_buffer())
         .append_to(receiver_reader_kernel_config.compile_args);
     auto receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -421,13 +422,14 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         (contig_pages_advanced * N_DRAM_BANKS * (final_packet_global_id / N_DRAM_BANKS));
     const uint32_t final_packet_second_tile_id = final_packet_first_tile_id + N_DRAM_BANKS;
     TT_FATAL(
-        final_packet_second_tile_id < tensor_args.persistent_intermediate_buffer.buffer()->num_pages(),
+        final_packet_second_tile_id < tensor_args.persistent_intermediate_buffer.mesh_buffer()->num_pages(),
         "Final packet would overflow intermediate buffer. This is unexpected and dangerous. "
-        "final_packet_first_tile_id: {}, final_packet_second_tile_id: {}, intermediate_buffer.buffer()->num_pages(): "
+        "final_packet_first_tile_id: {}, final_packet_second_tile_id: {}, "
+        "intermediate_buffer.mesh_buffer()->num_pages(): "
         "{}",
         final_packet_first_tile_id,
         final_packet_second_tile_id,
-        tensor_args.persistent_intermediate_buffer.buffer()->num_pages());
+        tensor_args.persistent_intermediate_buffer.mesh_buffer()->num_pages());
 
     // Kernel Runtime Args
     const uint32_t receiver_core_x = device->worker_core_from_logical_core(receiver_worker_cores[ring_index]).x;
@@ -445,7 +447,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            tensor_args.input_tensor.buffer()->address(),  // tensor_address0
+            tensor_args.input_tensor.mesh_buffer()->address(),  // tensor_address0
             in_row_tiles,
             in_col_tiles,
             input_row_device_stride,
@@ -465,8 +467,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         bool wait_output_semaphore = (link == 0) && !enable_async_output;
         bool reset_global_semaphore = (link == 0) && !enable_async_output;
         std::vector<uint32_t> writer_rt_args = {
-            tensor_args.persistent_intermediate_buffer.buffer()->address(),
-            tensor_args.persistent_output_buffer.buffer()->address(),
+            tensor_args.persistent_intermediate_buffer.mesh_buffer()->address(),
+            tensor_args.persistent_output_buffer.mesh_buffer()->address(),
             semaphore.address(),
             out_row_tiles,
             out_col_tiles,
@@ -520,8 +522,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
 
             // Set receiver runtime args
             std::vector<uint32_t> receiver_reader_rt_args = {
-                tensor_args.persistent_intermediate_buffer.buffer()->address(),
-                tensor_args.input_tensor.buffer()->address(),
+                tensor_args.persistent_intermediate_buffer.mesh_buffer()->address(),
+                tensor_args.input_tensor.mesh_buffer()->address(),
                 semaphore.address(),  // Global semaphore for sender i
                 in_row_tiles,
                 in_col_tiles,
@@ -539,7 +541,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
             tt::tt_metal::SetRuntimeArgs(program, receiver_reader_kernel_id, {core}, receiver_reader_rt_args);
 
             std::vector<uint32_t> receiver_writer_rt_args = {
-                tensor_args.persistent_output_buffer.buffer()->address(),
+                tensor_args.persistent_output_buffer.mesh_buffer()->address(),
                 in_row_tiles,
                 in_col_tiles,
                 receiver_input_row_device_stride,
@@ -594,23 +596,23 @@ void AllToAllAsyncProgram::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // Update reader runtime args
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.mesh_buffer()->address();
 
             // Update writer runtime args
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = tensor_args.persistent_intermediate_buffer.buffer()->address();
-            worker_writer_sender_runtime_args[1] = tensor_args.persistent_output_buffer.buffer()->address();
+            worker_writer_sender_runtime_args[0] = tensor_args.persistent_intermediate_buffer.mesh_buffer()->address();
+            worker_writer_sender_runtime_args[1] = tensor_args.persistent_output_buffer.mesh_buffer()->address();
             worker_writer_sender_runtime_args[2] = operation_attributes.semaphore.address();
         }
 
         // Update receiver runtime args
         for (const auto& core : shared_vars.receiver_worker_cores) {
             auto& receiver_writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-            receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.buffer()->address();
+            receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.mesh_buffer()->address();
 
             auto& receiver_reader_runtime_args = receiver_reader_runtime_args_by_core[core.x][core.y];
-            receiver_reader_runtime_args[0] = tensor_args.persistent_intermediate_buffer.buffer()->address();
-            receiver_reader_runtime_args[1] = tensor_args.input_tensor.buffer()->address();
+            receiver_reader_runtime_args[0] = tensor_args.persistent_intermediate_buffer.mesh_buffer()->address();
+            receiver_reader_runtime_args[1] = tensor_args.input_tensor.mesh_buffer()->address();
             receiver_reader_runtime_args[2] = operation_attributes.semaphore.address();
         }
     }

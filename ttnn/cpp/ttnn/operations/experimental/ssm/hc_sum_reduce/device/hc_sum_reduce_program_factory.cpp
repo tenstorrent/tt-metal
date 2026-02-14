@@ -21,8 +21,8 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto* input_buffer = tensor_args.input.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& ashape = tensor_args.input.padded_shape();
     auto num_output_blocks_total = tensor_args.input.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);

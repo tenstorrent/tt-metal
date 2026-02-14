@@ -28,13 +28,13 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.storage_type()));
 
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        TT_FATAL(tensor.is_allocated(), "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
             name,
-            enchantum::to_string(tensor.buffer()->buffer_type()));
+            enchantum::to_string(tensor.memory_config().buffer_type()));
 
         TT_FATAL(
             tensor.layout() == required_layout,

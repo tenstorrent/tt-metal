@@ -88,7 +88,7 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(logical_rank == padded_rank, "ttnn.pad: logical and padded shapes must have the same rank");
     TT_FATAL(input_tensor.logical_shape().rank() <= 4, "ttnn.pad: input tensor rank currently must be 4 or less");
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operand to pad needs to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::TILE || input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Error");

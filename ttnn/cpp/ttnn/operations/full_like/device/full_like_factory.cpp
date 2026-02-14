@@ -94,7 +94,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, TILE_HW, single_tile_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(
         program,
@@ -114,7 +114,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), u.u32, num_tiles_per_core, tiles_offset});
+        SetRuntimeArgs(
+            program, writer_id, core, {output.mesh_buffer()->address(), u.u32, num_tiles_per_core, tiles_offset});
 
         tiles_offset += num_tiles_per_core;
     }
@@ -132,7 +133,7 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_buffer_address = output.buffer()->address();
+    auto output_buffer_address = output.mesh_buffer()->address();
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {

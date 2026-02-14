@@ -50,11 +50,11 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device");
     tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -113,12 +113,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .compile_args = compute_kernel_args,
             .defines = reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW)});
 
-    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
+    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.mesh_buffer()->address(), num_tensor_tiles, 0});
 
     uint32_t out_dim_divider = Ht * Wt;
 
     tt_metal::SetRuntimeArgs(
-        program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
+        program, writer_kernel_id, core, {output.mesh_buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, selected_core_coord}};
 }

@@ -479,7 +479,7 @@ bool RingTopology::is_last_device_in_line(bool in_clockwise_direction) const {
 }
 
 CclOpTensorConfig::CclOpTensorConfig(const Tensor& tensor) :
-    buffer_start_address(tensor.buffer()->address()),
+    buffer_start_address(tensor.mesh_buffer()->address()),
     df(tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype())) {
     if (tensor.layout() == Layout::TILE) {
         this->tile = tensor.tensor_spec().tile();
@@ -487,7 +487,7 @@ CclOpTensorConfig::CclOpTensorConfig(const Tensor& tensor) :
         this->tile_size = this->tile.get_tile_hw();
     } else {
         this->tile = tt::tt_metal::Tile({32, 32});
-        this->page_size = tensor.buffer()->page_size();
+        this->page_size = tensor.mesh_buffer()->page_size();
         this->tile_size = 1024;
     }
 }
@@ -677,7 +677,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
-    this->input_page_size = input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.mesh_buffer()->page_size();
     log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
         this->num_cols = input_tensor.padded_shape()[-1];
@@ -1456,7 +1456,7 @@ void GenericWrappedTensorSlicer::initialize(
     uint32_t half_cb_n_pages) {
     // Configure layout parameters
     this->row_major = (input_tensor.layout() == Layout::ROW_MAJOR);
-    this->input_page_size = input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.mesh_buffer()->page_size();
     this->partition_index = partition_index;
     this->partition_size = partition_size;
 
@@ -1611,7 +1611,7 @@ void GenericWrappedTensorSlicerV2::initialize(
     uint32_t total_num_workers) {
     // Configure layout parameters
     this->row_major = (input_tensor.layout() == Layout::ROW_MAJOR);
-    this->input_page_size = input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.mesh_buffer()->page_size();
     this->partition_index = partition_index;
     this->partition_size = partition_size;
 

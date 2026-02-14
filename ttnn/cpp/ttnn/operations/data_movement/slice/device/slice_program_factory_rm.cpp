@@ -59,17 +59,17 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer()->address();
 
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
@@ -155,10 +155,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     const Shape& output_tensor_start,
     const uint32_t num_sticks_per_core_group_1,
     const uint32_t num_sticks_per_core_group_2) {
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -210,8 +210,8 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     constexpr uint32_t src0_cb_index = 0;
 

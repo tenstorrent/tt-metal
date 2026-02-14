@@ -73,7 +73,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // basic reader kernel set up
     std::vector<uint32_t> reader_ct_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle send_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp",
@@ -86,7 +86,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
 
     std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_header_cb_id, packet_cb_id, l1_alignment};
-    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).mesh_buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle send_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -111,11 +111,11 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         page_idx_end += increment;
 
         const std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(), increment, page_idx_start, input_page_size_bytes};
+            input_tensor.mesh_buffer()->address(), increment, page_idx_start, input_page_size_bytes};
         tt::tt_metal::SetRuntimeArgs(program, send_unary_reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).buffer()->address(),
+            output_tensors.at(0).mesh_buffer()->address(),
             page_idx_start,
             page_idx_end,
             num_hops,

@@ -240,7 +240,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor[0].mesh_buffer()->num_pages();
     const auto input_tensor_shape = input_tensor[0].padded_shape();
     const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();
@@ -267,11 +267,11 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(input_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(input_tensor[i].mesh_buffer())
             .append_to(sender_reader_forward_kernel_config.compile_args);
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_reader_forward_kernel_config.compile_args);
     }
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -303,7 +303,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_writer_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_writer_forward_kernel_config.compile_args);
     }
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -333,11 +333,11 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(input_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(input_tensor[i].mesh_buffer())
             .append_to(sender_reader_backward_kernel_config.compile_args);
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_reader_backward_kernel_config.compile_args);
     }
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
@@ -369,7 +369,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_writer_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_writer_backward_kernel_config.compile_args);
     }
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
@@ -424,10 +424,10 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         };
         reader_sender_rt_offset = reader_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            reader_forward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
+            reader_forward_rt_args.push_back(input_tensor[input_idx].mesh_buffer()->address());
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            reader_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
+            reader_forward_rt_args.push_back(output_tensor[input_idx].mesh_buffer()->address());
         }
         if (fuse_op) {
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, num_links, link, 1);
@@ -451,10 +451,10 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             semaphore.at(0).address(),  // out_ready_semaphore_backward
         };
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            reader_backward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
+            reader_backward_rt_args.push_back(input_tensor[input_idx].mesh_buffer()->address());
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            reader_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
+            reader_backward_rt_args.push_back(output_tensor[input_idx].mesh_buffer()->address());
         }
         if (fuse_op) {
             fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, num_links, link, 0);
@@ -484,7 +484,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         };
         writer_sender_rt_offset = writer_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
+            writer_forward_rt_args.push_back(output_tensor[input_idx].mesh_buffer()->address());
         }
         writer_forward_rt_args.push_back(false);
         writer_forward_rt_args.push_back(backward_device_coord.has_value());
@@ -524,7 +524,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             semaphore.at(0).address()       // out_ready_semaphore_backward
         };
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-            writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
+            writer_backward_rt_args.push_back(output_tensor[input_idx].mesh_buffer()->address());
         }
         writer_backward_rt_args.push_back(forward_device_coord.has_value());
         if (forward_device_coord.has_value()) {
@@ -606,18 +606,18 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             // sender reader
             worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
-                input_tensors[input_idx].buffer()->address();
+                input_tensors[input_idx].mesh_buffer()->address();
             worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                output_tensors[input_idx].buffer()->address();
+                output_tensors[input_idx].mesh_buffer()->address();
             worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
-                input_tensors[input_idx].buffer()->address();
+                input_tensors[input_idx].mesh_buffer()->address();
             worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + num_inputs + input_idx] =
-                output_tensors[input_idx].buffer()->address();
+                output_tensors[input_idx].mesh_buffer()->address();
             // sender writer
             worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
-                output_tensors[input_idx].buffer()->address();
+                output_tensors[input_idx].mesh_buffer()->address();
             worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
-                output_tensors[input_idx].buffer()->address();
+                output_tensors[input_idx].mesh_buffer()->address();
         }
     }
 }

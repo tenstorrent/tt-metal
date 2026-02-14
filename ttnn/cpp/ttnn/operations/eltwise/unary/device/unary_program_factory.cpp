@@ -38,7 +38,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer()->num_pages();
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
     tt::tt_metal::IDevice* device = input.device();

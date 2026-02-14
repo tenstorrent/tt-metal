@@ -384,14 +384,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
+    TensorAccessorArgs(input_tensor_q.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
@@ -442,7 +443,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         sliding_window_size.value_or(0),
     };
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -478,7 +479,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_attention_sink,
     };
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -923,9 +924,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             k_addr,
             v_addr,
             mask_addr,
-            is_chunked ? page_table.value().buffer()->address() : 0,
+            is_chunked ? page_table.value().mesh_buffer()->address() : 0,
             attention_sink_addr,
-            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
+            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().mesh_buffer()->address() : 0,
             i,
             local_batch_start,
             local_batch_end,
@@ -1035,12 +1036,12 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunk_start_idx_addr = 0;
     const uint32_t use_chunk_start_idx_tensor = flexible_chunked ? 1 : 0;
     if (is_chunked) {
-        page_table_addr = tensor_args.page_table.value().buffer()->address();
+        page_table_addr = tensor_args.page_table.value().mesh_buffer()->address();
         if (!flexible_chunked) {
             // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
             chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
         } else {
-            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().buffer()->address();
+            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().mesh_buffer()->address();
         }
     }
 

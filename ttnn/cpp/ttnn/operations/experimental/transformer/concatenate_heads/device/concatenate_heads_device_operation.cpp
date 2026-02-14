@@ -25,7 +25,7 @@ void ConcatenateHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 7 to 9 for bert large TM ops!");
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,

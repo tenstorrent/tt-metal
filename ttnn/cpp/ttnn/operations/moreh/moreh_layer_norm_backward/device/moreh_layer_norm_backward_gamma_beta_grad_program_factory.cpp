@@ -139,15 +139,16 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(do_mask_h)};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(beta_grad_has_value)};
-    TensorAccessorArgs(gamma_grad.has_value() ? gamma_grad->buffer() : nullptr).append_to(writer_compile_time_args);
-    TensorAccessorArgs(beta_grad.has_value() ? beta_grad->buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(gamma_grad.has_value() ? gamma_grad->mesh_buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(beta_grad.has_value() ? beta_grad->mesh_buffer() : nullptr).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
@@ -219,13 +220,13 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_addr = input.buffer()->address();
-    const auto mean_addr = mean.buffer()->address();
-    const auto rstd_addr = rstd.buffer()->address();
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_addr = input.mesh_buffer()->address();
+    const auto mean_addr = mean.mesh_buffer()->address();
+    const auto rstd_addr = rstd.mesh_buffer()->address();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0;
+    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().mesh_buffer()->address() : 0;
+    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().mesh_buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

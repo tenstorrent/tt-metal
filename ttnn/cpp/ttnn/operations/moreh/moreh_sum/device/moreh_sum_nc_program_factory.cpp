@@ -83,11 +83,11 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
     std::map<std::string, std::string> reader_defines;
     reader_defines["USE_FPU"] = "1";
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto* const writer_kernel_file =
@@ -151,7 +151,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              num_reduce_input_tile,
              num_tiles_per_core,
              tile_offset,
@@ -159,7 +159,8 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
              reduce_tile_size,
              inner_tile_size});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_per_core, tile_offset});
+        SetRuntimeArgs(
+            program, writer_kernel_id, core, {output.mesh_buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

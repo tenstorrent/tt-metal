@@ -26,12 +26,11 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 
     auto* ref_device = input_tensor.device();
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(
-        input_tensor.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(cos.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(cos.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(sin.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(sin.is_allocated(), "Operands to rotary embedding need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.device() == ref_device, "Operands to rotary embedding need to be on same device!");
     TT_FATAL(cos.device() == ref_device, "Operands to rotary embedding need to be on same device!");
     TT_FATAL(sin.device() == ref_device, "Operands to rotary embedding need to be on same device!");

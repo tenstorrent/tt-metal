@@ -310,18 +310,18 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_h,
         other_mask_w,
     };
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(other.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(other.mesh_buffer()).append_to(reader_compile_time_args);
 
     if (bias.has_value()) {
         reader_defines["FUSE_BIAS"] = "1";
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
-        TensorAccessorArgs(bias->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(bias->mesh_buffer()).append_to(reader_compile_time_args);
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
@@ -440,8 +440,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(input.buffer()->address());
-        reader_rt_args.push_back(other.buffer()->address());
+        reader_rt_args.push_back(input.mesh_buffer()->address());
+        reader_rt_args.push_back(other.mesh_buffer()->address());
         reader_rt_args.push_back(num_tiles_written);
         reader_rt_args.push_back(num_output_tiles_per_core);
 
@@ -453,7 +453,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         reader_rt_args.insert(reader_rt_args.end(), other_not_bcast.begin(), other_not_bcast.end());
 
         if (bias.has_value()) {
-            reader_rt_args.push_back(bias.value().buffer()->address());
+            reader_rt_args.push_back(bias.value().mesh_buffer()->address());
         }
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
@@ -462,7 +462,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(), num_tiles_written, num_output_tiles_per_core});
+            {output.mesh_buffer()->address(), num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
 
@@ -483,9 +483,9 @@ void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(
     auto bias = tensor_args.bias;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    const auto input_address = tensor_args.input.buffer()->address();
-    const auto other_address = tensor_args.other.buffer()->address();
-    const auto output_address = tensor_return_value.buffer()->address();
+    const auto input_address = tensor_args.input.mesh_buffer()->address();
+    const auto other_address = tensor_args.other.mesh_buffer()->address();
+    const auto output_address = tensor_return_value.mesh_buffer()->address();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -495,7 +495,7 @@ void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(
             runtime_args[1] = other_address;
 
             if (bias.has_value()) {
-                const auto bias_address = bias.value().buffer()->address();
+                const auto bias_address = bias.value().mesh_buffer()->address();
                 runtime_args[runtime_args.size() - 1] = bias_address;
             }
         }

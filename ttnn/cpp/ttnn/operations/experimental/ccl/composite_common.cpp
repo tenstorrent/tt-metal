@@ -316,7 +316,7 @@ bool use_composite_all_to_all(
     // the current native implementation works for very specific cases
     bool use_native =
         (input_tensor.layout() == ttnn::Layout::TILE &&
-         input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
+         input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM &&
          input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
          (!memory_config.has_value() ||
           memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&

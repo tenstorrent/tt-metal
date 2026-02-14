@@ -312,8 +312,8 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     tt_metal::Buffer* out_buffer = output.buffer();
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

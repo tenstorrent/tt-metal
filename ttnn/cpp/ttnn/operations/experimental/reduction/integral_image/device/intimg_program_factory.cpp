@@ -161,8 +161,8 @@ void IntImgProgramFactory::override_runtime_arguments(
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
-    auto input_buffer_address = tensor_args.buffer()->address();
-    auto output_buffer_address = tensor_return_value.buffer()->address();
+    auto input_buffer_address = tensor_args.mesh_buffer()->address();
+    auto output_buffer_address = tensor_return_value.mesh_buffer()->address();
     for (uint32_t x = 0; x < CORES_X; ++x) {
         for (uint32_t y = 0; y < CORES_Y; ++y) {
             const auto core = CoreCoord{x, y};

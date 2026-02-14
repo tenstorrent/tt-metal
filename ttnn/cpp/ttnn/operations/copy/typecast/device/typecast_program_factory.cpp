@@ -34,7 +34,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     const auto* device = input.device();
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer()->num_pages();
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();

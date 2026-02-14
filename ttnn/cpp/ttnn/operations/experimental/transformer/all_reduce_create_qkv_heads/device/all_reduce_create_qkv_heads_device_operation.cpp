@@ -35,7 +35,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
             tensor_name,
             tensor.storage_type());
         TT_FATAL(
-            tensor.buffer() != nullptr,
+            tensor.is_allocated(),
             "Operand {} needs to be allocated in buffers on device, but buffer is null",
             tensor_name);
     };
@@ -44,7 +44,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     validate_tensor_on_device(input_tensor, "input_tensor");
     validate_tensor_on_device(buffer_tensor, "buffer_tensor");
 
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
     TT_FATAL(
         page_size % input_tensor.buffer()->alignment() == 0,
         "All Gather currently requires aligned pages. page_size={}, alignment={}",

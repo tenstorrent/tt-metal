@@ -851,8 +851,8 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
             std::ranges::copy(
                 std::array<uint32_t, 4>{
                     static_cast<uint32_t>(
-                        tensor->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                    static_cast<uint32_t>(tensor->buffer()->buffer_type()),
+                        tensor->memory_config().memory_layout()),  // TODO: refactor out to generate_tensor_ct_args
+                    static_cast<uint32_t>(tensor->memory_config().buffer_type()),
                     static_cast<uint32_t>(tensor->layout()),
                     static_cast<uint32_t>(0)},
                 std::back_inserter(ct_args));
@@ -1196,7 +1196,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
 
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.buffer()->address()),
+        static_cast<uint32_t>(input_tensor.mesh_buffer()->address()),
         static_cast<uint32_t>(slices.size()),
         num_pages_per_packet,
         this->op_config.get_page_size()};
@@ -1229,7 +1229,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
     auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.memory_config().memory_layout()),  // tensor memory layout
-        static_cast<uint32_t>(input_tensor.buffer()->buffer_type()),        // buffer type
+        static_cast<uint32_t>(input_tensor.memory_config().buffer_type()),        // buffer type
         static_cast<uint32_t>(input_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                // cb_id
     };
@@ -1244,7 +1244,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
     auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.memory_config().memory_layout()),  // tensor memory layout
-        static_cast<uint32_t>(output_tensor.buffer()->buffer_type()),        // buffer type
+        static_cast<uint32_t>(output_tensor.memory_config().buffer_type()),        // buffer type
         static_cast<uint32_t>(output_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                 // cb_id
     };

@@ -29,8 +29,8 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
 
     // This should allocate a DRAM buffer on the device
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);

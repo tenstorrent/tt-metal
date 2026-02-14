@@ -111,8 +111,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     const uint32_t num_input_tensors = input_tensors.size();
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_pages = 2;
@@ -194,7 +194,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
-        TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input_tensors[i].mesh_buffer()).append_to(reader_compile_time_args);
     }
 
     std::map<std::string, std::string> concat_defines;
@@ -209,7 +209,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     } else {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     }
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     reader_kernel_id = CreateKernel(
@@ -271,7 +271,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
+                dst_buffer->address(), output.mesh_buffer()->page_size(), num_pages_per_core, num_pages_written};
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
@@ -296,7 +296,7 @@ void ConcatProgramFactory::override_runtime_arguments(
 
     std::vector<uint32_t> src_addrs(tensor_args.input_tensors.size());
     for (uint32_t i = 0; i < tensor_args.input_tensors.size(); ++i) {
-        src_addrs[i] = tensor_args.input_tensors[i].buffer()->address();
+        src_addrs[i] = tensor_args.input_tensors[i].mesh_buffer()->address();
     }
 
     Buffer* dst_buffer = tensor_return_value.buffer();

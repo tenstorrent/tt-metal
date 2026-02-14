@@ -25,7 +25,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Basic validations
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffer on device!");
     TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGather requires tensor of rank 2 or greater");
 
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
@@ -40,7 +40,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         "Worker cores used by links are parallelized over rows");
 
     // Page alignment check
-    auto page_size = input_tensor.buffer()->page_size();
+    auto page_size = input_tensor.mesh_buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     // Memory layout validations

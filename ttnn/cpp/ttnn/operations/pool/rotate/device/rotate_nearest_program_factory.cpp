@@ -185,7 +185,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         batch_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,
@@ -194,7 +194,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         batch_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -225,7 +225,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             }
 
             std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),
+                input_tensor.mesh_buffer()->address(),
                 input_nsticks_per_core,
                 start_stick_id,
                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
@@ -236,7 +236,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             };
 
             std::vector<uint32_t> writer_runtime_args = {
-                output_tensor.buffer()->address(),
+                output_tensor.mesh_buffer()->address(),
                 input_nsticks_per_core,
                 start_stick_id,
             };
@@ -252,7 +252,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
             std::vector<uint32_t> reader_runtime_args = {
-                input_tensor.buffer()->address(),
+                input_tensor.mesh_buffer()->address(),
                 num_sticks,
                 sticks_processed,
                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
@@ -263,7 +263,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             };
 
             std::vector<uint32_t> writer_runtime_args = {
-                output_tensor.buffer()->address(),
+                output_tensor.mesh_buffer()->address(),
                 num_sticks,
                 sticks_processed,
             };

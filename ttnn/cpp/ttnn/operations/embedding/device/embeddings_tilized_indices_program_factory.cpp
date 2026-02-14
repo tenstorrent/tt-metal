@@ -113,8 +113,8 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights.mesh_buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -136,7 +136,7 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -150,8 +150,8 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        (std::uint32_t)a.mesh_buffer()->address(),
+        (std::uint32_t)weights.mesh_buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -162,7 +162,10 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         reader_runtime_args.push_back(pad_token.value());
     }
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        (std::uint32_t)output.mesh_buffer()->address(),
+        (std::uint32_t)output_page_size,
+        (std::uint32_t)0,
+        (std::uint32_t)0};
 
     uint32_t row = 0;
     uint32_t tiles_per_tile_row = (num_cols + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -215,9 +218,9 @@ void EmbeddingsTilizedIndicesProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;
     const auto& cores = shared_variables.cores;
 
-    auto output_buffer_address = tensor_return_value.buffer()->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
+    auto output_buffer_address = tensor_return_value.mesh_buffer()->address();
+    auto input_buffer_address = tensor_args.input_tensor_arg.mesh_buffer()->address();
+    auto weights_buffer_address = tensor_args.weight_arg.mesh_buffer()->address();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);

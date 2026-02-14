@@ -19,15 +19,14 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
     const auto& weight_tensor = tensor_args.weight_tensor;
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
-    TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
+    TT_FATAL(target_tensor.is_allocated(), "Operands to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
 
     if (weight_tensor.has_value()) {
         TT_FATAL(
             weight_tensor.value().storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
         TT_FATAL(
-            weight_tensor.value().buffer() != nullptr,
-            "Operands to nll_loss need to be allocated in buffers on device!");
+            weight_tensor.value().is_allocated(), "Operands to nll_loss need to be allocated in buffers on device!");
         TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weigth tensor dtype must be bfloat16");
     }
 }

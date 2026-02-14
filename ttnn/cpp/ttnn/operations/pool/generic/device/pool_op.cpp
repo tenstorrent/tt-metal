@@ -30,7 +30,7 @@ void validate_pool2d(
     const Layout& output_layout) {
     // check the input tensor
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 

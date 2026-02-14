@@ -97,10 +97,10 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     auto* src0_buffer = a.buffer();
     auto* src1_buffer = b.has_value() ? b->buffer() : nullptr;
     auto* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_input_tiles = 2;
     uint32_t num_tiles_per_shard = 0;

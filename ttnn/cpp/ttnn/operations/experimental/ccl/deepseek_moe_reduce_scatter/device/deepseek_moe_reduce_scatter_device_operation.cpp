@@ -26,7 +26,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const std::vector<ttnn::Tensor>& input_tensors = tensor_args.input_tensors;
     for (const ttnn::Tensor& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
     }
 }
 
@@ -56,7 +56,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t input_tensor_rank = first_input_tensor.logical_shape().rank();
     const auto& input_tensor_shape = first_input_tensor.logical_shape();
     TT_FATAL(
-        first_input_tensor.buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
+        first_input_tensor.mesh_buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
         "deepseek_moe_reduce_scatter requires aligned pages");
     TT_FATAL(
         first_input_tensor.buffer()->is_l1(), "deepseek_moe_reduce_scatter requires input tensors allocated in L1");
@@ -119,10 +119,10 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
             first_input_tensor.buffer()->alignment() == input_tensor.buffer()->alignment(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same page alignment");
         TT_FATAL(
-            first_input_tensor.buffer()->page_size() == input_tensor.buffer()->page_size(),
+            first_input_tensor.mesh_buffer()->page_size() == input_tensor.mesh_buffer()->page_size(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same page size");
         TT_FATAL(
-            first_input_tensor.buffer()->num_pages() == input_tensor.buffer()->num_pages(),
+            first_input_tensor.mesh_buffer()->num_pages() == input_tensor.mesh_buffer()->num_pages(),
             "deepseek_moe_reduce_scatter requires all input tensors have the same number of pages");
         TT_FATAL(
             input_tensor.nd_shard_spec().has_value() &&

@@ -108,7 +108,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*routing_weights.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(routing_weights.mesh_buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -123,7 +123,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_return_value.mesh_buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/"
@@ -131,8 +131,8 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    const auto routing_weights_addr = routing_weights.buffer()->address();
-    const auto local_weights_addr = tensor_return_value.buffer()->address();
+    const auto routing_weights_addr = routing_weights.mesh_buffer()->address();
+    const auto local_weights_addr = tensor_return_value.mesh_buffer()->address();
 
     const auto device_weights_count_offset =
         compute_weight_count_offset(mesh_coordinate, cluster_axis, non_zero_per_device);
@@ -174,8 +174,8 @@ void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, utilized_core);
         auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, utilized_core);
 
-        reader_runtime_args.at(0) = tensor_args.input_routing_weights.buffer()->address();
-        writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
+        reader_runtime_args.at(0) = tensor_args.input_routing_weights.mesh_buffer()->address();
+        writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->address();
     }
 }
 }  // namespace ttnn::operations::data_movement

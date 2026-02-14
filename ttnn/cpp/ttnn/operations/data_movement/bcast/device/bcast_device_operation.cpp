@@ -58,7 +58,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
     const Tensor& input_tensor_b = tensor_args.input_b;
 
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to bcast need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr,
@@ -245,9 +245,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation:
     const Tensor& input_tensor0 = tensor_args.input_a;
     const Tensor& input_tensor1 = tensor_args.input_b;
     const Tensor& output_tensor = tensor_return_value;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool output_is_sharded = output_tensor.memory_config().is_sharded();
-    const bool input_is_dram = input_tensor0.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool input_is_dram = input_tensor0.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool input_is_sharded = input_tensor0.memory_config().is_sharded();
     const bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
                           (output_tensor.memory_config().shard_spec().value().grid ==

@@ -83,7 +83,7 @@ void set_or_update_runtime_arguments(
         uint32_t start_tw = start_t % oWt;
 
         std::array reader_runtime_args = {
-            input.buffer()->address(),
+            (uint32_t)input.mesh_buffer()->address(),
             start_n,
             start_c,
             start_t,
@@ -99,7 +99,7 @@ void set_or_update_runtime_arguments(
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         std::array writer_runtime_args = {
-            output.buffer()->address(),
+            (uint32_t)output.mesh_buffer()->address(),
             start_n,
             start_c,
             start_t,
@@ -165,7 +165,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     // READER KERNEL
     std::vector<uint32_t> reader_compile_time_args{(uint32_t)tt::CBIndex::c_0};
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel),
@@ -176,7 +176,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     uint32_t writer_cb_id = (kernel_config.writer_kernel == KernelName::WriterNoBcast) ? (uint32_t)tt::CBIndex::c_0
                                                                                        : (uint32_t)tt::CBIndex::c_1;
     std::vector<uint32_t> writer_compile_time_args{writer_cb_id};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),

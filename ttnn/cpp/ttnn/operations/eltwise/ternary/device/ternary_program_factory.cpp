@@ -526,8 +526,8 @@ void setup_ts_reader_args_and_dims(
         c_current_shard_width = output_dims.Wt;
     }
     // Standard first 5 arguments
-    reader_runtime_args[0] = predicate_tensor.buffer()->address();  // 0: src0_addr (predicate)
-    reader_runtime_args[1] = tensor_operand.buffer()->address();    // 1: src1_addr (tensor operand)
+    reader_runtime_args[0] = predicate_tensor.mesh_buffer()->address();  // 0: src0_addr (predicate)
+    reader_runtime_args[1] = tensor_operand.mesh_buffer()->address();    // 1: src1_addr (tensor operand)
     reader_runtime_args[2] = 0u;                                    // 2: src2_addr (scalar operand)
     reader_runtime_args[3] = num_tiles_per_core;                    // 3: num_tiles (per core)
     reader_runtime_args[4] = start_tile_id;                         // 4: start_id
@@ -747,9 +747,10 @@ void set_or_update_runtime_arguments(
             auto false_strides = calculate_strides(false_dims);
             // Tile counts are already calculated above if has_sharding
             std::array<uint32_t, num_reader_args> reader_runtime_args{};              // zero-initialized
-            reader_runtime_args[0] = predicate_tensor.buffer()->address();            // 0: src0_addr (predicate)
-            reader_runtime_args[1] = value_true_tensor.value().buffer()->address();   // 1: src1_addr (true tensor)
-            reader_runtime_args[2] = value_false_tensor.value().buffer()->address();  // 2: src2_addr (false tensor)
+            reader_runtime_args[0] = predicate_tensor.mesh_buffer()->address();       // 0: src0_addr (predicate)
+            reader_runtime_args[1] = value_true_tensor.value().mesh_buffer()->address();  // 1: src1_addr (true tensor)
+            reader_runtime_args[2] =
+                value_false_tensor.value().mesh_buffer()->address();                  // 2: src2_addr (false tensor)
             reader_runtime_args[3] = num_tiles_per_core;                              // 3: num_tiles (per core)
             reader_runtime_args[4] = c_start_id;                                      // 4: start_id
             // Set arguments for both broadcast and no-bcast cases (same arguments needed for width sharding)
@@ -783,17 +784,17 @@ void set_or_update_runtime_arguments(
 
         // Writer runtime args
         std::array writer_runtime_args = {
-            output.buffer()->address(),  // 0: dst_addr
-            num_tiles_per_core,          // 1: num_tiles
-            c_start_id,                  // 2: start_id
-            c_current_shard_width,       // 3: dst_shard_width
-            output_dims.D,               // 4: D
-            output_dims.N,               // 5: N
-            output_dims.C,               // 6: C
-            output_dims.Ht,              // 7: Ht
-            output_dims.Wt,              // 8: Wt
-            output_dims.ND,              // 9: cND
-            0u                           // 10: padding
+            (uint32_t)output.mesh_buffer()->address(),  // 0: dst_addr
+            num_tiles_per_core,                         // 1: num_tiles
+            c_start_id,                                 // 2: start_id
+            c_current_shard_width,                      // 3: dst_shard_width
+            output_dims.D,                              // 4: D
+            output_dims.N,                              // 5: N
+            output_dims.C,                              // 6: C
+            output_dims.Ht,                             // 7: Ht
+            output_dims.Wt,                             // 8: Wt
+            output_dims.ND,                             // 9: cND
+            0u                                          // 10: padding
         };
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
@@ -1089,7 +1090,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
             *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -1100,7 +1101,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         // TST: c_0 = predicate, c_1 = value_false tensor
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
             *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -1111,7 +1112,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         reader_compile_time_args.push_back((std::uint32_t)predicate_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_true_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_false_tensor_cb);
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
             *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -1139,7 +1140,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
     std::vector<uint32_t> writer_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     std::map<std::string, std::string> writer_defines;

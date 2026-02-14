@@ -150,9 +150,9 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         mapping_page_size_bytes,
         metadata_page_size_bytes,
         local_reduce};
-    tt::tt_metal::TensorAccessorArgs(topk_tensor.buffer()).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(topk_tensor.mesh_buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -175,8 +175,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         output_reduced_page_size_bytes,
         reduction_size,
     };
-    tt::tt_metal::TensorAccessorArgs(*output_mapping_tensor.buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(*output_reduced_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_mapping_tensor.mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_reduced_tensor.mesh_buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -186,16 +186,16 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     // split work over metadata pages (batch*seq)
-    const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
+    const auto num_metadata_pages = metadata_tensor.mesh_buffer()->num_pages();
 
     const auto [core_page_increments, all_cores] =
         tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
-    const auto mapping_tensor_addr = mapping_tensor.buffer()->address();
-    const auto metadata_tensor_addr = metadata_tensor.buffer()->address();
-    const auto topk_tensor_addr = topk_tensor.buffer()->address();
-    const auto output_mapping_tensor_addr = output_mapping_tensor.buffer()->address();
-    const auto output_reduced_tensor_addr = output_reduced_tensor.buffer()->address();
+    const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->address();
+    const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->address();
+    const auto topk_tensor_addr = topk_tensor.mesh_buffer()->address();
+    const auto output_mapping_tensor_addr = output_mapping_tensor.mesh_buffer()->address();
+    const auto output_reduced_tensor_addr = output_reduced_tensor.mesh_buffer()->address();
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 5;
@@ -252,12 +252,12 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, c);
             auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, c);
 
-            reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.topk_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.topk_tensor.mesh_buffer()->address();
 
-            writer_runtime_args.at(0) = output_mapping_tensor.buffer()->address();
-            writer_runtime_args.at(3) = output_reduced_tensor.buffer()->address();
+            writer_runtime_args.at(0) = output_mapping_tensor.mesh_buffer()->address();
+            writer_runtime_args.at(3) = output_reduced_tensor.mesh_buffer()->address();
         }
     }
 };

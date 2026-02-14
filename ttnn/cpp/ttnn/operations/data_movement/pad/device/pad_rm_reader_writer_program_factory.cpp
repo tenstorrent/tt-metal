@@ -40,11 +40,11 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-    auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
+    auto pad_value_const_tensor_addr = pad_value_const_tensor.mesh_buffer()->address();
 
     Buffer* src0_buffer = a.buffer();
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = tt::CBIndex::c_0;
@@ -57,9 +57,9 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
     tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
     std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(dst_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(pad_value_const_tensor.mesh_buffer()).append_to(reader_ct_args);
     const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
     uint32_t packed_pad_value;
@@ -120,7 +120,7 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
         padded_row_diff_size_nbytes,
-        pad_value_const_tensor_addr,
+        (uint32_t)pad_value_const_tensor_addr,
         pad_value_const_buffer_nbytes,
         packed_pad_value,
         start_src_stick_id,

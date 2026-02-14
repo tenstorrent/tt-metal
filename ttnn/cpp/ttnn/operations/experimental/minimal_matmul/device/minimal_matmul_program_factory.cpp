@@ -91,15 +91,15 @@ void append_accessors(
     const std::vector<Tensor>& output_tensors,
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<const Tensor>& ag_input_tensor = std::nullopt) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(main_tensor.mesh_buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(args);
     }
     if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(bias_tensor.value().mesh_buffer()).append_to(args);
     }
     if (ag_input_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ag_input_tensor.value().mesh_buffer()).append_to(args);
     }
 }
 
@@ -344,15 +344,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
-    uint32_t in0_addr = input_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
-    uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
+    uint32_t in0_addr = input_tensor.mesh_buffer()->address();
+    uint32_t in1_addr = weight_tensor.mesh_buffer()->address();
+    uint32_t in2_addr = use_bias ? bias_tensor.value().mesh_buffer()->address() : 0;
     // Note: Dataflow kernels can take a variable number of output tensors.
     // They are appended as a variable-length array at the end of the runtime-args:
     //   - for in0 output-writer cores the first output address is at index 13
     //   - for in1 output-writer cores the first output address is at index 12
     uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
-                            ? fused_op_signaler->ag_input.value().buffer()->address()
+                            ? fused_op_signaler->ag_input.value().mesh_buffer()->address()
                             : 0;
     auto in3_data_format =
         (fuse_op && fused_op_signaler->read_local_slice_from_input)
@@ -625,7 +625,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         };
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
-            in0_args.push_back(output_tensor.buffer()->address());
+            in0_args.push_back(output_tensor.mesh_buffer()->address());
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -654,7 +654,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         };
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
-            in1_args.push_back(output_tensor.buffer()->address());
+            in1_args.push_back(output_tensor.mesh_buffer()->address());
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
@@ -807,15 +807,15 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     const MinimalMatmulParams& /*operation_attributes*/,
     const MinimalMatmulInputs& tensor_args,
     Tensor& tensor_return_value) {
-    auto in0_addr = tensor_args.input_tensor.buffer()->address();
-    auto in1_addr = tensor_args.weight_tensor.buffer()->address();
-    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+    auto in0_addr = tensor_args.input_tensor.mesh_buffer()->address();
+    auto in1_addr = tensor_args.weight_tensor.mesh_buffer()->address();
+    auto in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().mesh_buffer()->address() : 0;
     auto in3_addr =
         tensor_args.optional_input_tensor.has_value() && cached_program.shared_variables.read_local_slice_from_input
-            ? tensor_args.optional_input_tensor.value().buffer()->address()
+            ? tensor_args.optional_input_tensor.value().mesh_buffer()->address()
             : 0;
 
-    std::vector<uint32_t> output_addrs = {tensor_return_value.buffer()->address()};
+    std::vector<uint32_t> output_addrs = {tensor_return_value.mesh_buffer()->address()};
     override_runtime_arguments_common(cached_program, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
 }
 

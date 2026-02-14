@@ -46,9 +46,9 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
         page_size_bytes == output_log_shape[3] * data_size,
         "Data size of output does not match requirement for repeat last dim");
     uint32_t read_start_page = 0;
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_higher_pages = input_log_shape[0];
@@ -155,8 +155,8 @@ void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     for (const auto& core : total_cores) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args.at(0) = input.buffer()->address();
-        runtime_args.at(1) = output.buffer()->address();
+        runtime_args.at(0) = input.mesh_buffer()->address();
+        runtime_args.at(1) = output.mesh_buffer()->address();
     }
 }
 

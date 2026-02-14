@@ -232,7 +232,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -301,7 +301,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
@@ -527,12 +527,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -583,7 +583,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
     }
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -669,15 +669,15 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),   // input_tensor_address
-                    output_tensor.buffer()->address(),  // output_tensor_address
-                    semaphore.at(dir).address(),        // out_ready_sem
-                    dir,                                // direction RT ARG
-                    input_tile_id_start,                // input_tile_id_start RT ARG
-                    input_tile_id_end,                  // input_tile_id_end RT ARG
-                    start_pages_read_in_row,            // start_pages_read_in_row RT ARG
-                    start_row_offset,                   // start_row_offset RT ARG
-                    chunks_per_sync_val,                // chunks_per_sync RT ARG
+                    input_tensor.mesh_buffer()->address(),   // input_tensor_address
+                    output_tensor.mesh_buffer()->address(),  // output_tensor_address
+                    semaphore.at(dir).address(),             // out_ready_sem
+                    dir,                                     // direction RT ARG
+                    input_tile_id_start,                     // input_tile_id_start RT ARG
+                    input_tile_id_end,                       // input_tile_id_end RT ARG
+                    start_pages_read_in_row,                 // start_pages_read_in_row RT ARG
+                    start_row_offset,                        // start_row_offset RT ARG
+                    chunks_per_sync_val,                     // chunks_per_sync RT ARG
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -707,7 +707,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
+                    output_tensor.mesh_buffer()->address(),                      // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                                 // out_ready_sem
@@ -816,13 +816,13 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.mesh_buffer()->address();
                 worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
 
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = output.mesh_buffer()->address();
                 worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
 
                 if (barrier_semaphore.has_value()) {

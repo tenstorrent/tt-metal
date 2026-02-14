@@ -49,7 +49,7 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
     // Work distribution - Total work units = N * H_out * W_out (one output stick per work unit)
 
-    const uint32_t total_pages_in_output = output_tensor.buffer()->num_pages();
+    const uint32_t total_pages_in_output = output_tensor.mesh_buffer()->num_pages();
 
     const tt::tt_metal::Shape& output_shape = output_tensor.padded_shape();
 
@@ -59,8 +59,8 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
     const uint32_t aligned_input_page_size = input.buffer()->aligned_page_size();
     const uint32_t aligned_output_page_size = output_tensor.buffer()->aligned_page_size();
 
-    const uint32_t input_page_size = input.buffer()->page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->page_size();
+    const uint32_t input_page_size = input.mesh_buffer()->page_size();
+    const uint32_t output_page_size = output_tensor.mesh_buffer()->page_size();
 
     TT_FATAL(
         input_page_size == output_page_size,
@@ -103,14 +103,14 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
         static_cast<uint32_t>(reciprocal_scale_w_fixed),
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,
         aligned_output_page_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -135,16 +135,16 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
 
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
-            input.buffer()->address(),  // rt_arg[0]: input_buffer_address
-            num_sticks,                 // rt_arg[1]: num_sticks
-            sticks_processed,           // rt_arg[2]: start_stick_id
+            input.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+            num_sticks,                      // rt_arg[1]: num_sticks
+            sticks_processed,                // rt_arg[2]: start_stick_id
         };
 
         // Writer runtime args
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
-            num_sticks,                         // rt_arg[1]: num_sticks
-            sticks_processed,                   // rt_arg[2]: start_stick_id
+            output_tensor.mesh_buffer()->address(),  // rt_arg[0]: output_buffer_address
+            num_sticks,                              // rt_arg[1]: num_sticks
+            sticks_processed,                        // rt_arg[2]: start_stick_id
         };
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, std::move(reader_runtime_args));

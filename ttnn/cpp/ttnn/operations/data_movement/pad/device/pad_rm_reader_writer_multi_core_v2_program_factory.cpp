@@ -177,9 +177,9 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
     }
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {

@@ -96,7 +96,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
         tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",

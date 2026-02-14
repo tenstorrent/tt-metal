@@ -62,8 +62,8 @@ BcastMultiCoreWProgramFactory::cached_program_t BcastMultiCoreWProgramFactory::c
 
     Buffer* src0_buffer = a.buffer();
     Buffer* src1_buffer = b.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_tiles = 2;
@@ -140,22 +140,22 @@ BcastMultiCoreWProgramFactory::cached_program_t BcastMultiCoreWProgramFactory::c
             binary_reader_kernel_id,
             core,
             {
-                a.buffer()->address(),      // 0
-                0,                          // 1
-                0,                          // 2
-                num_tensor_tiles_per_core,  // 3
-                b.buffer()->address(),      // 4
-                0,                          // 5
-                0,                          // 6
-                num_btensor_tiles,          // 7
-                num_tensor_tiles_per_core,  // 8
-                NC,                         // 9
-                Ht,                         // 10
-                Wt_per_core,                // 11
-                bnc1,                       // 12
-                num_Wtiles_read,            // 13
-                Ht * Wt,                    // 14
-                Wt_skip,                    // 15
+                a.mesh_buffer()->address(),  // 0
+                0,                           // 1
+                0,                           // 2
+                num_tensor_tiles_per_core,   // 3
+                b.mesh_buffer()->address(),  // 4
+                0,                           // 5
+                0,                           // 6
+                num_btensor_tiles,           // 7
+                num_tensor_tiles_per_core,   // 8
+                NC,                          // 9
+                Ht,                          // 10
+                Wt_per_core,                 // 11
+                bnc1,                        // 12
+                num_Wtiles_read,             // 13
+                Ht * Wt,                     // 14
+                Wt_skip,                     // 15
             });
 
         SetRuntimeArgs(
@@ -173,7 +173,7 @@ BcastMultiCoreWProgramFactory::cached_program_t BcastMultiCoreWProgramFactory::c
             unary_writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 0,
                 0,
                 Ht,

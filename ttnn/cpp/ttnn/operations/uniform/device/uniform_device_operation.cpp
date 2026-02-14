@@ -15,7 +15,7 @@ UniformDeviceOperation::program_factory_t UniformDeviceOperation::select_program
 void UniformDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Uniform: Input tensor need to be on device");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Uniform: Input tensor need to be allocated in buffers on device");
+    TT_FATAL(tensor_args.input.is_allocated(), "Uniform: Input tensor need to be allocated in buffers on device");
     TT_FATAL((tensor_args.input.layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
     TT_FATAL(
         tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,

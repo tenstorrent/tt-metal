@@ -33,7 +33,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool output_sharded = is_sharded(output.buffer()->buffer_layout());
+    bool output_sharded = is_sharded(output.memory_config().memory_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
@@ -136,8 +136,8 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights.mesh_buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -159,7 +159,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
-        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -172,8 +172,8 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
+        (std::uint32_t)a.mesh_buffer()->address(),
+        (std::uint32_t)weights.mesh_buffer()->address(),
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -183,7 +183,10 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         reader_runtime_args.push_back(pad_token.value());
     }
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        (std::uint32_t)output.mesh_buffer()->address(),
+        (std::uint32_t)output_page_size,
+        (std::uint32_t)0,
+        (std::uint32_t)0};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -234,8 +237,8 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
 
     auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
+    auto input_buffer_address = tensor_args.input_tensor_arg.mesh_buffer()->address();
+    auto weights_buffer_address = tensor_args.weight_arg.mesh_buffer()->address();
 
     if (output_sharded) {
         UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);

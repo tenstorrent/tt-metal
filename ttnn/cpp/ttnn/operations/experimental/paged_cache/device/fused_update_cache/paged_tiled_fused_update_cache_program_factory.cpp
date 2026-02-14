@@ -71,9 +71,9 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
     Buffer* index_buffer_ptr = nullptr;
     if (use_index_tensor) {
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
-        index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
+        index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().mesh_buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+        index_is_dram = update_idxs_tensor.value().memory_config().buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
 
@@ -97,7 +97,7 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table.value().buffer()->aligned_page_size();
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+        page_table_is_dram = page_table_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
     }
 
     uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;
@@ -341,7 +341,7 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
-                is_paged_cache ? page_table.value().buffer()->address() : 0,
+                is_paged_cache ? page_table.value().mesh_buffer()->address() : 0,
                 wait_to_start,
             });
 
@@ -384,7 +384,7 @@ PagedTiledFusedUpdateCacheProgramFactory::cached_program_t PagedTiledFusedUpdate
                 use_index_tensor ? 0 : cache_start_id,
                 index_buffer_addr,
                 i,
-                is_paged_cache ? page_table.value().buffer()->address() : 0,
+                is_paged_cache ? page_table.value().mesh_buffer()->address() : 0,
                 wait_to_start,
             });
 
@@ -460,8 +460,8 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
 
     auto* index_tensor_buffer = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr;
     auto* page_table_buffer = shared_vars.is_paged_cache ? page_table.value().buffer() : nullptr;
-    auto index_tensor_addr = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
-    auto page_table_tensor_addr = shared_vars.is_paged_cache ? page_table.value().buffer()->address() : 0;
+    auto index_tensor_addr = shared_vars.use_index_tensor ? update_idxs_tensor.value().mesh_buffer()->address() : 0;
+    auto page_table_tensor_addr = shared_vars.is_paged_cache ? page_table.value().mesh_buffer()->address() : 0;
 
     if (input_tensor1.is_sharded()) {
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_src1, *src1_buffer);

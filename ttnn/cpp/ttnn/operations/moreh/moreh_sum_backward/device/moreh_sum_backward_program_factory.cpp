@@ -145,9 +145,9 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_grad_rank};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
     const auto* const writer_kernel_file =
@@ -204,7 +204,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(output_grad.buffer()->address());
+        reader_rt_args.push_back(output_grad.mesh_buffer()->address());
         reader_rt_args.push_back(num_tiles_per_core);
         reader_rt_args.push_back(tile_offset);
         reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
@@ -214,7 +214,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
+            program, writer_kernel_id, core, {input_grad.mesh_buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

@@ -41,7 +41,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
     TT_FATAL(stats.layout() == Layout::TILE, "Stats tensor must have TILE layout, got: {}", stats.layout());
     TT_FATAL(
@@ -49,7 +49,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Stats tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
         stats.dtype());
     TT_FATAL(stats.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(stats.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    TT_FATAL(stats.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
     // stats has 2 or 1 tile columns per device if layernorm or rmsnorm
     TT_FATAL(
@@ -81,8 +81,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "{} != {}",
                 a.padded_shape()[-1],
                 gamma_tensor.padded_shape()[-1]);
-            TT_FATAL(
-                gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma_tensor.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma_tensor.padded_shape()[-2] == TILE_HEIGHT,
@@ -102,8 +101,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 gamma_tensor.physical_volume(),
                 a.padded_shape()[-1],
                 TILE_WIDTH);
-            TT_FATAL(
-                gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma_tensor.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma_tensor.dtype() == DataType::BFLOAT16,
@@ -123,8 +121,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                     a.padded_shape()[-1],
                     beta_tensor.padded_shape()[-1]);
                 TT_FATAL(
-                    beta_tensor.buffer() != nullptr,
-                    "Operands to layernorm need to be allocated in buffers on device!");
+                    beta_tensor.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
                 TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
                 TT_FATAL(
                     beta_tensor.padded_shape()[-2] == TILE_HEIGHT,
@@ -145,8 +142,7 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                     a.padded_shape()[-1],
                     TILE_WIDTH);
                 TT_FATAL(
-                    beta_tensor.buffer() != nullptr,
-                    "Operands to layernorm need to be allocated in buffers on device!");
+                    beta_tensor.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
                 TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
                 TT_FATAL(
                     beta_tensor.dtype() == DataType::BFLOAT16,

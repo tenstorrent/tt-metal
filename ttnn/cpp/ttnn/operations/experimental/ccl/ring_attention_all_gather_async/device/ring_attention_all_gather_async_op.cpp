@@ -27,7 +27,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
 
         TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
-        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
+        TT_FATAL(input_tensor.is_allocated(), "Input tensor {} must be allocated in buffers on device", i);
 
         TT_FATAL(
             input_tensor.dtype() == dtype,

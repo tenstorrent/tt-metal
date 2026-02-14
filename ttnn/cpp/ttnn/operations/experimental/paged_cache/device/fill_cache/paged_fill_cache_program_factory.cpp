@@ -65,7 +65,7 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
 
     if (use_batch_idx_tensor) {
         const auto& tensor = batch_idx_tensor.value();
-        batch_idx_buffer_addr = tensor.buffer()->address();
+        batch_idx_buffer_addr = tensor.mesh_buffer()->address();
         batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
         TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
@@ -204,16 +204,16 @@ void PagedFillCacheProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
-    auto dst_addr = tensor_args.cache_tensor.buffer()->address();
-    auto src_addr = tensor_args.input_tensor.buffer()->address();
-    auto page_table_addr = tensor_args.page_table.buffer()->address();
+    auto dst_addr = tensor_args.cache_tensor.mesh_buffer()->address();
+    auto src_addr = tensor_args.input_tensor.mesh_buffer()->address();
+    auto page_table_addr = tensor_args.page_table.mesh_buffer()->address();
 
     uint32_t current_kernel_batch_arg;
     if (shared_vars.use_batch_idx_tensor) {
         TT_FATAL(
             tensor_args.batch_idx_tensor_opt.has_value(),
             "batch_idx_tensor_opt is expected but not provided when use_batch_idx_tensor is true.");
-        current_kernel_batch_arg = tensor_args.batch_idx_tensor_opt.value().buffer()->address();
+        current_kernel_batch_arg = tensor_args.batch_idx_tensor_opt.value().mesh_buffer()->address();
     } else {
         current_kernel_batch_arg = operation_attributes.batch_idx_fallback;
     }

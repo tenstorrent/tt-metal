@@ -100,7 +100,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
         output_tensor.buffer()->alignment());
     auto output_page_size = output_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(output_page_size, max_alignment);
-    auto total_num_pages = output_tensor.buffer()->num_pages();
+    auto total_num_pages = output_tensor.mesh_buffer()->num_pages();
     auto fabric_max_payload_size = tt::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
@@ -135,7 +135,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, receiver_core_range_set, cb_packet_header_config);
 
-    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer());
+    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer());
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
     tt::CBIndex scratch_buffer_cb_index = tt::CBIndex::c_1;
@@ -204,7 +204,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
             std::vector<uint32_t> writer_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
-                output_tensor.buffer()->address(),           // output_base_addr
+                output_tensor.mesh_buffer()->address(),      // output_base_addr
                 pages_for_this_core,                         // num_pages
                 page_start_offset,                           // page_start_offset
                 num_whole_packets,                           // num_whole_packets
@@ -318,9 +318,9 @@ RecvAsyncMeshWorkloadFactory::create_at(
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, receiver_core_coord, reader_rt_args);
 
             std::vector<uint32_t> writer_rt_args = {
-                output_tensor.buffer()->address(),  // output_base_addr
-                page_start_offset,                  // start_page_index
-                pages_for_this_core,                // num_pages
+                output_tensor.mesh_buffer()->address(),  // output_base_addr
+                page_start_offset,                       // start_page_index
+                pages_for_this_core,                     // num_pages
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
@@ -359,7 +359,7 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-                writer_runtime_args[1] = output_tensor.buffer()->address();
+                writer_runtime_args[1] = output_tensor.mesh_buffer()->address();
             }
         } else {
             for (const auto& receiver_core_coord : receiver_core_coords) {
@@ -367,7 +367,7 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, receiver_core_coord);
 
                 reader_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-                writer_runtime_args[0] = output_tensor.buffer()->address();
+                writer_runtime_args[0] = output_tensor.mesh_buffer()->address();
             }
         }
     }

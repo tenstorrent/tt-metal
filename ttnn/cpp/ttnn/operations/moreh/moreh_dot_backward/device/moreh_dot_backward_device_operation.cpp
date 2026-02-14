@@ -20,7 +20,7 @@ void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
     TT_FATAL(tensor_shape == grad_tensor_shape, "Tensor shape and grad tensor shape should be the same.");
     TT_FATAL(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_FATAL(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");
-    TT_FATAL(grad_tensor.buffer() != nullptr, "Operands to dot backward need to be allocated in buffers on device!");
+    TT_FATAL(grad_tensor.is_allocated(), "Operands to dot backward need to be allocated in buffers on device!");
 }
 
 void validate_tensors(
@@ -44,7 +44,7 @@ void validate_tensors(
         output_grad.device() == input.device() and input.device() == other.device(),
         "Operands to dot backward need to be on the same device!");
     TT_FATAL(
-        output_grad.buffer() != nullptr and input.buffer() != nullptr and other.buffer() != nullptr,
+        output_grad.is_allocated() and input.is_allocated() and other.is_allocated(),
         "Operands to dot backward need to be allocated in buffers on device!");
 
     // validate optional inputs

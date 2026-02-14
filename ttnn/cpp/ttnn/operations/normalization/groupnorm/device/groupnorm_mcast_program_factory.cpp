@@ -181,11 +181,11 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
             block_wt * TILE_WIDTH);
     }
 
-    auto in0_dram_addr = a.buffer()->address();
-    auto out_dram_addr = output.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
+    auto in0_dram_addr = a.mesh_buffer()->address();
+    auto out_dram_addr = output.mesh_buffer()->address();
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
+    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().mesh_buffer()->address() : 0;
 
     uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
@@ -322,8 +322,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> reader_mcast_receiver_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
@@ -350,8 +350,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -420,12 +420,12 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         writer_named_compile_time_args_group_1["page_size"] = TILE_HW * datum_size_bytes;
     }
 
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
 
     std::string writer_kernel =
@@ -891,8 +891,8 @@ void GroupNormMcastProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
-    auto src_buffer_a = tensor_args.input.buffer()->address();
-    auto dst_buffer = tensor_return_value.buffer()->address();
+    auto src_buffer_a = tensor_args.input.mesh_buffer()->address();
+    auto dst_buffer = tensor_return_value.mesh_buffer()->address();
 
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
@@ -910,13 +910,13 @@ void GroupNormMcastProgramFactory::override_runtime_arguments(
 
         writer_runtime_args[3] = dst_buffer;
         if (gamma.has_value()) {
-            writer_runtime_args[4] = gamma.value().buffer()->address();
+            writer_runtime_args[4] = gamma.value().mesh_buffer()->address();
         }
         if (beta.has_value()) {
-            writer_runtime_args[5] = beta.value().buffer()->address();
+            writer_runtime_args[5] = beta.value().mesh_buffer()->address();
         }
         if (mask.has_value()) {
-            writer_runtime_args[6] = mask.value().buffer()->address();
+            writer_runtime_args[6] = mask.value().mesh_buffer()->address();
         }
     }
 

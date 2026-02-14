@@ -162,13 +162,13 @@ BcastShardedHOptimisedProgramFactory::cached_program_t BcastShardedHOptimisedPro
             binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(),  // (0) src1_addr
-                Ht,                     // (1) Ht
-                Wt,                     // (2) Wt
-                offset,                 // (3) read offset in1
-                tile_offset,            // (4) in1 offset between batches
-                w_blk,                  // (5) block size in w
-                batch_b,                // (6) in1 batch size
+                b.mesh_buffer()->address(),  // (0) src1_addr
+                Ht,                          // (1) Ht
+                Wt,                          // (2) Wt
+                offset,                      // (3) read offset in1
+                tile_offset,                 // (4) in1 offset between batches
+                w_blk,                       // (5) block size in w
+                batch_b,                     // (6) in1 batch size
             });
 
         SetRuntimeArgs(
@@ -254,13 +254,13 @@ void BcastShardedHOptimisedProgramFactory::override_runtime_arguments(
             cached_program.shared_variables.binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(),  // (0) src1_addr
-                Ht,                     // (1) Ht
-                Wt,                     // (2) Wt
-                offset,                 // (3) read offset in1
-                tile_offset,            // (4) in1 offset between batches
-                w_blk,                  // (5) block size in w
-                bN,                     // (6) in1 batch size
+                b.mesh_buffer()->address(),  // (0) src1_addr
+                Ht,                          // (1) Ht
+                Wt,                          // (2) Wt
+                offset,                      // (3) read offset in1
+                tile_offset,                 // (4) in1 offset between batches
+                w_blk,                       // (5) block size in w
+                bN,                          // (6) in1 batch size
             });
 
         SetRuntimeArgs(

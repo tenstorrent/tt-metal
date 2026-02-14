@@ -18,7 +18,7 @@ void IndexFillOperation::validate(
     const auto& index = tensor_args.index;
     const uint32_t dim = operation_attributes.dim;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
+    TT_FATAL(input.is_allocated(), "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Index fill: Only supporting row major layout");
     TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -29,7 +29,7 @@ void IndexFillOperation::validate(
 
     // Validate index tensor properties expected by the kernel.
     TT_FATAL(index.storage_type() == StorageType::DEVICE, "Index fill: Index tensor must be on device");
-    TT_FATAL(index.buffer() != nullptr, "Index fill: Index tensor must be allocated in buffer on device");
+    TT_FATAL(index.is_allocated(), "Index fill: Index tensor must be allocated in buffer on device");
     TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D");
     TT_FATAL(
         index.dtype() == DataType::UINT32,

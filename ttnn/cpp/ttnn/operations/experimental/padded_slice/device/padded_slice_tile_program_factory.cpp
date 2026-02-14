@@ -141,7 +141,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
     const auto num_tiles_per_full_row = num_output_tiles_per_dim[1] * max_num_tiles_per_row;
 
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr,  // read from nearest aligned address
         num_dims,
@@ -406,8 +406,8 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     TT_FATAL(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
@@ -415,14 +415,14 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
     uint32_t max_read_size = 4096;
 
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(
         output_row_size_bytes % dst_buffer_alignment == 0,
         "Output row size {} must be aligned to the destination buffer {} alignment {}",
         output_row_size_bytes,
-        output.buffer()->buffer_type(),
+        output.memory_config().buffer_type(),
         dst_buffer_alignment);
     // Input is tiled, and so channels would always be aligned to TILE_WIDTH.
     // So the non aligned copy is needed if the output alignment is less than TILE_WIDTH * element_size.

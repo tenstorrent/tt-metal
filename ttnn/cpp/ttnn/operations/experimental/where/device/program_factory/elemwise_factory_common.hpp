@@ -103,9 +103,9 @@ inline void set_eltwise_ternary_runtime_args(
         }
 
         ElemwiseReaderKernelArgs read_kern_args = {
-            .condition_tensor_base_addr = condition_tensor.buffer()->address(),
-            .true_tensor_base_addr = true_value_tensor.buffer()->address(),
-            .false_tensor_base_addr = false_value_tensor.buffer()->address(),
+            .condition_tensor_base_addr = condition_tensor.mesh_buffer()->address(),
+            .true_tensor_base_addr = true_value_tensor.mesh_buffer()->address(),
+            .false_tensor_base_addr = false_value_tensor.mesh_buffer()->address(),
             .num_tiles = num_tiles_per_core,
             .tile_ofs = tile_ofs};
 
@@ -113,7 +113,7 @@ inline void set_eltwise_ternary_runtime_args(
             .per_core_block_cnt = block_cnt_per_core, .per_core_block_size = block_size_per_core};
 
         ElemwiseWriterKernelArgs write_kern_args = {
-            .dst_base_addr = output.buffer()->address(), .num_tiles = num_tiles_per_core, .tile_ofs = tile_ofs};
+            .dst_base_addr = output.mesh_buffer()->address(), .num_tiles = num_tiles_per_core, .tile_ofs = tile_ofs};
 
         reader_args_array[i] = to_vector(read_kern_args);
         compute_args_array[i] = to_vector(compute_kern_args);

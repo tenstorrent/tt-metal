@@ -152,13 +152,13 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
     log_debug(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
     log_debug(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
 
-    auto input_addr = input_tensor.buffer()->address();
-    auto output_addr = output_tensor.buffer()->address();
-    auto stats_addr = stats_tensor.buffer()->address();
-    auto weight_addr = has_weight ? weight_tensor.value().buffer()->address() : 0;
-    auto transformation_mat_addr = fuse_rope ? transformation_mat.value().buffer()->address() : 0;
-    auto rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
-    auto rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
+    auto input_addr = input_tensor.mesh_buffer()->address();
+    auto output_addr = output_tensor.mesh_buffer()->address();
+    auto stats_addr = stats_tensor.mesh_buffer()->address();
+    auto weight_addr = has_weight ? weight_tensor.value().mesh_buffer()->address() : 0;
+    auto transformation_mat_addr = fuse_rope ? transformation_mat.value().mesh_buffer()->address() : 0;
+    auto rope_cos_addr = fuse_rope ? rope_cos.value().mesh_buffer()->address() : 0;
+    auto rope_sin_addr = fuse_rope ? rope_sin.value().mesh_buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -298,15 +298,15 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         fuse_rope,
         head_dim_tiles};
 
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(stats_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(stats_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? transformation_mat.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? transformation_mat.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_cos.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_cos.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -317,7 +317,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_heads,
         num_tile_rows,
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -423,14 +423,14 @@ void FusedRMSNormPostAllGatherProgramFactory::override_runtime_arguments(
     const auto& rope_cos_tensor = tensor_args.rope_cos;
     const auto& rope_sin_tensor = tensor_args.rope_sin;
 
-    const auto input_addr = input_tensor.buffer()->address();
-    const auto stats_addr = stats_tensor.buffer()->address();
-    const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().buffer()->address() : 0;
+    const auto input_addr = input_tensor.mesh_buffer()->address();
+    const auto stats_addr = stats_tensor.mesh_buffer()->address();
+    const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().mesh_buffer()->address() : 0;
     const auto transformation_mat_addr =
-        transformation_mat_tensor.has_value() ? transformation_mat_tensor.value().buffer()->address() : 0;
-    const auto rope_cos_addr = rope_cos_tensor.has_value() ? rope_cos_tensor.value().buffer()->address() : 0;
-    const auto rope_sin_addr = rope_sin_tensor.has_value() ? rope_sin_tensor.value().buffer()->address() : 0;
-    const auto output_addr = output_tensor.buffer()->address();
+        transformation_mat_tensor.has_value() ? transformation_mat_tensor.value().mesh_buffer()->address() : 0;
+    const auto rope_cos_addr = rope_cos_tensor.has_value() ? rope_cos_tensor.value().mesh_buffer()->address() : 0;
+    const auto rope_sin_addr = rope_sin_tensor.has_value() ? rope_sin_tensor.value().mesh_buffer()->address() : 0;
+    const auto output_addr = output_tensor.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);

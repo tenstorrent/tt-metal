@@ -89,8 +89,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
     const auto* const writer_kernel_file =
@@ -146,7 +146,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              num_reduce_input_tile,
              units_per_core,
              input_tile_stride,
@@ -154,7 +154,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
              HtWt,
              inner_size});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), units_per_core, tile_offset});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.mesh_buffer()->address(), units_per_core, tile_offset});
 
         tile_offset += units_per_core;
     }
@@ -172,8 +172,8 @@ void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = tensor_return_value.buffer()->address();
+    auto src_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto dst_buffer_address = tensor_return_value.mesh_buffer()->address();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};

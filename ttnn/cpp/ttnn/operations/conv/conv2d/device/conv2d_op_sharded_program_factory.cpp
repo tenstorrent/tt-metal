@@ -364,7 +364,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         }
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -380,8 +380,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -471,7 +470,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
     // weight
-    const uint32_t weight_dram_addr = b.buffer()->address();
+    const uint32_t weight_dram_addr = b.mesh_buffer()->address();
 
     // bias
     tt::tt_metal::Buffer* bias_buffer = nullptr;
@@ -844,7 +843,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     } else {
         // Put enough 0s so that the offsets of activation reuse args are the same
         reader_compile_time_args.push_back(0);
@@ -1001,8 +1000,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->mesh_buffer() : nullptr).append_to(writer_compile_time_args);
 
     const bool check_skip_compute = input_cores != output_cores;
 

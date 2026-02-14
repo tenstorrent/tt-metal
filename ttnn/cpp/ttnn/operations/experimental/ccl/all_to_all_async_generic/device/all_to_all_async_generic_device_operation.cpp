@@ -18,7 +18,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
 
@@ -28,7 +28,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");
 
     TT_FATAL(
         input_shape[operation_attributes.out_dim] % operation_attributes.num_devices == 0,
@@ -85,9 +85,9 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor for all_to_all_async must be on device");
         TT_FATAL(
-            output_tensor.buffer()->buffer_type() == BufferType::DRAM,
+            output_tensor.memory_config().buffer_type() == BufferType::DRAM,
             "Output tensor for all_to_all_async must be in DRAM, but is in {}",
-            output_tensor.buffer()->buffer_type());
+            output_tensor.memory_config().buffer_type());
         TT_FATAL(output_tensor.layout() == Layout::TILE, "Unsupported output layout {}.", output_tensor.layout());
 
         TT_FATAL(output_tensor.dtype() == input_tensor.dtype(), "Output tensor dtype must match input tensor dtype");

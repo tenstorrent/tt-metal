@@ -50,8 +50,8 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto dst_addr = output.mesh_buffer()->address();
 
     constexpr uint32_t double_buffer = 2;
     const uint32_t in0_tiles = block_size * double_buffer;
@@ -70,10 +70,10 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)block_size,
     };
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
 
@@ -172,8 +172,8 @@ void PreAllGatherWelfordProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
+    const auto input_addr = tensor_args.input.mesh_buffer()->address();
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);

@@ -95,20 +95,20 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(param_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(exp_avg_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(exp_avg_sq_in.mesh_buffer()).append_to(reader_compile_time_args);
     if (max_exp_avg_sq_in.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_in.value().buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(max_exp_avg_sq_in.value().mesh_buffer()).append_to(reader_compile_time_args);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(param_out.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(exp_avg_out.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(exp_avg_sq_out.mesh_buffer()).append_to(writer_compile_time_args);
     if (max_exp_avg_sq_out.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(max_exp_avg_sq_out.value().mesh_buffer()).append_to(writer_compile_time_args);
     }
 
     const auto* const reader_kernel_file =
@@ -173,16 +173,16 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto exp_avg_in_addr = exp_avg_in.buffer()->address();
-    const auto exp_avg_sq_in_addr = exp_avg_sq_in.buffer()->address();
+    const auto param_in_addr = param_in.mesh_buffer()->address();
+    const auto grad_addr = grad.mesh_buffer()->address();
+    const auto exp_avg_in_addr = exp_avg_in.mesh_buffer()->address();
+    const auto exp_avg_sq_in_addr = exp_avg_sq_in.mesh_buffer()->address();
     const auto max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0;
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().mesh_buffer()->address() : 0;
 
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto exp_avg_out_addr = exp_avg_out.buffer()->address();
-    const auto exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
+    const auto param_out_addr = param_out.mesh_buffer()->address();
+    const auto exp_avg_out_addr = exp_avg_out.mesh_buffer()->address();
+    const auto exp_avg_sq_out_addr = exp_avg_sq_out.mesh_buffer()->address();
     const auto max_exp_avg_sq_out_addr = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0;
 
     union {

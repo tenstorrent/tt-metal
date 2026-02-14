@@ -99,7 +99,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
         core,
         {src0_buffer->address(), src1_buffer->address(), num_tiles, 0, mask_h, mask_w});
     SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles, 1});
-    SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), 1, 0});
+    SetRuntimeArgs(program, writer_kernel_id, core, {output.mesh_buffer()->address(), 1, 0});
 
     const std::vector<Tensor> input_tensors = {input_a, input_b};
 

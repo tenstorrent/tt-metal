@@ -163,8 +163,8 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
                                              ? GetRuntimeArgs(program, capture.writer_mcast_receiver_kernels_id)
                                              : writer_sender_args_by_core;
 
-    const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
-    const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().buffer()->address() : 0;
+    const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().mesh_buffer()->address() : 0;
+    const auto beta_address = beta_tensor.has_value() ? beta_tensor.value().mesh_buffer()->address() : 0;
 
     for (uint32_t i = 0; i < capture.cores.size(); ++i) {
         const CoreCoord& core = capture.cores[i];
@@ -303,8 +303,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // get sharded addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

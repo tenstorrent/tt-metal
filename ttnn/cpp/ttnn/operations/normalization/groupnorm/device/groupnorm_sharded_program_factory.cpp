@@ -291,10 +291,10 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // get sharded addr
     // gamma, beta addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
-    auto input_negative_mask_dram_addr = negative_mask.has_value() ? negative_mask.value().buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
+    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().mesh_buffer()->address() : 0;
+    auto input_negative_mask_dram_addr = negative_mask.has_value() ? negative_mask.value().mesh_buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -564,7 +564,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // writer kernel
     if (negative_mask.has_value()) {
-        TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
+        TensorAccessorArgs(negative_mask.value().mesh_buffer()).append_to(writer_mcast_sender_compile_time_args);
     } else {
         TensorAccessorArgs().append_to(writer_mcast_sender_compile_time_args);  // placeholder
     }
@@ -1063,16 +1063,16 @@ void GroupNormShardedProgramFactory::override_runtime_arguments(
         auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
         if (gamma.has_value()) {
-            runtime_args[3] = gamma.value().buffer()->address();
+            runtime_args[3] = gamma.value().mesh_buffer()->address();
         }
         if (beta.has_value()) {
-            runtime_args[4] = beta.value().buffer()->address();
+            runtime_args[4] = beta.value().mesh_buffer()->address();
         }
         if (mask.has_value()) {
-            runtime_args[5] = mask.value().buffer()->address();
+            runtime_args[5] = mask.value().mesh_buffer()->address();
         }
         if (negative_mask.has_value()) {
-            runtime_args[6] = negative_mask.value().buffer()->address();
+            runtime_args[6] = negative_mask.value().mesh_buffer()->address();
         }
     }
 }

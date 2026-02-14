@@ -65,12 +65,12 @@ SplitFusedQKVAndSplitHeadsProgramFactory::cached_program_t SplitFusedQKVAndSplit
     tt_metal::Tensor& k = output[1];
     tt_metal::Tensor& v = output[2];
 
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
     tt_metal::Buffer* q_buffer = q.buffer();
-    TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
+    TT_ASSERT(k.is_allocated(), "Output k buffer should be allocated on device!");
     tt_metal::Buffer* k_buffer = k.buffer();
-    TT_ASSERT(k_buffer != nullptr, "Output k buffer should be allocated on device!");
+    TT_ASSERT(v.is_allocated(), "Output v buffer should be allocated on device!");
     tt_metal::Buffer* v_buffer = v.buffer();
-    TT_ASSERT(v_buffer != nullptr, "Output v buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

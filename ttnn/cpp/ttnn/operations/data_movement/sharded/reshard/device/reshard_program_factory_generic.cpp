@@ -634,8 +634,8 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
+    auto grid = input.memory_config().buffer_type() == BufferType::DRAM ? device->dram_grid_size()
+                                                                        : device->compute_with_storage_grid_size();
     auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores =
@@ -651,8 +651,8 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         // For ROW_MAJOR, use base page size from GCD calculation
-        uint32_t input_page_size = input.buffer()->page_size();
-        uint32_t output_page_size = output.buffer()->page_size();
+        uint32_t input_page_size = input.mesh_buffer()->page_size();
+        uint32_t output_page_size = output.mesh_buffer()->page_size();
         uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
 
         unit_size = base_page_size;
@@ -662,7 +662,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
-        input.buffer()->page_size() != output.buffer()->page_size()
+        input.mesh_buffer()->page_size() != output.mesh_buffer()->page_size()
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
@@ -671,7 +671,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program,
-        input.buffer()->page_size() != output.buffer()->page_size()
+        input.mesh_buffer()->page_size() != output.mesh_buffer()->page_size()
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
@@ -680,7 +680,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
     tt::tt_metal::CircularBufferConfig cb_dst_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
-            .set_page_size(dst_cb_index, output.buffer()->page_size())
+            .set_page_size(dst_cb_index, output.mesh_buffer()->page_size())
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
@@ -698,7 +698,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     for (const auto& core : cores) {
         std::vector<uint32_t> runtime_args_0;
         std::vector<uint32_t> runtime_args_1;
-        if (input.buffer()->page_size() != output.buffer()->page_size()) {
+        if (input.mesh_buffer()->page_size() != output.mesh_buffer()->page_size()) {
             auto output_core_to_page_range_pair =
                 detail::get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
             const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
@@ -706,7 +706,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 0,
                 tt::div_up(page_stride_vector.size(), 2));
             auto output_page_offset = runtime_args_0[physical_core_coords.size() + 1];
@@ -714,7 +714,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         } else {
@@ -724,7 +724,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 0,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 0,
                 tt::div_up(page_stride_vector.size(), 2));
             auto output_page_offset =
@@ -734,7 +734,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
                 physical_core_coords,
                 page_stride_vector,
                 output_page_offset,
-                input.buffer()->address(),
+                input.mesh_buffer()->address(),
                 tt::div_up(page_stride_vector.size(), 2),
                 page_stride_vector.size());
         };
@@ -755,7 +755,7 @@ void ReshardGenericFactory::override_runtime_arguments(
     Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     const auto& output = output_tensor;
-    uint32_t input_addr = input.buffer()->address();
+    uint32_t input_addr = input.mesh_buffer()->address();
     auto& runtime_args_0_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_0);
     auto& runtime_args_1_by_core = GetRuntimeArgs(cached_program.program, cached_program.shared_variables.kernel_id_1);
     auto& grid = cached_program.shared_variables.grid;

@@ -27,7 +27,7 @@ args_list_t emit_compile_time(const WorkerEdmInterfaceArgs& /*edm_interface_args
 args_list_t legacy_emit_address_generator_runtime_args(
     const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
     args_list_t args;
-    switch (t.buffer()->buffer_layout()) {
+    switch (t.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
@@ -35,7 +35,7 @@ args_list_t legacy_emit_address_generator_runtime_args(
             break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            TT_ASSERT(t.buffer()->page_size() != 1024);
+            TT_ASSERT(t.mesh_buffer()->page_size() != 1024);
             // For now we won't emit args for interleaved here... assume these are passed in elsewhere
             // This is during some transitionary period
             return {};
@@ -47,7 +47,7 @@ args_list_t legacy_emit_address_generator_runtime_args(
                 false,
                 "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
                 "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
+                t.memory_config().memory_layout());
             return {};
     };
 }
@@ -55,13 +55,13 @@ args_list_t legacy_emit_address_generator_runtime_args(
 args_list_t emit_address_generator_runtime_args(
     const tt::tt_metal::IDevice* const /*d*/, const tt::tt_metal::Tensor& t) {
     args_list_t args;
-    switch (t.buffer()->buffer_layout()) {
+    switch (t.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return shard_builder::generate_run_time_args(t); break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            TT_ASSERT(t.buffer()->page_size() != 1024);
+            TT_ASSERT(t.mesh_buffer()->page_size() != 1024);
             // For now we won't emit args for interleaved here... assume these are passed in elsewhere
             // This is during some transitionary period
             return {};
@@ -73,13 +73,13 @@ args_list_t emit_address_generator_runtime_args(
                 false,
                 "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
                 "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
+                t.memory_config().memory_layout());
             return {};
     };
 }
 
 args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
-    switch (t.buffer()->buffer_layout()) {
+    switch (t.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return ShardedAddrGenArgBuilder::emit_ct_args(t); break;
@@ -91,14 +91,14 @@ args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::
                 false,
                 "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
                 "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
+                t.memory_config().memory_layout());
             return {};
     }
     TT_ASSERT(false);
 }
 
 args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
-    switch (t.buffer()->buffer_layout()) {
+    switch (t.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
@@ -112,7 +112,7 @@ args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor&
                 false,
                 "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
                 "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
-                t.buffer()->buffer_layout());
+                t.memory_config().memory_layout());
             return {};
     }
     TT_ASSERT(false);
@@ -170,7 +170,8 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, T
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] =
+        t.mesh_buffer()->get_reference_buffer()->shard_spec().shape_in_pages();
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
     TT_FATAL(
@@ -220,7 +221,8 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
 }
 
 void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(const Tensor& t, const std::string& prefix) {
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] =
+        t.mesh_buffer()->get_reference_buffer()->shard_spec().shape_in_pages();
     [[maybe_unused]] const auto& [shard_grid_start, shard_grid_end] =
         shard_grid_from_shard_spec(t.shard_spec().value());
     [[maybe_unused]] bool shard_grid_transposed = shard_grid_is_transposed(t);

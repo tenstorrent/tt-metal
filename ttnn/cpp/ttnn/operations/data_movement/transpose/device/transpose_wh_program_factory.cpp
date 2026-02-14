@@ -74,7 +74,7 @@ void set_runtime_args_wh_tiled(
                 program,
                 reader_kernel_id,
                 core,
-                {input_tensor.buffer()->address(),
+                {input_tensor.mesh_buffer()->address(),
                  num_tiles_per_core,
                  tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
                  h,
@@ -89,13 +89,13 @@ void set_runtime_args_wh_tiled(
                 program,
                 writer_kernel_id,
                 core,
-                {output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_read});
+                {output_tensor.mesh_buffer()->address(), num_tiles_per_core, num_tiles_read});
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             auto& compute_args = cached_compute_args.at(core.x).at(core.y);
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            reader_args[0] = input_tensor.buffer()->address();
+            reader_args[0] = input_tensor.mesh_buffer()->address();
             reader_args[1] = num_tiles_per_core;
             reader_args[2] = tt::round_down(num_tiles_read, HtWt) + h * Wt + w;
             reader_args[3] = h;
@@ -106,7 +106,7 @@ void set_runtime_args_wh_tiled(
 
             compute_args[0] = num_tiles_per_core;
 
-            writer_args[0] = output_tensor.buffer()->address();
+            writer_args[0] = output_tensor.mesh_buffer()->address();
             writer_args[1] = num_tiles_per_core;
             writer_args[2] = num_tiles_read;
         }
@@ -154,7 +154,7 @@ void set_runtime_args_wh_rm(
                 program,
                 reader_kernel_id,
                 core,
-                {input_tensor.buffer()->address(), num_sticks_read, num_hw_blocks_per_core});
+                {input_tensor.mesh_buffer()->address(), num_sticks_read, num_hw_blocks_per_core});
 
             SetRuntimeArgs(program, compute_kernel_id, core, {num_hw_blocks_per_core});
 
@@ -162,19 +162,19 @@ void set_runtime_args_wh_rm(
                 program,
                 writer_kernel_id,
                 core,
-                {output_tensor.buffer()->address(), num_sticks_write, num_hw_blocks_per_core});
+                {output_tensor.mesh_buffer()->address(), num_sticks_write, num_hw_blocks_per_core});
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             auto& compute_args = cached_compute_args.at(core.x).at(core.y);
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            reader_args[0] = input_tensor.buffer()->address();
+            reader_args[0] = input_tensor.mesh_buffer()->address();
             reader_args[1] = num_sticks_read;
             reader_args[2] = num_hw_blocks_per_core;
 
             compute_args[0] = num_hw_blocks_per_core;
 
-            writer_args[0] = output_tensor.buffer()->address();
+            writer_args[0] = output_tensor.mesh_buffer()->address();
             writer_args[1] = num_sticks_write;
             writer_args[2] = num_hw_blocks_per_core;
         }
@@ -191,7 +191,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -222,8 +222,8 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;

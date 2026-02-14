@@ -117,8 +117,8 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
     const NdShardSpec& input_nd_shard_spec = input_tensors.at(0).nd_shard_spec().value();
     const uint32_t num_pages_per_shard = input_nd_shard_spec.shard_shape.volume() / num_tile_elements;
     const uint32_t num_shards = input_tensors.at(0).logical_volume() / (num_tile_elements * num_pages_per_shard);
-    const uint32_t num_pages_per_slice = input_tensors.at(0).buffer()->num_pages();
-    const uint32_t page_size = input_tensors.at(0).buffer()->page_size();
+    const uint32_t num_pages_per_slice = input_tensors.at(0).mesh_buffer()->num_pages();
+    const uint32_t page_size = input_tensors.at(0).mesh_buffer()->page_size();
 
     // choose cores
     const auto [clamped_num_links, worker_core_range_set, worker_cores] =
@@ -350,15 +350,15 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
         input_slice_7_cb_id,
         compute_cb_id,
     };
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(0).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(1).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(2).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(3).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(4).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(5).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(6).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(7).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(0).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(1).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(2).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(3).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(4).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(5).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(6).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(7).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_ct_args);
 
     std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/"
@@ -434,24 +434,24 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
 
             // writer
             std::vector<uint32_t> writer_rt_args = {
-                intermediate_slice_tensors.at(0).buffer()->address(),  // intermediate_slice_0_address
-                intermediate_slice_tensors.at(1).buffer()->address(),  // intermediate_slice_1_address
-                intermediate_slice_tensors.at(2).buffer()->address(),  // intermediate_slice_2_address
-                intermediate_slice_tensors.at(3).buffer()->address(),  // intermediate_slice_3_address
-                intermediate_slice_tensors.at(4).buffer()->address(),  // intermediate_slice_4_address
-                intermediate_slice_tensors.at(5).buffer()->address(),  // intermediate_slice_5_address
-                intermediate_slice_tensors.at(6).buffer()->address(),  // intermediate_slice_6_address
-                intermediate_slice_tensors.at(7).buffer()->address(),  // intermediate_slice_7_address
-                output_tensor.buffer()->address(),                     // output_address
-                virtual_core.x,                                        // op_semaphore_noc0_x
-                virtual_core.y,                                        // op_semaphore_noc0_y
-                op_semaphore.address(),                                // op_semaphore
-                opposition_direction_virtual_core.x,                   // pre_op_barrier_semaphore_noc0_x
-                opposition_direction_virtual_core.y,                   // pre_op_barrier_semaphore_noc0_y
-                pre_op_barrier_semaphore.address(),                    // pre_op_barrier_semaphore
-                direction,                                             // direction
-                start_tiles_read,                                      // start_tiles_read
-                start_tiles_to_read,                                   // tiles_to_read
+                intermediate_slice_tensors.at(0).mesh_buffer()->address(),  // intermediate_slice_0_address
+                intermediate_slice_tensors.at(1).mesh_buffer()->address(),  // intermediate_slice_1_address
+                intermediate_slice_tensors.at(2).mesh_buffer()->address(),  // intermediate_slice_2_address
+                intermediate_slice_tensors.at(3).mesh_buffer()->address(),  // intermediate_slice_3_address
+                intermediate_slice_tensors.at(4).mesh_buffer()->address(),  // intermediate_slice_4_address
+                intermediate_slice_tensors.at(5).mesh_buffer()->address(),  // intermediate_slice_5_address
+                intermediate_slice_tensors.at(6).mesh_buffer()->address(),  // intermediate_slice_6_address
+                intermediate_slice_tensors.at(7).mesh_buffer()->address(),  // intermediate_slice_7_address
+                output_tensor.mesh_buffer()->address(),                     // output_address
+                virtual_core.x,                                             // op_semaphore_noc0_x
+                virtual_core.y,                                             // op_semaphore_noc0_y
+                op_semaphore.address(),                                     // op_semaphore
+                opposition_direction_virtual_core.x,                        // pre_op_barrier_semaphore_noc0_x
+                opposition_direction_virtual_core.y,                        // pre_op_barrier_semaphore_noc0_y
+                pre_op_barrier_semaphore.address(),                         // pre_op_barrier_semaphore
+                direction,                                                  // direction
+                start_tiles_read,                                           // start_tiles_read
+                start_tiles_to_read,                                        // tiles_to_read
             };
 
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_coord);
@@ -546,15 +546,15 @@ void deepseek_moe_reduce_scatter_helper_override_runtime_arguments(
 
             // writer
             auto& writer_rt_args = writer_runtime_args[core.x][core.y];
-            writer_rt_args[0] = intermediate_slice_tensors.at(0).buffer()->address();
-            writer_rt_args[1] = intermediate_slice_tensors.at(1).buffer()->address();
-            writer_rt_args[2] = intermediate_slice_tensors.at(2).buffer()->address();
-            writer_rt_args[3] = intermediate_slice_tensors.at(3).buffer()->address();
-            writer_rt_args[4] = intermediate_slice_tensors.at(4).buffer()->address();
-            writer_rt_args[5] = intermediate_slice_tensors.at(5).buffer()->address();
-            writer_rt_args[6] = intermediate_slice_tensors.at(6).buffer()->address();
-            writer_rt_args[7] = intermediate_slice_tensors.at(7).buffer()->address();
-            writer_rt_args[8] = output_tensor.buffer()->address();
+            writer_rt_args[0] = intermediate_slice_tensors.at(0).mesh_buffer()->address();
+            writer_rt_args[1] = intermediate_slice_tensors.at(1).mesh_buffer()->address();
+            writer_rt_args[2] = intermediate_slice_tensors.at(2).mesh_buffer()->address();
+            writer_rt_args[3] = intermediate_slice_tensors.at(3).mesh_buffer()->address();
+            writer_rt_args[4] = intermediate_slice_tensors.at(4).mesh_buffer()->address();
+            writer_rt_args[5] = intermediate_slice_tensors.at(5).mesh_buffer()->address();
+            writer_rt_args[6] = intermediate_slice_tensors.at(6).mesh_buffer()->address();
+            writer_rt_args[7] = intermediate_slice_tensors.at(7).mesh_buffer()->address();
+            writer_rt_args[8] = output_tensor.mesh_buffer()->address();
             writer_rt_args[11] = op_semaphore.address();
             writer_rt_args[14] = pre_op_barrier_semaphore.address();
         }

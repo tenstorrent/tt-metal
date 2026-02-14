@@ -124,11 +124,11 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
+    auto a_addr = a.mesh_buffer()->address();
+    auto stats_addr = stats.mesh_buffer()->address();
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
+    auto beta_dram_addr = beta.has_value() ? beta.value().mesh_buffer()->address() : 0;
+    auto dst_addr = output.mesh_buffer()->address();
 
     [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
     [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
@@ -266,15 +266,15 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     reader_compile_time_args.push_back((std::uint32_t)cb_length);
     reader_compile_time_args.push_back((std::uint32_t)tiles_per_core_y);
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(stats.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
@@ -526,13 +526,13 @@ void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const auto input_addr = tensor_args.input.buffer()->address();
-    const auto stats_addr = tensor_args.stats.buffer()->address();
+    const auto input_addr = tensor_args.input.mesh_buffer()->address();
+    const auto stats_addr = tensor_args.stats.mesh_buffer()->address();
     const bool has_gamma = tensor_args.gamma.has_value();
     const bool has_beta = tensor_args.beta.has_value();
-    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().buffer()->address() : 0;
-    const auto beta_addr = has_beta ? tensor_args.beta.value().buffer()->address() : 0;
-    const auto output_addr = output.buffer()->address();
+    const auto gamma_addr = has_gamma ? tensor_args.gamma.value().mesh_buffer()->address() : 0;
+    const auto beta_addr = has_beta ? tensor_args.beta.value().mesh_buffer()->address() : 0;
+    const auto output_addr = output.mesh_buffer()->address();
 
     auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.reader_kernel_id);
     auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_vars.writer_kernel_id);

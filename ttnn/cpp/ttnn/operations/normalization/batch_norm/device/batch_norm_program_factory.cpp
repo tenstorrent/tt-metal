@@ -80,7 +80,7 @@ void set_or_update_runtime_arguments(
 
         std::array reader_runtime_args = {
             packed_scalar_eps,
-            input_tensor.buffer()->address(),
+            (uint32_t)input_tensor.mesh_buffer()->address(),
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -95,11 +95,11 @@ void set_or_update_runtime_arguments(
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
         const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
         std::array writer_runtime_args = {
-            batch_mean_tensor.buffer()->address(),  //  batch mean
-            batch_var_tensor.buffer()->address(),   //  batch var
-            weight_addr,                            // weight
-            bias_addr,                              // bias
-            c.buffer()->address(),                  // output
+            (uint32_t)batch_mean_tensor.mesh_buffer()->address(),  //  batch mean
+            (uint32_t)batch_var_tensor.mesh_buffer()->address(),   //  batch var
+            weight_addr,                                           // weight
+            bias_addr,                                             // bias
+            (uint32_t)c.mesh_buffer()->address(),                  // output
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -208,7 +208,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         input_tensor_cb,
         eps_cb,
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(weight_has_value),
@@ -219,12 +219,13 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         weight_tensor_cb,
         bias_tensor_cb,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weight_tensor ? weight_tensor->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor ? weight_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_tensor ? bias_tensor->buffer() : nullptr).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor ? bias_tensor->mesh_buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
     if (input_tensor.dtype() == DataType::FLOAT32) {

@@ -356,14 +356,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         args.all_gather_operation_attributes.ring_size};
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.mesh_buffer()).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -399,9 +399,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         scale_union.u,
         args.all_gather_operation_attributes.ring_size};
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(lse_output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -591,17 +591,17 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
-    uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
-    uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
-    uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
-    uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
-    uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
-    uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
-    uint32_t lse_addr = lse_output_tensor.buffer()->address();
+    uint32_t q_addr = input_tensor_q.mesh_buffer()->address();
+    uint32_t k_addr = input_tensor_k.mesh_buffer()->address();
+    uint32_t v_addr = input_tensor_v.mesh_buffer()->address();
+    uint32_t gathered_k_addr = gathered_input_tensor_k.mesh_buffer()->address();
+    uint32_t gathered_v_addr = gathered_input_tensor_v.mesh_buffer()->address();
+    uint32_t joint_q_addr = joint_tensor_q.mesh_buffer()->address();
+    uint32_t joint_k_addr = joint_tensor_k.mesh_buffer()->address();
+    uint32_t joint_v_addr = joint_tensor_v.mesh_buffer()->address();
+    uint32_t out_addr = output_tensor.mesh_buffer()->address();
+    uint32_t joint_out_addr = joint_output_tensor.mesh_buffer()->address();
+    uint32_t lse_addr = lse_output_tensor.mesh_buffer()->address();
 
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).

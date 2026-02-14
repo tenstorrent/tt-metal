@@ -26,7 +26,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be on device!");
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr,
+        input_tensor.is_allocated() and cache_tensor.is_allocated(),
         "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL(
         (input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE),

@@ -53,8 +53,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
                                             uint32_t* num_padded_tiles_per_dim,
                                             uint32_t* input_shape_args) __attribute__((always_inline)) {
         reader_common_args[0] = input_buffer->address();
-        reader_common_args[1] = start_tensor.buffer()->address();
-        reader_common_args[2] = end_tensor.buffer()->address();
+        reader_common_args[1] = start_tensor.mesh_buffer()->address();
+        reader_common_args[2] = end_tensor.mesh_buffer()->address();
 
         num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
         num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
@@ -196,15 +196,14 @@ SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFa
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
+    TT_ASSERT(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
+    TT_ASSERT(start_tensor.is_allocated(), "Start buffer should be allocated on device!");
+    TT_ASSERT(end_tensor.is_allocated(), "End buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* src_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* start_buffer = start_tensor.buffer();
     tt::tt_metal::Buffer* end_buffer = end_tensor.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-
-    TT_ASSERT(src_buffer != nullptr, "Input buffer should be allocated on device!");
-    TT_ASSERT(start_buffer != nullptr, "Start buffer should be allocated on device!");
-    TT_ASSERT(end_buffer != nullptr, "End buffer should be allocated on device!");
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

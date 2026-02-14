@@ -143,11 +143,11 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
     };
 
     // Add tensor accessor args for input tensor (16 compile time args offset)
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     }
 
     auto create_writer_config = [&](const std::vector<uint32_t>& args, auto processor, auto noc) {
@@ -189,8 +189,8 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
 
             // Runtime arguments for sharded reader
             std::vector<uint32_t> runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
+                input_tensor.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+                i * grid_nsticks_per_core               // rt_arg[1]: grid_stick_offset
             };
 
             tt::tt_metal::SetRuntimeArgs(program, kernel0_id, core, runtime_args);
@@ -210,10 +210,10 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
 
             // Runtime arguments for interleaved reader - expanded row by row
             std::vector<uint32_t> runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                grid_tensor.buffer()->address(),   // rt_arg[1]: grid_buffer_address
-                grid_sticks,                       // rt_arg[2]: grid_sticks
-                grid_processed                     // rt_arg[3]: grid_processed
+                input_tensor.mesh_buffer()->address(),  // rt_arg[0]: input_buffer_address
+                grid_tensor.mesh_buffer()->address(),   // rt_arg[1]: grid_buffer_address
+                grid_sticks,                            // rt_arg[2]: grid_sticks
+                grid_processed                          // rt_arg[3]: grid_processed
             };
 
             tt::tt_metal::SetRuntimeArgs(program, kernel0_id, core, runtime_args);
@@ -266,9 +266,9 @@ void GridSampleNearestProgramFactory::override_runtime_arguments(
 
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
-            tt::tt_metal::GetRuntimeArgs(prog, kernel0_id, core)[0] = input_tensor.buffer()->address();
+            tt::tt_metal::GetRuntimeArgs(prog, kernel0_id, core)[0] = input_tensor.mesh_buffer()->address();
             if (enable_split_reader) {
-                tt::tt_metal::GetRuntimeArgs(prog, kernel1_id, core)[0] = input_tensor.buffer()->address();
+                tt::tt_metal::GetRuntimeArgs(prog, kernel1_id, core)[0] = input_tensor.mesh_buffer()->address();
             }
         }
     } else {
@@ -280,12 +280,12 @@ void GridSampleNearestProgramFactory::override_runtime_arguments(
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(prog, kernel0_id, core);
-            runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
-            runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
+            runtime_args[0] = input_tensor.mesh_buffer()->address();  // rt_arg[0]: input_buffer_address
+            runtime_args[1] = grid_tensor.mesh_buffer()->address();   // rt_arg[1]: grid_buffer_address
             if (enable_split_reader) {
                 auto& runtime_args1 = tt::tt_metal::GetRuntimeArgs(prog, kernel1_id, core);
-                runtime_args1[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
-                runtime_args1[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
+                runtime_args1[0] = input_tensor.mesh_buffer()->address();  // rt_arg[0]: input_buffer_address
+                runtime_args1[1] = grid_tensor.mesh_buffer()->address();   // rt_arg[1]: grid_buffer_address
             }
         }
     }

@@ -162,14 +162,14 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(do_mask_h), static_cast<uint32_t>(do_mask_w)};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gamma.has_value() ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma.has_value() ? gamma->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
@@ -244,14 +244,14 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_addr = output_grad.buffer()->address();
-    const auto input_addr = input.buffer()->address();
-    const auto mean_addr = mean.buffer()->address();
-    const auto rstd_addr = rstd.buffer()->address();
+    const auto output_grad_addr = output_grad.mesh_buffer()->address();
+    const auto input_addr = input.mesh_buffer()->address();
+    const auto mean_addr = mean.mesh_buffer()->address();
+    const auto rstd_addr = rstd.mesh_buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().mesh_buffer()->address() : 0;
 
-    const auto input_grad_addr = input_grad.buffer()->address();
+    const auto input_grad_addr = input_grad.mesh_buffer()->address();
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

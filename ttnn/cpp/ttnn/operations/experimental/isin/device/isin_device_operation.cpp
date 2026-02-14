@@ -27,11 +27,11 @@ void IsInDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(test_elements.dtype()));
 
     TT_FATAL(!elements.is_sharded(), "Elements tensor is sharded");
-    TT_FATAL(elements.buffer() != nullptr, "Elements tensor's buffer is null");
+    TT_FATAL(elements.is_allocated(), "Elements tensor's buffer is null");
     TT_FATAL(elements.storage_type() == StorageType::DEVICE, "Elements tensor is not on a device");
 
     TT_FATAL(!test_elements.is_sharded(), "Test elements tensor is sharded");
-    TT_FATAL(test_elements.buffer() != nullptr, "Test elements tensor's buffer is null");
+    TT_FATAL(test_elements.is_allocated(), "Test elements tensor's buffer is null");
     TT_FATAL(test_elements.storage_type() == StorageType::DEVICE, "Test elements tensor is not on a device");
 }
 

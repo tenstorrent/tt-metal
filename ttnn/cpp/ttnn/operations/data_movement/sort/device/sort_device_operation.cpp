@@ -55,7 +55,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
 
     TT_FATAL(
-        tensor_args.input_tensor.buffer() != nullptr,
+        tensor_args.input_tensor.is_allocated(),
         "Operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         tensor_args.input_tensor.storage_type() == StorageType::DEVICE,

@@ -22,7 +22,7 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     const auto& output_dtype = operation_attributes.output_dtype;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
 
     if (tensor_args.output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.output_tensor.value();
@@ -30,7 +30,7 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(output_tensor.memory_config() == output_mem_config, "Mismatched output memory config");
         TT_FATAL(output_tensor.dtype() == output_dtype, "Mismatched output dtype");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-        TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+        TT_FATAL(output_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
         TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
     }
 

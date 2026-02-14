@@ -150,9 +150,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     // Data movement kernels
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     if (tensor_args.mask.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().mesh_buffer()).append_to(reader_compile_time_args);
     }
     if (attributes.is_causal_mask) {
         uint32_t num_tiles_causal_mask = tensor_args.mask.value().padded_shape()[-1] *
@@ -161,7 +161,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     }
 
     std::vector<uint32_t> writer_compile_time_args = {num_datum_padded};
-    tt::tt_metal::TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     std::map<std::string, std::string> softmax_defines, writer_defines;
     if (tensor_args.mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -277,7 +277,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     }
 
     uint32_t src_addr = src0_buffer->address();
-    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
+    uint32_t mask_addr = tensor_args.mask.has_value() ? tensor_args.mask.value().mesh_buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     uint32_t curr_row = 0;
@@ -382,9 +382,9 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     const SoftmaxParams& attributes,
     const SoftmaxInputs& tensor_args,
     Tensor& output_tensor) {
-    auto src_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto mask_buffer_address = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer()->address() : 0;
-    auto dst_buffer_address = output_tensor.buffer()->address();
+    auto src_buffer_address = tensor_args.input_tensor.mesh_buffer()->address();
+    auto mask_buffer_address = tensor_args.mask.has_value() ? tensor_args.mask.value().mesh_buffer()->address() : 0;
+    auto dst_buffer_address = output_tensor.mesh_buffer()->address();
 
     const auto shape = tensor_args.input_tensor.padded_shape();
     const uint32_t W = shape[-1], H = (tensor_args.input_tensor.physical_volume() / (shape[0] * shape[-1])),

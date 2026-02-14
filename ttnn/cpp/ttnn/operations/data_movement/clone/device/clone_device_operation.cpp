@@ -15,7 +15,7 @@ void CloneOperation::validate_inputs(
         TT_FATAL(input.layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
     }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
+    TT_FATAL(input.is_allocated(), "Clone: input must be allocated in buffer on device");
 
     auto input_memory_layout = input.memory_config().memory_layout();
     auto output_memory_layout = operation_attributes.memory_config.memory_layout();
@@ -27,7 +27,7 @@ void CloneOperation::validate_inputs(
             input_memory_layout == output_memory_layout,
             "Clone: input and output must have the same memory layout when both are sharded");
 
-        auto input_shard_spec = input.buffer()->shard_spec();
+        auto input_shard_spec = input.mesh_buffer()->get_reference_buffer()->shard_spec();
         auto output_shard_spec = operation_attributes.memory_config.shard_spec();
 
         TT_FATAL(output_shard_spec.has_value(), "Clone: output memory config must have shard spec when sharded");

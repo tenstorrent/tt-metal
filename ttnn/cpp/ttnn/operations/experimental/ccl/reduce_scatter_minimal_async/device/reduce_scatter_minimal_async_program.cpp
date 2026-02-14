@@ -621,7 +621,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
@@ -710,7 +710,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
@@ -831,12 +831,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
 
     std::string sender_reader_kernel_path =
@@ -894,12 +894,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
     }
 
     std::string sender_writer_kernel_path =
@@ -990,15 +990,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),         // input_tensor_address
-                    intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    semaphore.at(dir).address(),              // out_ready_semaphore
-                    dir,                                      // direction
-                    chunks_per_sync_val,                      // chunks_per_sync
-                    start_tiles_read,                         // start_tiles_read
-                    start_tiles_to_read,                      // start_tiles_to_read
-                    start_pages_read_in_row,                  // start_pages_read_in_row
-                    start_row_offset,                         // start_row_offset (unused by dim0 kernel)
+                    input_tensor.mesh_buffer()->address(),         // input_tensor_address
+                    intermediate_tensor.mesh_buffer()->address(),  // intermediate_tensor_address
+                    semaphore.at(dir).address(),                   // out_ready_semaphore
+                    dir,                                           // direction
+                    chunks_per_sync_val,                           // chunks_per_sync
+                    start_tiles_read,                              // start_tiles_read
+                    start_tiles_to_read,                           // start_tiles_to_read
+                    start_pages_read_in_row,                       // start_pages_read_in_row
+                    start_row_offset,                              // start_row_offset (unused by dim0 kernel)
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1017,8 +1017,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 // Writer RT args
                 std::vector<uint32_t> writer_rt_args = {
-                    intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
-                    output_tensor.buffer()->address(),                           // output_tensor_address
+                    intermediate_tensor.mesh_buffer()->address(),                // intermediate_tensor_address
+                    output_tensor.mesh_buffer()->address(),                      // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                                 // out_ready_fwd_semaphore
@@ -1125,13 +1125,13 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[1] = intermed.mesh_buffer()->address();
                 worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = intermed.mesh_buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.mesh_buffer()->address();
                 worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
                 worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
 
@@ -1231,7 +1231,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     bool fuse_op = fused_op_signaler.has_value();
 
     // Get OP Config, topology config
-    uint32_t page_size = input_tensor.buffer()->page_size();
+    uint32_t page_size = input_tensor.mesh_buffer()->page_size();
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
@@ -1351,7 +1351,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = output_tensor_num_pages / slice_B;
@@ -1442,17 +1442,17 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
     }
 
     std::string sender_reader_kernel_path =
@@ -1509,12 +1509,12 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
     }
 
     std::string sender_writer_kernel_path =
@@ -1627,10 +1627,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
                 // Reader RT args
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),         // input_tensor_address
-                    intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    output_tensor.buffer()->address(),        // output_tensor_address
-                    semaphore.at(0).address(),                // remote transfer sync semaphore
+                    input_tensor.mesh_buffer()->address(),         // input_tensor_address
+                    intermediate_tensor.mesh_buffer()->address(),  // intermediate_tensor_address
+                    output_tensor.mesh_buffer()->address(),        // output_tensor_address
+                    semaphore.at(0).address(),                     // remote transfer sync semaphore
                     fwd_bwd_semaphore_address,
                     is_forward,                    // is_forward
                     is_first_device_in_direction,  // is_first_device_in_direction
@@ -1661,11 +1661,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    output_tensor.buffer()->address(),        // output_tensor_address
-                    virtual_core.x,                           // out_ready_sem_noc0_x
-                    virtual_core.y,                           // out_ready_sem_noc0_y
-                    semaphore.at(0).address(),                // remote transfer sync semaphore
+                    intermediate_tensor.mesh_buffer()->address(),  // intermediate_tensor_address
+                    output_tensor.mesh_buffer()->address(),        // output_tensor_address
+                    virtual_core.x,                                // out_ready_sem_noc0_x
+                    virtual_core.y,                                // out_ready_sem_noc0_y
+                    semaphore.at(0).address(),                     // remote transfer sync semaphore
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
@@ -1752,14 +1752,14 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
-                worker_reader_sender_runtime_args[2] = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[1] = intermed.mesh_buffer()->address();
+                worker_reader_sender_runtime_args[2] = output.mesh_buffer()->address();
                 worker_reader_sender_runtime_args[3] = semaphore.at(0).address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = intermed.mesh_buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.mesh_buffer()->address();
                 worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
 
                 if (barrier_semaphore.has_value()) {

@@ -68,7 +68,7 @@ CCLOpConfig::CCLOpConfig(
         this->page_size = this->tile.get_tile_size(this->df);
         // this->page_size = input_tensors.at(0).buffer()->page_size();
     } else {
-        this->page_size = input_tensors.at(0).buffer()->page_size();
+        this->page_size = input_tensors.at(0).mesh_buffer()->page_size();
     }
 }
 

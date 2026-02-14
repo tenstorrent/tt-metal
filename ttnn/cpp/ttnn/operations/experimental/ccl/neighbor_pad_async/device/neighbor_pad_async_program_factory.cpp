@@ -73,14 +73,14 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 
                 // reader
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_runtime_args[0] = input.buffer()->address();
-                worker_reader_runtime_args[1] = output.buffer()->address();
+                worker_reader_runtime_args[0] = input.mesh_buffer()->address();
+                worker_reader_runtime_args[1] = output.mesh_buffer()->address();
                 worker_reader_runtime_args[9] = operation_attributes.final_semaphore.address();
 
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_runtime_args[0] = input.buffer()->address();
-                worker_writer_runtime_args[1] = output.buffer()->address();
+                worker_writer_runtime_args[0] = input.mesh_buffer()->address();
+                worker_writer_runtime_args[1] = output.mesh_buffer()->address();
                 worker_writer_runtime_args[13] = operation_attributes.final_semaphore.address();
                 worker_writer_runtime_args[17] = operation_attributes.barrier_semaphore.address();
 
@@ -94,12 +94,12 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
             auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.local_writer_kernel_ids[i]);
 
             auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
-            worker_reader_runtime_args[0] = input.buffer()->address();
-            worker_reader_runtime_args[1] = output.buffer()->address();
+            worker_reader_runtime_args[0] = input.mesh_buffer()->address();
+            worker_reader_runtime_args[1] = output.mesh_buffer()->address();
 
             auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
-            worker_writer_runtime_args[0] = input.buffer()->address();
-            worker_writer_runtime_args[1] = output.buffer()->address();
+            worker_writer_runtime_args[0] = input.mesh_buffer()->address();
+            worker_writer_runtime_args[1] = output.mesh_buffer()->address();
         }
     }
 }
@@ -132,7 +132,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     Buffer* output_buffer = tensor_return_value.buffer();
 
     // Get OP Config, topology config
-    uint32_t page_size = tensor_args.input_tensor.buffer()->page_size();
+    uint32_t page_size = tensor_args.input_tensor.mesh_buffer()->page_size();
     uint32_t num_sticks_per_halo_dim = 1;
     for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];
@@ -249,8 +249,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             reader_kernel_ids.push_back(worker_reader_kernel_id);
 
             std::vector<uint32_t> reader_rt_args = {
-                tensor_args.input_tensor.buffer()->address(),  // input_tensor_address
-                tensor_return_value.buffer()->address(),       // output_tensor_address
+                tensor_args.input_tensor.mesh_buffer()->address(),  // input_tensor_address
+                tensor_return_value.mesh_buffer()->address(),       // output_tensor_address
                 (operation_attributes.dim > 0) ? link_offset_start_id * input_halo_dim_size
                                                : outer_dim_size - 1,  // link_offset_start_id
                 (operation_attributes.dim == 0) ? link_offset_start_id : 0,
@@ -282,8 +282,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             writer_kernel_ids.push_back(worker_writer_kernel_id);
 
             std::vector<uint32_t> writer_rt_args = {
-                tensor_args.input_tensor.buffer()->address(),  // input_tensor_address
-                tensor_return_value.buffer()->address(),       // output_tensor_address
+                tensor_args.input_tensor.mesh_buffer()->address(),  // input_tensor_address
+                tensor_return_value.mesh_buffer()->address(),       // output_tensor_address
                 (operation_attributes.dim > 0) ? link_offset_start_id * output_halo_dim_size
                                                : outer_dim_size - 1,  // link_offset_start_id
                 (operation_attributes.dim == 0) ? link_offset_start_id : 0,
@@ -382,8 +382,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 const uint32_t reader_num_sticks_to_read = num_sticks_per_halo_dim;
 
                 std::vector<uint32_t> local_reader_rt_args = {
-                    tensor_args.input_tensor.buffer()->address(),  // input_tensor_address
-                    tensor_return_value.buffer()->address(),       // output_tensor_address (unused)
+                    tensor_args.input_tensor.mesh_buffer()->address(),  // input_tensor_address
+                    tensor_return_value.mesh_buffer()->address(),       // output_tensor_address (unused)
                     reader_total_rows_start,
                     reader_stick_start_id,
                     input_halo_dim_size,
@@ -411,8 +411,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 const uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
 
                 std::vector<uint32_t> local_writer_rt_args = {
-                    tensor_args.input_tensor.buffer()->address(),  // input_tensor_address (unused by writer)
-                    tensor_return_value.buffer()->address(),       // output_tensor_address
+                    tensor_args.input_tensor.mesh_buffer()->address(),  // input_tensor_address (unused by writer)
+                    tensor_return_value.mesh_buffer()->address(),       // output_tensor_address
                     writer_total_rows_start,
                     writer_stick_start_id,
                     input_halo_dim_size,

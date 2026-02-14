@@ -20,7 +20,7 @@ TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgram
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     Program program = CreateProgram();
 

@@ -95,14 +95,15 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     TT_FATAL(tensor.is_sharded(), "Only tensor slices for sharded tensors are able to be lowered to noc reads/writes");
 
     ttnn::ccl::cmd::HostCclCommandNocTransferBurst noc_transfer_burst;
-    noc_transfer_burst.bank_base_address = tensor.buffer()->address();
+    noc_transfer_burst.bank_base_address = tensor.mesh_buffer()->address();
 
     const auto& tensor_slice = std::get<ttnn::ccl::v2::TensorSlice>(command.command_args);
-    auto page_size = tensor.buffer()->page_size();
+    auto page_size = tensor.mesh_buffer()->page_size();
 
     auto coord_lookup = tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup();
 
-    const auto& [pages_per_shard_y, pages_per_shard_x] = tensor.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] =
+        tensor.mesh_buffer()->get_reference_buffer()->shard_spec().shape_in_pages();
     const auto& [shard_grid_start, shard_grid_end] = ttnn::ccl::shard_grid_from_shard_spec(tensor.shard_spec().value());
     const bool shard_grid_transposed = ttnn::ccl::ShardedAddrGenArgBuilder::shard_grid_is_transposed(tensor);
     // shard_grid_height (cores)
@@ -116,7 +117,7 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     // Only page aligned for now since tensor slice is page based at the moment
     // Future work to migrate tensor slice to be element based and then at that
     // point we can
-    switch (tensor.buffer()->buffer_layout()) {
+    switch (tensor.memory_config().memory_layout()) {
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: {
             auto address_generator = build_sharded_addr_gen<TensorMemoryLayout::BLOCK_SHARDED>(
                 coord_lookup,

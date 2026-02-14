@@ -117,11 +117,11 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "writer_moreh_clip_grad_norm_step1.cpp";
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(inputs.at(0).mesh_buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1, reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(tmp_pow_sum.mesh_buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -142,7 +142,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const auto output_addr = tmp_pow_sum.buffer()->address();
+    const auto output_addr = tmp_pow_sum.mesh_buffer()->address();
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
 
     uint32_t tile_offset = tile_offset_of_tmp_pow_sum;
@@ -150,17 +150,17 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
-        const auto input_addr = input.buffer()->address();
+        const auto input_addr = input.mesh_buffer()->address();
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
         const std::array reader_runtime_args{
-            input_addr, num_tiles, *reinterpret_cast<uint32_t*>(&decimal), origin_h, origin_w};
+            (uint32_t)input_addr, num_tiles, *reinterpret_cast<uint32_t*>(&decimal), origin_h, origin_w};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{output_addr, tile_offset};
+        const std::array writer_runtime_args{(uint32_t)output_addr, tile_offset};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute
@@ -202,7 +202,7 @@ void MorehClipGradNormStep1Operation::ProgramFactory::override_runtime_arguments
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.inputs.at(i).buffer()->address();
+            runtime_args[0] = tensor_args.inputs.at(i).mesh_buffer()->address();
             runtime_args[2] = *reinterpret_cast<uint32_t*>(&decimal);
         }
 

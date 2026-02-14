@@ -764,7 +764,7 @@ static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core
             "Bias tensor storage type must be DEVICE but got {}",
             c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+        TT_FATAL(c.is_allocated(), "Operands to matmul need to be allocated in buffers on device!");
     }
 
     tt_metal::IDevice* device = a.device();

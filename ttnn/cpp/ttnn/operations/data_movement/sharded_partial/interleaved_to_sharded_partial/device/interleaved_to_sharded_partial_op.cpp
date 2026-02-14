@@ -37,7 +37,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

@@ -75,8 +75,7 @@ TilizeWithValPaddingMultiCoreShardedFactory::cached_program_t TilizeWithValPaddi
         output_cb_data_format,
         out_sharded ? output.buffer() : nullptr);
 
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     /** reader
      */

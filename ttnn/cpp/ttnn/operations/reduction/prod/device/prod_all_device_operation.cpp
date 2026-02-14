@@ -22,7 +22,7 @@ void ProdAllDeviceOperation::validate_on_program_cache_miss(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands need to be on device! Got storage type: {}",
         input.storage_type());
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         input.layout() == tt::tt_metal::Layout::TILE, "Input Layout must be tilized, got layout: {}", input.layout());
     TT_FATAL(

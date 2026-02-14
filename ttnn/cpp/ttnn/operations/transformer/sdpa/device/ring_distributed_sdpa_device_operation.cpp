@@ -66,15 +66,14 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     for (const auto& tensor : input_tensors) {
         TT_FATAL(
             tensor.storage_type() == StorageType::DEVICE, "Operands to ring-distributed SDPA need to be on device");
-        TT_FATAL(
-            tensor.buffer() != nullptr, "Operands to ring-distributed SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to ring-distributed SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to ring-distributed SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to ring-distributed SDPA must be BF16, BF8, or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to ring-distributed SDPA need to be in DRAM");
     }
 
@@ -101,7 +100,7 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
     if (has_page_table) {
         const auto& page_table_tensor = tensor_args.page_table.value();
         TT_FATAL(page_table_tensor.storage_type() == StorageType::DEVICE, "page_table tensor must be on device");
-        TT_FATAL(page_table_tensor.buffer() != nullptr, "page_table tensor must be allocated in a buffer on device");
+        TT_FATAL(page_table_tensor.is_allocated(), "page_table tensor must be allocated in a buffer on device");
         TT_FATAL(
             page_table_tensor.dtype() == DataType::INT32,
             "page_table tensor must have INT32 dtype. Got {}",

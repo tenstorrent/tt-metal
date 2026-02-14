@@ -30,8 +30,8 @@ RepeatAndInterleaveEltwiseMulProgramFactory::cached_program_t RepeatAndInterleav
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());

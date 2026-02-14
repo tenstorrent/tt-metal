@@ -19,7 +19,7 @@ void MorehGetItemOperation::validate_inputs(
     const auto& index_tensors = tensor_args.index_tensors;
     const auto& output_tensor = tensor_args.output;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.dtype();
     TT_FATAL(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
@@ -28,7 +28,7 @@ void MorehGetItemOperation::validate_inputs(
     uint32_t index_size = index_tensors[0].logical_shape()[-1];
     for (const auto& index_tensor : index_tensors) {
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-        TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+        TT_FATAL(index_tensor.is_allocated(), "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.dtype() == DataType::INT32, "Index tensor must be of type INT32!");
 
         auto index_shape = index_tensor.logical_shape();

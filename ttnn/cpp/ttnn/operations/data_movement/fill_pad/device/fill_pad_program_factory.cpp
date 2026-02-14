@@ -24,8 +24,8 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
+    TT_ASSERT(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
-    TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
     const uint32_t input_element_size_bytes = detail::data_type_to_size.at(input_tensor.dtype());
     const uint32_t cb_page_size = (input_element_size_bytes * tt::constants::FACE_HEIGHT) + sizeof(uint16_t);

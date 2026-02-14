@@ -102,7 +102,7 @@ NLPCreateQKVHeadsDecodeShardedProgramFactory::cached_program_t NLPCreateQKVHeads
             .set_globally_allocated_address(*output[2].buffer());
     auto cb_v_output = CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_base_addr = input_tensor.mesh_buffer()->address();
 
     // cores for q
     uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
@@ -209,7 +209,7 @@ NLPCreateQKVHeadsDecodeShardedProgramFactory::cached_program_t NLPCreateQKVHeads
         const auto& core = q_cores_vector[i];
         std::vector<uint32_t> q_reader_runtime_args;
         q_reader_runtime_args.reserve(3 + in_num_cores_x + in_num_cores_y);
-        q_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
+        q_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().mesh_buffer()->address() : 0, i};
         q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
 
@@ -222,7 +222,8 @@ NLPCreateQKVHeadsDecodeShardedProgramFactory::cached_program_t NLPCreateQKVHeads
             const auto& core = k_cores_vector[i];
             std::vector<uint32_t> k_reader_runtime_args;
             k_reader_runtime_args.reserve(3 + in_num_cores_x + in_num_cores_y);
-            k_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
+            k_reader_runtime_args = {
+                q_start_addr, use_batch_offset ? batch_offset.value().mesh_buffer()->address() : 0, i};
             k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
             k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
 
@@ -281,19 +282,19 @@ void NLPCreateQKVHeadsDecodeShardedProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
     UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
 
-    uint32_t q_base_addr = tensor_args.input_tensor.buffer()->address();
+    uint32_t q_base_addr = tensor_args.input_tensor.mesh_buffer()->address();
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < q_num_cores; ++i) {
         const auto& core = q_cores_vector[i];
         auto& runtime_args = GetRuntimeArgs(program, q_reader_kernel_id, core);
         runtime_args[0] = q_start_addr;
-        runtime_args[1] = use_batch_offset ? tensor_args.batch_offset.value().buffer()->address() : 0;
+        runtime_args[1] = use_batch_offset ? tensor_args.batch_offset.value().mesh_buffer()->address() : 0;
         runtime_args[2] = i;
 
         auto& runtime_args_writer = GetRuntimeArgs(program, q_writer_kernel_id, core);
         runtime_args_writer[0] = q_start_addr;
-        runtime_args_writer[1] = use_batch_offset ? tensor_args.batch_offset.value().buffer()->address() : 0;
+        runtime_args_writer[1] = use_batch_offset ? tensor_args.batch_offset.value().mesh_buffer()->address() : 0;
         runtime_args_writer[2] = i;
     }
 
@@ -302,12 +303,12 @@ void NLPCreateQKVHeadsDecodeShardedProgramFactory::override_runtime_arguments(
             const auto& core = k_cores_vector[i];
             auto& runtime_args = GetRuntimeArgs(program, k_reader_kernel_id, core);
             runtime_args[0] = q_start_addr;
-            runtime_args[1] = use_batch_offset ? tensor_args.batch_offset.value().buffer()->address() : 0;
+            runtime_args[1] = use_batch_offset ? tensor_args.batch_offset.value().mesh_buffer()->address() : 0;
             runtime_args[2] = i;
 
             auto& runtime_args_writer = GetRuntimeArgs(program, k_writer_kernel_id, core);
             runtime_args_writer[0] = q_start_addr;
-            runtime_args_writer[1] = use_batch_offset ? tensor_args.batch_offset.value().buffer()->address() : 0;
+            runtime_args_writer[1] = use_batch_offset ? tensor_args.batch_offset.value().mesh_buffer()->address() : 0;
             runtime_args_writer[2] = i;
         }
     }

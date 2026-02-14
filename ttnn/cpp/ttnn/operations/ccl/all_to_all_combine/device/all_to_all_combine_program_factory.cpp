@@ -95,7 +95,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& mapping_spec = mapping_tensor.tensor_spec();
     const auto& metadata_spec = metadata_tensor.tensor_spec();
 
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
 
     const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
@@ -191,9 +191,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mapping_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(metadata_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -230,7 +230,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
@@ -263,9 +263,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_config);
 
     std::vector<uint32_t> reader_runtime_args = {
-        mapping_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        input_tensor.buffer()->address(),
+        mapping_tensor.mesh_buffer()->address(),
+        metadata_tensor.mesh_buffer()->address(),
+        input_tensor.mesh_buffer()->address(),
         0,
         tokens_per_device,
     };
@@ -275,7 +275,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
     for (const auto& sender_core : sender_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(),
+            output_tensor.mesh_buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
@@ -331,11 +331,11 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
 
-            reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
-            reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
-            reader_runtime_args.at(2) = tensor_args.input_tensor.buffer()->address();
+            reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->address();
 
-            writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
+            writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->address();
             writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
         }

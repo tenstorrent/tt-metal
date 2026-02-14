@@ -231,9 +231,9 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     tt::tt_metal::CreateCircularBuffer(
         program, output_tensor.memory_config().shard_spec()->grid, cb_batch_offset_config_reader);
 
-    uint32_t q_base_addr = q_output_tensor.buffer()->address();
-    uint32_t k_base_addr = k_output_tensor.buffer()->address();
-    uint32_t v_base_addr = v_output_tensor.buffer()->address();
+    uint32_t q_base_addr = q_output_tensor.mesh_buffer()->address();
+    uint32_t k_base_addr = k_output_tensor.mesh_buffer()->address();
+    uint32_t v_base_addr = v_output_tensor.mesh_buffer()->address();
 
     // cores for q
     const uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
@@ -318,13 +318,13 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     }
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages =
         input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / tt::constants::TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
-    const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
+    const auto output_tensor_num_pages = output_tensor.mesh_buffer()->num_pages();
     const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages =
@@ -508,7 +508,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         reduction_cb_index,
@@ -526,7 +526,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto reduction_reader_kernel_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -582,7 +582,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         q_base_addr,
         k_base_addr,
         v_base_addr,
-        batch_offset_tensor.buffer()->address(),
+        batch_offset_tensor.mesh_buffer()->address(),
         0,
         output_tensor_shard_num_pages};
     reader_writer_runtime_args_template.insert(
@@ -671,11 +671,11 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
+            input_tensor.mesh_buffer()->address(),  // tensor_address0
+            input_tensor_shard_num_pages,           // num_tiles_per_core
+            worker_num_tiles_to_read,               // num_tiles_to_read
+            input_first_core_tile_start_offset,     // first_core_tile_start_offset
+            input_tensor_cores_x.size(),            // num_cores
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -808,10 +808,10 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
     const auto& k_output = tensor_return_value.k;
     const auto& v_output = tensor_return_value.v;
 
-    auto q_base_addr = q_output.buffer()->address();
-    auto k_base_addr = k_output.buffer()->address();
-    auto v_base_addr = v_output.buffer()->address();
-    auto batch_base_addr = batch_tensor.buffer()->address();
+    auto q_base_addr = q_output.mesh_buffer()->address();
+    auto k_base_addr = k_output.mesh_buffer()->address();
+    auto v_base_addr = v_output.mesh_buffer()->address();
+    auto batch_base_addr = batch_tensor.mesh_buffer()->address();
 
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(mesh_coord_range);
@@ -824,7 +824,7 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input.mesh_buffer()->address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[1] = operation_attributes.semaphore.address();

@@ -168,10 +168,10 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_return_value.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
@@ -264,7 +264,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             program,
             reader_kernel_id,
             core,
-            {tensor_args.input.buffer()->address(),
+            {tensor_args.input.mesh_buffer()->address(),
              num_reduce_input_tile,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset,
@@ -276,7 +276,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             program,
             writer_kernel_id,
             core,
-            {tensor_return_value.buffer()->address(),
+            {tensor_return_value.mesh_buffer()->address(),
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset});
 

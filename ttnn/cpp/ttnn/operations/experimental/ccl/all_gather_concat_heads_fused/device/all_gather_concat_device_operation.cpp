@@ -23,8 +23,8 @@ AllGatherConcatDeviceOperation::program_factory_t AllGatherConcatDeviceOperation
 void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
-    const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
+    const auto& page_size = input_tensor.mesh_buffer()->page_size();
+    const auto input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -33,7 +33,7 @@ void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but is {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,

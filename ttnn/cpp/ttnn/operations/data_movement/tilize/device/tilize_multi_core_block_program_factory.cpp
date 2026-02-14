@@ -124,8 +124,8 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     }
 
     Buffer* src0_buffer = a.buffer();
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;

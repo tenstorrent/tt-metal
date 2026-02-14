@@ -99,12 +99,12 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     if (output.layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
     } else {
-        output_page_size = output.buffer()->page_size();
+        output_page_size = output.mesh_buffer()->page_size();
     }
     if (stats.value().layout() == Layout::TILE) {
         stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats_data_format);
     } else {
-        stats_page_size = stats.value().buffer()->page_size();
+        stats_page_size = stats.value().mesh_buffer()->page_size();
     }
 
     size_t num_targets_forward = 0;
@@ -237,7 +237,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             storage_core_noc_y.back());
     }
 
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().mesh_buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -997,9 +997,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
-            semaphore.address(),               // out_ready_sem_bank_addr (absolute address)
-            out_ready_sem_wait_value,          // out_ready_sem_wait_value
-            stats.value().buffer()->address()  // tensor_address0
+            semaphore.address(),                    // out_ready_sem_bank_addr (absolute address)
+            out_ready_sem_wait_value,               // out_ready_sem_wait_value
+            stats.value().mesh_buffer()->address()  // tensor_address0
         };
 
         if (i == 0) {
@@ -1265,7 +1265,7 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
         auto& writer_receiver_args_by_core = shared_vars.num_none_all_to_all_workers > 0
                                                  ? GetRuntimeArgs(program, shared_vars.writer_mcast_receiver_kernels_id)
                                                  : writer_sender_args_by_core;
-        const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
+        const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().mesh_buffer()->address() : 0;
 
         for (uint32_t i = 0; i < shared_vars.cores.size(); ++i) {
             const CoreCoord& core = shared_vars.cores[i];
@@ -1274,13 +1274,13 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
             if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
                 auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
                 runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[10] = stats_tensor.value().mesh_buffer()->address();
                 // runtime_args[0] holds the start of the post arguments, apply that offset
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
                 auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                 runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[10] = stats_tensor.value().mesh_buffer()->address();
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             }
         }

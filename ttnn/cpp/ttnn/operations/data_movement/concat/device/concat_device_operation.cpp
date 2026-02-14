@@ -69,7 +69,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
 
     for (int i = 0; i < input_tensors.size(); i++) {
         const Tensor& in_ref = input_tensors[i];
-        TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
+        TT_FATAL(in_ref.is_allocated(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.layout() == first_input.layout(), "All Tensors should have same layouts.");

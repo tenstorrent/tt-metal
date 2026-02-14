@@ -33,7 +33,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be on device!");
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr && cache_tensor.buffer() != nullptr,
+        input_tensor.is_allocated() && cache_tensor.is_allocated(),
         "Operands to update_cache need to be allocated in buffers on device!");
 
     // Layout and data type validation
@@ -119,7 +119,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 update_idxs_tensor_val.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Expect update_idxs to be HEIGHT SHARDED if sharded");
             TT_FATAL(
-                update_idxs_tensor_val.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+                update_idxs_tensor_val.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
                 "Expect update_idxs to have buffer type L1 if sharded");
             num_cores_cur_pos = update_idxs_tensor_val.padded_shape()[0];
             num_indices = update_idxs_tensor_val.logical_shape()[1];
@@ -128,7 +128,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 update_idxs_tensor_val.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Expect update_idxs to be DRAM INTERLEAVED");
             TT_FATAL(
-                update_idxs_tensor_val.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                update_idxs_tensor_val.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Expect update_idxs to have buffer type DRAM");
             num_cores_cur_pos = 0;
             num_indices = update_idxs_tensor_val.padded_shape()[0];

@@ -197,15 +197,15 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta ? beta->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{mean_has_value, rstd_has_value, block_size};
-    tt::tt_metal::TensorAccessorArgs(output->buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output->mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(rstd_as_tensor ? rstd_as_tensor->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(rstd_as_tensor ? rstd_as_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
@@ -321,13 +321,13 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     } e{};
     e.f = eps;  // epsilon
 
-    const auto input_addr = input.buffer()->address();
+    const auto input_addr = input.mesh_buffer()->address();
     const auto output_addr = output->buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
-    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
-    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
-    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma.value().mesh_buffer()->address() : 0;
+    const auto beta_addr = beta_has_value ? beta.value().mesh_buffer()->address() : 0;
+    const auto mean_addr = mean_has_value ? mean.value().mesh_buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd.value().mesh_buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

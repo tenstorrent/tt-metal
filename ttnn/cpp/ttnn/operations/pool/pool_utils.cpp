@@ -535,7 +535,7 @@ void validate_input_params(
 
 uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
     const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
-    const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    const uint32_t alignment = tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                    ? tt::tt_metal::hal::get_dram_alignment()
                                    : tt::tt_metal::hal::get_l1_alignment();
     return tt::round_up(stick_nbytes, alignment);

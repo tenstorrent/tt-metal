@@ -15,8 +15,8 @@ void DeepseekGroupedGateDeviceOperation::validate_on_program_cache_miss(
     // Basic validation
     TT_FATAL(scores.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(bias.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
-    TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
-    TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
+    TT_FATAL(scores.is_allocated(), "Scores tensor must be allocated");
+    TT_FATAL(bias.is_allocated(), "Bias tensor must be allocated");
 
     TT_FATAL(scores.dtype() == DataType::BFLOAT16, "Scores tensor must be BFLOAT16");
     TT_FATAL(scores.layout() == Layout::TILE, "Scores tensor must be TILE layout");

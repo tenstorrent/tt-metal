@@ -65,8 +65,8 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
         (std::uint32_t)src0_cb_index, row_width, num_cores_total, datum_size};
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src1_cb_index, single_tile_size};
 
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -92,10 +92,10 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
         });
 
     // Calculate runtime arguments for reader kernel
-    uint32_t src_addr = input.buffer()->address();
+    uint32_t src_addr = input.mesh_buffer()->address();
     uint32_t height_per_core = input.logical_shape()[0] / TILE_HEIGHT;
 
-    uint32_t dst_addr = output.buffer()->address();
+    uint32_t dst_addr = output.mesh_buffer()->address();
     uint32_t core_idx = 0;
 
     // Set per-core writer args based on tile responsibility

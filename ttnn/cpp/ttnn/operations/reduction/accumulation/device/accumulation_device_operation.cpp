@@ -40,7 +40,7 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "ttnn accumulation operations (cumprod, cumsum) require to be allocated in buffers on the device. "
         "The buffer is null.");
 

@@ -74,7 +74,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     std::map<std::string, std::string> writer_defines;
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_c_large.cpp",
@@ -82,7 +82,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         reader_ct_args,
         reader_defines);
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_c_large.cpp",
@@ -140,10 +140,10 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         }
 
         std::vector<uint32_t> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            input.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         std::vector<uint32_t> writer_args = {
-            output.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+            output.mesh_buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
@@ -168,11 +168,11 @@ void MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::override_runtime_argument
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
+            runtime_args[0] = tensor_args.input.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output.buffer()->address();
+            runtime_args[0] = output.mesh_buffer()->address();
         }
     }
 }

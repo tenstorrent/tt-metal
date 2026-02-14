@@ -109,7 +109,7 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
         });
 
     std::vector<uint32_t> common_runtime_args = {
-        input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+        input.mesh_buffer()->address(), output.mesh_buffer()->address(), num_shards, shard_id_stride};
     SetCommonRuntimeArgs(program, brisc_kernel_id, common_runtime_args);
     SetCommonRuntimeArgs(program, ncrisc_kernel_id, common_runtime_args);
 
@@ -132,7 +132,7 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
         std::vector<uint32_t> common_runtime_args = {
-            input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+            input.mesh_buffer()->address(), output.mesh_buffer()->address(), num_shards, shard_id_stride};
         auto& common_runtime_args_brisc = GetCommonRuntimeArgs(cached_program.program, brisc_kernel_id);
         auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(cached_program.program, ncrisc_kernel_id);
         for (size_t i = 0; i < common_runtime_args.size(); i++) {
@@ -174,7 +174,7 @@ void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
     auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
     std::vector<uint32_t> common_runtime_args = {
-        input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+        input.mesh_buffer()->address(), output.mesh_buffer()->address(), num_shards, shard_id_stride};
     auto& common_runtime_args_brisc = GetCommonRuntimeArgs(program, brisc_kernel_id);
     auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(program, ncrisc_kernel_id);
     for (size_t i = 0; i < common_runtime_args.size(); i++) {

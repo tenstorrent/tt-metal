@@ -89,9 +89,9 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args{packed_scaler_value};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(bias_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
@@ -161,7 +161,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
             program,
             reader_kernel_id,
             core,
-            {output_grad.buffer()->address(),
+            {output_grad.mesh_buffer()->address(),
              num_tiles,
              Wt,
              num_cols_per_core,
@@ -172,7 +172,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
              static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
 
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {bias_grad.buffer()->address(), num_cols_per_core, tile_offset});
+            program, writer_kernel_id, core, {bias_grad.mesh_buffer()->address(), num_cols_per_core, tile_offset});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(

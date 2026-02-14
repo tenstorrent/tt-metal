@@ -164,7 +164,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -187,8 +187,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         a.storage_type() == tt::tt_metal::StorageType::DEVICE && b.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -290,7 +289,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         num_blocks_output_w,
         num_blocks_weight_w);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_FATAL(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
@@ -548,7 +547,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer())
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_tensor.mesh_buffer())
             .append_to(activation_kernel_compile_args);
     }
 
@@ -556,8 +555,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);
     }
 
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_buffer()).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->mesh_buffer() : nullptr).append_to(weights_kernel_compile_args);
 
     auto act_kernel_id = CreateKernel(
         program,
@@ -605,7 +604,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
     uint32_t bias_base_address = 0;
     if (bias) {
-        bias_base_address = bias.value().buffer()->address();
+        bias_base_address = bias.value().mesh_buffer()->address();
     }
     auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
     auto total_num_cores = all_reader_cores.size();
@@ -633,7 +632,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
                 weights_kernel_id,
                 CoreCoord(core_x, core_y),
                 {core_index * weight_block_w_ntiles,
-                 b.buffer()->address(),
+                 b.mesh_buffer()->address(),
                  bias_base_address,
                  (uint32_t)(core_index < output_num_cores)});
         }
@@ -673,7 +672,7 @@ void Conv2dWidthShardedProgramFactory::override_runtime_arguments(
         auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
         this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
         if (shared_variables.has_bias) {
-            this_core_weights_kernel_runtime_args[2] = tensor_args.bias.value().buffer()->address();
+            this_core_weights_kernel_runtime_args[2] = tensor_args.bias.value().mesh_buffer()->address();
         }
     }
 

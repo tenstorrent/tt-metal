@@ -96,14 +96,14 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {Ht, Wt};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
     }
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const auto* const reader_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
     const auto* const writer_kernel_file{
@@ -166,7 +166,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {input.mesh_buffer()->address(),
              (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
              num_cols_read % Wt,
              num_cols_per_core,
@@ -177,7 +177,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
             writer_kernel_id,
             core,
             {
-                output.buffer()->address(),
+                output.mesh_buffer()->address(),
                 num_cols_per_core,  // number of tiles to write
                 num_cols_read       // output tile start index
             });

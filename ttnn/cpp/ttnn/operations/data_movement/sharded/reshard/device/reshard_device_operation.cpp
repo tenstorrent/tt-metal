@@ -67,11 +67,11 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 bool has_padding = false;
-                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
+                CoreCoord input_shard_grid = input_tensor.shard_spec().value().grid.ranges()[0].grid_size();
                 CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
                 uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
                 uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
-                uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
+                uint32_t input_shard_width = input_tensor.shard_spec().value().shape[1];
                 uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
                 has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
                 has_padding =
@@ -87,7 +87,7 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
-    auto input_page_size = input_tensor.buffer()->page_size();
+    auto input_page_size = input_tensor.mesh_buffer()->page_size();
     auto output_page_size = output_tensor_spec.compute_page_size_bytes();
 
     TT_FATAL(
@@ -115,7 +115,7 @@ void ReshardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
 
     if (tensor_args.preallocated_output.has_value()) {

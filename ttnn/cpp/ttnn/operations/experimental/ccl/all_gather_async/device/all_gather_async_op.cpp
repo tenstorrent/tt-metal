@@ -19,7 +19,7 @@ void AllGatherAsync::validate_with_output_tensors(
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
-    const auto& page_size = input_tensors[0].buffer()->page_size();
+    const auto& page_size = input_tensors[0].mesh_buffer()->page_size();
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
@@ -29,7 +29,7 @@ void AllGatherAsync::validate_with_output_tensors(
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,

@@ -119,8 +119,8 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
         tt::tt_metal::SetRuntimeArgs(
             program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
-        auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().buffer()->address() : 0;
-        auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().buffer()->address() : 0;
+        auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().mesh_buffer()->address() : 0;
+        auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().mesh_buffer()->address() : 0;
         tt::tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel_id,

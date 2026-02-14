@@ -33,7 +33,7 @@ bool can_deallocate(const Tensor& input_tensor) {
 static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
-    auto input_address = input_tensor.buffer()->address();
+    auto input_address = input_tensor.mesh_buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     if (not can_deallocate(input_tensor)) {
@@ -60,7 +60,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to
     // reallocate at lower addresses If the tensor is not allocated in a new address, there is no need to move the data
-    if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
+    if (move_within_same_mem_space and input_address == output_tensor.mesh_buffer()->address()) {
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
@@ -70,10 +70,11 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks =
+        input_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
-        output_tensor.buffer()->page_size(),
+        output_tensor.mesh_buffer()->page_size(),
         num_banks,
         output_tensor.buffer()->alignment());
 
@@ -82,16 +83,19 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
+        output_tensor.buffer()->size(),
+        output_tensor.mesh_buffer()->page_size(),
+        num_l1_banks,
+        hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {
             // If DRAM, inverse logic because memory is allocated bottom up
             case tt::tt_metal::BufferType::DRAM: {
-                non_overlap = output_tensor.buffer()->address() + size_per_bank <= input_address;
+                non_overlap = output_tensor.mesh_buffer()->address() + size_per_bank <= input_address;
             } break;
             case tt::tt_metal::BufferType::L1: {
-                non_overlap = input_address + size_per_bank <= output_tensor.buffer()->address();
+                non_overlap = input_address + size_per_bank <= output_tensor.mesh_buffer()->address();
             } break;
             default: break;
         }
@@ -99,7 +103,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 
     bool fits_in_cb =
         (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
-        (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
+        (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.mesh_buffer()->address()
                                                                          : output_tensor.device()->l1_size_per_core());
 
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
@@ -115,7 +119,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
-    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
+    [[maybe_unused]] auto input_address = input_tensor.mesh_buffer()->address();
     if (not can_deallocate(input_tensor)) {
         TT_FATAL(
             false,
@@ -142,7 +146,7 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
-    if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
+    if (input_tensor.mesh_buffer()->address() == output_tensor.mesh_buffer()->address()) {
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",

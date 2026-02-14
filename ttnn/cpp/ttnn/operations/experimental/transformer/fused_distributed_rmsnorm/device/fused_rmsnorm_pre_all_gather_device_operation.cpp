@@ -32,7 +32,7 @@ void FusedRMSNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", tensor.dtype());
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
+    TT_FATAL(tensor.is_allocated(), "Input tensor must be allocated in device buffers (buffer is null)");
 }
 
 TensorSpec FusedRMSNormPreAllGatherDeviceOperation::compute_output_specs(

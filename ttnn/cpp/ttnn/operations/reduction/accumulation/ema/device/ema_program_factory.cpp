@@ -102,10 +102,10 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
     // Compile time args for the kernels
     // ---------------------------------
     std::vector<uint32_t> reader_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_args);
 
     std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_args);
 
     std::vector<uint32_t> compute_compile_args = {
         total_batch_channel_tiles_per_core,
@@ -188,8 +188,8 @@ void EmaProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = tensor_return_value.buffer()->address();
+    auto src_buffer_address = tensor_args.input.mesh_buffer()->address();
+    auto dst_buffer_address = tensor_return_value.mesh_buffer()->address();
 
     // Update buffer addresses for all cores
     for (const auto& range : shared_variables.all_cores.ranges()) {

@@ -45,7 +45,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const auto output_padded_shape = output_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to slice_write need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to slice_write need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to slice_write need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",

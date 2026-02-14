@@ -66,12 +66,12 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
     std::vector<uint32_t> reader_compile_time_args{in_cb_id};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
     const std::string reader_file_path = kernels_dir_path + "reader_bernoulli.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_bernoulli.cpp";
     std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
     std::map<std::string, std::string> writer_defines;
@@ -117,7 +117,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), tile_offset, units_per_core};
+        std::vector<uint32_t> reader_runtime_args = {input.mesh_buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // Each core has its own seed to increase the number of generated random numbers
@@ -126,7 +126,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         std::vector<uint32_t> compute_runtime_args = {seed, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
+        std::vector<uint32_t> writer_runtime_args = {output.mesh_buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         tile_offset += units_per_core;
@@ -151,8 +151,8 @@ void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
 
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = output.buffer()->address();
+    const uint32_t input_addr = tensor_args.input.mesh_buffer()->address();
+    const uint32_t output_addr = output.mesh_buffer()->address();
 
     for (int i = 0; i < cores.size(); ++i) {
         {

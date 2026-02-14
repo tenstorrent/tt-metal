@@ -173,12 +173,12 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         topology, coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Tensor Info
-    [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.mesh_buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
-    const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
+    const auto output_tensor_num_pages = output_tensor.mesh_buffer()->num_pages();
     // Get only cores that have actual data
     const auto& output_tensor_original_corerangeset = output_tensor.memory_config().shard_spec()->grid;
     const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
@@ -485,11 +485,11 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
-            input_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,            // num_tiles_to_read
-            input_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),         // num_cores
+            input_tensor.mesh_buffer()->address(),  // tensor_address0
+            input_tensor_shard_num_pages,           // num_tiles_per_core
+            worker_num_tiles_to_read,               // num_tiles_to_read
+            input_first_core_tile_start_offset,     // first_core_tile_start_offset
+            input_tensor_cores_x.size(),            // num_cores
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -617,7 +617,7 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
         for (const auto& core : shared_vars.sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input_tensor.buffer()->address();
+            worker_reader_sender_runtime_args[0] = input_tensor.mesh_buffer()->address();
             // writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[1] = semaphore.address();

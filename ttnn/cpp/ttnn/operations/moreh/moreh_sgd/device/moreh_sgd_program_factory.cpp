@@ -119,16 +119,16 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(param_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad.mesh_buffer()).append_to(reader_compile_time_args);
     if (momentum_buffer_in.has_value()) {
-        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
     }
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(param_out.mesh_buffer()).append_to(writer_compile_time_args);
     if (has_momentum_buffer_out) {
-        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
     }
 
     const auto* const reader_kernel_file =
@@ -193,9 +193,9 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         u_one.f = 1.0f;
 
         std::vector<uint32_t> reader_args = {
-            param_in.buffer()->address(),
-            grad.buffer()->address(),
-            momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0,
+            param_in.mesh_buffer()->address(),
+            grad.mesh_buffer()->address(),
+            momentum_buffer_in.has_value() ? momentum_buffer_in.value().mesh_buffer()->address() : 0,
             num_tiles_per_core,
             tile_offset,
             u_lr.u,
@@ -206,8 +206,8 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         };
 
         std::vector<uint32_t> writer_args = {
-            param_out.buffer()->address(),
-            momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0,
+            param_out.mesh_buffer()->address(),
+            momentum_buffer_out.has_value() ? momentum_buffer_out.value().mesh_buffer()->address() : 0,
             num_tiles_per_core,
             tile_offset,
         };

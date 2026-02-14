@@ -69,7 +69,7 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
             .set_globally_allocated_address(*output[2].buffer());
     auto cb_v_output = CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_base_addr = input_tensor.mesh_buffer()->address();
 
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2
     // of a tile respectively)
@@ -85,7 +85,7 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
         head_tiles,
         1,  // read the first phase
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
@@ -156,7 +156,7 @@ void NLPCreateQKVHeadsDecodeInterleavedProgramFactory::override_runtime_argument
     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
     UpdateDynamicCircularBufferAddress(program, cb_v_output, *dst_buffer_value);
 
-    uint32_t q_base_addr = tensor_args.input_tensor.buffer()->address();
+    uint32_t q_base_addr = tensor_args.input_tensor.mesh_buffer()->address();
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {

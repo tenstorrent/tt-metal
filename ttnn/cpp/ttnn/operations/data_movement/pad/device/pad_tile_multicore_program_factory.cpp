@@ -48,7 +48,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer()->page_size();
     uint32_t multi_buffering_size = 2;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_cb_config =
@@ -69,8 +69,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     tt::tt_metal::CreateCircularBuffer(program, total_cores, pad_val_cb_config);
 
     Buffer* input_buffer = a.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -190,7 +190,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         }
 
         all_runtime_args = {
-            a.buffer()->address(),
+            a.mesh_buffer()->address(),
             num_pages_per_core,
             input_page_offset,
         };
@@ -204,8 +204,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         all_runtime_args.insert(all_runtime_args.end(), output_id_per_dim.begin(), output_id_per_dim.end());
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args);
-        all_runtime_args[0] = output.buffer()->address();  // change input addr to output addr before setting writer
-                                                           // args
+        all_runtime_args[0] = output.mesh_buffer()->address();  // change input addr to output addr before setting
+                                                                // writer args
         all_runtime_args[2] =
             output_page_offset;  // change input page offset to output page offset before setting writer args
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args);

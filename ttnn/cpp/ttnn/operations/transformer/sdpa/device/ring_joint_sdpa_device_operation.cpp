@@ -81,14 +81,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 

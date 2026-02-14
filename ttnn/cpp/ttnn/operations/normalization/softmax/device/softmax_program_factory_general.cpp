@@ -22,11 +22,11 @@ void SoftmaxProgramFactoryGeneral::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+            runtime_args[0] = tensor_args.input_tensor.mesh_buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output_tensor.buffer()->address();
+            runtime_args[0] = output_tensor.mesh_buffer()->address();
         }
     }
 }

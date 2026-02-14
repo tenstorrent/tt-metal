@@ -19,12 +19,11 @@ LlamaAllGatherMatmulAsyncDeviceOperation::select_program_factory(
 void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input0 = tensor_args.input0;
-    const auto& page_size = input0.buffer()->page_size();
+    const auto& page_size = input0.mesh_buffer()->page_size();
 
     TT_FATAL(page_size % input0.buffer()->alignment() == 0, "All Gather Replicate currently requires aligned pages");
     TT_FATAL(input0.storage_type() == StorageType::DEVICE, "Operands to llama_all_gather_matmul need to be on device!");
-    TT_FATAL(
-        input0.buffer() != nullptr, "Operands to llama_all_gather_matmul need to be allocated in buffers on device!");
+    TT_FATAL(input0.is_allocated(), "Operands to llama_all_gather_matmul need to be allocated in buffers on device!");
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input0.device()->compute_with_storage_grid_size().y,

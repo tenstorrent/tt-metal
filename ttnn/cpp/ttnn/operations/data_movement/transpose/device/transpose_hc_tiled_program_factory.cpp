@@ -120,7 +120,7 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     uint32_t sub_tile_line_bytes = 16 * input_tensor.element_size();
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
@@ -145,8 +145,8 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     // check if we need to allocate a scratch buffer

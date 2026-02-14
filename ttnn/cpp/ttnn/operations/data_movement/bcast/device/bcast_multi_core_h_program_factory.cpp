@@ -59,10 +59,10 @@ BcastMultiCoreHProgramFactory::cached_program_t BcastMultiCoreHProgramFactory::c
     const auto [num_cores, all_cores, core_group_1, core_group_2, Ht_per_core_group_1, Ht_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, Ht);
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* src0_buffer = a.buffer();
     Buffer* src1_buffer = b.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_tiles = 2;

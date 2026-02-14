@@ -260,8 +260,8 @@ SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShard
         shard_spec.shape[0],
         TILE_HEIGHT);
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
 
