@@ -564,8 +564,7 @@ def moe_dense_experts_forward_decode_tt(
             ttnn.deallocate(w1, force=False)
             ttnn.deallocate(w3, force=False)
 
-            gate = ttnn.silu(gate)
-            x_ff = gate * up
+            x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
             ttnn.deallocate(gate, force=False)
             ttnn.deallocate(up, force=False)
 
@@ -651,8 +650,7 @@ def moe_dense_experts_forward_decode_tt(
         ttnn.deallocate(w1, force=False)
         ttnn.deallocate(w3, force=False)
 
-        gate = ttnn.silu(gate)
-        x_ff = gate * up
+        x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
 
@@ -788,8 +786,7 @@ def moe_dense_experts_forward_prefill_tt(
         ttnn.deallocate(w3_batch, force=False)
         ttnn.deallocate(x_batch, force=False)
 
-    gate = ttnn.silu(gate)
-    x_ff = ttnn.mul(gate, up, memory_config=memory_config)
+    x_ff = ttnn.mul(gate, up, memory_config=memory_config, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate, force=False)
     ttnn.deallocate(up, force=False)
     if use_fused and skip_defensive_clones:
@@ -1051,8 +1048,7 @@ def moe_packed_experts_forward_prefill_tt(
             ttnn.deallocate(w3_e, force=False)
             ttnn.deallocate(x_packed, force=False)
 
-        gate = ttnn.silu(gate)
-        x_ff = ttnn.mul(gate, up, memory_config=memory_config)
+        x_ff = ttnn.mul(gate, up, memory_config=memory_config, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
         if use_fused and skip_defensive_clones:
@@ -1554,10 +1550,8 @@ def moe_sparse_experts_forward_tt(
             w3_out = ttnn.clone(up_view, memory_config=sparse_mc)
             ttnn.deallocate(w1w3_out, force=False)
 
-        gate = ttnn.silu(w1_out)
+        x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(w1_out, force=False)
-        x_ff = ttnn.mul(gate, w3_out, memory_config=sparse_mc)
-        ttnn.deallocate(gate, force=False)
         ttnn.deallocate(w3_out, force=False)
         # Deferred w1w3_out deallocation: silu/mul consumed the slice views.
         if skip_defensive_clones:
@@ -1593,10 +1587,8 @@ def moe_sparse_experts_forward_tt(
         )
         ttnn.deallocate(expert_input, force=False)
 
-        gate = ttnn.silu(w1_out)
+        x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(w1_out, force=False)
-        x_ff = ttnn.mul(gate, w3_out, memory_config=sparse_mc)
-        ttnn.deallocate(gate, force=False)
         ttnn.deallocate(w3_out, force=False)
 
     # Collapse sparse_matmul rank-6 output into [num_blocks, E, block, moe_intermediate]
