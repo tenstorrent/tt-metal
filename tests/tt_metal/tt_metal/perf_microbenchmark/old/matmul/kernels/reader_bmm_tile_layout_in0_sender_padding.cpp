@@ -106,11 +106,6 @@ void kernel_main() {
             // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even
             // though cmd bufs are different Also, this only works because we are setting VCs statically (using
             // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-            // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be
-            // sent in order they are issued
-            noc_async_writes_flushed();
-#endif
 
             // We should also multicast the flag to destinations
             uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(

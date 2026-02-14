@@ -1517,7 +1517,7 @@ inline void noc_semaphore_set_remote(
         noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
-        write_reg_cmd_buf,
+        write_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr,
         size_bytes,
@@ -1584,7 +1584,7 @@ inline void noc_semaphore_set_multicast(
         noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
-        write_reg_cmd_buf,
+        write_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
@@ -1648,7 +1648,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         noc);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
-        write_reg_cmd_buf,
+        write_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
