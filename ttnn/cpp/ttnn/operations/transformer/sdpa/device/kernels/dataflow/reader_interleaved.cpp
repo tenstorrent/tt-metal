@@ -50,6 +50,7 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
 }
 
 void kernel_main() {
+    DeviceZoneScopedN("SDPA-READER");
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -326,8 +327,10 @@ void kernel_main() {
                     const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                     const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
+                    { DeviceZoneScopedN("SDPA-RD-Q");
                     read_chunk_with_padding<q_tile_bytes>(
                         q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    }
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -350,6 +353,7 @@ void kernel_main() {
                         const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
+                        DeviceZoneScopedN("SDPA-RD-K");
                         // K: either read locally (injector or not participant) or receive from previous core
                         uint32_t cb_k_start_address = 0;
                         bool should_forward_k = false;
@@ -420,6 +424,7 @@ void kernel_main() {
 
                         // Mask read uses NOC read channel — overlaps with in-flight K write
                         if constexpr (use_provided_mask) {
+                            DeviceZoneScopedN("SDPA-RD-MASK");
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             barrier_count = 0;
@@ -457,6 +462,7 @@ void kernel_main() {
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
                         }
 
+                        { DeviceZoneScopedN("SDPA-RD-V");
                         // Complete K forward: flush write and signal receiver
                         if (should_forward_k) {
                             noc_async_writes_flushed();
@@ -538,6 +544,7 @@ void kernel_main() {
                             noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
                             noc_async_writes_flushed();
                             noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                        }
                         }
                     }
                 }

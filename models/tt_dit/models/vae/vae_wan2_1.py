@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
+from tracy import Profiler
 
 import ttnn
 
@@ -18,7 +19,6 @@ from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import bf16_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -49,6 +49,7 @@ class WanAttentionBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -59,25 +60,28 @@ class WanAttentionBlock(Module):
 
         self.norm = RMSNorm(
             embedding_dim=dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.to_qkv = Linear(
             in_features=dim,
             out_features=dim * 3,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.proj = Linear(
             in_features=dim,
             out_features=dim,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -92,14 +96,14 @@ class WanAttentionBlock(Module):
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -130,16 +134,18 @@ class WanAttentionBlock(Module):
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         residual_BTHWC = x_BTHWC
 
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
+                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis, dtype=x_BTHWC.dtype
                 ),
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.height_parallel.mesh_axis
+                    self.parallel_config.height_parallel.mesh_axis,
                 ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
@@ -149,7 +155,10 @@ class WanAttentionBlock(Module):
             x_BTHWC = ttnn.experimental.all_gather_async(
                 x_BTHWC,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                    x_BTHWC.shape,
+                    3,
+                    self.parallel_config.width_parallel.mesh_axis,
+                    dtype=x_BTHWC.dtype,
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -160,33 +169,41 @@ class WanAttentionBlock(Module):
                 cluster_axis=self.parallel_config.width_parallel.mesh_axis,
             )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+
+        padded_h = x_BTHWC.shape[2]
+        if padded_h != logical_h:
             """
             H is padded, so slice it out before attention
             """
-            padded_h = x_BTHWC.shape[2]
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_TND = self.to_qkv(x_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.DataType.FLOAT32 else (8, 8, 8)
+        x_TND = self.to_qkv(
+            x_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
+        )
         q_THNC, k_THNC, v_THNC = ttnn.transformer.split_query_key_value_and_split_heads(
             x_TND, num_heads=1, transpose_key=False
         )
         out_THNC = ttnn.transformer.scaled_dot_product_attention(
-            q_THNC,
-            k_THNC,
-            v_THNC,
+            ttnn.typecast(q_THNC, ttnn.bfloat16) if q_THNC.dtype != ttnn.bfloat16 else q_THNC,
+            ttnn.typecast(k_THNC, ttnn.bfloat16) if k_THNC.dtype != ttnn.bfloat16 else k_THNC,
+            ttnn.typecast(v_THNC, ttnn.bfloat16) if v_THNC.dtype != ttnn.bfloat16 else v_THNC,
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
+        out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
-        out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config)
+        out_TND = self.proj(
+            out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
+        )
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if padded_h != logical_h:
             """
             H should be padded to divide by H parallel factor.
             """
@@ -224,6 +241,7 @@ class WanCausalConv3d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -242,6 +260,7 @@ class WanCausalConv3d(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.dtype = dtype
 
         padding = _ntuple(padding, 3)
         external_padding = list(padding)
@@ -263,20 +282,23 @@ class WanCausalConv3d(Module):
             self.in_channels,
             self.out_channels,
             self.kernel_size,
+            dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if ttnn.float32
+            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0)
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0)
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
@@ -301,12 +323,17 @@ class WanCausalConv3d(Module):
             mask_shape = (1, 1, padded_h, 1, 1)
             mask = torch.ones(mask_shape)
             mask[:, :, logical_h:, :, :] = 0.0
-            mask = bf16_tensor(
+            mapper_dims = [None, None]
+            mapper_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+            mask = ttnn.from_torch(
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
+                ),
             )
             self.mask_cache[key] = mask
         return self.mask_cache[key]
@@ -336,7 +363,7 @@ class WanCausalConv3d(Module):
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -399,11 +426,11 @@ class WanCausalConv3d(Module):
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -421,6 +448,7 @@ class WanResidualBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -430,10 +458,11 @@ class WanResidualBlock(Module):
 
         self.norm1 = RMSNorm(
             embedding_dim=in_dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.conv1 = WanCausalConv3d(
             in_channels=in_dim,
@@ -443,13 +472,15 @@ class WanResidualBlock(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.conv2 = WanCausalConv3d(
             in_channels=out_dim,
@@ -459,6 +490,7 @@ class WanResidualBlock(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         if in_dim != out_dim:
@@ -466,13 +498,16 @@ class WanResidualBlock(Module):
                 in_features=in_dim,
                 out_features=out_dim,
                 mesh_device=mesh_device,
+                dtype=dtype,
             )
         else:
             self.conv_shortcut = None
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if dtype == ttnn.float32
+            else ttnn.MathFidelity.HiFi3,  # Do not use HiFi4 with bfloat16.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -510,7 +545,7 @@ class WanResidualBlock(Module):
             else x_tile_BTHWC
         )
         x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -532,7 +567,7 @@ class WanResidualBlock(Module):
 
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         x_norm_tile_BTHWC = self.norm2(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
-        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)  # NOTE: potential correctness issue
+        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -568,6 +603,7 @@ class WanMidBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -583,6 +619,7 @@ class WanMidBlock(Module):
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                dtype=dtype,
             )
         )
 
@@ -593,6 +630,7 @@ class WanMidBlock(Module):
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    dtype=dtype,
                 )
             )
             resnets.append(
@@ -602,6 +640,7 @@ class WanMidBlock(Module):
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    dtype=dtype,
                 )
             )
 
@@ -639,6 +678,7 @@ class WanConv2d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -654,6 +694,7 @@ class WanConv2d(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.dtype = dtype
 
         padding = _ntuple(padding, 3)
         external_padding = list(padding)
@@ -675,6 +716,7 @@ class WanConv2d(Module):
             self.in_channels,
             self.out_channels,
             self.kernel_size,
+            dtype,
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -688,8 +730,8 @@ class WanConv2d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0)
-        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0)
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
@@ -707,18 +749,23 @@ class WanConv2d(Module):
             mask_shape = (1, 1, padded_h, 1, 1)
             mask = torch.ones(mask_shape)
             mask[:, :, logical_h:, :, :] = 0.0
-            mask = bf16_tensor(
+            mapper_dims = [None, None]
+            mapper_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+            mask = ttnn.from_torch(
                 mask,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
-                shard_dim=2,
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=mapper_dims
+                ),
             )
             self.mask_cache[key] = mask
         return self.mask_cache[key]
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -781,11 +828,11 @@ class WanConv2d(Module):
             stride=self.stride,
             padding=self.internal_padding,
             padding_mode="zeros",
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if logical_h % self.parallel_config.height_parallel.factor != 0:
+        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor != logical_h:
             """
             H is padded to divide by H parallel factor. Must zero out padded portion of H.
             """
@@ -804,6 +851,7 @@ class WanResample(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -822,6 +870,7 @@ class WanResample(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         self.is_upsample = "upsample" in mode
@@ -837,6 +886,7 @@ class WanResample(Module):
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                dtype=dtype,
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -933,6 +983,7 @@ class WanUpBlock(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -956,6 +1007,7 @@ class WanUpBlock(Module):
                     mesh_device=mesh_device,
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
+                    dtype=dtype,
                 )
             )
             current_dim = out_dim
@@ -969,6 +1021,7 @@ class WanUpBlock(Module):
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                dtype=dtype,
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1005,6 +1058,7 @@ class WanDecoder3d(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -1031,6 +1085,7 @@ class WanDecoder3d(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         # middle blocks
@@ -1040,6 +1095,7 @@ class WanDecoder3d(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         # upsample blocks
@@ -1068,16 +1124,18 @@ class WanDecoder3d(Module):
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
+                dtype=dtype,
             )
             self.up_blocks.append(up_block)
 
         # output blocks
         self.norm_out = RMSNorm(
             embedding_dim=out_dim,
-            norm_eps=1e-6,
+            norm_eps=1e-12,
             norm_elementwise_affine=True,
             bias=False,
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1087,6 +1145,7 @@ class WanDecoder3d(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1118,8 +1177,6 @@ class WanDecoder3d(Module):
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
-        # DEBUG
-        # return x_BTHWC
 
         ## upsamples
         for up_block in self.up_blocks:
@@ -1199,6 +1256,7 @@ class WanDecoder(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.DataType.FLOAT32,
     ) -> None:
         super().__init__()
 
@@ -1217,6 +1275,7 @@ class WanDecoder(Module):
             in_features=aligned_channels(z_dim),
             out_features=aligned_channels(z_dim),
             mesh_device=mesh_device,
+            dtype=dtype,
         )
 
         self.decoder = WanDecoder3d(
@@ -1231,6 +1290,7 @@ class WanDecoder(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         self.cached_conv_count = count_convs(self.decoder)
@@ -1260,9 +1320,19 @@ class WanDecoder(Module):
         for i in range(T):
             # Process one frame at a time
             self._conv_idx = [0]
+
+            if i == 5:
+                profiler = Profiler()
+                profiler.enable()
+
             out_BTHWC, new_logical_h = self.decoder(
                 x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
             )
+
+            if i == 5:
+                ttnn.synchronize_device(self.mesh_device)
+                profiler.disable()
+
             # Channels first
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
             # Trim padding on output channels
@@ -1320,6 +1390,7 @@ class WanEncoder3D(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         # downsample blocks.
@@ -1333,6 +1404,7 @@ class WanEncoder3D(Module):
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
+                        dtype=dtype,
                     )
                 )
                 if scale in attn_scales:
@@ -1342,6 +1414,7 @@ class WanEncoder3D(Module):
                             mesh_device=mesh_device,
                             ccl_manager=ccl_manager,
                             parallel_config=parallel_config,
+                            dtype=dtype,
                         )
                     )
                 in_dim = out_dim
@@ -1356,18 +1429,29 @@ class WanEncoder3D(Module):
                         mesh_device=mesh_device,
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
+                        dtype=dtype,
                     )
                 )
                 scale /= 2.0
 
         # middle blocks
         self.mid_block = WanMidBlock(
-            dim=out_dim, num_layers=1, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+            dim=out_dim,
+            num_layers=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            dtype=dtype,
         )
 
         # output blocks
         self.norm_out = RMSNorm(
-            embedding_dim=out_dim, norm_eps=1e-6, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
+            embedding_dim=out_dim,
+            norm_eps=1e-12,
+            norm_elementwise_affine=True,
+            bias=False,
+            mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.conv_out = WanCausalConv3d(
             out_dim,
@@ -1377,6 +1461,7 @@ class WanEncoder3D(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1470,12 +1555,14 @@ class WanEncoder(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            dtype=dtype,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
             in_features=aligned_channels(self.out_channels),
             out_features=aligned_channels(self.out_channels),
             mesh_device=mesh_device,
+            dtype=dtype,
         )
         self.cached_conv_count = count_convs(self.encoder)
 

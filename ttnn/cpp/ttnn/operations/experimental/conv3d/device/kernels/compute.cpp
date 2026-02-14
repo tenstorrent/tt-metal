@@ -10,6 +10,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -122,6 +123,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 }
 
 void kernel_main() {
+    DeviceZoneScopedN("CONV3D-COMPUTE");
     constexpr uint32_t cb_vol2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_vol2col_tiled = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(2);
@@ -182,10 +184,13 @@ void kernel_main() {
             // Process only assigned C_out blocks
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
                 // Wait for new weights and bias
+                { DeviceZoneScopedN("CONV3D-WAIT-WEIGHTS");
                 cb_wait_front(cb_weight_tiled, weight_tiles);
+                }
 
                 if constexpr (use_bias) {
                     if (is_reducer) {
+                        DeviceZoneScopedN("CONV3D-WAIT-BIAS");
                         cb_wait_front(cb_bias_tiled, matmul_N_t);
                     }
                 }
@@ -195,6 +200,7 @@ void kernel_main() {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             // Tilize row-major patches
+                            { DeviceZoneScopedN("CONV3D-TILIZE");
                             uint32_t patch_rows_left = num_patches;
                             tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
                             for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
@@ -203,16 +209,22 @@ void kernel_main() {
                                 uint32_t current_patch_rows = patch_rows_left < tt::constants::TILE_HEIGHT
                                                                   ? patch_rows_left
                                                                   : tt::constants::TILE_HEIGHT;
+                                { DeviceZoneScopedN("CONV3D-TILIZE-WAIT");
                                 cb_wait_front(cb_vol2col_rm, current_patch_rows);
+                                }
                                 cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
+                                { DeviceZoneScopedN("CONV3D-TILIZE-EXEC");
                                 tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
+                                }
                                 cb_push_back(cb_vol2col_tiled, matmul_K_t);
                                 cb_pop_front(cb_vol2col_rm, current_patch_rows);
                                 patch_rows_left -= current_patch_rows;
                             }
                             tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
+                            }
 
                             // Apply matmul blocks
+                            { DeviceZoneScopedN("CONV3D-MATMUL");
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
                             matmul_blocks(
                                 cb_vol2col_tiled,
@@ -228,6 +240,7 @@ void kernel_main() {
                                 subblock_w,
                                 false /* transpose */);
                             cb_pop_front(cb_vol2col_tiled, patch_tiles);
+                            }
 
                             // Stall on matmul/bias to finish
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
@@ -235,6 +248,7 @@ void kernel_main() {
                             if (!is_reducer) {
                                 // not reducer implies that we are a worker and there are multiple workers in this
                                 // reduction group
+                                DeviceZoneScopedN("CONV3D-WORKER-SYNC");
 
                                 // Signal to writer that we have partial results
                                 cb_reserve_back(cb_reduction_tiled, output_tiles);
@@ -249,6 +263,7 @@ void kernel_main() {
                             } else {
                                 // We are a reducer core. Note that num_workers can be 0, in which case there is no
                                 // reduction.
+                                { DeviceZoneScopedN("CONV3D-REDUCTION");
                                 for (uint32_t i = 0; i < num_workers; i++) {
                                     // Wait for writer to populate reduction buffer
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
@@ -259,13 +274,16 @@ void kernel_main() {
                                     // By freeing the reduction buffer, we signal to the writer that we have used the
                                     // partial results. This is done inside add_block_inplace.
                                 }
+                                }
 
                                 // Apply bias only if we are a reducer, and do it after reduction
                                 if constexpr (use_bias) {
+                                    DeviceZoneScopedN("CONV3D-ADD-BIAS");
                                     add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
 
                                 // After reduction (if any), untilize result
+                                { DeviceZoneScopedN("CONV3D-UNTILIZE");
                                 cb_wait_front(cb_matmul_interm_tiled, output_tiles);
                                 untilize_init(cb_matmul_interm_tiled);
                                 for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
@@ -275,6 +293,7 @@ void kernel_main() {
                                     cb_pop_front(cb_matmul_interm_tiled, matmul_N_t);
                                 }
                                 untilize_uninit(cb_matmul_interm_tiled);
+                                }
                             }
                         }
                     }

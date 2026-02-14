@@ -7,6 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("CONV3D-WRITER");
     constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(1);
     constexpr uint32_t cb_bias_tiled = get_compile_time_arg_val(2);
@@ -80,6 +81,7 @@ void kernel_main() {
                 const uint32_t c_out_offset_t = c_out_block * matmul_N_t;
 
                 // Read weights and bias for this block
+                { DeviceZoneScopedN("CONV3D-RD-WEIGHTS");
                 cb_reserve_back(cb_weight_tiled, weight_tiles);
                 uint32_t weight_write_ptr = get_write_ptr(cb_weight_tiled);
 
@@ -92,9 +94,11 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_weight_tiled, weight_tiles);
+                }
 
                 if constexpr (use_bias) {
                     if (is_reducer) {
+                        DeviceZoneScopedN("CONV3D-RD-BIAS");
                         cb_reserve_back(cb_bias_tiled, matmul_N_t);
                         uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
                         for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
@@ -119,6 +123,7 @@ void kernel_main() {
 
                             if (!is_reducer) {
                                 // I'm a worker.
+                                DeviceZoneScopedN("CONV3D-WR-WORKER");
                                 // Wait for compute to finish
                                 cb_wait_front(cb_reduction_tiled, output_tiles);
 
@@ -137,12 +142,16 @@ void kernel_main() {
                                 cb_push_back(cb_worker_ack_back, 1);
                             } else {
                                 // I'm a reducer.
+                                DeviceZoneScopedN("CONV3D-WR-REDUCER");
+                                { DeviceZoneScopedN("CONV3D-WR-WAIT-WORKERS");
                                 // Wait for all workers to finish
                                 noc_semaphore_wait(local_semaphore_addr_ptr, num_workers);
+                                }
 
                                 // Reset our semaphore
                                 *local_semaphore_addr_ptr = 0;
 
+                                { DeviceZoneScopedN("CONV3D-WR-GATHER");
                                 const uint32_t worker_output_read_ptr = get_read_ptr(cb_matmul_interm_tiled);
                                 for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
                                     // Read data from worker into reduction buffer
@@ -163,8 +172,12 @@ void kernel_main() {
                                         worker_core_xs[worker_idx], worker_core_ys[worker_idx], semaphore_addr);
                                     noc_semaphore_inc(worker_semaphore_noc_addr, 1);
                                 }
+                                }
 
+                                { DeviceZoneScopedN("CONV3D-WR-WAIT-RESULT");
                                 cb_wait_front(cb_matmul_result_rm, output_tiles);
+                                }
+                                { DeviceZoneScopedN("CONV3D-WR-OUTPUT");
                                 uint32_t cb_read_ptr = get_read_ptr(cb_matmul_result_rm);
 
                                 for (uint32_t t = t_block; t < t_block_end; ++t) {
@@ -180,6 +193,7 @@ void kernel_main() {
                                     }
                                 }
                                 noc_async_write_barrier();
+                                }
                                 cb_pop_front(cb_matmul_result_rm, output_tiles);
                             }
                         }

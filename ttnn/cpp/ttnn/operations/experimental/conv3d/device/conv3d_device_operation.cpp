@@ -50,21 +50,34 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     // check row-major
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Activation tensor must be row-major.");
 
-    // input and weight must both be interleaved, bfloat16
+    // input and weight must both be interleaved, bfloat16 or float32
     TT_FATAL(!input_tensor_a.memory_config().is_sharded(), "Activation tensor must be interleaved.");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Activation tensor must be bfloat16.");
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32,
+        "Activation tensor must be bfloat16 or float32. got {}",
+        input_tensor_a.dtype());
 
     const auto& weight_tensor = tensor_args.weight_tensor;
     TT_FATAL(!weight_tensor.memory_config().is_sharded(), "Weight tensor must be interleaved.");
-    TT_FATAL(weight_tensor.dtype() == DataType::BFLOAT16, "Weight tensor must be bfloat16.");
+    TT_FATAL(
+        weight_tensor.dtype() == DataType::BFLOAT16 || weight_tensor.dtype() == DataType::FLOAT32,
+        "Weight tensor must be bfloat16 or float32. got {}",
+        weight_tensor.dtype());
     TT_FATAL(weight_tensor.layout() == Layout::TILE, "Weight tensor must be tile.");
+    TT_FATAL(
+        input_tensor_a.dtype() == weight_tensor.dtype(),
+        "Input and weight tensors must have the same dtype. got {} vs {}",
+        input_tensor_a.dtype(),
+        weight_tensor.dtype());
 
     if (tensor_args.bias_tensor.has_value()) {
         const auto& bias_tensor = tensor_args.bias_tensor.value();
         TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.layout() == Layout::TILE, "Bias tensor must be tiled.");
         TT_FATAL(
-            bias_tensor.dtype() == DataType::BFLOAT16, "Bias tensor must be bfloat16. got {}", bias_tensor.dtype());
+            bias_tensor.dtype() == DataType::BFLOAT16 || bias_tensor.dtype() == DataType::FLOAT32,
+            "Bias tensor must be bfloat16 or float32. got {}",
+            bias_tensor.dtype());
         TT_FATAL(
             bias_tensor.logical_shape().size() == 2,
             "Bias tensor must have 2 dimensions. got {}",
