@@ -44,6 +44,7 @@ class HostTensor {
      *   functions that operate on a HostTensor than as methods of HostTensor. (Separation of data storage and data
      *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
      */
+    using attribute_type = TensorAttributes<HostStorage>;
 
 public:
     using volumn_type = std::uint64_t;
@@ -63,8 +64,7 @@ public:
      * - Configs are deep copied.
      * - Underlying data has the copy semantics of the HostBuffer
      */
-    HostTensor(const HostTensor& other) :
-        impl(other.impl ? std::make_unique<TensorAttributes>(*other.impl) : nullptr) {}
+    HostTensor(const HostTensor& other) : impl(other.impl ? std::make_unique<attribute_type>(*other.impl) : nullptr) {}
 
     /**
      * Copy assignment operator.
@@ -77,7 +77,7 @@ public:
         if (this == &other) {
             return *this;
         }
-        impl = other.impl ? std::make_unique<TensorAttributes>(*other.impl) : nullptr;
+        impl = other.impl ? std::make_unique<attribute_type>(*other.impl) : nullptr;
         return *this;
     }
 
@@ -109,8 +109,7 @@ public:
 
     // Make this private + the main constructor?
     explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-        impl(std::make_unique<TensorAttributes>(
-            Storage(HostStorage(std::move(buffer))), std::move(spec), std::move(topology))) {}
+        impl(std::make_unique<attribute_type>(HostStorage(std::move(buffer)), std::move(spec), std::move(topology))) {}
 
     /**
      * From original Tensor:
@@ -233,9 +232,7 @@ public:
         return *buffer;
     }
 
-    const DistributedHostBuffer& get_distributed_host_buffer() const {
-        return std::get<HostStorage>(impl->get_storage()).buffer();
-    }
+    const DistributedHostBuffer& get_distributed_host_buffer() const { return impl->get_storage().buffer(); }
 
     bool is_sharded() const {
         // TODO: this is technically divergent from ttnn::Tensor
@@ -294,22 +291,20 @@ public:
 
     // TODO: Remove these after refactoring.
     HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-        impl(std::make_unique<TensorAttributes>(
-            std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    }
 
     // TODO: Does this make sense for HostTensor?
     HostTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        HostTensor result = *this;
-        result.impl = std::make_unique<TensorAttributes>(impl->with_tensor_topology(std::move(tensor_topology)));
-        return result;
+        return HostTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
     }
 
-    const HostStorage& get_storage() const { return std::get<HostStorage>(impl->get_storage()); }
+    const HostStorage& get_storage() const { return impl->get_storage(); }
 
 private:
-    std::unique_ptr<TensorAttributes> impl;
+    std::unique_ptr<attribute_type> impl;
 
-    HostStorage& get_storage() { return std::get<HostStorage>(impl->get_storage()); }
+    HostStorage& get_storage() { return impl->get_storage(); }
 };
 
 }  // namespace tt::tt_metal

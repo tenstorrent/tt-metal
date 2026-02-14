@@ -38,6 +38,8 @@ class MeshDevice;
  */
 class DeviceTensor {
     // TODO: internal constructor
+    using attribute_type = TensorAttributes<DeviceStorage>;
+
 public:
     using volumn_type = std::uint64_t;
 
@@ -50,8 +52,8 @@ public:
 
     // TODO: Close this constructor after refactoring.
     DeviceTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-        impl(std::make_unique<TensorAttributes>(
-            std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
+    }
 
     /**
      * Deallocates any owning device memory.
@@ -71,11 +73,9 @@ public:
      * Deallocate and release owned device memory.
      */
     void deallocate() {
-        // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
         auto& device_storage = get_storage();
         device_storage.mesh_buffer->deallocate();
         device_storage.mesh_buffer.reset();
-        // GraphTracker::instance().track_function_end();
     }
 
     // Getters
@@ -158,7 +158,7 @@ public:
      */
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_storage().mesh_buffer; }
 
-    const DeviceStorage& get_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
+    const DeviceStorage& get_storage() const { return impl->get_storage(); }
 
     // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
     // storage, find a better way to do this.
@@ -167,9 +167,9 @@ public:
     }
 
 private:
-    std::unique_ptr<TensorAttributes> impl;
+    std::unique_ptr<attribute_type> impl;
 
-    DeviceStorage& get_storage() { return std::get<DeviceStorage>(impl->get_storage()); }
+    DeviceStorage& get_storage() { return impl->get_storage(); }
 };
 
 }  // namespace tt::tt_metal
