@@ -378,7 +378,54 @@ class TTLayerNorm:
                 # Retry once without the perf configs to avoid hard-failing the entire pipeline.
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
-                return ttnn.layer_norm(x, **kwargs)
+                try:
+                    return ttnn.layer_norm(x, **kwargs)
+                except Exception:
+                    # Sharded LayerNorm support is runtime-dependent. When it fails, explicitly
+                    # run an interleaved "island" and reshard the output back, rather than
+                    # forcing a CPU fallback in perf/trace runs.
+                    if _ttnn_is_sharded(x):
+                        try:
+                            from .perf_counters import inc_ln_island_interleave, inc_ln_island_reshard
+                        except Exception:  # pragma: no cover
+                            inc_ln_island_interleave = None
+                            inc_ln_island_reshard = None
+
+                        mc_in = None
+                        try:
+                            mc_in = ttnn.get_memory_config(x)
+                        except Exception:
+                            mc_in = None
+
+                        t0 = time.perf_counter()
+                        try:
+                            x_int = ttnn.to_memory_config(
+                                x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+                            )
+                        except TypeError:
+                            x_int = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        if callable(inc_ln_island_interleave):
+                            inc_ln_island_interleave((time.perf_counter() - t0) * 1000.0)
+
+                        y_int = ttnn.layer_norm(x_int, **kwargs)
+
+                        if mc_in is not None:
+                            try:
+                                if mc_in.is_sharded():
+                                    t1 = time.perf_counter()
+                                    try:
+                                        y = ttnn.to_memory_config(
+                                            y_int, memory_config=mc_in, dtype=ttnn.bfloat16
+                                        )
+                                    except TypeError:
+                                        y = ttnn.to_memory_config(y_int, memory_config=mc_in)
+                                    if callable(inc_ln_island_reshard):
+                                        inc_ln_island_reshard((time.perf_counter() - t1) * 1000.0)
+                                    return y
+                            except Exception:
+                                pass
+                        return y_int
+                    raise
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTLayerNorm device path failed and CPU fallback is disabled") from exc
