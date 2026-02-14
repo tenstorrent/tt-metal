@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(sine, APPROX)); }
+ALWI void sin_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(sine, ckernel::sfpu::sine_init, APPROX)); }
 
 // clang-format off
 /**
@@ -38,7 +38,7 @@ ALWI void sin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(cosine, APPROX)); }
+ALWI void cos_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(cosine, ckernel::sfpu::cosine_init, APPROX)); }
 
 // clang-format off
 /**
@@ -84,7 +84,7 @@ ALWI void acosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(tan, APPROX)); }
+ALWI void tan_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(tan, ckernel::sfpu::tangent_init, APPROX)); }
 
 // clang-format off
 /**

@@ -85,10 +85,6 @@ inline void calculate_tangent() {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
     const float P0 = -0x1.92p+0f;       // representable as bf16
     const float P1 = -0x1.fbp-12f;      // representable as fp16
-    const float P2 = -0x1.51p-22f;      // requires fp32
-    const float P3 = -0x1.0b4612p-34f;  // requires fp32
-
-    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -117,8 +113,8 @@ inline void calculate_tangent() {
         sfpi::vFloat a = v + j * P0;
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
         a = a + j * P1;
-        a = a + j * P2;
-        a = a + j * P3;
+        a = a + j * sfpi::vConstFloatPrgm0;
+        a = a + j * sfpi::vConstFloatPrgm1;
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
@@ -158,10 +154,6 @@ inline void calculate_sine() {
     // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
     const float P0 = -0x1.92p+1f;               // representable as bf16
     const float P1 = -0x1.fbp-11f;              // representable as fp16
-    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;      // requires fp32
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;  // requires fp32
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 
     sfpi::vFloat C3, C2, C1, C0;
 
@@ -237,10 +229,6 @@ inline void calculate_cosine() {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
     const float P0 = -0x1.92p+0f;               // representable as bf16
     const float P1 = -0x1.fbp-12f;              // representable as fp16
-    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;      // requires fp32
-    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;  // requires fp32
-
-    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 
     sfpi::vFloat C3, C2, C1, C0;
 
@@ -472,6 +460,33 @@ inline void calculate_sinh() {
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE>
+void sine_init() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
+template <bool APPROXIMATION_MODE>
+void cosine_init() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+}
+
+template <bool APPROXIMATION_MODE>
+void tangent_init() {
+    // P2 and P3 of four-part Cody-Waite reduction by PI/2.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+
+    sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 }
 
 template <bool APPROXIMATION_MODE>
