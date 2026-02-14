@@ -20,7 +20,7 @@ auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); 
 
 RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
@@ -113,7 +113,7 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
 void RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
