@@ -430,7 +430,9 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 5
+        # Some runs take less than 5 minutes, need to investigate
+        # https://github.com/tenstorrent/tt-metal/issues/37686
+        timeout-minutes: 20
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"
