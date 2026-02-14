@@ -339,6 +339,8 @@ def main():
 
     use_tt = bool(args.tt_run)
     effective_dp, effective_batch_size = _resolve_dp_and_batch_size(args, use_tt=use_tt)
+    if use_tt and effective_dp > 1 and str(args.tt_execution_mode).lower() not in ("trace", "trace_2cq"):
+        raise SystemExit("--dp > 1 requires --tt-execution-mode trace or trace_2cq")
 
     # Always build a CPU reference pipeline (the thing we compare to for PCC).
     cfg_cpu = DPTLargeConfig(

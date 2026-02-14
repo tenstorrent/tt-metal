@@ -67,6 +67,7 @@ python -m models.experimental.dpt_large.demo.eval_pcc \
   --tt-run --device wormhole_n300 \
   --image-size 384 \
   --dp 2 --batch-size 2 \
+  --tt-execution-mode trace_2cq \
   --dump-json /tmp/dpt_eval.json
 ```
 
