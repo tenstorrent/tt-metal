@@ -74,12 +74,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.groups == 1, "Groups must be 1. got {}", args.groups);
     // assert padding on T is zero
     TT_FATAL(
-        args.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        args.padding[0],
-        args.padding[1],
-        args.padding[2]);
-    TT_FATAL(
         args.padding_mode == "zeros" || args.padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
         args.padding_mode);
