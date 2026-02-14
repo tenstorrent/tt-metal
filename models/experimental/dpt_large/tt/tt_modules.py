@@ -603,7 +603,7 @@ class TTAttention:
             )
             self._bqkv_tt = ttnn.from_torch(
                 bqkv.unsqueeze(0),
-                dtype=ttnn.bfloat16,
+                dtype=(ttnn.bfloat8_b if hasattr(ttnn, "bfloat8_b") else ttnn.bfloat16),
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
