@@ -779,7 +779,8 @@ class TTMLP:
             # tokens are already sharded (e.g., encoder-wide sharding), first
             # interleave them so we can reshard deterministically for the MLP.
             tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
-            if tokens_shard_mc is not None and _ttnn_is_sharded(x4):
+            incoming_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
+            if incoming_sharded:
                 x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             cfg = getattr(self, "program_config", None)
             # For encoder-wide sharding bring-up, keep the MLP compute in a
@@ -840,7 +841,7 @@ class TTMLP:
                 program_config=ff2_pc,
                 op_name="mlp_ff2",
             )
-            if tokens_shard_mc is not None:
+            if incoming_sharded:
                 # Restore the encoder-wide token sharding spec for residual adds.
                 y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
             if tokens_shard_mc is None and reshardened and _ttnn_is_sharded(y2):
@@ -936,10 +937,28 @@ class TTTransformerBlock:
         )
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
+        # Stage-2 encoder sharding bring-up: when tokens arrive sharded (L1),
+        # some runtimes can hit static circular-buffer vs L1 allocation clashes
+        # for LayerNorm. Convert the block input to an interleaved "island" and
+        # explicitly free the sharded storage to keep L1 pressure low.
+        tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
+        input_was_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x)
+        if input_was_sharded:
+            x_int = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            try:
+                if hasattr(ttnn, "deallocate"):
+                    ttnn.deallocate(x)
+            except Exception:
+                pass
+            x = x_int
+
         h = self.ln1(x)
         h = self.attn(h, **mm_opts)
         x = ttnn.add(x, h)
         h = self.ln2(x)
         h = self.mlp(h, **mm_opts)
         x = ttnn.add(x, h)
+
+        if input_was_sharded:
+            x = ttnn.to_memory_config(x, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
         return x
