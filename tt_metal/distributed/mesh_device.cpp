@@ -239,7 +239,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
     const auto& mpi_context = MetalContext::instance().global_distributed_context();
     distributed_context_ =
-        mpi_context.split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context.rank()));
+        mpi_context.split(distributed::multihost::Color(mesh_id_), distributed::multihost::Key(*mpi_context.rank()));
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
