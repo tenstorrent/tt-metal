@@ -141,6 +141,19 @@ def generate_supported_rank_bindings():
         2: [4],
         3: [2],
     }
+    # Process Rank ID To Tray ID Mapping when spawning 2 processes on a BH Galaxy
+    # Trays 1+2 form the top 4x4 half, trays 3+4 form the bottom 4x4 half
+    BH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
+        0: [1, 3],
+        1: [2, 4],
+    }
+    # Process Rank ID To Tray ID Mapping when spawning 4 processes on a BH Galaxy
+    BH_GLX_QUAD_RANK_TO_TRAY_MAPPING = {
+        0: [1],
+        1: [3],
+        2: [4],
+        3: [2],
+    }
 
     # Rank bindings for Dual Mesh Setup (1 process per mesh)
     DUAL_MESH_RANK_BINDINGS = [
