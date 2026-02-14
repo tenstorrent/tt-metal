@@ -48,7 +48,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(r));
         s = t * a + s;
 
-        // Reciprocal 1/r.
+        // Reciprocal 1/-r.
         const float k0 = 0.3232325017452239990234375f;
         const float k1 = 1.4545459747314453125f;
         const float k2 = 2.121212482452392578125f;
@@ -85,7 +85,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat r = t * a + a;
 
     v_if(i < 0) {
-        // Reciprocal 1/r.
+        // Reciprocal 1/-r.
         const float k0 = 0.3232325017452239990234375f;
         const float k1 = 1.4545459747314453125f;
         const float k2 = 2.121212482452392578125f;
