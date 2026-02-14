@@ -8,66 +8,21 @@
 // Data copy is avoided and reader and writer kernels are not needed.
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 
-#include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <random>
 #include <string_view>
 #include <vector>
 
 using namespace tt::tt_metal;
-
-using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
+using namespace tt::tt_metal::experimental::ez;
 
 struct DistributionConfig {
-    DistributionConfig(TensorMemoryLayout layout, uint32_t num_cores_y, uint32_t num_cores_x) :
-        layout(layout), num_cores_y(num_cores_y), num_cores_x(num_cores_x) {}
-
     TensorMemoryLayout layout;
     uint32_t num_cores_y;
     uint32_t num_cores_x;
 };
-
-std::shared_ptr<distributed::MeshBuffer> MakeShardedL1MeshBufferBFP16(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    size_t size,
-    const DistributionConfig& config,
-    const ShardSpecBuffer& shard_config) {
-    BufferShardingArgs sharding_args = BufferShardingArgs(shard_config, config.layout);
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = tt::constants::TILE_HW * sizeof(bfloat16),
-        .buffer_type = BufferType::L1,
-        .sharding_args = sharding_args,
-    };
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = size,
-    };
-    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-}
-
-CBHandle MakeCircularBufferBFP16(
-    Program& program,
-    const CoreSpec& core,
-    tt::CBIndex cb,
-    uint32_t n_tiles,
-    const std::shared_ptr<distributed::MeshBuffer>& l1_buf) {
-    constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
-    CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
-                                         .set_page_size(cb, tile_size)
-                                         // IMPORTANT: assign L1 buffer address to circular buffer directly so that
-                                         // no extra allocation and data copy
-                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
-    return CreateCircularBuffer(program, core, cb_config);
-}
 
 std::string next_arg(int& i, int argc, char** argv) {
     if (i + 1 >= argc) {
@@ -140,11 +95,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
-
+    DeviceContext ctx(device_id);
     const auto& config = test_configs.at(sharding_type);
 
     // In this example we will distribute 16 tiles (4x4) across 4 cores.
@@ -154,6 +105,7 @@ int main(int argc, char** argv) {
     // Calculate the number of tiles per core in each dimension based on the configuration.
     const uint32_t num_tiles_per_core_x = n_tiles_x / config.num_cores_x;
     const uint32_t num_tiles_per_core_y = n_tiles_y / config.num_cores_y;
+    const uint32_t num_tiles_per_core = num_tiles_per_core_x * num_tiles_per_core_y;
 
     fmt::print(
         "Sharding {}x{} tiles to {}x{} cores in {} mode\n",
@@ -164,29 +116,20 @@ int main(int argc, char** argv) {
         config.layout);
     fmt::print("Each core will handle {}x{} tiles\n\n", num_tiles_per_core_y, num_tiles_per_core_x);
 
-    // Construct the L1 configuration. The configuration is very detailed to enable maximum performance.
     // The cores that the buffer will be sharded across.
     const CoreRange cores(CoreCoord(0, 0), CoreCoord(config.num_cores_y - 1, config.num_cores_x - 1));
-    // The sharing configuration for the buffer
-    ShardSpecBuffer spec(
-        // core_sets: The set of cores to shard the buffer across
-        cores,
-        // shard_shape: The size of each shard in the buffer
-        {uint32_t(num_tiles_per_core_x * tt::constants::TILE_HEIGHT),
-         uint32_t(num_tiles_per_core_y * tt::constants::TILE_WIDTH)},
-        // shard_orientation: The orientation of the shards in the buffer
-        ShardOrientation::ROW_MAJOR,
-        // page_shape: The shape of each page in the buffer (most likely equals to tile size as that's what the compute
-        // engines expect)
-        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-        // tensor2d_shape_in_pages: The shape of the tensor in pages/(tiles)
-        {n_tiles_y, n_tiles_x});
 
-    // Create the input and output buffers that lives on L1(SRAM)
-    size_t size_bytes = n_tiles_y * n_tiles_x * tt::constants::TILE_HW * sizeof(bfloat16);
-    auto a = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
-    auto b = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
-    auto c = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
+    // Create the input and output buffers that live on L1(SRAM), sharded across cores.
+    ShardConfig shard_config{
+        .cores = CoreRangeSet(cores),
+        .shard_shape =
+            {num_tiles_per_core_x * tt::constants::TILE_HEIGHT, num_tiles_per_core_y * tt::constants::TILE_WIDTH},
+        .tensor2d_shape_in_pages = {n_tiles_y, n_tiles_x},
+        .layout = config.layout,
+    };
+    auto a = ctx.sharded_l1_buffer(shard_config);
+    auto b = ctx.sharded_l1_buffer(shard_config);
+    auto c = ctx.sharded_l1_buffer(shard_config);
 
     // Data to fill the input buffers.
     std::mt19937 rng(seed);
@@ -199,40 +142,33 @@ int main(int argc, char** argv) {
         b_data[i] = bfloat16(dist(rng));
     }
 
-    size_t num_tiles_per_core = n_tiles_x * n_tiles_y / CoreRangeSet(cores).num_cores();
-    // Create circular buffers so the compute APIs can access the data.
-    // NOTE: These are special circular buffers that have explicitly set L1 buffer address. As data already fully
-    // resides in L1, we can simply point the circular buffers to the L1 buffers and avoid any extra allocation or data
-    // copy. This is an impotant optimization for performance. But hyper specific to use cases like this one.
-    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, num_tiles_per_core, a);
-    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, num_tiles_per_core, b);
-    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, num_tiles_per_core, c);
+    // Copy data from host to L1 directly.
+    ctx.write(a, a_data);
+    ctx.write(b, b_data);
 
-    // Create the kernel
-    auto compute = CreateKernel(
-        program,
-        "tt_metal/programming_examples/vecadd_sharding/kernels/add_sharding.cpp",
-        cores,
-        ComputeConfig{
-            .math_approx_mode = false,
-            // pass in compile time arguments
-            .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}});
+    // Build the program: 3 L1-backed circular buffers + compute kernel.
+    // Because data is already in L1 via sharding, no reader/writer kernels are needed.
+    // The CBs point directly at the sharded L1 buffer memory (no extra allocation or copy).
+    auto program =
+        ProgramBuilder(cores)
+            .cb(tt::CBIndex::c_0, a, num_tiles_per_core)
+            .cb(tt::CBIndex::c_1, b, num_tiles_per_core)
+            .cb(tt::CBIndex::c_2, c, num_tiles_per_core)
+            .compute(
+                "tt_metal/programming_examples/vecadd_sharding/kernels/add_sharding.cpp",
+                ComputeConfig{
+                    .math_approx_mode = false,
+                    .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}})
+            .runtime_args({num_tiles_per_core})
+            .done()
+            .build();
 
-    // copy data from host to L1 directly
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    EnqueueWriteMeshBuffer(cq, a, a_data, false);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false);
-
-    // Setup arguments and run the program.
-    SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    ctx.run(std::move(program));
 
     fmt::print("Kernel execution finished. Reading results...\n");
 
     // Read the output buffer.
-    std::vector<bfloat16> c_data;
-    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
+    auto c_data = ctx.read<bfloat16>(c);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
@@ -244,7 +180,7 @@ int main(int argc, char** argv) {
     for ([[maybe_unused]] auto& core : cores) {
         const auto core_offset = core_idx * element_per_core;
         fmt::print("Core {}:\n", core_idx);
-        for (int index = 0; index < print_per_core; index++) {
+        for (size_t index = 0; index < print_per_core; index++) {
             const auto i = core_offset + index;
             fmt::print(
                 "index {}: {} + {} = {}\n",
@@ -274,7 +210,6 @@ int main(int argc, char** argv) {
         fmt::print(stderr, "Some results did not match expected values.\n");
     }
 
-    // Finally, we close the device.
-    mesh_device->close();
+    // DeviceContext closes the device automatically when it goes out of scope.
     return 0;
 }
