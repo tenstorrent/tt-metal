@@ -5,10 +5,8 @@
 #pragma once
 
 #include <cstdint>
-#if __has_include("chlkc_unpack_data_format.h")
-#include "chlkc_pack_data_format.h"
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
+#if __has_include("chlkc_descriptors.h")
+#include "chlkc_descriptors.h"
 #define DATA_FORMATS_DEFINED
 #endif
 
