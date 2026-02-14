@@ -36,6 +36,7 @@ void py_module(nb::module_& mod) {
     auto unary_with_param = static_cast<nb::class_<UnaryWithParam>>(mod.attr("UnaryWithParam"));
     unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())
+        .def(nb::init<UnaryOpType, float, float>())
         .def(
             "__init__",
             [](UnaryWithParam* t, std::pair<UnaryOpType, float> arg) { new (t) UnaryWithParam{arg.first, arg.second}; })
@@ -54,9 +55,8 @@ void py_module(nb::module_& mod) {
         .def("__repr__", [](const UnaryWithParam& param) {
             if (param.params.empty()) {
                 return fmt::format("UnaryWithParam(op_type={})", param.op_type);
-            }                 return fmt::format(
-                    "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
-
+            }
+            return fmt::format("UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
         });
 
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
@@ -71,8 +71,11 @@ void py_module(nb::module_& mod) {
     auto eltwise_unary_with_param = static_cast<nb::class_<EltwiseUnaryWithParam>>(mod.attr("EltwiseUnaryWithParam"));
     eltwise_unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())
+        .def(nb::init<UnaryOpType, float, float>())
         .def(nb::init<UnaryOpType, int32_t>())
+        .def(nb::init<UnaryOpType, int32_t, int32_t>())
         .def(nb::init<UnaryOpType, uint32_t>())
+        .def(nb::init<UnaryOpType, uint32_t, uint32_t>())
         .def(nb::init<UnaryWithParam>())
         .def(
             "__init__",

@@ -25,6 +25,13 @@ def chunk_and_shard_tensor(tensor, num_simulated_devices, device, dim, dtype, la
     return result
 
 
+def create_recip_tensor_for_welford(device, width):
+    """Create reciprocal tensor for Welford algorithm in pre-allgather op."""
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return ttnn.create_layer_norm_reciprocals(device, core_range_set, width)
+
+
 def prepare_row_major_weight_bias(torch_weight_1d, num_simulated_devices):
     """
     Prepare weight/bias tensor for ROW_MAJOR layout, matching DistributedLayerNorm._prepare_torch_state.
@@ -122,11 +129,16 @@ def run_distributed_dit_layernorm(
             tt_weight = chunk_and_shard_tensor(weight_2d, num_simulated_devices, device, -1, dtype)
             tt_bias = chunk_and_shard_tensor(bias_2d, num_simulated_devices, device, -1, dtype)
 
+    # Create reciprocal tensor for Welford algorithm
+    # Width per chunk is embedding_dim / num_simulated_devices
+    chunk_width = embedding_dim // num_simulated_devices
+    recip_tensor = create_recip_tensor_for_welford(device, chunk_width)
+
     tt_stats = []
     for tt_inp_chunk in tt_inp:
         tt_stats.append(
             ttnn.experimental.dit_layernorm_pre_allgather(
-                tt_inp_chunk, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+                tt_inp_chunk, recip_tensor, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
             )
         )
 
@@ -391,11 +403,16 @@ def run_distributed_dit_layernorm_batched_affine(
     tt_weight = chunk_and_shard_tensor(weight_tiled, num_simulated_devices, device, -1, dtype)
     tt_bias = chunk_and_shard_tensor(bias_tiled, num_simulated_devices, device, -1, dtype)
 
+    # Create reciprocal tensor for Welford algorithm
+    # Width per chunk is embedding_dim / num_simulated_devices
+    chunk_width = embedding_dim // num_simulated_devices
+    recip_tensor = create_recip_tensor_for_welford(device, chunk_width)
+
     tt_stats = []
     for tt_inp_chunk in tt_inp:
         tt_stats.append(
             ttnn.experimental.dit_layernorm_pre_allgather(
-                tt_inp_chunk, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+                tt_inp_chunk, recip_tensor, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
             )
         )
 

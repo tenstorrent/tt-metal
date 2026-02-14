@@ -32,6 +32,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
@@ -273,19 +274,13 @@ void MetalContext::initialize(
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                     // fw_build_key is a combination of build_key and fw_compile_hash
                     // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                    // if it's not already in firmware_built_keys_
                     // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
                     // Uses full 64-bit fw_compile_hash for proper change detection
                     uint64_t fw_build_key =
                         BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
 
-                    {
-                        std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
-                        if (!firmware_built_keys_.contains(fw_build_key)) {
-                            BuildEnvManager::get_instance().build_firmware(device_id);
-                            firmware_built_keys_.insert(fw_build_key);
-                        }
-                    }
+                    jit_build_once(
+                        fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });
 
                     // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                     // activated. This is required since ethernet cores context switch between application and routing
