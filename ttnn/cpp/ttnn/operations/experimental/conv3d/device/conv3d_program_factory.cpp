@@ -39,7 +39,13 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
     auto [T_out, H_out, W_out] = detail::compute_output_dims(
-        T_in, H_in, W_in, operation_attributes.padding, operation_attributes.stride, operation_attributes.kernel_size);
+        T_in,
+        H_in,
+        W_in,
+        operation_attributes.padding,
+        operation_attributes.stride,
+        operation_attributes.kernel_size,
+        operation_attributes.dilation);
     uint32_t C_out = operation_attributes.output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -188,6 +194,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.stride[2]);
     log_debug(
         tt::LogOp,
+        "Dilation: {}x{}x{}",
+        operation_attributes.dilation[0],
+        operation_attributes.dilation[1],
+        operation_attributes.dilation[2]);
+    log_debug(
+        tt::LogOp,
         "Padding: {}x{}x{}",
         operation_attributes.padding[0],
         operation_attributes.padding[1],
@@ -231,7 +243,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         semaphore_id,
         operation_attributes.stride[0],
         operation_attributes.stride[1],
-        operation_attributes.stride[2]};
+        operation_attributes.stride[2],
+        operation_attributes.dilation[0],
+        operation_attributes.dilation[1],
+        operation_attributes.dilation[2]};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
