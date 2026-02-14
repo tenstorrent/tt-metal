@@ -379,8 +379,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 seq_len = int(padded_len)
 
         tokens_tt = ttnn.to_layout(tokens_tt3, ttnn.TILE_LAYOUT)
-        # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
-        tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
+        # Keep encoder tokens as rank-3 [B, N, C] in perf mode so TTNN sharded
+        # split-heads attention can follow the vit.md pattern without rank reshapes.
 
         # Stage-2+: keep tokens sharded across encoder blocks for better core utilization.
         # Attention runs the explicit sharded QK-softmax-AV path on these sharded

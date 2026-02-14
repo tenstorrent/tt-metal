@@ -659,8 +659,10 @@ class TTAttention:
         shape = tuple(getattr(x, "shape", ()))
         if len(shape) == 4:
             B, _, N, C = shape
+            x3 = ttnn.reshape(x, (int(B), int(N), int(C)))
         elif len(shape) == 3:
             B, N, C = shape
+            x3 = x
         else:
             raise ValueError(f"TTAttention expects TT tensor with 3D/4D shape, got {shape}")
         input_is_4d = len(shape) == 4
@@ -668,15 +670,10 @@ class TTAttention:
         D = self.head_dim
         if C != H * D:
             raise ValueError(f"TTAttention hidden dim mismatch: C={C}, H*D={H * D}")
-        # Device-side fused QKV linear
-        if len(shape) == 3:
-            x4 = ttnn.reshape(x, (B, 1, N, C))
-        else:
-            x4 = x
         # Stage-2/3: tokens may be block-sharded across the encoder.
         tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
         cfg = getattr(self, "program_config", None)
-        input_is_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
+        input_is_sharded = tokens_shard_mc is not None and (_ttnn_is_sharded(x) or _ttnn_is_sharded(x3))
         use_default_attn_programs = bool(getattr(cfg, "use_default_attention_programs", False)) if cfg is not None else False
         # Prefer explicit attention on sharded operands; fall back to the SDPA island
         # only when not sharded.
@@ -697,10 +694,10 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
-            if qkv_pc is not None and not _ttnn_is_sharded(x4):
+            if qkv_pc is not None and not (_ttnn_is_sharded(x) or _ttnn_is_sharded(x3)):
                 qkv_pc = None
-            qkv4 = _ttnn_linear_with_optional_program_config(
-                x=x4,
+            qkv3 = _ttnn_linear_with_optional_program_config(
+                x=x3,
                 w=self._wqkv_tt,
                 bias=self._bqkv_tt,
                 dtype=ttnn.bfloat16,
@@ -708,8 +705,6 @@ class TTAttention:
                 program_config=qkv_pc,
                 op_name="attn_qkv",
             )
-            # The split-heads op expects a rank-3 [B, N, 3*C] tensor (vit.md pattern).
-            qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             if explicit_sharded_attn:
                 # `split_query_key_value_and_split_heads` expects the fused QKV tensor to be
                 # block-sharded across the encoder grid (vit demo reshard step).
@@ -844,8 +839,8 @@ class TTAttention:
         # Output projection on device when possible.
         out: ttnn.Tensor
         if self._proj_w_tt is not None and self._proj_b_tt is not None:
-            # Ensure TT and 4D shape [B, 1, N, C] for ttnn.linear
-            ctx_tt4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
+            # Keep attention projection on rank-3 [B, N, C] to match vit.md sharded path.
+            ctx3 = ctx if len(getattr(ctx, "shape", ())) == 3 else ttnn.reshape(ctx, (int(B), int(N), int(C)))
             cfg = getattr(self, "program_config", None)
             memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
@@ -853,10 +848,10 @@ class TTAttention:
             if input_is_sharded and tokens_shard_mc is not None:
                 memcfg = tokens_shard_mc
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
-            if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
+            if proj_pc is not None and not _ttnn_is_sharded(ctx3):
                 proj_pc = None
-            out_tt4 = _ttnn_linear_with_optional_program_config(
-                x=ctx_tt4,
+            out3 = _ttnn_linear_with_optional_program_config(
+                x=ctx3,
                 w=self._proj_w_tt,
                 bias=self._proj_b_tt,
                 dtype=ttnn.bfloat16,
@@ -864,12 +859,7 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
-            # Keep rank stable for residual adds.
-            out = out_tt4
-            if len(getattr(out_tt4, "shape", [])) == 3:
-                out = ttnn.reshape(out_tt4, (B, 1, N, C))
-            if not input_is_4d and len(getattr(out, "shape", [])) == 4:
-                out = ttnn.reshape(out, (B, N, C))
+            out = out3 if not input_is_4d else ttnn.reshape(out3, (int(B), 1, int(N), int(C)))
         else:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention projection weights unavailable and CPU fallback is disabled")
@@ -926,91 +916,43 @@ class TTMLP:
             self.w1_tt = self.b1_tt = self.w2_tt = self.b2_tt = None
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
-        # Preferred device path
         try:
             if self.w1_tt is None or self.w2_tt is None:
                 raise RuntimeError("Device MLP weights unavailable")
+
             shape = tuple(getattr(x, "shape", ()))
-            if len(shape) == 3:
+            if len(shape) == 4:
+                B, one, N, C = shape
+                if int(one) != 1:
+                    raise ValueError(f"TTMLP expected [B,1,N,C] or [B,N,C], got {shape}")
+                x3 = ttnn.reshape(x, (int(B), int(N), int(C)))
+                wants_4d = True
+            elif len(shape) == 3:
                 B, N, C = shape
-                x4 = ttnn.reshape(x, (B, 1, N, C))
-            elif len(shape) == 4:
-                x4 = x
-                B, _, N, C = shape
+                x3 = x
+                wants_4d = False
             else:
                 raise ValueError(f"TTMLP expects 3D/4D TT tensor, got {shape}")
-            # Stage-2: keep transformer tokens sharded across blocks, but use a
-            # stable MLP sharding spec for FC1/FC2. If the incoming tokens are
-            # already sharded (e.g., encoder-wide sharding), avoid DRAM round-trips
-            # and reshard only if required.
+
             tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
-            incoming_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
+            incoming_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x3)
             cfg = getattr(self, "program_config", None)
-            # For encoder-wide sharding bring-up, keep the MLP compute in a
-            # simple interleaved island to avoid L1 circular-buffer clashes.
-            # Stage 3 will re-enable stable sharded MLP program configs.
-            mlp_interleaved_island = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
 
             memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
+            if incoming_sharded:
+                memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or tokens_shard_mc or memcfg
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
-            if mlp_interleaved_island:
-                memcfg = ttnn.DRAM_MEMORY_CONFIG
+            if ff1_pc is not None and not _ttnn_is_sharded(x3):
                 ff1_pc = None
+            if ff2_pc is not None and not _ttnn_is_sharded(x3):
                 ff2_pc = None
-            reshardened = False
-            if (not mlp_interleaved_island) and cfg is not None and not _ttnn_is_sharded(x4):
-                mlp_grid = getattr(cfg, "mlp_core_grid", None)
-                if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
-                    try:
-                        grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
-                        core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
-                        shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)
-                        shard_mc = ttnn.create_sharded_memory_config(
-                            shape_for_shard,
-                            core_grid=core_grid,
-                            strategy=ttnn.ShardStrategy.BLOCK,
-                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                        )
-                        x4 = ttnn.to_memory_config(x4, memory_config=shard_mc, dtype=ttnn.bfloat16)
-                        reshardened = True
-                        memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
-                    except Exception:
-                        reshardened = False
 
-            if (not mlp_interleaved_island) and cfg is not None and incoming_sharded:
-                mlp_grid = getattr(cfg, "mlp_core_grid", None)
-                if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
-                    try:
-                        grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
-                        core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
-                        shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)
-                        shard_mc = ttnn.create_sharded_memory_config(
-                            shape_for_shard,
-                            core_grid=core_grid,
-                            strategy=ttnn.ShardStrategy.BLOCK,
-                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                        )
-                        x4 = ttnn.to_memory_config(x4, memory_config=shard_mc, dtype=ttnn.bfloat16)
-                        reshardened = True
-                        memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
-                    except Exception:
-                        try:
-                            from .perf_counters import strict_program_config_enabled
-                        except Exception:  # pragma: no cover
-                            strict_program_config_enabled = lambda: False  # type: ignore
-                        if strict_program_config_enabled():
-                            raise
-                        # Legacy fallback: interleave then reshard deterministically.
-                        x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            if ff1_pc is not None and not _ttnn_is_sharded(x4):
-                ff1_pc = None
-            if ff2_pc is not None and not _ttnn_is_sharded(x4):
-                ff2_pc = None
             y1 = _ttnn_linear_with_optional_program_config(
-                x=x4,
+                x=x3,
                 w=self.w1_tt,
                 bias=self.b1_tt,
                 dtype=ttnn.bfloat16,
@@ -1018,9 +960,9 @@ class TTMLP:
                 program_config=ff1_pc,
                 op_name="mlp_ff1",
             )
-            # If FF1 program config fuses GELU, skip the explicit GELU op.
             if not _program_config_fuses_activation(ff1_pc):
                 y1 = ttnn.gelu(y1)
+
             y2 = _ttnn_linear_with_optional_program_config(
                 x=y1,
                 w=self.w2_tt,
@@ -1030,17 +972,14 @@ class TTMLP:
                 program_config=ff2_pc,
                 op_name="mlp_ff2",
             )
-            if incoming_sharded:
+
+            if incoming_sharded and tokens_shard_mc is not None:
                 # Restore the encoder-wide token sharding spec for residual adds.
                 y2 = ttnn.to_memory_config(y2, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
-            if tokens_shard_mc is None and reshardened and _ttnn_is_sharded(y2):
-                # Legacy path: when only MLP is sharded, return interleaved so
-                # residual adds (which may be interleaved) remain stable.
-                try:
-                    y2 = ttnn.to_memory_config(y2, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-                except Exception:
-                    pass
-            return y2 if len(shape) == 4 else ttnn.reshape(y2, (B, N, self.w2_tt.shape[-1]))
+
+            if wants_4d:
+                y2 = ttnn.reshape(y2, (int(B), 1, int(N), int(y2.shape[-1])))
+            return y2
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTMLP device path failed and CPU fallback is disabled") from exc
@@ -1126,53 +1065,7 @@ class TTTransformerBlock:
         )
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
-        # Stage-2 bring-up: LayerNorm can be fragile on sharded tokens (runtime-dependent).
-        # Keep attention and MLP sharded, but run LN on an interleaved DRAM island and
-        # reshard immediately after so attention program configs are usable.
-        tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
-        input_is_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x)
-
-        def _to_interleaved_and_free_l1(t):
-            t_int = ttnn.to_memory_config(t, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            try:
-                if hasattr(ttnn, "reallocate"):
-                    t_int = ttnn.reallocate(t_int)
-            except Exception:
-                pass
-            try:
-                if hasattr(ttnn, "deallocate"):
-                    ttnn.deallocate(t)
-            except Exception:
-                pass
-            return t_int
-
-        def _reshard(t_int):
-            t_sh = ttnn.to_memory_config(t_int, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
-            try:
-                if hasattr(ttnn, "deallocate"):
-                    ttnn.deallocate(t_int)
-            except Exception:
-                pass
-            return t_sh
-
-        if input_is_sharded:
-            # Keep a residual copy in DRAM, free L1, and shard only around attention/MLP.
-            x_res_int = _to_interleaved_and_free_l1(x)
-            h_int = self.ln1(x_res_int)
-            h = _reshard(h_int)
-            h = self.attn(h, **mm_opts)
-            x = _reshard(x_res_int)
-            x = ttnn.add(x, h)
-
-            x_res2_int = _to_interleaved_and_free_l1(x)
-            h2_int = self.ln2(x_res2_int)
-            h2 = _reshard(h2_int)
-            h2 = self.mlp(h2, **mm_opts)
-            x = _reshard(x_res2_int)
-            x = ttnn.add(x, h2)
-            return x
-
-        # Non-sharded path stays simple.
+        # Stage-2/3: perf path must remain fully on-device with no DRAM "islands".
         h = self.ln1(x)
         h = self.attn(h, **mm_opts)
         x = ttnn.add(x, h)
