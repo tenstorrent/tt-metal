@@ -297,10 +297,9 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Use a small 2D grid so per-core shards are smaller (reduces L1/CB pressure)
-        # and so attention sharding matches vit.md's (core_grid.x * core_grid.y) divisor.
-        # Keep grid_y=2 so seq tile counts for 384/512 (20/34) divide cleanly.
-        grid = (8, 2)
+        # TTNN sharded split-heads expects the batch dimension to map to grid_y.
+        # In our perf path (dp=2, batch=2), per-chip batch is 1, so grid_y must be 1.
+        grid = (8, 1)
         attn_grid = grid
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
