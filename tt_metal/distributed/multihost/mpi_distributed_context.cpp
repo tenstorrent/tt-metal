@@ -128,11 +128,15 @@ Status MPIRequest::wait() {
     // This is a false positive - req_ is always initialized via MPI_Isend/MPI_Irecv
     // in isend()/irecv() before being passed to the MPIRequest constructor.
     // The analyzer cannot track requests through class members (known limitation).
+    //
+    // Precondition: MPIRequest must be constructed with a valid MPI_Request from MPI_Isend/MPI_Irecv.
+    // This is ensured by the factory methods isend()/irecv() in MPIContext.
     if (done_) {
         // Already completed - req_ was set to MPI_REQUEST_NULL by previous MPI_Wait.
         // Calling MPI_Wait again on MPI_REQUEST_NULL is safe (returns immediately),
         // but we avoid it and return a sentinel status to indicate no new operation occurred.
-        // Callers should use active() to check if the request is still pending.
+        // Callers should use active() to check if the request is still pending before calling wait().
+        // Note: MPI_ANY_SOURCE and MPI_ANY_TAG are used as sentinel values here (not wildcards).
         return Status{Rank(MPI_ANY_SOURCE), Tag(MPI_ANY_TAG), 0};
     }
     MPI_Status status{};
