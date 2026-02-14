@@ -423,6 +423,10 @@ def main():
                 counts.get("upsample_host_fallback_count", 0)
             ) != 0:
                 raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
+            if int(counts.get("attn_island_interleave_count", 0)) != 0 or int(counts.get("attn_island_reshard_count", 0)) != 0:
+                raise RuntimeError(f"Unexpected attention island conversions in perf run: {counts}")
+            if int(counts.get("ln_island_interleave_count", 0)) != 0 or int(counts.get("ln_island_reshard_count", 0)) != 0:
+                raise RuntimeError(f"Unexpected LayerNorm island conversions in perf run: {counts}")
             if int(counts.get("program_config_fallback_total", 0)) != 0:
                 raise RuntimeError(f"Unexpected TT program_config fallbacks in perf run: {counts}")
 

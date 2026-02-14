@@ -419,6 +419,12 @@ class TTLayerNorm:
             if self.weight_tt is None or self.bias_tt is None:
                 raise RuntimeError("LayerNorm affine params not available on device")
 
+            try:
+                from .perf_counters import inc_program_config_fallback, strict_program_config_enabled
+            except Exception:  # pragma: no cover
+                inc_program_config_fallback = None
+                strict_program_config_enabled = lambda: False  # type: ignore
+
             kwargs = {
                 "weight": self.weight_tt,
                 "bias": self.bias_tt,
@@ -427,7 +433,8 @@ class TTLayerNorm:
             pc = self.program_config
             ln_pc = getattr(pc, "ln_program_config", None) if pc is not None else None
             # Perf LN program configs typically assume a sharded input tensor.
-            if ln_pc is not None and _ttnn_is_sharded(x):
+            x_is_sharded = _ttnn_is_sharded(x)
+            if ln_pc is not None and x_is_sharded:
                 kwargs["program_config"] = ln_pc
 
             cc = getattr(pc, "ln_compute_config", None) if pc is not None else None
@@ -437,12 +444,20 @@ class TTLayerNorm:
                 return ttnn.layer_norm(x, **kwargs)
             except TypeError:
                 # Backward compat for older runtimes without program_config / compute_kernel_config kwargs.
+                if ("program_config" in kwargs or "compute_kernel_config" in kwargs) and callable(inc_program_config_fallback):
+                    inc_program_config_fallback(op="layer_norm", reason="kwarg_unsupported")
+                if strict_program_config_enabled() and ("program_config" in kwargs or "compute_kernel_config" in kwargs):
+                    raise
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
                 return ttnn.layer_norm(x, **kwargs)
             except Exception:
                 # Some runtimes accept these kwargs but can fail for particular inputs/configs.
                 # Retry once without the perf configs to avoid hard-failing the entire pipeline.
+                if ("program_config" in kwargs or "compute_kernel_config" in kwargs) and callable(inc_program_config_fallback):
+                    inc_program_config_fallback(op="layer_norm", reason="runtime_rejected")
+                if strict_program_config_enabled() and ("program_config" in kwargs or "compute_kernel_config" in kwargs):
+                    raise
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
                 try:
@@ -451,7 +466,10 @@ class TTLayerNorm:
                     # Sharded LayerNorm support is runtime-dependent. When it fails, explicitly
                     # run an interleaved "island" and reshard the output back, rather than
                     # forcing a CPU fallback in perf/trace runs.
-                    if _ttnn_is_sharded(x):
+                    if x_is_sharded:
+                        # In perf mode, do not silently interleave/reshard; fail so the issue is observable.
+                        if strict_program_config_enabled():
+                            raise
                         try:
                             from .perf_counters import inc_ln_island_interleave, inc_ln_island_reshard
                         except Exception:  # pragma: no cover
@@ -643,9 +661,17 @@ class TTAttention:
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
+            split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            # For explicit sharded attention, prefer keeping QKV projection output sharded.
+            if explicit_sharded_attn and split_memcfg is not None:
+                try:
+                    if hasattr(split_memcfg, "is_sharded") and split_memcfg.is_sharded():
+                        memcfg = split_memcfg
+                except Exception:
+                    pass
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -661,7 +687,6 @@ class TTAttention:
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
-            split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
             try:
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
                     qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
@@ -867,13 +892,11 @@ class TTMLP:
             else:
                 raise ValueError(f"TTMLP expects 3D/4D TT tensor, got {shape}")
             # Stage-2: keep transformer tokens sharded across blocks, but use a
-            # stable "MLP island" sharding spec for FC1/FC2. If the incoming
-            # tokens are already sharded (e.g., encoder-wide sharding), first
-            # interleave them so we can reshard deterministically for the MLP.
+            # stable MLP sharding spec for FC1/FC2. If the incoming tokens are
+            # already sharded (e.g., encoder-wide sharding), avoid DRAM round-trips
+            # and reshard only if required.
             tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
             incoming_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
-            if incoming_sharded:
-                x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             cfg = getattr(self, "program_config", None)
             # For encoder-wide sharding bring-up, keep the MLP compute in a
             # simple interleaved island to avoid L1 circular-buffer clashes.
@@ -908,6 +931,32 @@ class TTMLP:
                         memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
                     except Exception:
                         reshardened = False
+
+            if (not mlp_interleaved_island) and cfg is not None and incoming_sharded:
+                mlp_grid = getattr(cfg, "mlp_core_grid", None)
+                if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
+                    try:
+                        grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
+                        core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                        shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)
+                        shard_mc = ttnn.create_sharded_memory_config(
+                            shape_for_shard,
+                            core_grid=core_grid,
+                            strategy=ttnn.ShardStrategy.BLOCK,
+                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        )
+                        x4 = ttnn.to_memory_config(x4, memory_config=shard_mc, dtype=ttnn.bfloat16)
+                        reshardened = True
+                        memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
+                    except Exception:
+                        try:
+                            from .perf_counters import strict_program_config_enabled
+                        except Exception:  # pragma: no cover
+                            strict_program_config_enabled = lambda: False  # type: ignore
+                        if strict_program_config_enabled():
+                            raise
+                        # Legacy fallback: interleave then reshard deterministically.
+                        x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             if ff1_pc is not None and not _ttnn_is_sharded(x4):
                 ff1_pc = None
             if ff2_pc is not None and not _ttnn_is_sharded(x4):
