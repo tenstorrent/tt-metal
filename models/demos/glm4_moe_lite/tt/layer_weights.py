@@ -74,6 +74,8 @@ def _env_experts_dtype() -> ttnn.DataType:
         return ttnn.float16
     if override in {"f32", "fp32", "float32"}:
         return ttnn.float32
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
     raise ValueError(f"Invalid GLM4_MOE_LITE_EXPERTS_TT_DTYPE={override!r}")
 
 
@@ -94,6 +96,8 @@ def _env_dense_dtype() -> ttnn.DataType:
         return ttnn.float16
     if override in {"f32", "fp32", "float32"}:
         return ttnn.float32
+    if override in {"bf4", "bfloat4_b"}:
+        return ttnn.bfloat4_b
     raise ValueError(f"Invalid GLM4_MOE_LITE_DENSE_TT_DTYPE={override!r}")
 
 
@@ -302,6 +306,7 @@ class MoELayerTTWeights:
     w1_experts: ttnn.Tensor
     w2_experts: ttnn.Tensor
     w3_experts: ttnn.Tensor
+    e_score_correction_bias_tile: Optional[ttnn.Tensor] = None  # Pre-converted TILE layout for decode (T=1)
     w1w3_experts: Optional[ttnn.Tensor] = None
 
 
@@ -634,6 +639,8 @@ def convert_decoder_layer_weights(
             cache_file=c("e_score_correction_bias_centered_v1"),
             dtype=ttnn.bfloat16,
         )
+        # Pre-convert bias to TILE layout for decode (T=1) to avoid per-step to_layout calls.
+        e_bias_tile = ttnn.to_layout(e_bias, ttnn.TILE_LAYOUT)
 
         experts_dtype = _env_experts_dtype()
         num_experts = int(hparams.n_routed_experts)
@@ -708,6 +715,7 @@ def convert_decoder_layer_weights(
             w1_experts=w1_experts,
             w2_experts=w2_experts,
             w3_experts=w3_experts,
+            e_score_correction_bias_tile=e_bias_tile,
             w1w3_experts=w1w3_experts_tt,
         )
 
