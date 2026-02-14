@@ -10,6 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_gather_minimal_matmul_async.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/types.hpp"
@@ -18,9 +19,8 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"experimental.all_gather_minimal_matmul_async">(
         mod,
-        ttnn::experimental::all_gather_minimal_matmul_async,
         R"doc(
         all_gather_minimal_matmul_async(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
@@ -183,7 +183,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         ... )
         >>> y.shape  # [M, N]
         )doc",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t{
+            &all_gather_minimal_matmul_async,
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
             nb::kw_only(),
