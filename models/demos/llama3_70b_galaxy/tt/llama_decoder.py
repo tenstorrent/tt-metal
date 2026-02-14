@@ -135,6 +135,7 @@ class TtTransformerBlock(LightweightModule):
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        residual_dtype = ttnn.bfloat16
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -150,7 +151,7 @@ class TtTransformerBlock(LightweightModule):
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             if self.unfuse_res_add:
-                h = ttnn.add(x, h)
+                h = ttnn.add(x, h, dtype=residual_dtype)
                 attn_in_sharded, _ = self.attention_norm(h, None, mode)
             else:
                 attn_in_sharded, _ = self.attention_norm(x, h, mode)
@@ -173,7 +174,7 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
             if self.unfuse_res_add:
-                h = ttnn.add(attn_out, h)
+                h = ttnn.add(attn_out, h, dtype=residual_dtype)
                 ff_in_sharded, _ = self.ff_norm(h, None, mode)
             else:
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
@@ -182,7 +183,7 @@ class TtTransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=residual_dtype)
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":
