@@ -123,3 +123,27 @@ target_link_libraries(
 add_dependencies(test_cabling_descriptor_mgd_generation scaleout_generated_protos)
 add_dependencies(test_cabling_descriptor_mgd_generation fabric_generated_protos)
 add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)
+
+# Test for host_id assignment in DFS order (matching Python tt-CableGen behavior)
+add_executable(test_host_id_assignment test_host_id_assignment.cpp)
+
+set_target_properties(
+    test_host_id_assignment
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_include_directories(test_host_id_assignment SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_host_id_assignment
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+# Make sure protobuf files are generated before compiling host_id assignment tests
+add_dependencies(test_host_id_assignment scaleout_generated_protos)

@@ -114,6 +114,8 @@ struct ResolvedGraphInstance {
     std::string template_name;  // Graph template name (e.g., "n300_t3k_superpod")
     std::string instance_name;  // Instance name (e.g., "superpod1", "pod2")
 
+    std::vector<std::pair<std::string, bool>> children_order;  // (name, is_node) in template order
+
     // Direct child nodes at this level (not nested)
     std::map<std::string, Node> nodes;
 
@@ -222,6 +224,8 @@ private:
 
     // Recreate all nodes from templates to reset port availability for graph-level connections
     void recreate_nodes_from_templates(ResolvedGraphInstance& graph);
+
+    void reassign_host_ids_dfs();
 
     void get_all_connections_of_type(
         const std::vector<PortType>& port_types, std::vector<PortConnection>& conn_list) const;
