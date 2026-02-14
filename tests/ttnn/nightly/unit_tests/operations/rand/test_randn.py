@@ -92,7 +92,7 @@ def test_randn_with_memory_config(device, mem_config):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_randn_dtype_layout_and_distribution(device, dtype, layout):
     shape = (1024, 1024)
 
@@ -107,8 +107,8 @@ def test_randn_dtype_layout_and_distribution(device, dtype, layout):
     assert check_standard_normal_distribution(torch_tensor, dtype), "Random values do not look standard normal!"
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_randn_dtype_layout_and_distribution_no_check(device, dtype, layout):
     shape = (1024, 1024)
 
@@ -144,7 +144,7 @@ def test_randn_invalid_args(device):
 
 @pytest.mark.parametrize("shape", [[2, 32, 32, 16]])
 @pytest.mark.parametrize("seed", [1234])
-@pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_randn_callback(shape, seed, dtype, device):
     num_program_cache_entries_list = []
     for i in range(2):
@@ -158,7 +158,7 @@ def test_randn_callback(shape, seed, dtype, device):
 
 
 @pytest.mark.parametrize("shape", [[512, 512], [5, 8, 70, 40]])
-@pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_randn_with_compute_kernel_options(shape, dtype, device, compute_kernel_options):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
