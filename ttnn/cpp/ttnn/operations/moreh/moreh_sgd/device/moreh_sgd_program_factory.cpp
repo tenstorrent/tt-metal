@@ -119,16 +119,16 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(param_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad.mesh_buffer()).append_to(reader_compile_time_args);
     if (momentum_buffer_in.has_value()) {
-        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
     }
 
     std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(param_out.mesh_buffer()).append_to(writer_compile_time_args);
     if (has_momentum_buffer_out) {
-        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
     }
 
     const auto* const reader_kernel_file =

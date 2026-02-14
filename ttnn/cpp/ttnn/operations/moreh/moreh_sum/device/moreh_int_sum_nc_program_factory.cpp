@@ -82,8 +82,8 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
 
     std::vector<uint32_t> reader_compile_time_args = {};
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto* const writer_kernel_file =

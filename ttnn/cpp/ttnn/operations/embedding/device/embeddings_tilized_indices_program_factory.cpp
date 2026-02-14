@@ -113,8 +113,8 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights.mesh_buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -136,7 +136,7 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
     auto writer_kernel_id = tt::tt_metal::CreateKernel(

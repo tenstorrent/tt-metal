@@ -56,9 +56,9 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
     // reader
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)cb_index, (std::uint32_t)batch_cb_index, page_size};
-    TensorAccessorArgs(*input_a.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_b.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*batch_ids.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_a.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_b.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(batch_ids.mesh_buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -67,7 +67,7 @@ IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_index, (std::uint32_t)page_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

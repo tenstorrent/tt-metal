@@ -46,7 +46,7 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
 
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
     std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, input_unit_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,

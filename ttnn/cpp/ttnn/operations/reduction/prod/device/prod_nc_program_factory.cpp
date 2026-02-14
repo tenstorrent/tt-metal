@@ -92,11 +92,11 @@ ProdNcProgramFactory::cached_program_t ProdNcProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";

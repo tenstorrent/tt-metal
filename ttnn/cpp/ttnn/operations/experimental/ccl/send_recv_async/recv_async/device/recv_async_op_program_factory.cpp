@@ -135,7 +135,7 @@ RecvAsyncMeshWorkloadFactory::create_at(
 
     CreateCircularBuffer(program, receiver_core_range_set, cb_packet_header_config);
 
-    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer());
+    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer());
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
     tt::CBIndex scratch_buffer_cb_index = tt::CBIndex::c_1;

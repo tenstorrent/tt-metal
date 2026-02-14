@@ -180,8 +180,8 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
         (std::uint32_t)tiles_per_chunk,
         (std::uint32_t)input_block_size_bytes,
         (std::uint32_t)num_chunks};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights.mesh_buffer()).append_to(embedding_compile_time_args);
 
     std::map<std::string, std::string> embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
@@ -227,7 +227,7 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     // TODO: We can use the second risc to do more work in parallel
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
         // Tilized writer
         writer_kernel_id = tt::tt_metal::CreateKernel(

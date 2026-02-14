@@ -143,11 +143,11 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
     };
 
     // Add tensor accessor args for input tensor (16 compile time args offset)
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     }
 
     auto create_writer_config = [&](const std::vector<uint32_t>& args, auto processor, auto noc) {

@@ -150,9 +150,9 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         mapping_page_size_bytes,
         metadata_page_size_bytes,
         local_reduce};
-    tt::tt_metal::TensorAccessorArgs(topk_tensor.buffer()).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(topk_tensor.mesh_buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -175,8 +175,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         output_reduced_page_size_bytes,
         reduction_size,
     };
-    tt::tt_metal::TensorAccessorArgs(*output_mapping_tensor.buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(*output_reduced_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_mapping_tensor.mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_reduced_tensor.mesh_buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

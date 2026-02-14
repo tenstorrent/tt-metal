@@ -136,8 +136,8 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights.mesh_buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -159,7 +159,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
-        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,

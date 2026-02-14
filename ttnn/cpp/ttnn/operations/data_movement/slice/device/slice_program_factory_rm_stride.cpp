@@ -69,10 +69,10 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {in_cb, element_size};
-    TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {in_cb, element_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));

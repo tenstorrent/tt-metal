@@ -63,9 +63,9 @@ NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::cre
         (std::uint32_t)output_cb_index_0,
         (std::uint32_t)output_cb_index_1,
     };
-    TensorAccessorArgs(*input.buffer()).append_to(compile_time_args);
-    TensorAccessorArgs(*out_num_indices.buffer()).append_to(compile_time_args);
-    TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(out_num_indices.mesh_buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(out_indices.mesh_buffer()).append_to(compile_time_args);
 
     const std::array run_time_args = {
         (std::uint32_t)input.mesh_buffer()->address(),

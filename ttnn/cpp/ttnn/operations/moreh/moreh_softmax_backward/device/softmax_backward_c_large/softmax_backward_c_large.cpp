@@ -83,8 +83,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     }
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/reader_moreh_softmax_backward_c.cpp",
@@ -92,7 +92,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
         reader_ct_args,
         reader_defines);
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_backward_c.cpp",

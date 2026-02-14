@@ -97,20 +97,20 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_in.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(param_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(exp_avg_in.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(exp_avg_sq_in.mesh_buffer()).append_to(reader_compile_time_args);
     if (max_exp_avg_sq_in.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_in.value().buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(max_exp_avg_sq_in.value().mesh_buffer()).append_to(reader_compile_time_args);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_out.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*exp_avg_sq_out.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(param_out.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(exp_avg_out.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(exp_avg_sq_out.mesh_buffer()).append_to(writer_compile_time_args);
     if (max_exp_avg_sq_out.has_value()) {
-        TensorAccessorArgs(*max_exp_avg_sq_out.value().buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(max_exp_avg_sq_out.value().mesh_buffer()).append_to(writer_compile_time_args);
     }
 
     const auto* const reader_kernel_file =

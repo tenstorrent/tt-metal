@@ -74,7 +74,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input_tensor.dtype() == DataType::FLOAT32)};
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = operations::CreateReadKernel(
         program,
         std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/reader_moreh_softmax_w.cpp",
@@ -82,7 +82,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
         reader_ct_args,
         reader_defines);
     std::vector<uint32_t> writer_ct_args = {};
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = operations::CreateWriteKernel(
         program,
         std::string(SOFTMAX_KERNEL_PATH_GENERAL) + "/writer_moreh_softmax_w.cpp",

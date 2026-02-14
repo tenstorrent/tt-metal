@@ -194,7 +194,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
-        TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input_tensors[i].mesh_buffer()).append_to(reader_compile_time_args);
     }
 
     std::map<std::string, std::string> concat_defines;
@@ -209,7 +209,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     } else {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     }
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     reader_kernel_id = CreateKernel(

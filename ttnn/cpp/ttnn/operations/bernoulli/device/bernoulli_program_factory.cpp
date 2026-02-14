@@ -66,12 +66,12 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
     std::vector<uint32_t> reader_compile_time_args{in_cb_id};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
     const std::string reader_file_path = kernels_dir_path + "reader_bernoulli.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_bernoulli.cpp";
     std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
     std::map<std::string, std::string> writer_defines;

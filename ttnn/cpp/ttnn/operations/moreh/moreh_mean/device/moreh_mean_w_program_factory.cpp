@@ -79,11 +79,11 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(packed_scaler_value);
 
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CBIndex::c_16)};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {

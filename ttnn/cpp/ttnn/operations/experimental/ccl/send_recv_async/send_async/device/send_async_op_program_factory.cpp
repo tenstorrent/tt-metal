@@ -154,7 +154,7 @@ SendAsyncMeshWorkloadFactory::create_at(
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
 
-    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
+    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
     std::vector<uint32_t> reader_compile_args = {
         src0_cb_index,               // cb0_id

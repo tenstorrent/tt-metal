@@ -103,14 +103,14 @@ UpsampleNearestFloatProgramFactory::cached_program_t UpsampleNearestFloatProgram
         static_cast<uint32_t>(reciprocal_scale_w_fixed),
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,
         aligned_output_page_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

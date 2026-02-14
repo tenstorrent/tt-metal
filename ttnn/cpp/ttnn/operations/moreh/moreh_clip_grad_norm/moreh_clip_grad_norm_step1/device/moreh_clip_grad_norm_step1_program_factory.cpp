@@ -117,11 +117,11 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "writer_moreh_clip_grad_norm_step1.cpp";
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(inputs.at(0).mesh_buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1, reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(tmp_pow_sum.mesh_buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////

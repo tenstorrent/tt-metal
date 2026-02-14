@@ -564,7 +564,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // writer kernel
     if (negative_mask.has_value()) {
-        TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
+        TensorAccessorArgs(negative_mask.value().mesh_buffer()).append_to(writer_mcast_sender_compile_time_args);
     } else {
         TensorAccessorArgs().append_to(writer_mcast_sender_compile_time_args);  // placeholder
     }

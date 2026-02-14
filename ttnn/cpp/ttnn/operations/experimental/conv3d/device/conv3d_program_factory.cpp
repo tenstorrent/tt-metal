@@ -232,7 +232,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.stride[0],
         operation_attributes.stride[1],
         operation_attributes.stride[2]};
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -331,8 +331,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id};
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 

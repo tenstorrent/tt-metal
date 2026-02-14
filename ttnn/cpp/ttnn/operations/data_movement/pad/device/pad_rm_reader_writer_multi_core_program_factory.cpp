@@ -225,9 +225,9 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(dst_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(pad_value_const_tensor.mesh_buffer()).append_to(reader_ct_args);
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
 
     uint32_t packed_pad_value;

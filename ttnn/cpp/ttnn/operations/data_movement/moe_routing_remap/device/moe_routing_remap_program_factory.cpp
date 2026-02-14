@@ -108,7 +108,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*routing_weights.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(routing_weights.mesh_buffer()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -123,7 +123,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
         num_cluster_experts,
         non_zero_per_device,
         input_datum_size_bytes};
-    tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_return_value.mesh_buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/"

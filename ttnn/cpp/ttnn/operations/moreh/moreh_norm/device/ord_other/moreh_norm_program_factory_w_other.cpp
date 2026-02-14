@@ -98,10 +98,10 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         "writer_moreh_norm_w.cpp";
 
     std::vector<uint32_t> reader_ct_args = {};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_ct_args);
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_ct_args);
     std::vector<uint32_t> writer_ct_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_ct_args);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////

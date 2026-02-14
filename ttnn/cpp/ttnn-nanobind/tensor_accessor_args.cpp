@@ -19,7 +19,7 @@ void py_module(nb::module_& mod) {
         .def(
             "__init__",
             [](tt::tt_metal::TensorAccessorArgs* t, const ttnn::Tensor& tensor) {
-                new (t) tt::tt_metal::TensorAccessorArgs(*tensor.buffer());
+                new (t) tt::tt_metal::TensorAccessorArgs(tensor.mesh_buffer());
             },
             nb::arg("tensor"),
             R"doc(

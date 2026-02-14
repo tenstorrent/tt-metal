@@ -46,7 +46,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     }
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto kernel_id = CreateWriteKernel(
         program,

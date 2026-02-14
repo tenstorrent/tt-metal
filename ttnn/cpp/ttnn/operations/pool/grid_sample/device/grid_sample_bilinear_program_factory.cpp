@@ -153,9 +153,9 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
         reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[14]: grid_nsticks_per_core
     }
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     }
 
     const std::string reader_kernel_path =
@@ -277,7 +277,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
             get_aligned_stick_size(output_shape, output_tensor),  // ct_arg[1]: output_stick_size
             out_ntiles_c                                          // ct_arg[2]: out_ntiles_c
         };
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,

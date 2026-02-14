@@ -91,15 +91,15 @@ void append_accessors(
     const std::vector<Tensor>& output_tensors,
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<const Tensor>& ag_input_tensor = std::nullopt) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(main_tensor.mesh_buffer()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(args);
     }
     if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(bias_tensor.value().mesh_buffer()).append_to(args);
     }
     if (ag_input_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ag_input_tensor.value().mesh_buffer()).append_to(args);
     }
 }
 
