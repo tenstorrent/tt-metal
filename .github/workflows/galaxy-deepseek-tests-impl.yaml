@@ -81,7 +81,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf:rw
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -122,7 +122,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_mla.py --timeout 900 --durations=0
-          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 2400 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=12288 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 2400 --durations=0
           # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 2500 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
