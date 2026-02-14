@@ -85,6 +85,7 @@ jobs:
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
       distro: ${{ steps.platform.outputs.distro }}
       version: ${{ steps.platform.outputs.version }}
+      python-version: ${{ steps.python-version.outputs.version }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -96,6 +97,19 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
+
+      - name: Determine Python version
+        id: python-version
+        run: |
+          VERSION="${{ steps.platform.outputs.version }}"
+          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
+          if [ "$VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
         run: |
@@ -194,7 +208,9 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -207,7 +223,9 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -220,7 +238,9 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -233,7 +253,9 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -246,7 +268,9 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
           outputs: |
