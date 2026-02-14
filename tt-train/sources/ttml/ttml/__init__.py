@@ -28,3 +28,6 @@ from ._recursive_import import _recursive_import_from_ttml
 # Recursively import all _ttml symbols into this module
 # Python implementations in subpackages will take precedence
 _recursive_import_from_ttml(_ttml, sys.modules[__name__])
+
+# Import Python subpackages
+from . import ops
