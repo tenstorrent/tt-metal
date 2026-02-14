@@ -882,6 +882,11 @@ class TTAttention:
             memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            # For the sharded attention path, emit projection output interleaved
+            # to avoid L1 static-CB clashes on the full encoder grid; reshard
+            # back to tokens_shard_mc for residual adds.
+            if input_is_sharded:
+                memcfg = attn_island_memcfg
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
             if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
