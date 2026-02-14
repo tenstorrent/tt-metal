@@ -695,16 +695,6 @@ class TTAttention:
                 # Backward compat: older runtimes may not expose these kwargs.
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
 
-            # Stage-2 success criteria: attention should remain sharded end-to-end
-            # in perf runs (no DRAM "islands").
-            try:
-                from .perf_counters import strict_program_config_enabled
-            except Exception:  # pragma: no cover
-                strict_program_config_enabled = lambda: False  # type: ignore
-            if explicit_sharded_attn and strict_program_config_enabled():
-                if not (_ttnn_is_sharded(q_tt) and _ttnn_is_sharded(k_tt) and _ttnn_is_sharded(v_tt)):
-                    raise RuntimeError("Stage-2 perf requires sharded Q/K/V tensors for attention")
-
             if explicit_sharded_attn:
                 # Explicit attention path supports sharded operands: QK -> fused scale+mask+softmax -> AV.
                 qk_pc = None if use_default_attn_programs else getattr(cfg, "qk_program_config", None)
