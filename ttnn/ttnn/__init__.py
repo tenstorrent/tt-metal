@@ -129,6 +129,13 @@ from ttnn._ttnn.multi_device import (
     barrier as distributed_context_barrier,
 )
 
+from ttnn._ttnn.mesh_socket import (
+    DistributedSocketType,
+    DistributedEndpointSocketType,
+    DistributedISocket,
+    create_distributed_socket,
+)
+
 from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
