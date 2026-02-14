@@ -4,6 +4,7 @@
 
 #include "reduce_op_single_core_hw_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,6 +12,7 @@
 #include <cmath>
 
 using namespace tt::constants;
+using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
 
@@ -29,6 +31,13 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
     float scaler = std::sqrt(operation_attributes.scaler);
+
+    // Calculate padding dimensions from logical shape
+    const auto& logical_shape = a.logical_shape();
+    uint32_t logical_W = logical_shape[3];
+    uint32_t logical_H = logical_shape[2];
+    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
 
     uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
 
@@ -78,7 +87,19 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+
+    // Prepare reader compile-time args with padding support
+    uint32_t in_df = static_cast<uint32_t>(src0_cb_data_format);
+    uint32_t neutral_policy = get_neutral_policy(operation_attributes.math_op);
+    std::vector<uint32_t> reader_compile_time_args = {
+        packed_scaler_value,
+        Wt,
+        Ht,
+        in_df,
+        last_w,
+        last_h,
+        neutral_policy
+    };
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
@@ -87,7 +108,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_universal_start_id.cpp",
+        "reader_unary_reduce_w_with_padding.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

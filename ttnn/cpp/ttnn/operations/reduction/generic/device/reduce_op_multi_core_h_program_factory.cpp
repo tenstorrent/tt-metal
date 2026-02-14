@@ -4,6 +4,7 @@
 
 #include "reduce_op_multi_core_h_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,6 +12,7 @@
 #include <cmath>
 
 using namespace tt::constants;
+using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
 
@@ -26,6 +28,19 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
+
+    // Calculate padding dimensions from logical shape
+    const auto& logical_shape = a.logical_shape();
+    uint32_t logical_W = logical_shape[3];
+    uint32_t logical_H = logical_shape[2];
+    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
+    // If last_w or last_h is 0, it means the dimension is already tile-aligned
+    // In that case, we don't need to pad, so we set to TILE_WIDTH/TILE_HEIGHT respectively
+    // which will result in no padding being applied
+    if (last_w == 0) last_w = TILE_WIDTH;
+    if (last_h == 0) last_h = TILE_HEIGHT;
+    uint32_t neutral_policy = get_neutral_policy(operation_attributes.math_op);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -128,7 +143,16 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
     if (use_width_sharding) {
-        std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
+        // Compile-time args for sharded reader:
+        // 0: src0_cb_index, 1: src1_cb_index, 2: IN_DF, 3: LAST_W, 4: LAST_H, 5: NEUTRAL_POLICY, 6: scaler_cb_index
+        std::vector<uint32_t> reader_compile_time_args = {
+            src0_cb_index,
+            src1_cb_index,
+            static_cast<uint32_t>(src0_cb_data_format),
+            last_w,
+            last_h,
+            neutral_policy,
+            scaler_cb_index};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
@@ -138,7 +162,18 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        // Compile-time args for interleaved reader:
+        // 0: Ht, 1: Wt, 2: HtWt, 3: row_chunk, 4: IN_DF, 5: LAST_W, 6: LAST_H, 7: NEUTRAL_POLICY, 8: packed_scaler_value
+        std::vector<uint32_t> reader_compile_time_args = {
+            Ht,
+            Wt,
+            HtWt,
+            chunk_size,
+            static_cast<uint32_t>(src0_cb_data_format),
+            last_w,
+            last_h,
+            neutral_policy,
+            packed_scaler_value};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
@@ -225,8 +260,19 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
+        // Check if padding is needed (logical size is not tile-aligned)
+        uint32_t is_last_w_padded = (logical_W % TILE_WIDTH != 0) ? 1 : 0;
+        uint32_t is_last_h_padded = (logical_H % TILE_HEIGHT != 0) ? 1 : 0;
         std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+            num_cols_per_core_group_1 * Ht,
+            shard_Wt,
+            Ht,
+            NC,
+            shard_row_size,
+            shard_batch_size,
+            is_last_w_padded,
+            is_last_h_padded,
+            packed_scaler_value};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};

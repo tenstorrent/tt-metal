@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -17,6 +18,11 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
     constexpr uint32_t row_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t IN_DF         = get_compile_time_arg_val(4);
+    constexpr uint32_t LAST_W        = get_compile_time_arg_val(5);
+    constexpr uint32_t LAST_H        = get_compile_time_arg_val(6);
+    constexpr uint32_t NEUTRAL_POLICY = get_compile_time_arg_val(7);
+    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_POLICY);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -25,10 +31,10 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scalar = get_compile_time_arg_val(4);
+    constexpr uint32_t scalar = get_compile_time_arg_val(8);
     generate_reduce_scaler(cb_id_in2, scalar);
 
-    constexpr auto tensor_args = TensorAccessorArgs<5>();
+    constexpr auto tensor_args = TensorAccessorArgs<9>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;
@@ -64,6 +70,16 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
                 noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
                 noc_async_read_barrier();
+                if constexpr (LAST_W > 0) {
+                    if (w == Wt - 1) {
+                        apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
+                    }
+                }
+                if constexpr (LAST_H > 0) {
+                    if (j == Ht - 1) {
+                        apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
+                    }
+                }
                 cb_push_back(cb_id_in0, onetile);
 
                 ++w;
