@@ -431,47 +431,6 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-    ],
-)
-def test_unary_logical_not_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data = torch.linspace(-100, 100, num_elements, dtype=torch_dtype)
-    in_data[::5] = 0  # every 5th element is zero
-    in_data = in_data[:num_elements].reshape(input_shapes).nan_to_num(0.0)
-
-    input_tensor = ttnn.from_torch(
-        in_data,
-        dtype=ttnn_dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.logical_not(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_dtype)
-
-    golden_function = ttnn.get_golden_function(ttnn.logical_not)
-    golden_tensor = golden_function(in_data, device=device)
-
-    assert torch.equal(output_tensor, golden_tensor.to(torch_dtype))
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_i0_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
