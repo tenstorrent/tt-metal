@@ -234,7 +234,16 @@ class Model:
         return None
 
     def _forward_layers_and_head(
-        self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1, is_decode=True, user_id=0
+        self,
+        hidden_states,
+        rope_mats,
+        current_pos,
+        page_table,
+        kv_cache,
+        get_last_token=-1,
+        is_decode=True,
+        user_id=0,
+        batch_size=1,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -264,6 +273,7 @@ class Model:
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
                 user_id=user_id,
+                batch_size=batch_size,
             )
         logits = hidden_states
 
@@ -335,6 +345,7 @@ class Model:
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        batch_size=1,
     ):
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
@@ -355,9 +366,10 @@ class Model:
             current_pos=None,  # No current_pos for prefill
             page_table=page_table,
             kv_cache=kv_cache,
-            get_last_token=get_last_token,
+            get_last_token=get_last_token if batch_size == 1 else -1,  # Disable get_last_token for batch>1
             is_decode=False,
             user_id=user_id,
+            batch_size=batch_size,
         )
 
         return logits
@@ -476,15 +488,34 @@ class Model:
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batched_prefill=False,
     ):
-        """Prepare inputs for prefill mode"""
-        # Embed the tokens
-        if tokens.dim() == 2:
-            tokens = tokens.reshape(1, 1, 1, -1)
+        """Prepare inputs for prefill mode
 
+        Args:
+            batched_prefill: If True, tokens is [num_rows, seq_len] and will be
+                sharded across mesh rows. Each row processes a different user.
+        """
+        # Embed the tokens
         device = None if trace_enabled else self.mesh_device
 
-        tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if batched_prefill:
+            # Row-parallel batched prefill: tokens is [num_rows, seq_len]
+            # Shard across mesh rows so each row gets one user's tokens [1, seq_len]
+            num_rows = tokens.shape[0]
+            seq_len_per_user = tokens.shape[1]
+            tokens = tokens.reshape(num_rows, 1, 1, seq_len_per_user)
+            tokens = ttnn.from_torch(
+                tokens,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            )
+        else:
+            if tokens.dim() == 2:
+                tokens = tokens.reshape(1, 1, 1, -1)
+            tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
             tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -589,3 +620,37 @@ class Model:
         torch_output = ttnn.to_torch(tt_output_tensor)
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
+
+    def process_output_prefill_batched(self, tt_out, last_token_idxs, users_per_row=1, seq_len_per_user=None):
+        """Process row-parallel batched prefill output.
+
+        Extracts logits from one device per row (first device of each row).
+        Supports multiple users per row when users_per_row > 1.
+
+        Args:
+            tt_out: Multi-device output tensor
+            last_token_idxs: List of last_token_idx per user (length = num_rows * users_per_row)
+            users_per_row: Number of users per mesh row per iteration
+            seq_len_per_user: Per-user sequence length (required when users_per_row > 1)
+
+        Returns:
+            List of per-user logit tensors (one per user)
+        """
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(tt_out)
+        results = []
+        num_rows = self.mesh_device.shape[0]
+        for row in range(num_rows):
+            device_idx = row * num_cols  # First device of each row
+            torch_output = ttnn.to_torch(device_tensors[device_idx])
+            for u in range(users_per_row):
+                user_flat_idx = row * users_per_row + u
+                last_idx = last_token_idxs[user_flat_idx] if isinstance(last_token_idxs, list) else last_token_idxs
+                if users_per_row > 1:
+                    # Tokens are concatenated: user u's last token is at offset u*seq_len_per_user + last_idx
+                    global_idx = u * seq_len_per_user + last_idx
+                    result = torch_output[..., global_idx, : self.vocab_size]
+                else:
+                    result = torch_output[..., last_idx, : self.vocab_size]
+                results.append(result)
+        return results
