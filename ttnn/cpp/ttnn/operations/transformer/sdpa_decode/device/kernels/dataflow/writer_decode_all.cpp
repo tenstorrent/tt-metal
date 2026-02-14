@@ -134,9 +134,9 @@ void kernel_main() {
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
-    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
+    constexpr bool is_half_tile = (get_tile_size(cb_identity_scale_in) < 2 * tt::constants::TILE_HW);
+    generate_reduce_scaler<is_half_tile>(cb_identity_scale_in, identity_scalar_packed);
+    generate_reduce_scaler<is_half_tile>(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {

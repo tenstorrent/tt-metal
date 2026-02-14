@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole, is_watcher_enabled
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
@@ -22,8 +22,6 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])  # 32k max sequence length per chip
 def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_len):
     """Test FlashMLADecode op."""
-    if is_blackhole() and is_watcher_enabled():
-        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37631")
 
     # Calculate decode_position from num_chunks and k_chunk_size
     decode_position = num_chunks * k_chunk_size - 1
