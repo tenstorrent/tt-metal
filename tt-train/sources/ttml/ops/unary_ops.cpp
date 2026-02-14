@@ -64,6 +64,21 @@ autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_b
     return out;
 }
 
+autograd::TensorPtr tanh(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::tanh(tensor->get_value()));
+    autograd::GradFunction grad = [tensor, out]() {
+        tt::tt_metal::MemoryConfig mem_config;
+        auto res = ttnn::tanh_bw(out->get_grad(), tensor->get_value(), mem_config);
+        tensor->add_grad(res[0].value());
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
     auto log_softmax = ttnn_fixed::log_softmax(tensor->get_value(), dim);
     auto out = autograd::create_tensor(log_softmax);
