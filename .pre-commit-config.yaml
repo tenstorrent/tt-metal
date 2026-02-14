@@ -62,6 +62,14 @@ repos:
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
       pass_filenames: false
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.4.1
+  hooks:
+    - id: codespell
+      args: [
+        '--ignore-words=.codespellignore',
+        '--skip=*.bin,*.csv,build*,third_party,python_env,.git,*.egg-info,infra/tests/_data/data_collection/cicd/'
+      ]
 - repo: local
   hooks:
     - id: block-ttnn-pybind-changes
