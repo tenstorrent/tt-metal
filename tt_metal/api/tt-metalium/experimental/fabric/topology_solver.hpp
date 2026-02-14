@@ -20,11 +20,30 @@ class PhysicalSystemDescriptor;
 namespace tt::tt_fabric {
 
 /**
+ * @brief Represents a cardinal (aggregate) connection requirement between two groups of nodes
+ *
+ * Specifies that there must be num_connections total connections between group_a and group_b.
+ * These are in addition to any explicit edges in the adjacency graph. Connections can be
+ * between any pair (a, b) where a in group_a and b in group_b - the exact pairing is flexible.
+ *
+ * @tparam NodeId The type used to identify nodes in the graph
+ */
+template <typename NodeId>
+struct CardinalConnection {
+    std::vector<NodeId> group_a;
+    std::vector<NodeId> group_b;
+    size_t num_connections = 0;
+};
+
+/**
  * @brief Generic graph representation with minimal query interface
  *
  * AdjacencyGraph provides a generic graph representation that works with any node type.
  * It provides a minimal interface for querying graph structure: getting all nodes and
  * getting neighbors of a specific node.
+ *
+ * Optionally supports cardinal connections: aggregate connectivity requirements between
+ * groups of nodes (in addition to explicit adjacency edges).
  *
  * @tparam NodeId The type used to identify nodes in the graph
  */
@@ -33,6 +52,7 @@ class AdjacencyGraph {
 public:
     using NodeType = NodeId;
     using AdjacencyMap = std::map<NodeId, std::vector<NodeId>>;
+    using CardinalConnectionType = CardinalConnection<NodeId>;
 
     /**
      * @brief Construct empty adjacency graph
@@ -40,11 +60,22 @@ public:
     AdjacencyGraph() = default;
 
     /**
-     * @brief Construct adjacency graph from a MeshGraph
+     * @brief Construct adjacency graph from adjacency map
      *
-     * @param mesh_graph The mesh graph to construct the adjacency graph from
+     * @param adjacency_map Map from each node to its neighbors
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
+
+    /**
+     * @brief Construct adjacency graph from adjacency map with optional cardinal connections
+     *
+     * Nodes referenced in cardinal connection groups that are not in adjacency_map will be
+     * added with empty neighbor lists so they appear in get_nodes().
+     *
+     * @param adjacency_map Map from each node to its neighbors
+     * @param cardinal_connections Optional cardinal (aggregate) connections between groups
+     */
+    AdjacencyGraph(const AdjacencyMap& adjacency_map, const std::vector<CardinalConnectionType>& cardinal_connections);
 
     /**
      * @brief Get all nodes in the graph
@@ -71,9 +102,36 @@ public:
      */
     void print_adjacency_map(const std::string& graph_name = "Graph") const;
 
+    /**
+     * @brief Get cardinal (aggregate) connections, if any
+     *
+     * Cardinal connections specify additional connectivity requirements between groups:
+     * num_connections total between group_a and group_b (in addition to explicit edges).
+     *
+     * @return const std::vector<CardinalConnectionType>& Empty if none
+     */
+    const std::vector<CardinalConnectionType>& get_cardinal_connections() const;
+
+    /**
+     * @brief Add a cardinal connection (aggregate connectivity between groups)
+     *
+     * Specifies that num_connections are required between group_a and group_b, in addition
+     * to any explicit edges. Connections can be between any pair (a, b) with a in group_a,
+     * b in group_b.
+     *
+     * @param group_a Nodes in the first group
+     * @param group_b Nodes in the second group
+     * @param num_connections Number of additional connections required between the groups
+     */
+    void add_cardinal_connection(
+        const std::vector<NodeId>& group_a, const std::vector<NodeId>& group_b, size_t num_connections);
+
 private:
+    void rebuild_nodes_cache();
+
     AdjacencyMap adj_map_;
     std::vector<NodeId> nodes_cache_;
+    std::vector<CardinalConnectionType> cardinal_connections_;
 };
 
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph);

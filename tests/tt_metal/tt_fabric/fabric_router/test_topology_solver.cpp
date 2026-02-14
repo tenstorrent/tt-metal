@@ -243,6 +243,119 @@ TEST_F(TopologySolverTest, AdjacencyGraphWithSharedPtr) {
     EXPECT_TRUE(graph.get_neighbors(nonexistent).empty());
 }
 
+// Cardinal connection tests - optional, backward compatible
+TEST_F(TopologySolverTest, AdjacencyGraphCardinalConnections_OptionalEmpty) {
+    AdjacencyGraph<int>::AdjacencyMap adj_map{{1, {2}}, {2, {1}}};
+    AdjacencyGraph<int> graph(adj_map);
+    EXPECT_TRUE(graph.get_cardinal_connections().empty());
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphCardinalConnections_Constructor) {
+    AdjacencyGraph<int>::AdjacencyMap adj_map{{1, {2}}, {2, {1}}, {3, {4}}, {4, {3}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> cardinal = {
+        {{1, 2}, {3, 4}, 3},
+    };
+    AdjacencyGraph<int> graph(adj_map, cardinal);
+    EXPECT_EQ(graph.get_cardinal_connections().size(), 1u);
+    EXPECT_EQ(graph.get_cardinal_connections()[0].group_a.size(), 2u);
+    EXPECT_EQ(graph.get_cardinal_connections()[0].group_b.size(), 2u);
+    EXPECT_EQ(graph.get_cardinal_connections()[0].num_connections, 3u);
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphCardinalConnections_AddMethod) {
+    AdjacencyGraph<int>::AdjacencyMap adj_map{{1, {2}}, {2, {1}}};
+    AdjacencyGraph<int> graph(adj_map);
+    graph.add_cardinal_connection({1, 2}, {3, 4}, 5);
+    EXPECT_EQ(graph.get_cardinal_connections().size(), 1u);
+    EXPECT_EQ(graph.get_cardinal_connections()[0].num_connections, 5u);
+    // Nodes 3, 4 from groups should be added to graph
+    EXPECT_EQ(graph.get_nodes().size(), 4u);
+}
+
+TEST_F(TopologySolverTest, AdjacencyGraphCardinalConnections_GroupsAddedAsNodes) {
+    AdjacencyGraph<int>::AdjacencyMap adj_map{{1, {2}}, {2, {1}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> cardinal = {
+        {{1, 2}, {99, 100}, 2},
+    };
+    AdjacencyGraph<int> graph(adj_map, cardinal);
+    EXPECT_EQ(graph.get_nodes().size(), 4u);
+    EXPECT_TRUE(std::find(graph.get_nodes().begin(), graph.get_nodes().end(), 99) != graph.get_nodes().end());
+    EXPECT_TRUE(std::find(graph.get_nodes().begin(), graph.get_nodes().end(), 100) != graph.get_nodes().end());
+}
+
+TEST_F(TopologySolverTest, GraphIndexDataCardinalConstraints) {
+    using namespace tt::tt_fabric::detail;
+    AdjacencyGraph<int>::AdjacencyMap target_adj{{1, {2}}, {2, {1}}, {3, {4}}, {4, {3}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> target_cardinal = {
+        {{1, 2}, {3, 4}, 3},
+    };
+    AdjacencyGraph<int> target_graph(target_adj, target_cardinal);
+    AdjacencyGraph<int>::AdjacencyMap global_adj{{10, {20}}, {20, {10}}, {30, {40}}, {40, {30}}};
+    AdjacencyGraph<int> global_graph(global_adj);
+    GraphIndexData<int, int> graph_data(target_graph, global_graph);
+    EXPECT_EQ(graph_data.target_cardinal_constraints.size(), 1u);
+    EXPECT_EQ(graph_data.target_cardinal_constraints[0].group_a_indices.size(), 2u);
+    EXPECT_EQ(graph_data.target_cardinal_constraints[0].group_b_indices.size(), 2u);
+    EXPECT_EQ(graph_data.target_cardinal_constraints[0].num_connections, 3u);
+    EXPECT_TRUE(graph_data.global_cardinal_constraints.empty());
+}
+
+TEST_F(TopologySolverTest, GraphIndexDataCardinalConstraints_BothTargetAndGlobal) {
+    using namespace tt::tt_fabric::detail;
+    AdjacencyGraph<int>::AdjacencyMap target_adj{{1, {2}}, {2, {1}}, {3, {4}}, {4, {3}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> target_cardinal = {
+        {{1, 2}, {3, 4}, 2},
+    };
+    AdjacencyGraph<int> target_graph(target_adj, target_cardinal);
+    AdjacencyGraph<int>::AdjacencyMap global_adj{{10, {20}}, {20, {10}}, {30, {40}}, {40, {30}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> global_cardinal = {
+        {{10, 20}, {30, 40}, 3},
+    };
+    AdjacencyGraph<int> global_graph(global_adj, global_cardinal);
+    GraphIndexData<int, int> graph_data(target_graph, global_graph);
+    EXPECT_EQ(graph_data.target_cardinal_constraints.size(), 1u);
+    EXPECT_EQ(graph_data.global_cardinal_constraints.size(), 1u);
+    EXPECT_EQ(graph_data.global_cardinal_constraints[0].group_a_indices.size(), 2u);
+    EXPECT_EQ(graph_data.global_cardinal_constraints[0].group_b_indices.size(), 2u);
+    EXPECT_EQ(graph_data.global_cardinal_constraints[0].num_connections, 3u);
+}
+
+TEST_F(TopologySolverTest, SolveWithCardinalConstraints) {
+    // Target: two disjoint edges (1-2) and (3-4), plus cardinal: 2 connections between {1,2} and {3,4}
+    AdjacencyGraph<int>::AdjacencyMap target_adj{{1, {2}}, {2, {1}}, {3, {4}}, {4, {3}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> target_cardinal = {
+        {{1, 2}, {3, 4}, 2},
+    };
+    AdjacencyGraph<int> target_graph(target_adj, target_cardinal);
+    // Global: two edges (10-20) and (30-40), with 10 connected to 30 and 40 for cardinal requirement
+    AdjacencyGraph<int>::AdjacencyMap global_adj{
+        {10, {20, 30, 40}},
+        {20, {10}},
+        {30, {10, 40}},
+        {40, {10, 30}},
+    };
+    AdjacencyGraph<int> global_graph(global_adj);
+    MappingConstraints<int, int> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_TRUE(result.success) << "Cardinal constraint mapping should succeed";
+    EXPECT_EQ(result.target_to_global.size(), 4u);
+}
+
+TEST_F(TopologySolverTest, SolveWithCardinalConstraints_FailsWhenInsufficient) {
+    // Target: two edges (1-2), (3-4), cardinal: 2 connections between groups
+    AdjacencyGraph<int>::AdjacencyMap target_adj{{1, {2}}, {2, {1}}, {3, {4}}, {4, {3}}};
+    std::vector<AdjacencyGraph<int>::CardinalConnectionType> target_cardinal = {
+        {{1, 2}, {3, 4}, 2},
+    };
+    AdjacencyGraph<int> target_graph(target_adj, target_cardinal);
+    // Global: two disjoint edges only - NO connections between the two pairs
+    AdjacencyGraph<int>::AdjacencyMap global_adj{{10, {20}}, {20, {10}}, {30, {40}}, {40, {30}}};
+    AdjacencyGraph<int> global_graph(global_adj);
+    MappingConstraints<int, int> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    EXPECT_FALSE(result.success) << "Should fail when cardinal constraint cannot be satisfied";
+}
+
 // MappingConstraints Tests
 // Use different types to verify template type checking
 using TestTargetNode = uint32_t;
@@ -1492,6 +1605,85 @@ AdjacencyGraph<NodeId> create_2d_torus_graph(size_t rows, size_t cols) {
     return AdjacencyGraph<NodeId>(adj_map);
 }
 
+// Helper: create N chained 2x4 meshes in a line using cardinal connections
+// Creates N separate 2x4 meshes and connects them sequentially via cardinal connections
+template <typename NodeId>
+AdjacencyGraph<NodeId> create_chained_2x4_meshes_with_cardinal(size_t num_meshes) {
+    using AdjacencyMap = typename AdjacencyGraph<NodeId>::AdjacencyMap;
+    using CardinalConnectionType = typename AdjacencyGraph<NodeId>::CardinalConnectionType;
+    AdjacencyMap adj_map;
+    std::vector<CardinalConnectionType> cardinal_connections;
+    const size_t mesh_size = 2 * 4;  // 8 nodes per mesh
+
+    // Create each 2x4 mesh and offset node IDs
+    for (size_t mesh_idx = 0; mesh_idx < num_meshes; ++mesh_idx) {
+        auto mesh = create_2d_mesh_graph<NodeId>(2, 4);
+        const auto& mesh_nodes = mesh.get_nodes();
+        NodeId base_id = static_cast<NodeId>(mesh_idx * mesh_size);
+
+        // Copy mesh edges with offset (only within-mesh edges)
+        for (const auto& node : mesh_nodes) {
+            NodeId global_node = static_cast<NodeId>(base_id + static_cast<NodeId>(node));
+            const auto& neighbors = mesh.get_neighbors(node);
+            std::vector<NodeId> global_neighbors;
+            for (const auto& neighbor : neighbors) {
+                global_neighbors.push_back(static_cast<NodeId>(base_id + static_cast<NodeId>(neighbor)));
+            }
+            adj_map[global_node] = global_neighbors;
+        }
+
+        // Connect to previous mesh using cardinal connection: rightmost column of previous mesh to leftmost column of
+        // this mesh
+        if (mesh_idx > 0) {
+            CardinalConnectionType cardinal;
+            // Group A: rightmost column of previous mesh (nodes at (row, 3) for row in [0, 1])
+            for (size_t row = 0; row < 2; ++row) {
+                NodeId prev_right = static_cast<NodeId>((mesh_idx - 1) * mesh_size + row * 4 + 3);
+                cardinal.group_a.push_back(prev_right);
+            }
+            // Group B: leftmost column of this mesh (nodes at (row, 0) for row in [0, 1])
+            for (size_t row = 0; row < 2; ++row) {
+                NodeId curr_left = static_cast<NodeId>(mesh_idx * mesh_size + row * 4);
+                cardinal.group_b.push_back(curr_left);
+            }
+            // 2 connections (one per row)
+            cardinal.num_connections = 1;
+            cardinal_connections.push_back(cardinal);
+        }
+    }
+    return AdjacencyGraph<NodeId>(adj_map, cardinal_connections);
+}
+
+TEST_F(TopologySolverTest, StressTest_4x2x4MeshesCardinalOn4x8Mesh) {
+    // Target: 4 chained 2x4 meshes (stages) with cardinal connections between meshes = 32 nodes
+    // Each mesh is internally connected, but meshes are connected via cardinal constraints
+    // Each cardinal constraint requires 2 connections between adjacent meshes
+    auto target_graph = create_chained_2x4_meshes_with_cardinal<TestTargetNode>(4);
+    // Global: Single 4x8 mesh = 32 nodes
+    // No cardinal connections in global graph - all connections are explicit
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+
+    EXPECT_EQ(target_graph.get_nodes().size(), 32u);                // 4 meshes * 8 nodes = 32
+    EXPECT_EQ(global_graph.get_nodes().size(), 32u);                // 4 * 8 = 32
+    EXPECT_EQ(target_graph.get_cardinal_connections().size(), 3u);  // 3 cardinal constraints between 4 meshes
+    EXPECT_EQ(global_graph.get_cardinal_connections().size(), 0u);  // No cardinal in global graph
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Stress test: 4x2x4 meshes (cardinal) should map onto 4x8 mesh. Error: "
+                                << result.error_message;
+
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.size(), 32u);
+        log_info(
+            tt::LogFabric,
+            "Stress test completed: dfs_calls={}, backtracks={}",
+            result.stats.dfs_calls,
+            result.stats.backtrack_count);
+    }
+}
+
 TEST_F(TopologySolverTest, RequiredConstraints_4x8MeshOn8x8Mesh_CornersToCorners) {
     // Create global graph: 8x8 mesh (64 nodes, no wrap-around, has 4 corners)
     auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 8);
@@ -2112,6 +2304,195 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
             state.dfs_calls,
             state.backtrack_count,
             state.error_message);
+    }
+}
+
+// ============================================================================
+// Cardinality + Topology Mapping Integration Tests
+// ============================================================================
+
+TEST_F(TopologySolverTest, Cardinality_2x4MeshWithCrossGroupConnections) {
+    // Target: 2x4 mesh (8 nodes). Group A = left half {0,1,4,5}, Group B = right half {2,3,6,7}
+    // Cardinal: 3 connections between groups (in addition to explicit mesh edges at boundary)
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(2, 4);
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    for (const auto& node : target_graph.get_nodes()) {
+        target_adj[node] = target_graph.get_neighbors(node);
+    }
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{0, 1, 4, 5}, {2, 3, 6, 7}, 3},
+    };
+    AdjacencyGraph<TestTargetNode> target_final(target_adj, target_cardinal);
+
+    // Global: same 2x4 mesh + extra cross-group edges (0-2, 0-3, 1-3) for cardinal
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(2, 4);
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    for (const auto& node : global_graph.get_nodes()) {
+        global_adj[node] = global_graph.get_neighbors(node);
+    }
+    global_adj[0].push_back(2);
+    global_adj[2].push_back(0);
+    global_adj[0].push_back(3);
+    global_adj[3].push_back(0);
+    global_adj[1].push_back(3);
+    global_adj[3].push_back(1);
+    AdjacencyGraph<TestGlobalNode> global_final(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_final, global_final, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "2x4 mesh with cardinal should map successfully";
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.size(), 8u);
+        for (const auto& [t, g] : result.target_to_global) {
+            const auto& t_neighbors = target_final.get_neighbors(t);
+            const auto& g_neighbors = global_final.get_neighbors(g);
+            for (const auto& tn : t_neighbors) {
+                auto it = result.target_to_global.find(tn);
+                if (it != result.target_to_global.end()) {
+                    EXPECT_TRUE(std::find(g_neighbors.begin(), g_neighbors.end(), it->second) != g_neighbors.end())
+                        << "Adjacency must be preserved";
+                }
+            }
+        }
+    }
+}
+
+TEST_F(TopologySolverTest, Cardinality_RingTopologyWithBipartiteConnection) {
+    // Target: 8-node ring. Group A={0,1,2,3}, B={4,5,6,7}. Cardinal: 2 extra between halves
+    auto target_graph = create_1d_ring_graph<TestTargetNode>(8);
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    for (const auto& node : target_graph.get_nodes()) {
+        target_adj[node] = target_graph.get_neighbors(node);
+    }
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{0, 1, 2, 3}, {4, 5, 6, 7}, 2},
+    };
+    AdjacencyGraph<TestTargetNode> target_final(target_adj, target_cardinal);
+
+    // Global: 8-node ring with extra cross-links (0-4, 1-5)
+    auto global_graph = create_1d_ring_graph<TestGlobalNode>(8);
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    for (const auto& node : global_graph.get_nodes()) {
+        global_adj[node] = global_graph.get_neighbors(node);
+    }
+    global_adj[0].push_back(4);
+    global_adj[4].push_back(0);
+    global_adj[1].push_back(5);
+    global_adj[5].push_back(1);
+    AdjacencyGraph<TestGlobalNode> global_final(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_final, global_final, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Ring with cardinal should map successfully";
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.size(), 8u);
+    }
+}
+
+TEST_F(TopologySolverTest, Cardinality_WithRequiredConstraint) {
+    // Target: two chains (0-1) and (2-3), cardinal 1 between groups
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj{{0, {1}}, {1, {0}}, {2, {3}}, {3, {2}}};
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{0, 1}, {2, 3}, 1},
+    };
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj, target_cardinal);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj{
+        {10, {11, 20}},
+        {11, {10}},
+        {20, {10, 21}},
+        {21, {20}},
+    };
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(0, 10);
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success);
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.at(0), 10u);
+        EXPECT_EQ(result.target_to_global.size(), 4u);
+    }
+}
+
+TEST_F(TopologySolverTest, Cardinality_ExplicitPlusCardinal_NoDoubleCount) {
+    // Explicit edge 1-3 between groups + cardinal 1. Total needed: 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj{
+        {1, {2, 3}},
+        {2, {1}},
+        {3, {1, 4}},
+        {4, {3}},
+    };
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{1, 2}, {3, 4}, 1},
+    };
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj, target_cardinal);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj{
+        {10, {11, 20}},
+        {11, {10, 20}},
+        {20, {10, 11, 21}},
+        {21, {20}},
+    };
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Explicit + cardinal (no double count) should succeed";
+}
+
+TEST_F(TopologySolverTest, Cardinality_MeshStructureMapsButCardinalFails) {
+    // 2x2 mesh, cardinal 3 between {0,1} and {2,3}. Mesh has 1 edge at boundary. Total: 4 needed.
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(2, 2);
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    for (const auto& node : target_graph.get_nodes()) {
+        target_adj[node] = target_graph.get_neighbors(node);
+    }
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{0, 1}, {2, 3}, 3},
+    };
+    AdjacencyGraph<TestTargetNode> target_final(target_adj, target_cardinal);
+
+    // Global: 2x2 mesh only - 1 connection between groups. Insufficient.
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(2, 2);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_final, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_FALSE(result.success) << "Mesh structure matches but cardinal insufficient - should fail";
+}
+
+TEST_F(TopologySolverTest, Cardinality_TargetAndGlobalBothHaveCardinal) {
+    // Target: two chains (0-1) and (2-3), cardinal 2 between groups
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj{{0, {1}}, {1, {0}}, {2, {3}}, {3, {2}}};
+    std::vector<AdjacencyGraph<TestTargetNode>::CardinalConnectionType> target_cardinal = {
+        {{0, 1}, {2, 3}, 2},
+    };
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj, target_cardinal);
+
+    // Global: 10-11, 20-21. 1 explicit edge (10-20) between groups.
+    // Global cardinal adds 2 capacity for underspecified links
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj{
+        {10, {11, 20}},
+        {11, {10}},
+        {20, {10, 21}},
+        {21, {20}},
+    };
+    std::vector<AdjacencyGraph<TestGlobalNode>::CardinalConnectionType> global_cardinal = {
+        {{10, 11}, {20, 21}, 2},
+    };
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj, global_cardinal);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    EXPECT_TRUE(result.success) << "Target + global cardinal should succeed with combined capacity";
+    if (result.success) {
+        EXPECT_EQ(result.target_to_global.size(), 4u);
     }
 }
 

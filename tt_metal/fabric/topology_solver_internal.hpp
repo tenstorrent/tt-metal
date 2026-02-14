@@ -29,10 +29,22 @@ struct MappingResult;
 namespace tt::tt_fabric::detail {
 
 /**
+ * @brief Indexed representation of a cardinal (aggregate) connection constraint
+ *
+ * Same as CardinalConnection but uses node indices instead of node IDs for O(1) lookups.
+ */
+struct CardinalConstraintIdx {
+    std::vector<size_t> group_a_indices;
+    std::vector<size_t> group_b_indices;
+    size_t num_connections = 0;
+};
+
+/**
  * @brief Indexed graph representation for efficient lookups
  *
  * Converts AdjacencyGraph into index-based representation for O(1) lookups.
  * Stores deduplicated, sorted adjacency lists and connection counts.
+ * Includes indexed cardinal constraints when present in the source graphs.
  */
 template <typename TargetNode, typename GlobalNode>
 struct GraphIndexData {
@@ -55,6 +67,10 @@ struct GraphIndexData {
     // Degree vectors
     std::vector<size_t> target_deg;
     std::vector<size_t> global_deg;
+
+    // Cardinal constraints (indexed) - empty if none in source graphs
+    std::vector<CardinalConstraintIdx> target_cardinal_constraints;
+    std::vector<CardinalConstraintIdx> global_cardinal_constraints;
 
     size_t n_target = 0;
     size_t n_global = 0;
@@ -200,6 +216,7 @@ private:
      * Only called for candidates that passed hard constraint checks.
      * cost = -is_preferred * SOFT_WEIGHT
      *      - channel_match_count * SOFT_WEIGHT
+     *      - cardinal_connectivity_bonus (prefer nodes with better cross-group connectivity)
      *      + degree_gap * RUNTIME_WEIGHT
      */
     template <typename TargetNode, typename GlobalNode>
@@ -209,6 +226,7 @@ private:
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         const std::vector<int>& mapping,
+        const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
 
     /**
@@ -224,6 +242,19 @@ private:
         const std::vector<int>& mapping,
         const std::vector<bool>& used,
         ConnectionValidationMode validation_mode);
+
+    /**
+     * @brief Check cardinal constraints when assigning target_idx -> global_idx would complete
+     * both groups of a target cardinal constraint
+     *
+     * Returns false if any such constraint would be violated (early pruning in hard constraints).
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static bool check_cardinal_constraint_if_complete(
+        size_t target_idx,
+        size_t global_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const std::vector<int>& mapping);
 
     // Cost weights (ensure hard >> soft >> runtime)
     static constexpr int HARD_WEIGHT = 1000000;
@@ -301,6 +332,21 @@ struct ConsistencyChecker {
         size_t start_global_idx,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const std::vector<bool>& used);
+
+    /**
+     * @brief Check cardinal constraints for a complete mapping
+     *
+     * For each target cardinal constraint: total connections between mapped groups in global
+     * must be >= (explicit edges between groups in target) + num_connections. Cardinal
+     * connections are additional to explicit edges (no double counting).
+     *
+     * @param mapping Complete mapping (all target nodes assigned)
+     * @param graph_data Indexed graph data (with target_cardinal_constraints)
+     * @return true if all cardinal constraints are satisfied
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static bool check_cardinal_constraints(
+        const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data);
 };
 
 template <typename TargetNode, typename GlobalNode>
