@@ -268,6 +268,7 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     } else {
         while (!ncrisc_noc_posted_writes_sent(noc));
     }
+    invalidate_l1_cache();
     WAYPOINT("NPPD");
 }
 
