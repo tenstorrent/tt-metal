@@ -171,7 +171,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source", "traced_machine_info"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash", "traced_source", "traced_machine_info", "config_id"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -335,7 +335,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
     for i, test_vector in enumerate(test_vectors):
         input_hash = header_info[i].get("input_hash", "N/A")
-        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Input Hash='{input_hash}'")
+        config_id = header_info[i].get("config_id")
+        if config_id:
+            logger.info(
+                f"Executing test: Module='{module_name}', Suite='{suite_name}', Config ID='{config_id}', Input Hash='{input_hash}'"
+            )
+        else:
+            logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Input Hash='{input_hash}'")
         if config.dry_run:
             logger.info(f"Would have executed test for vector {test_vector}")
             suite_pbar.update()
@@ -346,6 +352,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
         result["input_hash"] = input_hash
+        if config_id:
+            result["config_id"] = config_id
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1

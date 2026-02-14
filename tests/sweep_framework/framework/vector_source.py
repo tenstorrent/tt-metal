@@ -127,13 +127,85 @@ class VectorExportSource(VectorSource):
             pass
         return []
 
+    def _get_machine_info(self):
+        """Get machine info using get_machine_info from generic_ops_tracer."""
+        try:
+            import sys
+            import os
+
+            # Add model_tracer to path if not already there
+            # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
+            # to get to repo root, then into model_tracer
+            model_tracer_path = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "model_tracer"
+            model_tracer_path_str = str(model_tracer_path)
+
+            if model_tracer_path_str not in sys.path:
+                sys.path.insert(0, model_tracer_path_str)
+
+            # Import the module
+            from generic_ops_tracer import get_machine_info
+
+            machine_info = get_machine_info()
+
+            # get_machine_info() might return None if tt-smi fails
+            if machine_info is None:
+                logger.warning("get_machine_info() returned None - tt-smi might have failed")
+                return None
+
+            logger.debug(f"Successfully retrieved machine info: {machine_info}")
+            return machine_info
+        except Exception as e:
+            import traceback
+
+            logger.warning(f"Failed to get machine info: {e}\n{traceback.format_exc()}")
+            return None
+
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including mesh variants)"""
+        """Load test vectors from vectors_export directory (including mesh variants)
+
+        If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
+        those matching the current machine's configuration.
+        """
+        import os
+
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
+        # Check if this is a model_traced run (resource filtering only applies to model_traced)
+        is_model_traced = "model_traced" in module_name
+
+        # Get current machine info (for device/card filtering in model_traced runs)
+        current_machine_info = None
+        if is_model_traced:
+            current_machine_info = self._get_machine_info()
+
+        # Check if mesh filtering is enabled via environment variable
+        mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        target_mesh = None
+
+        if mesh_filter:
+            logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
+
+            if current_machine_info:
+                logger.info(
+                    f"Current machine: board_type={current_machine_info['board_type']}, "
+                    f"device_series={current_machine_info['device_series']}, "
+                    f"card_count={current_machine_info['card_count']}"
+                )
+            else:
+                logger.warning("Could not determine current machine info from tt-smi")
+
+            # Parse target mesh shape from env var (e.g., "1x2" -> (1, 2))
+            try:
+                target_rows, target_cols = map(int, mesh_filter.lower().split("x"))
+                target_mesh = (target_rows, target_cols)
+            except (ValueError, AttributeError):
+                logger.warning(f"Invalid MESH_DEVICE_SHAPE format: {mesh_filter}, expected NxM (e.g., 1x2)")
+
         all_vectors = []
+        filtered_count = 0
+        machine_mismatch_count = 0
 
         # Load vectors from all matching files (e.g., base + mesh variants)
         for module_file in module_files:
@@ -169,11 +241,107 @@ class VectorExportSource(VectorSource):
                             # Preserve stored sweep_name (may include mesh suffix), fallback to module_name
                             if "sweep_name" not in vector_data:
                                 vector_data["sweep_name"] = module_name
+
+                            # Get traced_machine_info for filtering checks
+                            traced_machine_info = vector_data.get("traced_machine_info")
+                            # Handle both list and dict formats
+                            if isinstance(traced_machine_info, list) and traced_machine_info:
+                                traced_machine_info = traced_machine_info[0]
+
+                            # Check if required mesh shape exceeds available devices
+                            # This check only applies to model_traced runs (not nightly/lead models)
+                            # and is independent of MESH_DEVICE_SHAPE env var
+                            skip_for_resources = False
+                            if current_machine_info and traced_machine_info and isinstance(traced_machine_info, dict):
+                                # Get the mesh shape from traced config (this is what actually matters)
+                                traced_mesh_shape = traced_machine_info.get("mesh_device_shape")
+
+                                # Calculate required device count from mesh shape
+                                if isinstance(traced_mesh_shape, list) and len(traced_mesh_shape) == 2:
+                                    required_device_count = traced_mesh_shape[0] * traced_mesh_shape[1]
+                                else:
+                                    # Fallback to device_count if mesh_shape not available
+                                    required_device_count = traced_machine_info.get("device_count", 1)
+
+                                # Get current machine capabilities
+                                current_device_count = current_machine_info.get("device_count", 1)
+
+                                # Skip if vector requires more devices than available
+                                # Use mesh shape product (actual requirement) instead of card_count from trace machine
+                                if required_device_count > current_device_count:
+                                    logger.debug(
+                                        f"Skipping vector requiring {required_device_count} devices "
+                                        f"(mesh shape: {traced_mesh_shape}) "
+                                        f"(current machine has {current_device_count} devices)"
+                                    )
+                                    machine_mismatch_count += 1
+                                    skip_for_resources = True
+
+                            if skip_for_resources:
+                                continue
+
+                            # Apply mesh filtering if enabled
+                            if mesh_filter and target_mesh:
+                                if traced_machine_info and isinstance(traced_machine_info, dict):
+                                    # Extract mesh shape from traced config
+                                    vector_mesh = traced_machine_info.get("mesh_device_shape")
+                                    if isinstance(vector_mesh, list) and len(vector_mesh) == 2:
+                                        vector_mesh_tuple = (vector_mesh[0], vector_mesh[1])
+                                    else:
+                                        vector_mesh_tuple = (1, 1)  # Default for single device
+
+                                    # Check if mesh shape matches
+                                    if vector_mesh_tuple != target_mesh:
+                                        filtered_count += 1
+                                        continue
+
+                                    # Validate device_count consistency
+                                    device_count = traced_machine_info.get("device_count", 1)
+                                    expected_device_count = target_mesh[0] * target_mesh[1]
+                                    if device_count != expected_device_count:
+                                        logger.debug(
+                                            f"Vector mesh {vector_mesh_tuple} has device_count={device_count}, "
+                                            f"expected {expected_device_count} for mesh {target_mesh}"
+                                        )
+                                        filtered_count += 1
+                                        continue
+
+                                    # Check machine compatibility if current_machine_info is available
+                                    if current_machine_info:
+                                        # Check board_type (flexible matching for wormhole variants)
+                                        traced_board = traced_machine_info.get("board_type", "").lower()
+                                        current_board = current_machine_info.get("board_type", "").lower()
+                                        if traced_board and current_board:
+                                            # Allow "wormhole" to match "wormhole_b0" etc.
+                                            board_match = (
+                                                traced_board == current_board
+                                                or "wormhole" in traced_board
+                                                and "wormhole" in current_board
+                                            )
+                                            if not board_match:
+                                                machine_mismatch_count += 1
+                                                continue
+
+                                        # Check device_series
+                                        traced_series = traced_machine_info.get("device_series", "").lower()
+                                        current_series = current_machine_info.get("device_series", "").lower()
+                                        if traced_series and current_series and traced_series != current_series:
+                                            machine_mismatch_count += 1
+                                            continue
+
                             all_vectors.append(vector_data)
 
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Failed to load vectors from {module_file}: {e}")
-                continue
+                logger.error(f"Error loading vectors from {module_file}: {e}")
+
+        # Log filtering results if filtering was enabled
+        if mesh_filter and (filtered_count > 0 or machine_mismatch_count > 0):
+            total_filtered = filtered_count + machine_mismatch_count
+            logger.info(
+                f"Filtered out {total_filtered} vectors "
+                f"(mesh mismatch: {filtered_count}, machine mismatch: {machine_mismatch_count}), "
+                f"loaded {len(all_vectors)} vectors"
+            )
 
         return all_vectors
 

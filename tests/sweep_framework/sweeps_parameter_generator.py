@@ -40,7 +40,15 @@ def get_mesh_shape_from_vector(vector):
         tuple: (rows, cols) representing mesh shape, e.g., (2, 4) or (1, 1) for single-chip
     """
     machine_info = vector.get("traced_machine_info")
-    if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
+
+    # Handle dict format (current V2 format)
+    if machine_info and isinstance(machine_info, dict):
+        mesh_shape = machine_info.get("mesh_device_shape")
+        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+            return tuple(mesh_shape)
+
+    # Handle list format (legacy format)
+    elif machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
         # Check if mesh_device_shape is directly in machine_info (old format)
         mesh_shape = machine_info[0].get("mesh_device_shape")
         if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
