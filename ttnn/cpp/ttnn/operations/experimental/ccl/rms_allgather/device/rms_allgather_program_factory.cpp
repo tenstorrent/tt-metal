@@ -5,6 +5,7 @@
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
+#include "ttnn/common/vector_init.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -985,13 +986,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             tt::tt_metal::SetRuntimeArgs(
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
-            std::vector<uint32_t> mcast_receiver_args;
-            mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            mcast_receiver_args.push_back(0);
-            mcast_receiver_args.push_back(0);
-            mcast_receiver_args.push_back(0);
-            mcast_receiver_args.push_back(in0_mcast_noc_x[0]);
-            mcast_receiver_args.push_back(in0_mcast_noc_y[0]);
+            auto mcast_receiver_args = vector_init<uint32_t>(
+                all_to_all_worker_tile_offset_size_bytes, 0u, 0u, 0u, in0_mcast_noc_x[0], in0_mcast_noc_y[0]);
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
         }
         // Set all gather runtime args

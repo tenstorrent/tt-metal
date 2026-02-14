@@ -8,6 +8,8 @@
 #include <string>
 #include <optional>
 
+#include "ttnn/common/vector_init.hpp"
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -984,9 +986,9 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
             } else {  // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
-                std::vector<uint32_t> mcast_receiver_args;
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).x);
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).y);
+                auto mcast_receiver_args = vector_init<uint32_t>(
+                    device->worker_core_from_logical_core(group.front()).x,
+                    device->worker_core_from_logical_core(group.front()).y);
                 tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
             }
         }
@@ -997,17 +999,17 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
     for (auto core : core_coords) {
-        std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(packed_cinv_value);
-        writer_mcast_sender_args.push_back(packed_winv_value);
-        writer_mcast_sender_args.push_back(e.u);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
-        writer_mcast_sender_args.push_back(input_negative_mask_dram_addr);
-        writer_mcast_sender_args.push_back(gamma_tile_start_id);
-        writer_mcast_sender_args.push_back(beta_tile_start_id);
-        writer_mcast_sender_args.push_back(input_mask_tile_start_id);
+        auto writer_mcast_sender_args = vector_init<uint32_t>(
+            packed_cinv_value,
+            packed_winv_value,
+            e.u,
+            gamma_dram_addr,
+            beta_dram_addr,
+            input_mask_dram_addr,
+            input_negative_mask_dram_addr,
+            gamma_tile_start_id,
+            beta_tile_start_id,
+            input_mask_tile_start_id);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id, core, writer_mcast_sender_args);
         writer_kernel_ids.push_back(writer_kernels_id);
 
