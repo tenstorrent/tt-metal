@@ -267,11 +267,11 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(input_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(input_tensor[i].mesh_buffer())
             .append_to(sender_reader_forward_kernel_config.compile_args);
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_reader_forward_kernel_config.compile_args);
     }
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -303,7 +303,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_writer_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_writer_forward_kernel_config.compile_args);
     }
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -333,11 +333,11 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_reader_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(input_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(input_tensor[i].mesh_buffer())
             .append_to(sender_reader_backward_kernel_config.compile_args);
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_reader_backward_kernel_config.compile_args);
     }
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
@@ -369,7 +369,7 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         sender_writer_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
     }
     for (uint32_t i = 0; i < num_inputs; i++) {
-        tt::tt_metal::TensorAccessorArgs(output_tensor[i].buffer())
+        tt::tt_metal::TensorAccessorArgs(output_tensor[i].mesh_buffer())
             .append_to(sender_writer_backward_kernel_config.compile_args);
     }
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(

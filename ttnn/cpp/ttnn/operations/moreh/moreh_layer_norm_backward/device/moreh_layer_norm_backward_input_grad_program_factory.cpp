@@ -162,14 +162,14 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(do_mask_h), static_cast<uint32_t>(do_mask_w)};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gamma.has_value() ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma.has_value() ? gamma->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};

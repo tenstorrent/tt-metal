@@ -322,8 +322,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> reader_mcast_receiver_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
@@ -350,8 +350,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"num_rows_per_group", num_rows_per_batch_per_core_group_1},
     };
 
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -420,12 +420,12 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         writer_named_compile_time_args_group_1["page_size"] = TILE_HW * datum_size_bytes;
     }
 
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().mesh_buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
 
     std::string writer_kernel =

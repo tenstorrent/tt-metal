@@ -58,7 +58,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/rand/device/kernels/";
     std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";

@@ -85,7 +85,7 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
         head_tiles,
         1,  // read the first phase
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"

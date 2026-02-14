@@ -769,17 +769,18 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         full_tile.get_tile_size(q_df),
         sliding_window_size.value_or(0),
     };
-    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
+    tt_metal::TensorAccessorArgs(input_tensor_k.mesh_buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_q.mesh_buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_v.mesh_buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
+    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args_common);
 
     if (use_attention_sink) {
-        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+        tt_metal::TensorAccessorArgs(*attention_sink->mesh_buffer()).append_to(reader_compile_time_args_common);
     } else {
         reader_compile_time_args_common.push_back(0);
     }
@@ -812,7 +813,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
     };
-    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,

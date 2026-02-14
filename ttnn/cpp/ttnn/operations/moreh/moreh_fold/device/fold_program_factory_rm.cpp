@@ -123,12 +123,12 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
         static_cast<uint32_t>(output_cb_index),
         static_cast<uint32_t>(scratch_cb_index),
     };
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(output_cb_index),
     };
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";

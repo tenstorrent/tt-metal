@@ -73,9 +73,9 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_vec = ttnn::kernel_utils::to_vector(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(args.condition_tensor.buffer()).append_to(reader_compile_time_vec);
-    tt::tt_metal::TensorAccessorArgs(args.true_value_tensor.buffer()).append_to(reader_compile_time_vec);
-    tt::tt_metal::TensorAccessorArgs(args.false_value_tensor.buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.condition_tensor.mesh_buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.true_value_tensor.mesh_buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.false_value_tensor.mesh_buffer()).append_to(reader_compile_time_vec);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
@@ -83,11 +83,10 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
 
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
-    tt_metal::Buffer* dst_buffer = output.buffer();
     CompileTimeWriterKernelArgs writer_compile_time_args = {.cb_dst = output_cb_index};
     std::map<std::string, std::string> writer_defines;
     std::vector<uint32_t> writer_compile_time_vec = ttnn::kernel_utils::to_vector(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_vec);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",

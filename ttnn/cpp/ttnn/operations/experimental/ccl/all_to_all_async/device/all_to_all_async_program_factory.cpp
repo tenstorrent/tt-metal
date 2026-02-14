@@ -304,7 +304,8 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         num_targets_forward,             // num_targets_forward_direction
         num_targets_backward             // num_targets_backward_direction
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(reader_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer())
+        .append_to(reader_kernel_config.compile_args);
     log_trace(tt::LogOp, "Reader Compile Args:");
     for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -333,9 +334,9 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         contig_pages_advanced,           // contig_pages_advanced
         N_DRAM_BANKS                     // num_dram_banks
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_buffer())
         .append_to(writer_kernel_config.compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_buffer())
         .append_to(writer_kernel_config.compile_args);
     for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -358,7 +359,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_buffer())
         .append_to(receiver_writer_kernel_config.compile_args);
 
     auto receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -380,9 +381,9 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
         receiver_cb_index,
         pages_per_packet,
         N_DRAM_BANKS};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer())
         .append_to(receiver_reader_kernel_config.compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_buffer())
         .append_to(receiver_reader_kernel_config.compile_args);
     auto receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

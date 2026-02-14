@@ -78,13 +78,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -256,13 +257,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -437,13 +439,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

@@ -230,11 +230,11 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs().append_to(reader_compile_time_args);  // mask tensor (not used in ring)
-    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
+    TensorAccessorArgs(page_table.has_value() ? page_table->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
@@ -262,7 +262,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -297,7 +297,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         0,  //(uint32_t)sliding_window_size,
         0,  //(std::uint32_t)use_attention_sink,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

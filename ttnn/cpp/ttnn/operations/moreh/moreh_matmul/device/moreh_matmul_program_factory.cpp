@@ -310,18 +310,18 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_h,
         other_mask_w,
     };
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(other.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(other.mesh_buffer()).append_to(reader_compile_time_args);
 
     if (bias.has_value()) {
         reader_defines["FUSE_BIAS"] = "1";
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
-        TensorAccessorArgs(bias->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(bias->mesh_buffer()).append_to(reader_compile_time_args);
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";

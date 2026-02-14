@@ -93,8 +93,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)index.physical_volume(),  // num elements in index array
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index.mesh_buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -109,7 +109,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)input.element_size(),     // element size in bytes
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,

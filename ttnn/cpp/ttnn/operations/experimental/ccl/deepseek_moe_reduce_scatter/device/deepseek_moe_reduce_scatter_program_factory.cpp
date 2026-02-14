@@ -350,15 +350,15 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
         input_slice_7_cb_id,
         compute_cb_id,
     };
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(0).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(1).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(2).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(3).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(4).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(5).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(6).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(7).buffer()).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(0).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(1).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(2).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(3).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(4).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(5).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(6).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_slice_tensors.at(7).mesh_buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_ct_args);
 
     std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/kernels/"

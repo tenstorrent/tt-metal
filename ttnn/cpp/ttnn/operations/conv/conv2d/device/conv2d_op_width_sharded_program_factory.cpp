@@ -547,7 +547,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         activation_kernel_compile_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer())
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_tensor.mesh_buffer())
             .append_to(activation_kernel_compile_args);
     }
 
@@ -555,8 +555,8 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);
     }
 
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_buffer()).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->mesh_buffer() : nullptr).append_to(weights_kernel_compile_args);
 
     auto act_kernel_id = CreateKernel(
         program,

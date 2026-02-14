@@ -248,8 +248,8 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias.mesh_buffer()).append_to(reader_compile_time_args);
 
     // Reader kernel
     auto reader_kernel_id = CreateKernel(
@@ -359,8 +359,8 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_weights.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_indices.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,

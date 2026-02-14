@@ -165,10 +165,10 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
         dst_reg_count,
         packed_winv_value,
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_id, output_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,

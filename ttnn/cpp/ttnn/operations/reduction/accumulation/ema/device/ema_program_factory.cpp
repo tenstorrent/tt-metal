@@ -102,10 +102,10 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
     // Compile time args for the kernels
     // ---------------------------------
     std::vector<uint32_t> reader_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_args);
 
     std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_args);
 
     std::vector<uint32_t> compute_compile_args = {
         total_batch_channel_tiles_per_core,

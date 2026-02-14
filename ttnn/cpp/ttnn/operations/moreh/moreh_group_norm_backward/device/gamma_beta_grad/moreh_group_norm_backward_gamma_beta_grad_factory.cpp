@@ -138,16 +138,17 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         "writer_moreh_group_norm_backward_gamma_beta_grad.cpp");
 
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(gamma_grad_has_value)};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(output_grad.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(beta_grad_has_value)};
-    TensorAccessorArgs(gamma_grad_has_value ? gamma_grad.value().buffer() : nullptr)
+    TensorAccessorArgs(gamma_grad_has_value ? gamma_grad.value().mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    TensorAccessorArgs(beta_grad_has_value ? beta_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(beta_grad_has_value ? beta_grad.value().mesh_buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);

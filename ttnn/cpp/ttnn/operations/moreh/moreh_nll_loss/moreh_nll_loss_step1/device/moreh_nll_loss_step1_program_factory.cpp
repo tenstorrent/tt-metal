@@ -104,11 +104,11 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

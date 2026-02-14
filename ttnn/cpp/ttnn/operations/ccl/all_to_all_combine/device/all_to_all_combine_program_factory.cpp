@@ -191,9 +191,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mapping_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(metadata_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -230,7 +230,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;

@@ -72,7 +72,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].mesh_buffer()->address();
-        index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
+        index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].mesh_buffer());
         index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
 
@@ -124,7 +124,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     std::map<std::string, std::string> writer_defines;
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(input_5d.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_5d.mesh_buffer()).append_to(reader_compile_time_args);
     for (auto& dim : index_info) {
         dim.args.append_to(reader_compile_time_args);
     }
@@ -135,7 +135,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         reader_compile_time_args,
         reader_defines);
     std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",

@@ -176,7 +176,7 @@ AllToAllAsyncGenericProgram::create_at(
         dst_in_dims                                 // dst_inner_dims_size
     };
 
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer())
         .append_to(sender_reader_kernel_config.compile_args);
 
     auto sender_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -249,7 +249,8 @@ AllToAllAsyncGenericProgram::create_at(
         (concat_num_half_tiles * device_index) / 2  // full_block_offset
     };
 
-    tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_return_value.mesh_buffer())
+        .append_to(sender_writer_kernel_config.compile_args);
 
     auto sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

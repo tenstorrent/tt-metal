@@ -76,7 +76,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
 
     std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
-    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).mesh_buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle receive_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
@@ -85,7 +85,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // And the writer
     std::vector<uint32_t> writer_ct_args = {receiver_cb_id};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle receive_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",

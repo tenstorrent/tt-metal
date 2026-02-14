@@ -126,7 +126,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         reduction_dim_size,
         inner_num_tiles,
         reduction_num_tiles};
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
         compute_output_cb_id, output_page_size, num_cores_to_be_used, input_tensor_Wt, slice_Wt, output_tensors.size()};
@@ -134,7 +134,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         writer_ct_args.push_back(output_page_size);
     }
     for (const ttnn::Tensor& output_tensor : output_tensors) {
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_ct_args);
     }
 
     const auto* const reader_kernel_file =

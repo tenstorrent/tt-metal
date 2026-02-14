@@ -150,9 +150,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     // Data movement kernels
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     if (tensor_args.mask.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().mesh_buffer()).append_to(reader_compile_time_args);
     }
     if (attributes.is_causal_mask) {
         uint32_t num_tiles_causal_mask = tensor_args.mask.value().padded_shape()[-1] *
@@ -161,7 +161,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     }
 
     std::vector<uint32_t> writer_compile_time_args = {num_datum_padded};
-    tt::tt_metal::TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
     std::map<std::string, std::string> softmax_defines, writer_defines;
     if (tensor_args.mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";

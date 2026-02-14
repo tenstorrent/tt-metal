@@ -82,13 +82,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -263,13 +264,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -457,13 +459,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;

@@ -519,8 +519,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     global_worker_count,
                     global_worker_id,
                 };
-                tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+                tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
+                tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_reader_compile_args);
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
@@ -603,7 +603,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
                 }
-                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+                tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(sender_writer_compile_args);
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"

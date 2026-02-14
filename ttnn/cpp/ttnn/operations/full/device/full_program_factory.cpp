@@ -63,7 +63,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page, page_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateWriteKernel(
         program,
@@ -83,7 +83,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
         // Create the reader compile time arguments
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)cb_index2, elems_per_page, page_size};
-        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_buffer()).append_to(reader_compile_time_args);
 
         // Create the reader kernel
         reader_id = CreateReadKernel(

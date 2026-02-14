@@ -189,15 +189,15 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 
     std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(beta_has_value)};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(beta_has_value ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma_has_value ? gamma->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(beta_has_value ? beta->mesh_buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value)};
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(mean_has_value ? mean.value().buffer() : nullptr).append_to(writer_compile_time_args);
-    TensorAccessorArgs(rstd_has_value ? rstd.value().buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(mean_has_value ? mean.value().mesh_buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(rstd_has_value ? rstd.value().mesh_buffer() : nullptr).append_to(writer_compile_time_args);
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);

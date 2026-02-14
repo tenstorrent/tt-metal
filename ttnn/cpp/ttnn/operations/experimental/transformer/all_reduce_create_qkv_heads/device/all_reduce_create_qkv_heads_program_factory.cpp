@@ -508,7 +508,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         reduction_cb_index,
@@ -526,7 +526,7 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto reduction_reader_kernel_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

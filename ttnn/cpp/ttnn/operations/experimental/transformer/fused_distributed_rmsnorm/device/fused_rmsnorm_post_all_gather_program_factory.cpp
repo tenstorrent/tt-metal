@@ -298,15 +298,15 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         fuse_rope,
         head_dim_tiles};
 
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(stats_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(stats_tensor.mesh_buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? transformation_mat.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? transformation_mat.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_cos.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_cos.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -317,7 +317,7 @@ FusedRMSNormPostAllGatherProgramFactory::cached_program_t FusedRMSNormPostAllGat
         num_heads,
         num_tile_rows,
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()).append_to(writer_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,

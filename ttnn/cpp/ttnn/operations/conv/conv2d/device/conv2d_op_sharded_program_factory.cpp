@@ -843,7 +843,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_tensor.mesh_buffer()).append_to(reader_compile_time_args);
     } else {
         // Put enough 0s so that the offsets of activation reuse args are the same
         reader_compile_time_args.push_back(0);
@@ -1000,8 +1000,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->mesh_buffer() : nullptr).append_to(writer_compile_time_args);
 
     const bool check_skip_compute = input_cores != output_cores;
 
