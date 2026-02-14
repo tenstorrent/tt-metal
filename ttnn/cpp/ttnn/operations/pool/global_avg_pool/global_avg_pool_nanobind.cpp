@@ -4,22 +4,19 @@
 
 #include "global_avg_pool_nanobind.hpp"
 
-#include <optional>
-
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::avgpool {
 
 namespace {
 
 void bind_global_avg_pool2d(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Applies global_avg_pool2d to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
 
         .. math::

@@ -4,8 +4,6 @@
 
 #include <ttnn/operations/pool/rotate/rotate_nanobind.hpp>
 
-#include <optional>
-
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -20,7 +18,7 @@ namespace ttnn::operations::rotate {
 namespace {
 
 void bind_rotate(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Rotates a tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
         The rotate operation performs spatial transformation by rotating each pixel position

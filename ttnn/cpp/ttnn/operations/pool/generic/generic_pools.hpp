@@ -13,8 +13,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
-namespace ttnn {
-namespace operations::pool {
+namespace ttnn::operations::pool {
 
 using op_slicing::Op2DSliceConfig;
 
@@ -66,9 +65,7 @@ Tensor avg_pool2d(
     Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false);
 
-}  // namespace operations::pool
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::pool
 
 namespace ttnn {
 using ttnn::operations::pool::max_pool2d;

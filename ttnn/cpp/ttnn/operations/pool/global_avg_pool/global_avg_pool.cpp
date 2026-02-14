@@ -69,8 +69,7 @@ Tensor global_avg_pool2d(
 
 }  // namespace tt::tt_metal
 
-namespace ttnn {
-namespace operations::pool {
+namespace ttnn::operations::pool {
 
 Tensor global_avg_pool2d(
     const Tensor& input,
@@ -81,5 +80,4 @@ Tensor global_avg_pool2d(
     return result;
 }
 
-}  // namespace operations::pool
-}  // namespace ttnn
+}  // namespace ttnn::operations::pool
