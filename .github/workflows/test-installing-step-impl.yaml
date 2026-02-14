@@ -126,7 +126,7 @@ jobs:
           # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct is found
           mkdir -p huggingface/tt_cache
           LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
-          wget -r -nH -x --cut-dirs=4 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/" || true
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P huggingface/tt_cache "${LFC_BASE}/meta-llama/Llama-3.1-70B-Instruct/"
 
       - name: Patch tt-metalium-models to mount workspace volume
         shell: bash
