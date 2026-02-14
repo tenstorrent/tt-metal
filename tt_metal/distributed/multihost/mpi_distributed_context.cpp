@@ -129,7 +129,10 @@ Status MPIRequest::wait() {
     // in isend()/irecv() before being passed to the MPIRequest constructor.
     // The analyzer cannot track requests through class members (known limitation).
     if (done_) {
-        // Already completed, return empty status (MPI_Wait on MPI_REQUEST_NULL is safe but wasteful)
+        // Already completed - req_ was set to MPI_REQUEST_NULL by previous MPI_Wait.
+        // Calling MPI_Wait again on MPI_REQUEST_NULL is safe (returns immediately),
+        // but we avoid it and return a sentinel status to indicate no new operation occurred.
+        // Callers should use active() to check if the request is still pending.
         return Status{Rank(MPI_ANY_SOURCE), Tag(MPI_ANY_TAG), 0};
     }
     MPI_Status status{};
@@ -143,6 +146,7 @@ Status MPIRequest::wait() {
 
 std::optional<Status> MPIRequest::test() {
     if (done_) {
+        // Already completed - no operation to test. Return nullopt to indicate no status available.
         return std::nullopt;
     }
     MPI_Status status{};
