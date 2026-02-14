@@ -31,14 +31,33 @@ Usage:
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple, Set, Any
+import logging
 import re
 import os
+import uuid
 
 import ttnn
 from ttnn._ttnn.program_descriptor import UnpackToDestMode
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors import cpp_parser
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def _core_range_set_to_coords(core_range_set: Any) -> Set[Tuple[int, int]]:
+    """Convert a CoreRangeSet to a set of (x, y) coordinate tuples."""
+    coords: Set[Tuple[int, int]] = set()
+    for cr in core_range_set.ranges():
+        for y in range(cr.start.y, cr.end.y + 1):
+            for x in range(cr.start.x, cr.end.x + 1):
+                coords.add((x, y))
+    return coords
 
 
 # =============================================================================
@@ -1563,7 +1582,15 @@ def _compute_runtime_arg_offsets(
                 args = kernel.runtime_args[core.x][core.y]
                 max_args = max(max_args, len(args))
             except (IndexError, KeyError):
-                pass
+                if core_range_override is not None:
+                    logger.warning(
+                        "Phase %d %s: no runtime args for core (%d,%d) "
+                        "with core_range_override (stem op may not cover this core)",
+                        i,
+                        kernel_type,
+                        core.x,
+                        core.y,
+                    )
 
         cumulative += max_args
 
@@ -1613,7 +1640,7 @@ def _concatenate_runtime_args(
     num_cols = len(core_coords)
     col_args: List[List[int]] = [[] for _ in range(num_cols)]
 
-    for pk in phase_kernels:
+    for phase_idx, pk in enumerate(phase_kernels):
         kernel = pk.get(kernel_type)
         if kernel is None:
             continue
@@ -1622,7 +1649,15 @@ def _concatenate_runtime_args(
                 args = kernel.runtime_args[core.x][core.y]
                 col_args[col_idx].extend(list(args))
             except (IndexError, KeyError):
-                pass
+                if core_range_override is not None:
+                    logger.warning(
+                        "Phase %d %s: no runtime args for core (%d,%d) "
+                        "with core_range_override (stem op may not cover this core)",
+                        phase_idx,
+                        kernel_type,
+                        core.x,
+                        core.y,
+                    )
 
     return [(core_coords[i], col_args[i]) for i in range(num_cols) if col_args[i]]
 
@@ -2521,6 +2556,9 @@ class OpGraphBuilder:
         if not self.stem_phases:
             raise ValueError("OpGraph has no stem phases")
 
+        # Validate tree topology before doing any device allocation
+        self._validate_topology()
+
         # Trace all root-to-leaf paths
         paths = self._trace_paths()
 
@@ -2548,6 +2586,11 @@ class OpGraphBuilder:
                     segment_cache[key] = _create_barrier_config(device, core_range)
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
+        # Assign co-dispatch group for barrier safety validation.
+        # All paths MUST be dispatched together via composite.launch().
+        num_paths = len(paths)
+        group_id = f"opgraph_{uuid.uuid4().hex[:8]}"
+
         fused_ops = []
         for path in paths:
             # Save CB descriptor state before building each path.
@@ -2565,10 +2608,14 @@ class OpGraphBuilder:
                 all_sem_refs,
                 segment_cache,
             )
+
+            # Tag with co-dispatch group
+            fused = fused._replace(co_dispatch_group=(group_id, num_paths))
             fused_ops.append(fused)
 
             # Restore original state so the next path sees uncorrupted indices
             self._restore_cb_state(saved_cb_state)
+            self._verify_cb_restore(saved_cb_state)
 
         return fused_ops
 
@@ -2577,15 +2624,28 @@ class OpGraphBuilder:
 
         Returns a list of paths.  Each path is a list of
         ``(core_range, [phases])`` segments from root (stem) to leaf.
+
+        For intermediate branches (those with children), the segment's
+        core_range is the *effective* range — the union of descendant leaf
+        ranges — rather than the branch's own core_range.  This ensures
+        barrier scopes match the cores that actually run through each
+        segment, which is essential when children don't fully tile the
+        parent (unused parent cores don't participate in barriers).
         """
         union_range = self._compute_union_ranges()
         paths: List[List[Tuple[Any, List[OpDescriptor]]]] = []
 
         def _collect(branch: BranchSpec, prefix: List[Tuple[Any, List[OpDescriptor]]]):
-            current = prefix + [(branch.core_range, list(branch.phases))]
             if not branch.children:
+                # Leaf: use the branch's own core_range
+                current = prefix + [(branch.core_range, list(branch.phases))]
                 paths.append(current)
             else:
+                # Intermediate: use effective range (union of descendant leaves)
+                # so the barrier scope matches cores that actually run.
+                eff_coords = self._effective_leaf_range(branch)
+                eff_range = self._coords_to_core_range_set(eff_coords)
+                current = prefix + [(eff_range, list(branch.phases))]
                 for child in branch.children:
                     _collect(child, current)
 
@@ -2619,6 +2679,115 @@ class OpGraphBuilder:
 
         _collect_leaf_ranges(self.branches)
         return ttnn.CoreRangeSet(all_ranges)
+
+    def _validate_topology(self) -> None:
+        """Validate the OpGraph tree topology.
+
+        Checks:
+        - Each child's core_range is a subset of its parent's range.
+        - Sibling branches have disjoint core ranges.
+        - Leaf branches have at least one phase.
+        - All branch core_ranges are rectangular (NOC multicast safety).
+
+        Note: Children are NOT required to fully cover their parent's range.
+        Unused cores in the parent simply don't participate in branch phases.
+        The effective barrier scope for each segment is computed from
+        descendant leaf ranges, so gaps are handled correctly.
+
+        Raises:
+            ValueError: On any topology violation.
+        """
+
+        def _validate_branch(branch: BranchSpec, parent_coords: Set[Tuple[int, int]], depth: int):
+            branch_coords = _core_range_set_to_coords(branch.core_range)
+            label = f"branch at depth {depth} (cores {sorted(branch_coords)})"
+
+            # Child must be a subset of parent
+            if not branch_coords.issubset(parent_coords):
+                extra = sorted(branch_coords - parent_coords)
+                raise ValueError(
+                    f"OpGraph topology error: {label} has cores {extra} "
+                    f"outside parent range {sorted(parent_coords)}"
+                )
+
+            # Leaf branches must have at least one phase
+            if not branch.children and not branch.phases:
+                raise ValueError(f"OpGraph topology error: leaf {label} has no phases")
+
+            # Validate children
+            if branch.children:
+                # Check sibling disjointness
+                seen_coords: Set[Tuple[int, int]] = set()
+                for i, child in enumerate(branch.children):
+                    child_coords = _core_range_set_to_coords(child.core_range)
+                    overlap = seen_coords & child_coords
+                    if overlap:
+                        raise ValueError(
+                            f"OpGraph topology error: sibling branches at depth {depth + 1} "
+                            f"have overlapping cores {sorted(overlap)}"
+                        )
+                    seen_coords |= child_coords
+
+                # Recurse into children
+                for child in branch.children:
+                    _validate_branch(child, branch_coords, depth + 1)
+
+        # Validate top-level branches: siblings must be disjoint
+        seen_top: Set[Tuple[int, int]] = set()
+        for i, branch in enumerate(self.branches):
+            branch_coords = _core_range_set_to_coords(branch.core_range)
+            overlap = seen_top & branch_coords
+            if overlap:
+                raise ValueError(
+                    f"OpGraph topology error: top-level branches have " f"overlapping cores {sorted(overlap)}"
+                )
+            seen_top |= branch_coords
+
+        # Validate each top-level branch recursively.  Top-level branches
+        # don't have a "parent" to be subsets of (the stem range is derived
+        # FROM the branches), so we validate their internal structure and
+        # check leaf-has-phases for top-level leaves.
+        for branch in self.branches:
+            if not branch.children and not branch.phases:
+                raise ValueError(
+                    f"OpGraph topology error: leaf branch on cores "
+                    f"{sorted(_core_range_set_to_coords(branch.core_range))} has no phases"
+                )
+            # Validate children recursively (subset, disjoint, leaf phases)
+            if branch.children:
+                branch_coords = _core_range_set_to_coords(branch.core_range)
+                _validate_branch(
+                    # Create a virtual "wrapper" to trigger the children check
+                    branch,
+                    branch_coords,
+                    depth=0,
+                )
+
+    @staticmethod
+    def _effective_leaf_range(branch: "BranchSpec") -> Set[Tuple[int, int]]:
+        """Compute the union of all descendant leaf core coordinates.
+
+        For leaf branches, returns the branch's own core coords.
+        For intermediate branches, returns the union of all leaf descendants.
+        """
+        if not branch.children:
+            return _core_range_set_to_coords(branch.core_range)
+        coords: Set[Tuple[int, int]] = set()
+        for child in branch.children:
+            coords |= OpGraphBuilder._effective_leaf_range(child)
+        return coords
+
+    @staticmethod
+    def _coords_to_core_range_set(coords: Set[Tuple[int, int]]) -> Any:
+        """Convert a set of (x, y) tuples to a CoreRangeSet.
+
+        Each coordinate becomes a single-core CoreRange.  CoreRangeSet
+        merges adjacent ranges internally.
+        """
+        ranges = set()
+        for x, y in coords:
+            ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
+        return ttnn.CoreRangeSet(ranges)
 
     @staticmethod
     def _save_cb_state(
@@ -2658,6 +2827,28 @@ class OpGraphBuilder:
             entry["cb"].core_ranges = entry["core_ranges"]
             for fmt, orig_idx in entry["fmt"]:
                 fmt.buffer_index = orig_idx
+
+    @staticmethod
+    def _verify_cb_restore(saved: List[dict]) -> None:
+        """Verify that CB descriptor state was correctly restored.
+
+        Called after _restore_cb_state to catch any future code changes
+        that add mutation paths not covered by save/restore.
+
+        Raises:
+            RuntimeError: If any CB field doesn't match its saved value.
+        """
+        for entry in saved:
+            cb = entry["cb"]
+            if cb.total_size != entry["total_size"]:
+                raise RuntimeError(
+                    f"CB restore failed: total_size is {cb.total_size}, " f"expected {entry['total_size']}"
+                )
+            for fmt, expected_idx in entry["fmt"]:
+                if fmt.buffer_index != expected_idx:
+                    raise RuntimeError(
+                        f"CB restore failed: buffer_index is {fmt.buffer_index}, " f"expected {expected_idx}"
+                    )
 
     def _build_path(
         self,

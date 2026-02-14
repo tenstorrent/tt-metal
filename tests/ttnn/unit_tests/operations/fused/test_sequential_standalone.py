@@ -2401,5 +2401,569 @@ class TestCBPoolAllocator:
         assert result_dict["phase1_cb_in0"] == 5  # Phase 1: remapped + prefixed
 
 
+def _make_mock_core_range_set(coord_ranges):
+    """Create a mock CoreRangeSet from a list of ((sx,sy),(ex,ey)) pairs.
+
+    Each pair defines a rectangular CoreRange from (sx,sy) to (ex,ey).
+    The mock supports .ranges() iteration with .start.x/y and .end.x/y
+    attributes, matching the real CoreRangeSet API used by
+    _core_range_set_to_coords.
+    """
+    ranges = []
+    for (sx, sy), (ex, ey) in coord_ranges:
+        cr = MagicMock()
+        cr.start.x = sx
+        cr.start.y = sy
+        cr.end.x = ex
+        cr.end.y = ey
+        ranges.append(cr)
+    crs = MagicMock()
+    crs.ranges.return_value = ranges
+    return crs
+
+
+class TestOpGraphTopologyValidation:
+    """Tests for OpGraph topology validation."""
+
+    def test_overlapping_siblings_rejected(self):
+        """Two top-level branches with overlapping core ranges should be rejected."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        # Branches overlap: (0,0)-(2,0) and (1,0)-(3,0) share core (1,0) and (2,0)
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (2, 0))]),
+                phases=[MagicMock()],
+            ),
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((1, 0), (3, 0))]),
+                phases=[MagicMock()],
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="overlapping cores"):
+            builder._validate_topology()
+
+    def test_child_outside_parent_rejected(self):
+        """Child range that extends beyond parent should be rejected."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        # Parent is (0,0)-(3,0), child extends to (5,0)
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
+                phases=[MagicMock()],
+                children=[
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((2, 0), (5, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                ],
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="outside parent range"):
+            builder._validate_topology()
+
+    def test_overlapping_children_rejected(self):
+        """Sibling children with overlapping ranges should be rejected."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        # Children overlap within parent
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
+                phases=[MagicMock()],
+                children=[
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((2, 0), (5, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                ],
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="overlapping cores"):
+            builder._validate_topology()
+
+    def test_empty_leaf_branch_rejected(self):
+        """Leaf branch with no phases should be rejected."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                phases=[MagicMock()],
+            ),
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                phases=[],  # Empty!
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="has no phases"):
+            builder._validate_topology()
+
+    def test_valid_topology_accepted(self):
+        """Valid 2-branch split should pass validation."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                phases=[MagicMock()],
+            ),
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                phases=[MagicMock()],
+            ),
+        ]
+
+        # Should not raise
+        builder._validate_topology()
+
+    def test_valid_nested_topology_accepted(self):
+        """Valid nested branching should pass validation."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
+                phases=[MagicMock()],
+                children=[
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                ],
+            ),
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((4, 0), (5, 0))]),
+                phases=[MagicMock()],
+            ),
+        ]
+
+        # Should not raise
+        builder._validate_topology()
+
+    def test_partial_coverage_accepted(self):
+        """Children that don't fully tile the parent should be accepted.
+
+        Unused parent cores simply don't participate in branch phases.
+        """
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        # Parent covers (0,0)-(5,0) = 6 cores, but children only use 4
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
+                phases=[MagicMock()],
+                children=[
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    # Cores (4,0)-(5,0) intentionally unused
+                ],
+            ),
+        ]
+
+        # Should not raise — partial coverage is allowed
+        builder._validate_topology()
+
+    def test_intermediate_branch_no_phases_accepted(self):
+        """Intermediate branch (has children) with no phases is valid — just a grouping node."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        BranchSpec = _mock_sequential.BranchSpec
+
+        builder = OpGraphBuilder()
+        builder.stem_phases = [MagicMock()]
+
+        builder.branches = [
+            BranchSpec(
+                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
+                phases=[],  # No phases — just a grouping node
+                children=[
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                    BranchSpec(
+                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                        phases=[MagicMock()],
+                    ),
+                ],
+            ),
+        ]
+
+        # Should not raise
+        builder._validate_topology()
+
+
+class TestCoDispatchValidation:
+    """Tests for co-dispatch group validation in composite.launch."""
+
+    def _make_op_descriptor(self, co_dispatch_group=None):
+        """Create a mock OpDescriptor with optional co-dispatch group."""
+        OpDescriptor = _mock_sequential.OpDescriptor
+        return OpDescriptor(
+            descriptor=MagicMock(),
+            input_tensors=[MagicMock()],
+            output_tensors=[MagicMock()],
+            keepalive=(),
+            co_dispatch_group=co_dispatch_group,
+        )
+
+    def test_missing_co_dispatch_member_rejected(self):
+        """Launching with a subset of a co-dispatch group should raise ValueError."""
+        # Import _validate_co_dispatch_groups from composite module using mock
+        # We need to import composite under mock too
+        _modules_before = set(sys.modules)
+        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
+        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
+        for k in _ttnn_mocked_keys:
+            sys.modules[k] = MagicMock()
+        try:
+            import models.experimental.ops.descriptors.composite as _mock_composite
+
+            validate_fn = _mock_composite._validate_co_dispatch_groups
+        finally:
+            for k in set(sys.modules) - _modules_before:
+                del sys.modules[k]
+            for k in _ttnn_mocked_keys:
+                if _ttnn_originals[k] is not None:
+                    sys.modules[k] = _ttnn_originals[k]
+                else:
+                    sys.modules.pop(k, None)
+
+        # Group expects 3 members but only 2 provided
+        ops = [
+            self._make_op_descriptor(co_dispatch_group=("grp1", 3)),
+            self._make_op_descriptor(co_dispatch_group=("grp1", 3)),
+        ]
+
+        with pytest.raises(ValueError, match="expected 3 ops but got 2"):
+            validate_fn(ops)
+
+    def test_co_dispatch_with_independent_ops_accepted(self):
+        """Group ops + independent ops (no group) should be accepted."""
+        _modules_before = set(sys.modules)
+        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
+        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
+        for k in _ttnn_mocked_keys:
+            sys.modules[k] = MagicMock()
+        try:
+            import models.experimental.ops.descriptors.composite as _mock_composite
+
+            validate_fn = _mock_composite._validate_co_dispatch_groups
+        finally:
+            for k in set(sys.modules) - _modules_before:
+                del sys.modules[k]
+            for k in _ttnn_mocked_keys:
+                if _ttnn_originals[k] is not None:
+                    sys.modules[k] = _ttnn_originals[k]
+                else:
+                    sys.modules.pop(k, None)
+
+        ops = [
+            self._make_op_descriptor(co_dispatch_group=("grp1", 2)),
+            self._make_op_descriptor(co_dispatch_group=("grp1", 2)),
+            self._make_op_descriptor(),  # Independent op, no group
+        ]
+
+        # Should not raise
+        validate_fn(ops)
+
+    def test_no_co_dispatch_group_accepted(self):
+        """All ops without groups should be accepted (existing behavior)."""
+        _modules_before = set(sys.modules)
+        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
+        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
+        for k in _ttnn_mocked_keys:
+            sys.modules[k] = MagicMock()
+        try:
+            import models.experimental.ops.descriptors.composite as _mock_composite
+
+            validate_fn = _mock_composite._validate_co_dispatch_groups
+        finally:
+            for k in set(sys.modules) - _modules_before:
+                del sys.modules[k]
+            for k in _ttnn_mocked_keys:
+                if _ttnn_originals[k] is not None:
+                    sys.modules[k] = _ttnn_originals[k]
+                else:
+                    sys.modules.pop(k, None)
+
+        ops = [
+            self._make_op_descriptor(),
+            self._make_op_descriptor(),
+        ]
+
+        # Should not raise
+        validate_fn(ops)
+
+
+class TestEffectiveLeafRange:
+    """Tests for OpGraphBuilder._effective_leaf_range."""
+
+    def test_leaf_branch_returns_own_range(self):
+        """Leaf branch should return its own core coords."""
+        BranchSpec = _mock_sequential.BranchSpec
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        branch = BranchSpec(
+            core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+            phases=[MagicMock()],
+        )
+
+        result = OpGraphBuilder._effective_leaf_range(branch)
+        assert result == {(0, 0), (1, 0)}
+
+    def test_intermediate_branch_returns_leaf_union(self):
+        """Intermediate branch should return union of all descendant leaf ranges."""
+        BranchSpec = _mock_sequential.BranchSpec
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        branch = BranchSpec(
+            core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
+            phases=[MagicMock()],
+            children=[
+                BranchSpec(
+                    core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                    phases=[MagicMock()],
+                ),
+                BranchSpec(
+                    core_range=_make_mock_core_range_set([((4, 0), (5, 0))]),
+                    phases=[MagicMock()],
+                ),
+                # Gap at (2,0)-(3,0)
+            ],
+        )
+
+        result = OpGraphBuilder._effective_leaf_range(branch)
+        assert result == {(0, 0), (1, 0), (4, 0), (5, 0)}
+        # Cores (2,0) and (3,0) NOT included — they're unused
+
+    def test_nested_effective_range(self):
+        """Deeply nested tree should return only the leaf-level core coords."""
+        BranchSpec = _mock_sequential.BranchSpec
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        # Tree: root(0-7) -> mid(0-3, children=[leaf(0-1), leaf(2-3)]), leaf(6-7)
+        # Effective = {0,1,2,3,6,7} — no 4,5
+        branch_a = BranchSpec(
+            core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
+            phases=[],
+            children=[
+                BranchSpec(
+                    core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
+                    phases=[MagicMock()],
+                ),
+                BranchSpec(
+                    core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
+                    phases=[MagicMock()],
+                ),
+            ],
+        )
+
+        result = OpGraphBuilder._effective_leaf_range(branch_a)
+        assert result == {(0, 0), (1, 0), (2, 0), (3, 0)}
+
+
+class TestCBRestoreVerification:
+    """Tests for _verify_cb_restore."""
+
+    def test_verify_passes_on_correct_restore(self):
+        """Verification should pass when state matches."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        cb = MagicMock()
+        cb.total_size = 4096
+        fmt = MagicMock()
+        fmt.buffer_index = 5
+
+        saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
+        # Should not raise
+        OpGraphBuilder._verify_cb_restore(saved)
+
+    def test_verify_fails_on_total_size_mismatch(self):
+        """Verification should fail when total_size doesn't match."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        cb = MagicMock()
+        cb.total_size = 8192  # Different from saved!
+        fmt = MagicMock()
+        fmt.buffer_index = 5
+
+        saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
+        with pytest.raises(RuntimeError, match="total_size"):
+            OpGraphBuilder._verify_cb_restore(saved)
+
+    def test_verify_fails_on_buffer_index_mismatch(self):
+        """Verification should fail when buffer_index doesn't match."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        cb = MagicMock()
+        cb.total_size = 4096
+        fmt = MagicMock()
+        fmt.buffer_index = 10  # Different from saved!
+
+        saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
+        with pytest.raises(RuntimeError, match="buffer_index"):
+            OpGraphBuilder._verify_cb_restore(saved)
+
+
+class TestCompileTimePerformance:
+    """Tests that build pipeline performance doesn't regress catastrophically.
+
+    These measure the Python-side build pipeline time (CB pool allocation,
+    source generation, merge) with generous thresholds to avoid CI flakiness.
+    """
+
+    def _make_mock_phase(self, cb_indices=None, kernel_source="void kernel_main() {}"):
+        """Create a mock OpDescriptor with realistic CB/kernel structure."""
+        if cb_indices is None:
+            cb_indices = [0, 1, 16]
+
+        descriptor = MagicMock()
+
+        # Mock CB descriptors
+        cbs = []
+        for idx in cb_indices:
+            cb = MagicMock()
+            cb.total_size = 2048
+            cb.core_ranges = _make_mock_core_ranges()
+            cb.has_global_circular_buffer.return_value = False
+            cb.has_buffer.return_value = False
+
+            fmt = MagicMock()
+            fmt.buffer_index = idx
+            fmt.data_format = "Float16_b"
+            fmt.page_size = 2048
+            cb.format_descriptors = [fmt]
+            cbs.append(cb)
+        descriptor.cbs = cbs
+
+        # Mock kernels
+        reader = MagicMock()
+        reader.core_ranges = _make_mock_core_ranges()
+        reader.kernel_source = kernel_source
+        reader.defines = {}
+        reader.compile_time_args = [32, 4]
+        reader.named_compile_time_args = [("cb_in", 0), ("cb_out", 16)]
+        reader.runtime_args = _make_mock_runtime_args_view([[1, 2, 3]])
+
+        writer = MagicMock()
+        writer.core_ranges = _make_mock_core_ranges()
+        writer.kernel_source = kernel_source
+        writer.defines = {}
+        writer.compile_time_args = [32]
+        writer.named_compile_time_args = [("cb_in", 0), ("cb_out", 16)]
+        writer.runtime_args = _make_mock_runtime_args_view([[4, 5]])
+
+        compute = MagicMock()
+        compute.core_ranges = _make_mock_core_ranges()
+        compute.kernel_source = kernel_source
+        compute.defines = {}
+        compute.compile_time_args = [8, 1]
+        compute.named_compile_time_args = [("cb_in", 0), ("cb_out", 16)]
+        compute.runtime_args = _make_mock_runtime_args_view([[6]])
+
+        descriptor.kernels = [reader, writer, compute]
+
+        op = _mock_sequential.OpDescriptor(
+            descriptor=descriptor,
+            input_tensors=[MagicMock()],
+            output_tensors=[MagicMock()],
+        )
+        return op
+
+    def _run_cb_pool_allocation(self, n_phases):
+        """Run CB pool allocation pipeline for n_phases, return elapsed time."""
+        import time
+
+        CBPoolAllocator = _mock_sequential.CBPoolAllocator
+        extract = _mock_sequential.extract_cb_info
+
+        pool = CBPoolAllocator()
+        phases = [self._make_mock_phase() for _ in range(n_phases)]
+
+        start = time.perf_counter()
+        for phase_idx, phase in enumerate(phases):
+            cb_info = extract(phase.descriptor)
+            pool.allocate_phase(phase_idx, cb_info, phantom_cb_indices=set())
+        elapsed = time.perf_counter() - start
+        return elapsed
+
+    def test_two_phase_build_time(self):
+        """2-phase fused chain build should complete quickly."""
+        elapsed = self._run_cb_pool_allocation(2)
+        assert elapsed < 5.0, f"2-phase CB allocation took {elapsed:.2f}s (limit: 5s)"
+
+    def test_four_phase_build_time(self):
+        """4-phase fused chain build should complete in reasonable time."""
+        elapsed = self._run_cb_pool_allocation(4)
+        assert elapsed < 10.0, f"4-phase CB allocation took {elapsed:.2f}s (limit: 10s)"
+
+    def test_build_time_scales_linearly(self):
+        """Build time should scale roughly linearly with phase count, not quadratically."""
+        times = {}
+        for n_phases in [2, 4, 8]:
+            times[n_phases] = self._run_cb_pool_allocation(n_phases)
+
+        # 8-phase should be no more than 8x the 2-phase time (linear scaling).
+        # With quadratic scaling it would be 16x. Use generous 10x limit.
+        if times[2] > 0.001:  # Only check if measurable
+            ratio = times[8] / times[2]
+            assert ratio < 10.0, (
+                f"Scaling appears super-linear: 2-phase={times[2]:.4f}s, "
+                f"8-phase={times[8]:.4f}s, ratio={ratio:.1f}x (limit: 10x)"
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

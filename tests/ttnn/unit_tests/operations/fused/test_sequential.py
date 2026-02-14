@@ -4628,3 +4628,89 @@ class TestOpGraphExecution:
         print(f"Mixed LN/RMS Branch A PCC: {pcc_a:.6f}, Branch B PCC: {pcc_b:.6f}")
         assert passing_a, f"Branch A PCC: {pcc_a}"
         assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_partial_coverage_branches(self, device, opgraph_tensors):
+        """Stem on 6 cores, branches only use 4 cores (partial coverage).
+
+        The stem op is created on 6 cores but the branches only use the
+        first 4.  The fused kernel only runs on the 4 branch cores;
+        work that was assigned to the unused 2 cores is not executed.
+        This verifies that partial coverage doesn't cause hangs or errors.
+        """
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        # Stem on 6 cores, branches on 4
+        stem_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        # Cores (4,0)-(5,0) intentionally unused
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=stem_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused_ops = build_op_graph(
+            stem_phases=[stem_op],
+            branches=[
+                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+            ],
+            device=device,
+        )
+        assert len(fused_ops) == 2
+
+        # Verify co-dispatch group is set
+        for op in fused_ops:
+            assert op.co_dispatch_group is not None
+            gid, expected = op.co_dispatch_group
+            assert expected == 2
+
+        outputs = composite.launch(fused_ops)
+        assert len(outputs) == 2
+
+        # Both branches should produce valid output (non-zero)
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[1][0])
+        assert result_a.abs().max().item() > 0, "Branch A output is all zeros"
+        assert result_b.abs().max().item() > 0, "Branch B output is all zeros"
+
+        # Compute golden values using the branch ranges (not stem range)
+        # Note: stem output on 4 cores may differ from 6-core stem, so
+        # we just check that results are numerically reasonable
+        print(f"Partial coverage: A max={result_a.abs().max():.4f}, B max={result_b.abs().max():.4f}")
+
+    def test_invalid_topology_overlapping_branches(self, device, opgraph_tensors):
+        """Overlapping branch core ranges should raise ValueError before touching device."""
+        from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
+        from models.experimental.ops.descriptors.normalization import rms_norm
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        # Overlapping: (0,0)-(2,0) and (1,0)-(3,0)
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        with pytest.raises(ValueError, match="overlapping"):
+            build_op_graph(
+                stem_phases=[stem_op],
+                branches=[
+                    BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                    BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+                ],
+                device=device,
+            )

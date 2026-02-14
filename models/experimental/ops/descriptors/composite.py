@@ -2,11 +2,37 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+from typing import Dict, List, Tuple
 
 import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
+
+
+def _validate_co_dispatch_groups(op_descriptors: List[OpDescriptor]) -> None:
+    """Validate that all members of each co-dispatch group are present.
+
+    OpGraph paths share barrier semaphores and MUST be dispatched together.
+    Dispatching a subset would deadlock because missing paths' cores never
+    arrive at the barrier.
+
+    Raises:
+        ValueError: If a co-dispatch group is incomplete.
+    """
+    groups: Dict[str, Tuple[int, int]] = {}  # group_id -> (expected, actual_count)
+    for op in op_descriptors:
+        if op.co_dispatch_group is not None:
+            gid, expected = op.co_dispatch_group
+            if gid not in groups:
+                groups[gid] = (expected, 0)
+            groups[gid] = (groups[gid][0], groups[gid][1] + 1)
+
+    for gid, (expected, actual) in groups.items():
+        if actual != expected:
+            raise ValueError(
+                f"Co-dispatch group '{gid}': expected {expected} ops but got {actual}. "
+                f"All OpGraph paths must be dispatched together via composite.launch()."
+            )
 
 
 def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
@@ -38,6 +64,9 @@ def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
     """
     if not op_descriptors:
         raise ValueError("op_descriptors cannot be empty")
+
+    # Validate co-dispatch groups: all members of a group must be present
+    _validate_co_dispatch_groups(op_descriptors)
 
     # Extract program descriptors
     descriptors = [op_descriptor.descriptor for op_descriptor in op_descriptors]
