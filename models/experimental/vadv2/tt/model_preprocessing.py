@@ -420,7 +420,7 @@ def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device
 
     parameters.conv_args = {"img_backbone": {}, "img_neck": {}}
 
-    img = input_tensor[1]
+    img = input_tensor[1][0][0]
 
     if isinstance(img, list):
         img = torch.tensor(img[0])
