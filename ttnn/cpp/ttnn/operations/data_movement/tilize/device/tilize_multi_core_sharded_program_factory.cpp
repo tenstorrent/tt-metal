@@ -26,7 +26,7 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-    bool fp32_llk_acc = input.dtype() == DataType::FLOAT32;
+    bool fp32_llk_acc = input.dtype() == DataType::FLOAT32 || input.dtype() == DataType::UINT8;
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
