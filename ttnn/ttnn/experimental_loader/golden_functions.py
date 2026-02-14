@@ -81,22 +81,38 @@ def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_function)
 
 
-def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
-    if bcast_dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
-        in1 = in1.expand(in0.shape)
+def _golden_function(in0, in1, math_op, dim, *args, **kwargs):
+    import torch
+
+    if dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+        # Perform the operation
+        if math_op == ttnn.BcastOpMath.ADD:
+            res = in0 + in1
+        elif math_op == ttnn.BcastOpMath.SUB:
+            res = in0 - in1
+        elif math_op == ttnn.BcastOpMath.MUL:
+            res = in0 * in1
+        else:
+            raise AssertionError("Invalid math operation")
+
+        # Handle ALL dimension mismatches
+        if res.shape != in0.shape:
+            slices = []
+            for i, (res_dim, in0_dim) in enumerate(zip(res.shape, in0.shape)):
+                if res_dim > in0_dim and in0_dim == 1:
+                    # Truncate any dimension that is size 1 in in0
+                    slices.append(slice(0, 1))
+                elif res_dim >= in0_dim:
+                    # Take first in0_dim elements
+                    slices.append(slice(0, in0_dim))
+                else:
+                    slices.append(slice(None))
+
+            res = res[tuple(slices)]
+
+        return res
     else:
         raise AssertionError("Invalid bcast dimension")
-
-    if math_op == ttnn.BcastOpMath.ADD:
-        res = in0 + in1
-    elif math_op == ttnn.BcastOpMath.SUB:
-        res = in0 - in1
-    elif math_op == ttnn.BcastOpMath.MUL:
-        res = in0 * in1
-    else:
-        raise AssertionError("Invalid math operation")
-
-    return res
 
 
 ttnn.attach_golden_function(ttnn.bcast, _golden_function)
