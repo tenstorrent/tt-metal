@@ -607,9 +607,33 @@ class TTAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
+            # Per-Q/K/V biases for the explicit sharded attention path. We add these
+            # after split-heads to avoid large broadcast buffers in the fused QKV linear.
+            bias_dtype = ttnn.bfloat8_b if hasattr(ttnn, "bfloat8_b") else ttnn.bfloat16
+            self._q_bias_tt = ttnn.from_torch(
+                q_b_hd.unsqueeze(0).unsqueeze(2),  # [1, H, 1, D]
+                dtype=bias_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            self._k_bias_tt = ttnn.from_torch(
+                k_b_hd.unsqueeze(0).unsqueeze(3),  # [1, H, D, 1] (K is transposed)
+                dtype=bias_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            self._v_bias_tt = ttnn.from_torch(
+                v_b_hd.unsqueeze(0).unsqueeze(2),  # [1, H, 1, D]
+                dtype=bias_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
         except Exception:
             self._wqkv_tt = None
             self._bqkv_tt = None
+            self._q_bias_tt = None
+            self._k_bias_tt = None
+            self._v_bias_tt = None
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.device = device
@@ -716,7 +740,7 @@ class TTAttention:
             qkv3 = _ttnn_linear_with_optional_program_config(
                 x=x3,
                 w=self._wqkv_tt,
-                bias=self._bqkv_tt,
+                bias=(None if explicit_sharded_attn else self._bqkv_tt),
                 dtype=qkv_dtype,
                 memory_config=memcfg,
                 program_config=qkv_pc,
@@ -756,6 +780,12 @@ class TTAttention:
             except TypeError:
                 # Backward compat: older runtimes may not expose these kwargs.
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
+
+            if explicit_sharded_attn and getattr(self, "_q_bias_tt", None) is not None:
+                # Apply Q/K/V biases post-split to avoid large sharded broadcast in QKV linear.
+                q_tt = ttnn.add(q_tt, self._q_bias_tt)
+                k_tt = ttnn.add(k_tt, self._k_bias_tt)
+                v_tt = ttnn.add(v_tt, self._v_bias_tt)
 
             if explicit_sharded_attn:
                 # Explicit attention path (ViT TTNN pattern) on sharded operands:
