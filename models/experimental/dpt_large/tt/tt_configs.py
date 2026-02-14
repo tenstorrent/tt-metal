@@ -351,16 +351,42 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
     if disable_attn_pc:
         split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
-    # When tokens are sharded across a 2D core grid, some attention matmul
-    # program configs require per-core tile counts that depend on the shard
-    # spec. To keep Stage-2 bring-up stable on N300, disable these for now and
-    # rely on the default sharded kernels (Stage 3 will tune these).
+    qkv_pc = prog_cfgs.get("query_key_value_matmul_program_config")
+    proj_pc = prog_cfgs.get("self_output_matmul_program_config")
     if config.device.endswith("n300"):
-        qkv_pc = None
-        proj_pc = None
-    else:
-        qkv_pc = prog_cfgs.get("query_key_value_matmul_program_config")
-        proj_pc = prog_cfgs.get("self_output_matmul_program_config")
+        # Tokens are block-sharded across a 2D core grid (grid_y > 1). Adjust
+        # per-core M tile counts for QKV and projection matmuls so program
+        # configs match the shard spec.
+        try:
+            seqL_t = int(prog_cfgs.get("_seqL_t"))
+            dim_t__x = int(prog_cfgs.get("_dim_t__x"))
+            grid_x, grid_y = int(grid[0]), int(grid[1])
+            if grid_y > 1 and seqL_t % grid_y == 0:
+                per_core_M = seqL_t // grid_y
+                qkv_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=dim_t__x,
+                    out_subblock_h=1,
+                    out_subblock_w=dim_t__x,
+                    per_core_M=per_core_M,
+                    per_core_N=3 * dim_t__x,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+                proj_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=dim_t__x,
+                    out_subblock_h=1,
+                    out_subblock_w=dim_t__x,
+                    per_core_M=per_core_M,
+                    per_core_N=dim_t__x,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+        except Exception:
+            # If any of these program config types/attrs are missing in the runtime,
+            # keep the default (may be None).
+            pass
 
     return TTLayerConfig(
         grid=grid,
