@@ -7,6 +7,8 @@
 #include <device.hpp>
 #include <memory>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
@@ -15,9 +17,20 @@
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 
+namespace tt {
+class Cluster;
+}
+
+namespace tt::tt_metal::detail {
+class ProgramCompileGroup;
+}
+
 namespace tt::tt_metal {
 
 class IDevice;
+class DeviceManager;
+class DispatchMemMap;
+class dispatch_core_manager;
 enum DispatchWorkerType : uint32_t;
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
@@ -36,40 +49,44 @@ struct DispatchKernelNode {
     int tunnel_index{-1};             // Tunnel index
 };
 
-// Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use
-// a created Device to fill out the settings. First version automatically generates the topology based on devices, num
-// cqs, and detected board. Second version uses the topology passed in.
-void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs);
-void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs);
-void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes);
+// TODO: Use the correct ContextDescriptor once that PR is merged
+struct ContextDescriptor {
+    const tt::Cluster& cluster;
+    dispatch_core_manager& dispatch_core_manager_;
+    const DispatchMemMap& dispatch_mem_map;
+    DeviceManager* device_manager;
+};
 
-// Populate the static arguments for a device.
-// Prerequisites: Must call populate_fd_kernels
-void populate_cq_static_args(IDevice* device);
+class DispatchTopology {
+public:
+    explicit DispatchTopology(const ContextDescriptor& descriptor);
+    ~DispatchTopology();
 
-// Fill out all settings for FD kernels on the given device, and add them to a Program and return it.
-// Prerequisites: Must call populate_cq_static_args
-void create_cq_program(tt::tt_metal::IDevice* device);
+    void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs);
+    void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs);
+    void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes);
 
-// Compile all command queue programs created by create_and_compile_cq_program()
-void compile_cq_programs();
+    void populate_cq_static_args(IDevice* device);
+    void create_cq_program(IDevice* device);
+    void compile_cq_programs();
+    std::unique_ptr<Program> get_compiled_cq_program(IDevice* device);
+    void configure_dispatch_cores(IDevice* device);
 
-// Get the compiled command queue program for a given device
-std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device);
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
+    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
 
-// Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
-void configure_dispatch_cores(tt::tt_metal::IDevice* device);
+    void reset();
 
-// Return the virtual dispatch cores running on a given device
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id);
+private:
+    std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs) const;
 
-// Return the virtual cores used for dispatch routing/tunneling on a given device
-const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id);
-
-// Return the set of termination targets that were registered for this device
-const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(ChipId dev_id);
-
-// Must be called at the end of the application to cleanup any static state allocated by this module.
-void reset_topology_state();
+    ContextDescriptor context_;
+    std::vector<FDKernel*> node_id_to_kernel_;
+    std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
+    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info_;
+};
 
 }  // namespace tt::tt_metal

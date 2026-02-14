@@ -332,6 +332,7 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
     }
 
     skip_remote_devices_ = skip;
+    create_dispatch_topology();
     add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
@@ -425,10 +426,14 @@ void DeviceManager::compile_and_load_fabric() {
     }
 }
 
-void DeviceManager::configure_and_load_fast_dispatch_kernels() {
+void DeviceManager::configure_and_load_fast_dispatch_kernels(bool force_recreate_topology) {
     // Mock devices don't have real command queues or sysmem managers, skip FD kernel setup
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
+    }
+
+    if (force_recreate_topology) {
+        create_dispatch_topology();
     }
 
     const auto& active_devices = this->get_all_active_devices();
@@ -443,14 +448,14 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
 
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        populate_cq_static_args(dev);
+        dispatch_topology_->populate_cq_static_args(dev);
         if (not this->skip_remote_devices_) {
             for (const auto& tunnel : tunnels_from_mmio) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto* device = get_device(mmio_controlled_device_id);
-                    populate_cq_static_args(device);
+                    dispatch_topology_->populate_cq_static_args(device);
                 }
             }
         }
@@ -465,7 +470,7 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
             continue;
         }
 
-        create_cq_program(dev);
+        dispatch_topology_->create_cq_program(dev);
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         if (not this->skip_remote_devices_) {
@@ -474,14 +479,14 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto* device = get_device(mmio_controlled_device_id);
-                    create_cq_program(device);
+                    dispatch_topology_->create_cq_program(device);
                 }
             }
         }
     }
 
     // Compile programs
-    compile_cq_programs();
+    dispatch_topology_->compile_cq_programs();
 
     std::vector<std::shared_future<void>> events;
     // Init command queues in parallel.
@@ -495,16 +500,22 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
         events.emplace_back(detail::async([&, dev, mmio_device_id]() {
             auto tunnels_from_mmio =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-            dev->init_command_queue_device();
+            Device* device_ptr = get_device(dev->id());
+            TT_ASSERT(device_ptr != nullptr, "Device {} not found in DeviceManager", dev->id());
+            device_ptr->init_command_queue_device_with_topology(dispatch_topology_);
             log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             if (not this->skip_remote_devices_) {
                 for (const auto& tunnel : tunnels_from_mmio) {
                     // Need to create devices from farthest to the closest.
                     for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                         uint32_t mmio_controlled_device_id = tunnel[ts];
-                        auto* device = get_device(mmio_controlled_device_id);
-                        device->init_command_queue_device();
-                        log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
+                        Device* remote_device = get_device(mmio_controlled_device_id);
+                        TT_ASSERT(
+                            remote_device != nullptr,
+                            "Device {} not found in DeviceManager",
+                            mmio_controlled_device_id);
+                        remote_device->init_command_queue_device_with_topology(dispatch_topology_);
+                        log_info(tt::LogMetal, "Command Queue initialized on Device {}", remote_device->id());
                     }
                 }
             }
@@ -663,8 +674,14 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     if (this->using_fast_dispatch_ && !devices_to_activate.empty()) {
-        populate_fd_kernels(devices_to_activate, this->num_hw_cqs_);
+        dispatch_topology_->populate_fd_kernels(devices_to_activate, this->num_hw_cqs_);
     }
+}
+
+void DeviceManager::create_dispatch_topology() {
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    dispatch_topology_ = std::make_shared<DispatchTopology>(
+        ContextDescriptor{ctx.get_cluster(), ctx.get_dispatch_core_manager(), ctx.dispatch_mem_map(), this});
 }
 
 uint32_t DeviceManager::get_fabric_router_sync_timeout_ms() {
@@ -938,7 +955,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
             continue;
         }
 
-        auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
+        auto dispatch_cores = dispatch_topology_->get_virtual_dispatch_cores(dev_id);
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
@@ -957,7 +974,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     // Process registered termination signals from topology
     for (const auto& dev_id : devices_to_close) {
         auto* dev = this->get_active_device(dev_id);
-        const auto& info = tt::tt_metal::get_registered_termination_cores(dev_id);
+        const auto& info = dispatch_topology_->get_registered_termination_cores(dev_id);
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
             tt_metal::detail::WriteToDeviceL1(
@@ -1051,6 +1068,16 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     }
 
     return pass;
+}
+
+const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_cores(ChipId dev_id) const {
+    TT_ASSERT(dispatch_topology_ != nullptr, "Dispatch topology not created");
+    return dispatch_topology_->get_virtual_dispatch_cores(dev_id);
+}
+
+const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_routing_cores(ChipId dev_id) const {
+    TT_ASSERT(dispatch_topology_ != nullptr, "Dispatch topology not created");
+    return dispatch_topology_->get_virtual_dispatch_routing_cores(dev_id);
 }
 
 DeviceManager::~DeviceManager() {

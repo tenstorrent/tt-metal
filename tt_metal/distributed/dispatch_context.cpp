@@ -11,7 +11,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "impl/device/device_impl.hpp"
-#include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
@@ -49,8 +48,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         dev->init_command_queue_host();
     }
     // Query the number of command queues requested
-    populate_fd_kernels(active_devices, num_hw_cqs);
-    device_manager->configure_and_load_fast_dispatch_kernels();
+    device_manager->configure_and_load_fast_dispatch_kernels(/*force_recreate_topology=*/true);
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
@@ -95,7 +93,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     }
 
     for (const auto& dev : active_devices) {
-        auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev->id());
+        auto dispatch_cores = device_manager->get_virtual_dispatch_cores(dev->id());
         tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
     }
 

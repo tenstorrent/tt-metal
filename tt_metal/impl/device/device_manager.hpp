@@ -11,6 +11,7 @@
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
 #include "device_impl.hpp"
+#include "impl/dispatch/topology.hpp"
 
 namespace tt::tt_metal {
 
@@ -50,6 +51,11 @@ public:
     // API needed due to Issue #19729
     std::size_t get_max_num_eth_cores_across_all_devices() const;
 
+    // Create the dispatch topology overwriting the existing one if it exists.
+    void create_dispatch_topology();
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
+    const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
+
 private:
     uint8_t num_hw_cqs_{};
     size_t l1_small_size_{};
@@ -67,6 +73,8 @@ private:
 
     mutable std::mutex lock_;
     std::vector<std::unique_ptr<Device>> devices_;
+
+    std::shared_ptr<DispatchTopology> dispatch_topology_;
 
     bool skip_remote_devices_{};
 
@@ -86,7 +94,7 @@ private:
     // Initialize state for activated devices
     void init_fabric(const std::vector<IDevice*>& active_devices) const;
     void initialize_active_devices();
-    void configure_and_load_fast_dispatch_kernels();
+    void configure_and_load_fast_dispatch_kernels(bool force_recreate_topology = false);
     void compile_and_load_fabric();
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
