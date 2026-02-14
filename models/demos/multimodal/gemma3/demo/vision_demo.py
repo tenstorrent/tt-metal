@@ -446,6 +446,9 @@ def test_multimodal_demo_text(
                         enable_trace=enable_trace,
                     )
 
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
+
                     next_tokens, next_texts = sampler(logits)
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
