@@ -688,29 +688,12 @@ class TTAttention:
             if split_memcfg is None:
                 split_memcfg = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
 
-            # QKV fused linear output must be block-sharded across the encoder grid so
-            # `split_query_key_value_and_split_heads` can run its sharded program
-            # factory (no interleaving islands in perf/trace mode).
+            # QKV fused linear must be block-sharded for TTNN split-heads to take the
+            # fully sharded path (vit.md pattern). Prefer the canonical TTNN constant
+            # so the op can pick the right sharded kernel from program_config.
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if explicit_sharded_attn:
-                grid = getattr(cfg, "grid", None) if cfg is not None else None
-                if grid is None:
-                    raise RuntimeError("Missing encoder core grid in TT config")
-                grid_x, grid_y = int(grid[0]), int(grid[1])
-                cache_key = (int(B), int(N), int(C), int(grid_x), int(grid_y))
-                qkv_shard_mc = self._qkv_block_shard_mc_cache.get(cache_key)
-                if qkv_shard_mc is None:
-                    if not hasattr(ttnn, "create_sharded_memory_config"):
-                        raise RuntimeError("ttnn.create_sharded_memory_config unavailable; cannot shard QKV output")
-                    core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
-                    qkv_shard_mc = ttnn.create_sharded_memory_config(
-                        (int(B), 1, int(N), int(3 * C)),
-                        core_grid=core_grid,
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    )
-                    self._qkv_block_shard_mc_cache[cache_key] = qkv_shard_mc
-                memcfg = qkv_shard_mc
+                memcfg = getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or memcfg
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
