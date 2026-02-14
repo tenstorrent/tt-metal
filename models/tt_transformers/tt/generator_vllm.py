@@ -356,7 +356,11 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
         )
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward_llama_vision(*args, **kwargs)
+        logits = super().decode_forward_llama_vision(*args, **kwargs)
+        if isinstance(logits, tuple):
+            return logits[0]
+        else:
+            return logits
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
