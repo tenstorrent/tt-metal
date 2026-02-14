@@ -3,20 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <random>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt-metalium/core_coord.hpp"
+
+#include <cstdint>
+#include <vector>
 
 using namespace tt::constants;
-using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::ez;
 
 // Reference implementation of matrix multiplication.
 // Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
@@ -33,20 +32,13 @@ void golden_matmul(
     uint32_t M,
     uint32_t N,
     uint32_t K) {
-    std::vector<bfloat16> c_bf(M * N, 0);
-
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            std::uint32_t idx_c = j + (i * N);
-            std::uint32_t idx_a = i * K;
-            std::uint32_t idx_b = j;
+    for (uint32_t i = 0; i < M; i++) {
+        for (uint32_t j = 0; j < N; j++) {
             float c_f = 0;
-            for (int k_m = 0; k_m < K; k_m++) {
-                c_f += static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
-                idx_a += 1;
-                idx_b += N;
+            for (uint32_t k_m = 0; k_m < K; k_m++) {
+                c_f += static_cast<float>(a[i * K + k_m]) * static_cast<float>(b[k_m * N + j]);
             }
-            output.at(idx_c) = bfloat16(c_f);
+            output.at(j + i * N) = bfloat16(c_f);
         }
     }
 }
@@ -60,124 +52,70 @@ void matmul_single_core(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool /*bcast_batch*/,
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
-    // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
+    DeviceContext& ctx) {
+    // This is a single-core example using core {0,0}.
     CoreCoord core({0, 0});
 
-    // Calcaulate the number of tiles for each dimension.
+    // Calculate the number of tiles for each dimension.
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
     // Create DRAM buffers for the input and output data.
-    uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-
+    // A tile on Tenstorrent is 32x32 elements; with BFloat16, each tile occupies 2048 bytes.
     // We allocate DRAM buffers for the input and output data (replicated per device across the mesh).
     // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-
-    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
-    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
-    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
-
-    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
-    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
+    auto src0_dram_buffer = ctx.dram_tile_buffer(Mt * Kt);
+    auto src1_dram_buffer = ctx.dram_tile_buffer(Kt * Nt);
+    auto dst_dram_buffer = ctx.dram_tile_buffer(Mt * Nt);
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
-    // the compute kernel is using the other tile). This number can be adjusted based on the use case. But geberally
+    // the compute kernel is using the other tile). This number can be adjusted based on the use case. But generally
     // diminishing returns observed after several tiles.
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t src0_cb_index = CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    constexpr uint32_t num_input_tiles = 2;
+    constexpr uint32_t num_output_tiles = 2;
 
-    uint32_t src1_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    auto builder = ProgramBuilder(core);
+    builder.cb(tt::CBIndex::c_0, num_input_tiles)
+        .cb(tt::CBIndex::c_1, num_input_tiles)
+        .cb(tt::CBIndex::c_16, num_output_tiles);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-            .set_page_size(output_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-    // Create the data movement kernels and the compute kernel
-    std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-    auto reader_id = tt_metal::CreateKernel(
-        program,
+    // Create the data movement kernels and the compute kernel.
+    // Reader: loads A and B tiles from DRAM into circular buffers c_0 and c_1.
+    // Writer: stores computed output tiles from c_16 back to DRAM.
+    // The EZ API auto-generates TensorAccessorArgs from the buffer lists.
+    auto& reader_ref = builder.reader(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
-
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-    auto writer_id = tt_metal::CreateKernel(
-        program,
+        {src0_dram_buffer, src1_dram_buffer});
+    auto& writer_ref = builder.writer(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+        {dst_dram_buffer});
 
-    // Compile time arguments for the kernels
-    // Note that these take effect at the kernel's compile time. Chaning these values will require recompilation of the
+    // Compile time arguments for the compute kernel.
+    // Note that these take effect at the kernel's compile time. Changing these values will require recompilation of the
     // kernel. Having arguments at compile time allows the compiler to optimize the kernel for the specific use case.
     // Like applying loop unrolling, constant folding, etc.. resulting in a more efficient kernel.
-    std::vector<uint32_t> compute_compile_time_args = {
-        Mt,  // Mt
-        Kt,  // Kt
-        Nt   // Nt
-    };
-    tt_metal::CreateKernel(
-        program,
+    builder.compute(
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
-        core,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
+        MathFidelity::HiFi4,
+        {Mt, Kt, Nt});
 
-    // Set kernel arguments
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
-    tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
+    // Set kernel runtime arguments.
+    reader_ref.runtime_args({src0_dram_buffer->address(), src1_dram_buffer->address(), Mt, Kt, Nt});
+    writer_ref.runtime_args({dst_dram_buffer->address(), Mt, Kt, Nt});
+    // NOTE: We never set the runtime arguments for the compute kernel. Everything needed has
+    // been set at compile time. The compute kernel does not need any runtime arguments to execute.
 
-    tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
-    // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
-    // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
-    // this step.
-
-    // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
-    // buffer
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    // Upload the input data to the DRAM buffers, execute the kernels, read back the result.
+    ctx.write(src0_dram_buffer, a);
+    ctx.write(src1_dram_buffer, b);
+    ctx.run(builder.build());
+    output = ctx.read<bfloat16>(dst_dram_buffer);
 }
 
 ///////////////////////////////////////
@@ -186,9 +124,10 @@ int main() {
     bool pass = true;
 
     try {
-        // Open device
+        // Open device.
+        // DeviceContext wraps MeshDevice creation, command queue, and teardown in RAII.
         constexpr int device_id = 0;
-        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+        DeviceContext ctx(device_id);
 
         // parameters for the matrix multiplication
         constexpr uint32_t M = 640;  // user-defined
@@ -216,7 +155,7 @@ int main() {
         std::vector<bfloat16> golden_vec(M * N, 0);
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
-        // Tilize the input vectors to match the expected tiled layout for the device
+        // Tilize the input vectors to match the expected tiled layout for the device.
         // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
         // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
         // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
@@ -227,20 +166,18 @@ int main() {
 
         // Invoke the matrix multiplication on the device
         std::vector<bfloat16> result_vec(M * N, 0);
-        matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
+        matmul_single_core(src0_vec, src1_vec, result_vec, M, N, K, ctx);
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
 
-        // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
+        // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector.
         // This is a measure of how similar the two vectors are.
         // A PCC close to 1 indicates that the two vectors are very similar.
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
-
-        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
