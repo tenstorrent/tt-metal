@@ -122,6 +122,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
     api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
     api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
+    api/tt-metalium/experimental/ez/ez.hpp
+    api/tt-metalium/experimental/ez/device_context.hpp
+    api/tt-metalium/experimental/ez/program_builder.hpp
 )
 target_sources(
     tt_metal
@@ -315,6 +318,7 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
 add_subdirectory(experimental/udm)
+add_subdirectory(experimental/ez)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
