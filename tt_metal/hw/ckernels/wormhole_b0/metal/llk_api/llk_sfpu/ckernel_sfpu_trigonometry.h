@@ -45,16 +45,22 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
         // Compensated residual for the reciprocal-correction branch.
         // This preserves precision when tan(x) is near its poles.
         s = sfpi::vConstNeg1 * r + a;
+        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(r));
         s = t * a + s;
 
-        // Reciprocal seed for 1/r.
-        t = sfpi::approx_recip(r);
+        // Reciprocal 1/r.
+        const float k0 = 0.3232325017452239990234375f;
+        const float k1 = 1.4545459747314453125f;
+        const float k2 = 2.121212482452392578125f;
 
-        // One Newton-Raphson step on reciprocal:
-        // e = 1 - r*t, then t <- t*(1 + e) = t*(2 - r*t)
-        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
-        vFloat neg_t = -t;
-        t = t * neg_e + neg_t;
+        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(r);
+        t = k1 + k0 * negative_x;
+        sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
+        t = k2 + t * negative_x;
+        scale *= 0.5f;
+        sfpi::vFloat e = sfpi::vConst1 + negative_x * t;
+        t = t * e + t;
+        t = t * scale;
 
         // Reconstruct tan from corrected reciprocal terms.
         r = r * t + sfpi::vConst1;
@@ -79,11 +85,20 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     sfpi::vFloat r = t * a + a;
 
     v_if(i < 0) {
-        t = sfpi::approx_recip(r);
-        // one N-R
-        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
-        vFloat neg_t = -t;
-        r = t * neg_e + neg_t;
+        // Reciprocal 1/r.
+        const float k0 = 0.3232325017452239990234375f;
+        const float k1 = 1.4545459747314453125f;
+        const float k2 = 2.121212482452392578125f;
+
+        sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(r));
+        t = k1 + k0 * negative_x;
+        sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(r);
+        t = k2 + t * negative_x;
+        sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
+        sfpi::vFloat e = sfpi::vConst1 + negative_x * t;
+        scale *= 0.5f;
+        t = t * e + t;
+        r = t * scale;
     }
     v_endif;
 
