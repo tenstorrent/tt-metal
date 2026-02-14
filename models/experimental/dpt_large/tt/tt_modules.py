@@ -696,11 +696,16 @@ class TTAttention:
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not (_ttnn_is_sharded(x) or _ttnn_is_sharded(x3)):
                 qkv_pc = None
+            qkv_dtype = ttnn.bfloat16
+            if explicit_sharded_attn and hasattr(ttnn, "bfloat8_b"):
+                # Split-heads sharded path is sensitive to L1 circular-buffer pressure.
+                # Match vit.md and use BF8 for the fused QKV projection in perf mode.
+                qkv_dtype = ttnn.bfloat8_b
             qkv3 = _ttnn_linear_with_optional_program_config(
                 x=x3,
                 w=self._wqkv_tt,
                 bias=self._bqkv_tt,
-                dtype=ttnn.bfloat16,
+                dtype=qkv_dtype,
                 memory_config=memcfg,
                 program_config=qkv_pc,
                 op_name="attn_qkv",
