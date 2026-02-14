@@ -85,6 +85,33 @@ barrier (`ttnn.synchronize_device`) so it is stable across runs and does not inc
 When `--dump-perf` is enabled, the runner enables strict mode and fails if any TTNN program-config fast path
 throws and falls back silently. In perf runs, `program_config_fallback_total` must be `0`.
 
+## Memory Layout & Sharding Strategy (Stage 2)
+
+The encoder uses a hybrid layout strategy to balance sharding benefits with current TTNN op constraints:
+
+- **Tokens are block-sharded across transformer blocks** in perf mode (`tt_perf_encoder=True`).
+- **Attention "island"**: TTNN SDPA (`ttnn.transformer.scaled_dot_product_attention`) currently requires
+  **interleaved** operands (it rejects sharded tensors). The attention path therefore:
+  - runs fused QKV and output projection on sharded tokens where possible
+  - converts just-in-time to interleaved for SDPA
+  - converts back to sharded tokens immediately after attention
+
+The perf JSON exposes `attn_island_interleave_*` and `attn_island_reshard_*` counters so the conversion
+overhead is visible and measurable.
+
+## Fused Ops Used
+
+| Subsystem | Fused op | Where |
+|---|---|---|
+| Encoder MLP | FF1 matmul + GELU | `tt/tt_configs.py` (FF1 `fused_activation`) |
+| Encoder Attention | QKV fused projection (single linear) | `tt/tt_modules.py` (`TTAttention` fused QKV weights) |
+
+## Stage 3 (Tuning / Limitations)
+
+Stage 3 work will focus on reducing attention island overhead (potentially replacing SDPA with an explicit
+QK+softmax+AV implementation that supports sharded operands), reducing TM/layout churn, and increasing
+core utilization.
+
 Run CPU-only (no TT device) to get a baseline:
 
 ```sh

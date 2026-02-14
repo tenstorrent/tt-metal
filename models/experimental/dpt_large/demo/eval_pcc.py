@@ -480,6 +480,10 @@ def main():
         "threshold": 0.99,
         "all_pass": all(pcc_pass_flags) if len(pcc_pass_flags) else False,
     }
+    # Convenience top-level keys (match common perf-gate scripts).
+    result["pcc_mean"] = float(result["pcc"]["mean"])
+    result["pcc_min"] = float(result["pcc"]["min"])
+    result["pcc_all_pass"] = bool(result["pcc"]["all_pass"])
 
     if args.dump_json:
         out = Path(args.dump_json)

@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Optional
 
 import math
+import time
 import torch
 
 from .tt_cnn_ops import TTConv2dCached
@@ -502,6 +503,7 @@ class TTAttention:
             B, N, C = shape
         else:
             raise ValueError(f"TTAttention expects TT tensor with 3D/4D shape, got {shape}")
+        input_is_4d = len(shape) == 4
         H = self.num_heads
         D = self.head_dim
         if C != H * D:
@@ -511,13 +513,24 @@ class TTAttention:
             x4 = ttnn.reshape(x, (B, 1, N, C))
         else:
             x4 = x
+        # Stage-2 hybrid attention: tokens may be block-sharded across the encoder.
+        tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
+        cfg = getattr(self, "program_config", None)
+        attn_island_memcfg = (
+            mm_opts.get("attn_island_memcfg", None)
+            or getattr(cfg, "attn_island_memcfg", None)
+            or ttnn.DRAM_MEMORY_CONFIG
+        )
+        hybrid_attn = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
-            cfg = getattr(self, "program_config", None)
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            # If tokens are sharded, keep QKV output sharded as well before interleaving for SDPA.
+            if hybrid_attn:
+                memcfg = tokens_shard_mc
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -530,12 +543,34 @@ class TTAttention:
                 program_config=qkv_pc,
                 op_name="attn_qkv",
             )
+            if hybrid_attn:
+                # SDPA rejects sharded operands. Interleave just-in-time for SDPA
+                # and immediately reshard after attention.
+                try:
+                    from .perf_counters import inc_attn_island_interleave
+                except Exception:  # pragma: no cover
+                    inc_attn_island_interleave = None
+                t0 = time.perf_counter()
+                qkv4 = ttnn.to_memory_config(qkv4, memory_config=attn_island_memcfg, dtype=ttnn.bfloat16)
+                if callable(inc_attn_island_interleave):
+                    inc_attn_island_interleave((time.perf_counter() - t0) * 1000.0)
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] tensors
-            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                qkv3, num_heads=H, transpose_key=False
-            )
+            if hybrid_attn:
+                try:
+                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv3, num_heads=H, transpose_key=False, memory_config=attn_island_memcfg
+                    )
+                except TypeError:
+                    # Backward compat: older runtimes may not expose memory_config for this op.
+                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv3, num_heads=H, transpose_key=False
+                    )
+            else:
+                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                    qkv3, num_heads=H, transpose_key=False
+                )
             scale = 1.0 / math.sqrt(D)
             sdpa_kwargs = dict(is_causal=False, scale=scale)
             if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
@@ -556,6 +591,19 @@ class TTAttention:
             # Merge heads back to [B, N, C]
             merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
+            if hybrid_attn:
+                try:
+                    from .perf_counters import inc_attn_island_reshard
+                except Exception:  # pragma: no cover
+                    inc_attn_island_reshard = None
+                # Reshard attention output back to the token sharding spec so
+                # residual adds and subsequent MLPs stay sharded.
+                ctx4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
+                t1 = time.perf_counter()
+                ctx4 = ttnn.to_memory_config(ctx4, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+                if callable(inc_attn_island_reshard):
+                    inc_attn_island_reshard((time.perf_counter() - t1) * 1000.0)
+                ctx = ctx4
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
@@ -583,6 +631,8 @@ class TTAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
+            if input_is_4d:
+                ctx = ttnn.reshape(ctx, (B, 1, N, C))
 
         # Output projection on device when possible.
         out: ttnn.Tensor
@@ -593,6 +643,8 @@ class TTAttention:
             memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
+            if hybrid_attn:
+                memcfg = tokens_shard_mc
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
             if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
@@ -605,10 +657,12 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
-            # Back to [B, N, C]
+            # Keep rank stable for residual adds.
             out = out_tt4
-            if len(getattr(out_tt4, "shape", [])) == 4:
-                out = ttnn.reshape(out_tt4, (B, N, C))
+            if len(getattr(out_tt4, "shape", [])) == 3:
+                out = ttnn.reshape(out_tt4, (B, 1, N, C))
+            if not input_is_4d and len(getattr(out, "shape", [])) == 4:
+                out = ttnn.reshape(out, (B, N, C))
         else:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention projection weights unavailable and CPU fallback is disabled")
@@ -623,6 +677,8 @@ class TTAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
+            if input_is_4d:
+                out = ttnn.reshape(out, (B, 1, N, C))
         return out
 
 

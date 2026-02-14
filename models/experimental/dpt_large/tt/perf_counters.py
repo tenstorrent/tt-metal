@@ -24,6 +24,12 @@ class DPTPerfCounters:
     vit_backbone_fallback_count: int = 0
     reassembly_readout_fallback_count: int = 0
     upsample_host_fallback_count: int = 0
+    # Stage-2 hybrid attention bookkeeping: SDPA currently requires interleaved
+    # operands, so we explicitly interleave/reshard around the SDPA "island".
+    attn_island_interleave_count: int = 0
+    attn_island_reshard_count: int = 0
+    attn_island_interleave_ms_total: float = 0.0
+    attn_island_reshard_ms_total: float = 0.0
     program_config_fallback_total: int = 0
     program_config_fallback_by_op: dict[str, int] = field(default_factory=dict)
     program_config_fallback_by_reason: dict[str, int] = field(default_factory=dict)
@@ -32,6 +38,10 @@ class DPTPerfCounters:
         self.vit_backbone_fallback_count = 0
         self.reassembly_readout_fallback_count = 0
         self.upsample_host_fallback_count = 0
+        self.attn_island_interleave_count = 0
+        self.attn_island_reshard_count = 0
+        self.attn_island_interleave_ms_total = 0.0
+        self.attn_island_reshard_ms_total = 0.0
         self.program_config_fallback_total = 0
         self.program_config_fallback_by_op.clear()
         self.program_config_fallback_by_reason.clear()
@@ -41,6 +51,10 @@ class DPTPerfCounters:
             "vit_backbone_fallback_count": int(self.vit_backbone_fallback_count),
             "reassembly_readout_fallback_count": int(self.reassembly_readout_fallback_count),
             "upsample_host_fallback_count": int(self.upsample_host_fallback_count),
+            "attn_island_interleave_count": int(self.attn_island_interleave_count),
+            "attn_island_reshard_count": int(self.attn_island_reshard_count),
+            "attn_island_interleave_ms_total": float(self.attn_island_interleave_ms_total),
+            "attn_island_reshard_ms_total": float(self.attn_island_reshard_ms_total),
             "program_config_fallback_total": int(self.program_config_fallback_total),
             # Nested dicts are JSON-serializable and keep the top-level keys stable.
             "program_config_fallback_by_op": dict(self.program_config_fallback_by_op),
@@ -68,6 +82,18 @@ def inc_reassembly_readout_fallback() -> int:
 def inc_upsample_host_fallback() -> int:
     PERF_COUNTERS.upsample_host_fallback_count += 1
     return int(PERF_COUNTERS.upsample_host_fallback_count)
+
+
+def inc_attn_island_interleave(ms: float) -> int:
+    PERF_COUNTERS.attn_island_interleave_count += 1
+    PERF_COUNTERS.attn_island_interleave_ms_total += float(ms)
+    return int(PERF_COUNTERS.attn_island_interleave_count)
+
+
+def inc_attn_island_reshard(ms: float) -> int:
+    PERF_COUNTERS.attn_island_reshard_count += 1
+    PERF_COUNTERS.attn_island_reshard_ms_total += float(ms)
+    return int(PERF_COUNTERS.attn_island_reshard_count)
 
 
 def set_strict_program_config(strict: bool) -> None:

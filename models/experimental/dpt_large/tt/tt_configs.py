@@ -44,6 +44,10 @@ class TTLayerConfig:
     proj_memcfg: Optional[ttnn.MemoryConfig] = None
     mlp_memcfg: Optional[ttnn.MemoryConfig] = None
     split_heads_memcfg: Optional[ttnn.MemoryConfig] = None
+    # Stage-2 hybrid attention: SDPA currently rejects sharded operands. We keep
+    # tokens sharded across blocks, but explicitly interleave around the SDPA
+    # "island" using this memory config.
+    attn_island_memcfg: Optional[ttnn.MemoryConfig] = None
     qkv_program_config: Optional[object] = None
     proj_program_config: Optional[object] = None
     ff1_program_config: Optional[object] = None
@@ -74,8 +78,13 @@ class TTLayerConfig:
             return None
 
     def matmul_opts(self, seq_len: int | None = None):
-        # Hook to pass sequence length to downstream ops if they care.
-        return {"seq_len": seq_len} if seq_len is not None else {}
+        # Hook to pass sequence length and layout knobs to downstream ops.
+        opts: dict[str, object] = {}
+        if seq_len is not None:
+            opts["seq_len"] = seq_len
+        if self.attn_island_memcfg is not None:
+            opts["attn_island_memcfg"] = self.attn_island_memcfg
+        return opts
 
     def sdpa_program_config(self, seq_len: int):
         """SDPA program config aligned with ViT demo chunking.
@@ -361,6 +370,7 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
             else getattr(ttnn, "L1_MEMORY_CONFIG", None)
         ),
         split_heads_memcfg=split_mem,
+        attn_island_memcfg=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
         qkv_program_config=prog_cfgs.get("query_key_value_matmul_program_config"),
         qk_program_config=qk_pc,
         softmax_program_config=softmax_pc,

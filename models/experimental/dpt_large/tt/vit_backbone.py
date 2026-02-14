@@ -89,6 +89,8 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         self._pos_embed_cache = {}
         self._tt_pos_embed_cache = {}
         self._tt_cls_cache = {}
+        # Cache sharded token memory configs keyed by (seq_len, hidden, grid).
+        self._tokens_shard_mc_cache = {}
         self.used_tt_encoder_last_forward: bool = False
         # TTNN defaults to l1_small_size=0 in some runtimes, which can force
         # kernels down slow fallback paths or fail allocation in conv/halo ops.
@@ -380,7 +382,36 @@ class DPTViTBackboneTTNN(torch.nn.Module):
         # Keep [B,1,N,C] through encoder blocks to reduce per-layer reshapes.
         tokens_tt = ttnn.reshape(tokens_tt, (int(B), 1, int(seq_len), int(C)))
 
+        # Stage-2: keep tokens sharded across encoder blocks for better core utilization.
+        # SDPA currently requires interleaved operands; attention handles a hybrid
+        # island by interleaving/resharding around SDPA.
+        tokens_shard_mc = None
+        try:
+            if bool(getattr(self.config, "tt_perf_encoder", False)) and self.tt_layer_cfg is not None:
+                grid_x, grid_y = (int(self.tt_layer_cfg.grid[0]), int(self.tt_layer_cfg.grid[1]))
+                cache_key = (int(seq_len), int(C), int(grid_x), int(grid_y))
+                tokens_shard_mc = self._tokens_shard_mc_cache.get(cache_key)
+                if tokens_shard_mc is None and hasattr(ttnn, "create_sharded_memory_config"):
+                    core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                    shape_for_shard = getattr(tokens_tt, "padded_shape", None) or getattr(tokens_tt, "shape", None)
+                    tokens_shard_mc = ttnn.create_sharded_memory_config(
+                        shape_for_shard,
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    self._tokens_shard_mc_cache[cache_key] = tokens_shard_mc
+                if tokens_shard_mc is not None:
+                    tokens_tt = ttnn.to_memory_config(tokens_tt, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+        except Exception:
+            inc_vit_backbone_fallback()
+            if not bool(getattr(self.config, "allow_cpu_fallback", True)):
+                raise
+            tokens_shard_mc = None
+
         mm_opts = self.tt_layer_cfg.matmul_opts(seq_len=int(seq_len)) if self.tt_layer_cfg else {}
+        if tokens_shard_mc is not None:
+            mm_opts["tokens_shard_mc"] = tokens_shard_mc
         if pad_seq and orig_len < seq_len:
             mm_opts["valid_seq_len"] = int(orig_len)
             cache_key = (int(seq_len), int(orig_len))
@@ -412,6 +443,21 @@ class DPTViTBackboneTTNN(torch.nn.Module):
             if return_tt:
                 try:
                     tokens_tt4 = h_tt
+                    # Token tensors are sharded across blocks in perf mode. The
+                    # output-layer reassembly path uses slice/reshape/permute,
+                    # which is most stable on interleaved tensors across TTNN versions.
+                    try:
+                        is_sharded = False
+                        if hasattr(ttnn, "is_sharded"):
+                            is_sharded = bool(ttnn.is_sharded(tokens_tt4))
+                        elif hasattr(tokens_tt4, "is_sharded"):
+                            is_sharded = bool(tokens_tt4.is_sharded())
+                        if is_sharded:
+                            tokens_tt4 = ttnn.to_memory_config(
+                                tokens_tt4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+                            )
+                    except Exception:
+                        pass
                     shape = tuple(int(v) for v in tuple(getattr(tokens_tt4, "shape", ())))
                     if len(shape) == 3:
                         b, n, c = shape
