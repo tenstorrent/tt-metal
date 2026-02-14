@@ -72,6 +72,12 @@ def test_rand(device):
     logger.info("TT-NN rand tensor:", tensor)
 
 
+def test_randn(device):
+    # Create a TT-NN tensor with random values standard normal distributed
+    tensor = ttnn.randn(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    logger.info("TT-NN randn tensor:", tensor)
+
+
 def test_from_buffer(device):
     # Create a TT-NN tensor from a Python buffer (list)
     buffer = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
