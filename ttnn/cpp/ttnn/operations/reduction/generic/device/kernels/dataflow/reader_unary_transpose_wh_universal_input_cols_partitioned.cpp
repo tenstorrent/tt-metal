@@ -65,7 +65,6 @@ void kernel_main() {
                 noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
-
                 ++w;
 
                 if (w == Wt) {
