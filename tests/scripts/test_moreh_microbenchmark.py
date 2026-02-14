@@ -812,8 +812,8 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
         bw_lower_bound = 250.0
         bw_upper_bound = 270.0
     elif arch == "blackhole":
-        bw_lower_bound = 350.0
-        bw_upper_bound = 380.0
+        bw_lower_bound = 490.0
+        bw_upper_bound = 512.0
     else:
         assert False, f"Unsupported architecture: {arch}"
     assert bw_lower_bound <= throughput
