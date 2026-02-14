@@ -213,7 +213,6 @@ ttnn::Tensor reshape_tiled(
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // squeeze input tensor and requested shape to 3D
-
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
             return squeeze_shape_to_3D(shape);
@@ -231,38 +230,42 @@ ttnn::Tensor reshape_tiled(
     const auto input_padded_shape_3d = compute_padded_shape(input_tensor_shape_3d);
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
-    if (tensor.memory_config().is_sharded()) {
-        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        tensor3d = ttnn::sharded_to_interleaved(tensor, working_input_memory_config, std::nullopt);
-    }
-
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
     }
 
-    MemoryConfig working_output_memory_config = memory_config;
-    if (memory_config.is_sharded()) {
-        working_output_memory_config =
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
+    auto updated_mem_config = memory_config;
+    if (updated_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        auto shard_spec = updated_mem_config.shard_spec().value();
+        shard_spec.shape[1] = requested_shape_3d[-1];
+        updated_mem_config = updated_mem_config.with_shard_spec(shard_spec);
+    } else if (updated_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        auto shard_spec = updated_mem_config.shard_spec().value();
+        shard_spec.shape[0] = requested_shape_3d[-2];
+        updated_mem_config = updated_mem_config.with_shard_spec(shard_spec);
     }
 
     auto output_tensor_3d = ttnn::prim::reshape_view(
         tensor3d,
         requested_shape_3d,
         requested_padded_shape_3d,
-        working_output_memory_config,
+        updated_mem_config,
         recreate_mapping_tensor,
         sub_core_grid);
 
-    if (memory_config.is_sharded()) {
-        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-
+    if (updated_mem_config.is_sharded()) {
         // Recompute the shard spec for the output tensor shape
-        auto output_mem_config = detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
+        auto output_mem_config =
+            detail::recompute_shard_spec_for_output(updated_mem_config, output_tensor_3d.tensor_spec());
 
-        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
+        output_tensor_3d = ttnn::prim::reshape_view(
+            tensor3d,
+            requested_shape_3d,
+            requested_padded_shape_3d,
+            output_mem_config,
+            recreate_mapping_tensor,
+            sub_core_grid);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {

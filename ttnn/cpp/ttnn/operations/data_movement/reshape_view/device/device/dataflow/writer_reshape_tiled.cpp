@@ -66,7 +66,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
 
-        const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+        const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
         enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
         noc_async_write_barrier();
 

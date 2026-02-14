@@ -70,17 +70,30 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
-@pytest.mark.parametrize("shape", [[1, 1, 1024, 1], [1, 1024, 1]])
-def test_reshape_block_shard(device, shape):
-    input_torch = torch.randn(shape, dtype=torch.bfloat16)
-    shard_shape = shape.copy()
-    shard_shape[-1] = 32
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape, input_core_grid, output_shape, output_shard_shape, output_core_grid",
+    [
+        ([1, 1, 1024, 1], [1, 1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
+        ([1, 1024, 1], [1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
+        # ([1, 1, 1024], [1, 32, 1024], ttnn.CoreGrid(x=8, y=1), [1024, 1], [1024, 32], ttnn.CoreGrid(x=1, y=8)), (passes)
+        # ([1, 32, 512], [1, 32, 128], ttnn.CoreGrid(x=4, y=1), [512, 32], [128, 32], ttnn.CoreGrid(x=1, y=4)),
+        ([1, 128, 64], [1, 1, 128, 64], ttnn.CoreGrid(x=1, y=1), [64, 128], [64, 128], ttnn.CoreGrid(x=1, y=1)),
+    ],
+)
+def test_reshape_block_shard(
+    device, input_shape, input_shard_shape, input_core_grid, output_shape, output_shard_shape, output_core_grid
+):
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
 
     block_sharded_config = ttnn.create_sharded_memory_config(
-        shape=shard_shape,
-        core_grid=ttnn.CoreGrid(x=1, y=8),
+        shape=input_shard_shape,
+        core_grid=input_core_grid,
         strategy=ttnn.ShardStrategy.BLOCK,
-        use_height_and_width_as_shard_shape=False,
+    )
+    output_block_sharded_config = ttnn.create_sharded_memory_config(
+        shape=output_shard_shape,
+        core_grid=output_core_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
     )
     input_ttnn = ttnn.from_torch(
         input_torch,
@@ -89,9 +102,9 @@ def test_reshape_block_shard(device, shape):
         device=device,
         memory_config=block_sharded_config,
     )
-    output_tensor = ttnn.reshape(input_ttnn, [1, 1024])
+    output_tensor = ttnn.reshape(input_ttnn, output_shape, memory_config=output_block_sharded_config)
 
-    expected_output = input_torch.reshape([1, 1024])
+    expected_output = input_torch.reshape(output_shape)
     actual_output = ttnn.to_torch(output_tensor)
     assert torch.allclose(expected_output, actual_output)
 
@@ -138,6 +151,12 @@ def test_reshape_width_shard(device, layout):
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=False,
     )
+    output_width_sharded_config = ttnn.create_sharded_memory_config(
+        shape=output_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=False,
+    )
     input_ttnn = ttnn.from_torch(
         input_torch,
         dtype=ttnn.bfloat16,
@@ -145,7 +164,7 @@ def test_reshape_width_shard(device, layout):
         device=device,
         memory_config=width_sharded_config,
     )
-    output_tensor = ttnn.reshape(input_ttnn, output_shape)
+    output_tensor = ttnn.reshape(input_ttnn, output_shape, memory_config=output_width_sharded_config)
 
     expected_output = input_torch.reshape(output_shape)
     actual_output = ttnn.to_torch(output_tensor)
