@@ -9,6 +9,7 @@ import pytest
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -141,8 +142,7 @@ def test_binary_fmod_bf16(
     output = ttnn.fmod(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
-    assert pcc >= 0.99
+    assert_with_ulp(torch_output_tensor, output, 1)
 
 
 # This test was added for #17362
