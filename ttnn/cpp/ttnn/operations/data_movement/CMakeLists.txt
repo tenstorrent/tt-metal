@@ -19,6 +19,7 @@ file(
     common/kernels/*
     fill_pad/device/kernels/*
     fill_rm/device/kernels/*
+    flip/device/kernels/*
     fold/device/kernels/*
     gather/device/kernels/*
     copy/device/kernels/*
@@ -56,6 +57,7 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            flip/flip.hpp
             copy/device/copy_program_factory.hpp
             copy/device/copy_device_operation_types.hpp
             fill_pad/fill_pad.hpp
@@ -378,6 +380,10 @@ target_sources(
         fill_rm/device/fill_rm_device_operation.cpp
         fill_rm/device/fill_rm_program_factory.cpp
         fill_rm/fill_rm.cpp
+        flip/device/flip_device_operation.cpp
+        flip/device/flip_rm_program_factory.cpp
+        flip/device/flip_tiled_program_factory.cpp
+        flip/flip.cpp
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
         fold/device/fold_multi_core_program_factory.cpp
