@@ -9,15 +9,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "concatenate_heads.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_concatenate_heads(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::transformer::concatenate_heads,
+    const auto* const doc =
         R"doc(
             Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
@@ -30,8 +28,15 @@ void bind_concatenate_heads(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: the output tensor.
 
-        )doc",
-        ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
+        )doc";
+
+    ttnn::bind_function<"concatenate_heads">(
+        mod,
+        doc,
+        &ttnn::transformer::concatenate_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

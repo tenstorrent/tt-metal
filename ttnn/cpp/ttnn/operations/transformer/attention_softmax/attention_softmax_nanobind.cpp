@@ -9,15 +9,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "attention_softmax.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_attention_softmax(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::transformer::attention_softmax,
+    const auto* const doc =
         R"doc(
         Divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
@@ -37,19 +35,21 @@ void bind_attention_softmax(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
 
-        )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("tensor"),
-            nb::kw_only(),
-            nb::arg("head_size") = nb::none(),
-            nb::arg("attention_mask") = nb::none(),
-            nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
-            nb::arg("causal_mask") = false,
-            nb::arg("memory_config") = nb::none()});
+        )doc";
 
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"attention_softmax">(
         mod,
-        ttnn::transformer::attention_softmax_,
+        doc,
+        &ttnn::transformer::attention_softmax,
+        nb::arg("tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("head_size") = nb::none(),
+        nb::arg("attention_mask") = nb::none(),
+        nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
+        nb::arg("causal_mask") = false,
+        nb::arg("memory_config") = nb::none());
+
+    const auto* const doc_inplace =
         R"doc(
         In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
@@ -69,15 +69,19 @@ void bind_attention_softmax(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
 
-        )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("tensor"),
-            nb::kw_only(),
-            nb::arg("head_size") = nb::none(),
-            nb::arg("attention_mask") = nb::none(),
-            nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
-            nb::arg("causal_mask") = false,
-            nb::arg("memory_config") = nb::none()});
+        )doc";
+
+    ttnn::bind_function<"attention_softmax_">(
+        mod,
+        doc_inplace,
+        &ttnn::transformer::attention_softmax_,
+        nb::arg("tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("head_size") = nb::none(),
+        nb::arg("attention_mask") = nb::none(),
+        nb::arg("program_config").noconvert() = ttnn::SoftmaxDefaultProgramConfig{},
+        nb::arg("causal_mask") = false,
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer
