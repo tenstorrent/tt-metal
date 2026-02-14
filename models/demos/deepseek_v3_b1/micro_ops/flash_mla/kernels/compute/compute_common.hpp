@@ -12,274 +12,231 @@
 #include "api/compute/matmul.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-/******************************************************************************
- *                                                                             *
- *                   Common Functions for Compute Kernels                      *
- *                                                                             *
- ******************************************************************************/
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm.h"
+#include "../../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa_custom_mm_reuse_dest_srcb.h"
 
-/**
- * in0_cb += in1_cb
- */
-template <bool pop_in1>
-void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles consumed
+#ifdef TRISC_PACK
+#include "../../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 
-    add_tiles_init(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        add_tiles(in0_cb, in1_cb, 0, i, 0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst();
-    }
-    if (pop_in1) {
-        cb_pop_front(in1_cb, num_tiles);
-    }
+constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
+
+#ifdef TRISC_PACK
+// Packer:
+// All 32 slots of replay buffer are used for red sum and red max
+// Fast Approx Exp uses 3 constants and LoadMacro
+// Non-Approx Exp uses 1 constant for recip. TODO: Look into integrating new polynomial exp in
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+
+constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
+constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
+constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
+
+template <uint32_t scale /* 1.0f in FP32 */>
+inline void init_fast_approx_exp_constants() {
+    constexpr float LN2_RECIP = 1.4426950408889634f;
+    constexpr float A = 256.0f * LN2_RECIP;
+    constexpr float B_minus_C = 32500.818359375f;
+    constexpr float THRESHOLD = -88.5f;
+
+    constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+
+    constexpr float A_scaled = A * scale_fp32;
+    constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+
+    TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+    TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
+
+    TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+    TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+    TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
+
+    TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+    TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+    TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 }
 
-/**
- * in_cb -> out_cb
- */
-template <bool pop_in_cb>
-void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // Precondition: in_cb has num_tiles produced
-    // Precondition: out_cb has num_tiles free
-    // Postcondition: in_cb has num_tiles consumed
-    // Postcondition: out_cb has num_tiles produced
-
-    copy_tile_to_dst_init_short(in_cb);
-
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-
-#pragma GCC unroll 0
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        copy_tile(in_cb, i, 0 /*dst*/);
-        pack_tile(0, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-    if (pop_in_cb) {
-        cb_pop_front(in_cb, num_tiles);
-    }
+inline void fast_approx_exp(uint32_t dst_index) {
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
+    ckernel::sfpu::calculate_exponential<true, true, DST_ACCUM_MODE, true, 4, true>();
 }
 
-/**
- * out_cb = in0_cb @ in1_cb
- *
- * @param transpose: If false, in1 is expected in [K, N] layout (row-major), no tile transpose.
- *                   If true, in1 is in [N, K] layout and both layout indexing and tile-level
- *                   transpose are applied.
- * @param skip_in1_pop: If true, skip cb_pop_front on in1_cb (caller manages CB lifecycle)
- */
-ALWI void cb_matmul_blocks(
-    const uint32_t& in0_cb,
-    const uint32_t& in1_cb,
-    const uint32_t& out_cb,
-    const uint32_t& M,
-    const uint32_t& N,
-    const uint32_t& K,
-    const uint32_t& num_blocks,
-    const uint32_t& in0_num_subblocks,
-    const uint32_t& in1_num_subblocks,
-    const uint32_t& in0_block_w,
-    const uint32_t& subblock_h,
-    const uint32_t& subblock_w,
-    const bool& transpose,
-    const bool& add_mask,
-    const uint32_t& mask_cb,
-    const uint32_t& zero_cb,
-    const bool& skip_in1_pop = false) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced (or N*K if transpose)
-    // postcondition: in0_cb is full, in1_cb is empty (unless skip_in1_pop=true)
-    // postcondition: out_cb has M*N produced
-
-    // For [K, N] layout (transpose=false): in1 tiles indexed as (k, n) -> k * N + n
-    //   - Inner loop (over K): stride by N to next K row
-    //   - Subblock offset (over N): stride by subblock_w
-    //   - MOP iterates over subblock_w with stride 1, which matches [K, N] layout
-    // For [N, K] layout (transpose=true): in1 tiles indexed as (n, k) -> n * K + k
-    //   - Inner loop (over K): stride by 1 to next K column
-    //   - Column offset (over N): stride by K to next N row
-    //   - MOP assumes stride 1, so we must call matmul_block per output column
-    const uint32_t in1_inner_stride = transpose ? 1 : N;
-    const uint32_t in1_subblock_stride = transpose ? subblock_w * K : subblock_w;
-    // When transpose=true, MOP's internal stride=1 is wrong for [N,K] layout.
-    // We call matmul_block with effective_subblock_w=1 and loop over columns explicitly.
-    const uint32_t effective_subblock_w = transpose ? 1 : subblock_w;
-    const uint32_t num_col_loops = transpose ? subblock_w : 1;
-    const uint32_t in1_col_stride = K;  // Stride between output columns in [N, K] layout
-
-    mm_block_init_short(
-        in0_cb,
-        in1_cb,
-        transpose /*transpose*/,
-        effective_subblock_w /*ct_dim*/,
-        subblock_h /*rt_dim*/,
-        in0_block_w /*kt_dim*/);
-
-    reconfig_data_format(in1_cb, in0_cb);
-    {
-        DeviceZoneScopedN("matmul-wait-in1");
-        cb_wait_front(in1_cb, K * N);
-    }
-
-    uint32_t output_num_tiles = M * N;
-    cb_reserve_back(out_cb, output_num_tiles);
-    uint32_t in0_index_offset = 0;
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            // When transpose=true, we process one output column at a time
-            for (uint32_t col_loop = 0; col_loop < num_col_loops; ++col_loop) {
-                tile_regs_acquire();
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_offset;
-                // For transpose: offset by col_loop * K to get to correct N row
-                uint32_t in1_index = in1_index_offset + (transpose ? col_loop * in1_col_stride : 0);
-
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                    matmul_block(
-                        in0_cb,
-                        in1_cb,
-                        in0_index,
-                        in1_index,
-                        dst_index,
-                        transpose,
-                        effective_subblock_w,
-                        subblock_h,
-                        in0_block_w);
-                    in0_index++;
-                    in1_index += in1_inner_stride;
-                }
-                uint32_t col_out_tiles = subblock_h * effective_subblock_w;
-                if (add_mask) {
-                    cb_wait_front(mask_cb, col_out_tiles);
-                    cb_wait_front(zero_cb, 1);
-                    add_tiles_init(zero_cb, mask_cb, true);
-                    for (uint32_t i = 0; i < col_out_tiles; i++) {
-                        add_tiles(zero_cb, mask_cb, 0, i, i);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                cb_reserve_back(out_cb, col_out_tiles);
-                for (uint32_t i = 0; i < col_out_tiles; i++) {
-                    pack_tile(i, out_cb);
-                }
-                cb_push_back(out_cb, col_out_tiles);
-                tile_regs_release();
-            }
-            in1_index_offset += in1_subblock_stride;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-    }
-    if (!skip_in1_pop) {
-        cb_pop_front(in1_cb, K * N);
-    }
+// TODO: Currently hardcodes the lregs used by red max
+// Could potentially also skip loading prev sum if we manage lregs properly
+// TODO: Try and integrate with calculate_exponential_polynomial instead for perf
+template <bool exp_approx_mode, uint16_t scale_bf16>
+inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_index) {
+    // TODO: Can get rid of this
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, corr_exp_index + get_dest_buffer_base());
+    // Prev - Max
+    TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
+    TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG3, 2);  // SFPMAD_MOD1_NEGATE_VC
+    sfpi::vFloat sub_top_4 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vFloat sub_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg3];
+    // Init after to avoid trampling cached registers before we use them
+    // TODO: Putting the prev regs in the upper regs lets us init ahead of time
+    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    sfpi::vFloat exp_top_4 = ckernel::sfpu::
+        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+            sub_top_4, scale_bf16);
+    sfpi::vFloat exp_bottom_4 = ckernel::sfpu::
+        _calculate_exponential_piecewise_<exp_approx_mode, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+            sub_bottom_4, scale_bf16);
+    // Subtract 1. This is because the bcast mul accumulates to dest
+    // Without -1: bcast = prev * exp + prev
+    // With -1: bcast = prev * (exp - 1) + prev = prev * exp - prev + prev = prev * exp
+    sfpi::l_reg[sfpi::LRegs::LReg0] = exp_top_4;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = exp_bottom_4;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG3, 2);  // SFPMAD_MOD1_NEGATE_VC
+    // Store Exp - 1 Values
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 4);
+    // TODO: Can get rid of this
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, curr_sum_index + get_dest_buffer_base());
+    // Load Curr Sum Values
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 4);
+    // Mul Exp by Curr Sum
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    // Store Result
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 4);
 }
 
-/**
- * Strided matmul: out_cb = in0_cb @ in1_cb with custom in1 row stride.
- *
- * Used for MLA where V is the first vDHt columns of K (DHt columns total).
- * in1 is in [K, DHt] layout but we only want [K, N] where N < DHt.
- *
- * @param in1_row_stride: Actual row width of in1 (DHt), stride between K rows
- * @param skip_in1_wait: If true, skip cb_wait_front (caller already ensured tiles available)
- * @param skip_in1_pop: If true, skip cb_pop_front (caller manages CB lifecycle)
- */
-ALWI void cb_matmul_blocks_strided(
-    const uint32_t& in0_cb,
-    const uint32_t& in1_cb,
-    const uint32_t& out_cb,
-    const uint32_t& M,
-    const uint32_t& N,
-    const uint32_t& K,
-    const uint32_t& in1_row_stride,  // Actual width of in1 rows (DHt)
-    const uint32_t& num_blocks,
-    const uint32_t& in0_num_subblocks,
-    const uint32_t& in1_num_subblocks,
-    const uint32_t& in0_block_w,
-    const uint32_t& subblock_h,
-    const uint32_t& subblock_w,
-    const bool& skip_in1_wait,
-    const bool& skip_in1_pop) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*in1_row_stride tiles available (or skip_in1_wait=true)
-    // postcondition: in0_cb is full
-    // postcondition: out_cb has M*N produced
+// TODO: Currently hardcodes the lregs used by red max
+// Could potentially also skip loading prev sum if we manage lregs properly
+// TODO: Try and integrate with calculate_exponential_polynomial instead for perf
+template <bool exp_approx_mode, uint16_t scale_bf16>
+inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
+    // Last op should already be sum offset
+    sfpi::vFloat sum_top_4 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    // Init after to avoid trampling cached registers before we use them
+    // TODO: Putting the prev regs in the upper regs lets us init ahead of time
+    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    sfpi::vFloat recip_top_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_top_4);
+    sfpi::vFloat recip_bottom_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_bottom_4);
 
-    // in1 is in [K, in1_row_stride] layout, but we only read [K, N] portion
-    // Inner stride is in1_row_stride (not N) to skip extra columns
-    const uint32_t in1_inner_stride = in1_row_stride;
-    const uint32_t in1_subblock_stride = subblock_w;  // Adjacent columns in output
+    // Subtract 1. This is because the bcast mul accumulates to dest
+    sfpi::l_reg[sfpi::LRegs::LReg0] = recip_top_4;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = recip_bottom_4;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG0, 2);  // SFPMAD_MOD1_NEGATE_VC
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LCONST_1, p_sfpu::LREG2, 2);  // SFPMAD_MOD1_NEGATE_VC
+    // TODO: Can get rid of this
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, recip_dst_index + get_dest_buffer_base());
+    // Store Result
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 4);
+}
+#endif
 
-    mm_block_init_short(
-        in0_cb, in1_cb, false /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    reconfig_data_format(in1_cb, in0_cb);
-
-    if (!skip_in1_wait) {
-        DeviceZoneScopedN("matmul-wait-in1");
-        cb_wait_front(in1_cb, K * in1_row_stride);
+// First chunk controls whether we run the correction path with prev sum, max, out
+// Last chunk controls whether we signal out packer to start packing as output is produced
+template <
+    uint32_t chunk_size,
+    uint32_t num_tiles_k,
+    uint32_t num_tiles_v,
+    uint32_t scale_fp32,
+    uint16_t scale_bf16,
+    bool transpose_k,
+    bool transpose_v,
+    uint32_t packed_tile_size,
+    bool exp_approx_mode = false>
+void compute_sdpa_chunk(
+    uint32_t cb_q,
+    uint32_t cb_k,
+    uint32_t cb_out,
+    uint32_t mm1_dst_offset,
+    uint32_t mm2_dst_offset,
+    uint32_t max_dst_offset,
+    uint32_t sum_dst_offset,
+    uint32_t corr_exp_dst_offset,
+    bool first_chunk,
+    bool last_chunk) {
+    // TODO: This is likely needed due to a conflict with the compiler
+    PACK((ckernel::sfpu::_init_sdpa_reduce_row_8x32_replay_buffers_()));
+    sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    cb_wait_front(cb_k, num_tiles_k * chunk_size);
+    // Q @ K (FPU)
+    // Make sure SFPU of previous chunk is done (sem is zero)
+    MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+    sdpa_custom_mm_block<transpose_k>(cb_q, cb_k, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size);
+    // Reduce Max (SFPU)
+    PACK((llk_math_sfpu_sdpa_reduce_max_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size>(
+        mm1_dst_offset, max_dst_offset, !first_chunk)));
+    // Bcast Sub (FPU)
+    // Wait for SFPU to finish (sem is 0)
+    sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);  // For tile shape
+    MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+    sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
+    sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false>(mm1_dst_offset);
+    if (!first_chunk) {
+        // Exp Sub (SFPU)
+        // Signal FPU that tile is ready
+        // This should just init an lreg constant and is what's needed for non-approx exp
+        PACK((non_approx_exp_mul_prev<exp_approx_mode, scale_bf16>(sum_dst_offset, corr_exp_dst_offset)));
+        PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
+        // Bcast Mul (FPU)
+        // Wait for SFPU that tile is ready (sem is non-zero)
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
+        MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
+        sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
+        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true>(mm2_dst_offset);
+        // FPU has consumed the tile
+        MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+        // Reset to 0
+        MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
+    }
+    // Exp Mul Scale (SFPU)
+    PACK((init_fast_approx_exp_constants<scale_fp32>()));
+    for (uint32_t i = 0; i < chunk_size; i++) {
+        // Wait for FPU that tile is ready (sem is non-zero)
+        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        PACK((fast_approx_exp(mm1_dst_offset + i * packed_tile_size)));
+        PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+        PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
     }
 
-    uint32_t output_num_tiles = M * N;
-    cb_reserve_back(out_cb, output_num_tiles);
-    uint32_t in0_index_offset = 0;
+    // MM (FPU)
+    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, cb_k, cb_out, transpose_v, chunk_size, num_tiles_v);
+    sdpa_custom_mm_reuse_dest_srcb_block(
+        cb_q,
+        cb_k,
+        0,
+        0,
+        mm1_dst_offset,
+        mm2_dst_offset,
+        transpose_v,
+        chunk_size,
+        num_tiles_v,
+        num_tiles_k,
+        last_chunk);
 
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb,
-                    in1_cb,
-                    in0_index,
-                    in1_index,
-                    dst_index,
-                    false /*transpose*/,
-                    subblock_w,
-                    subblock_h,
-                    in0_block_w);
-                in0_index++;
-                in1_index += in1_inner_stride;  // Stride by actual row width
-            }
-
-            uint32_t col_out_tiles = subblock_h * subblock_w;
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(out_cb, col_out_tiles);
-            for (uint32_t i = 0; i < col_out_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            cb_push_back(out_cb, col_out_tiles);
-            tile_regs_release();
-
-            in1_index_offset += in1_subblock_stride;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
+    // Reduce Sum (SFPU)
+    PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+        mm1_dst_offset, sum_dst_offset, !first_chunk)));
+    // Signal SFPU is done for the chunk
+    if (!first_chunk) {
+        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
     }
+    cb_pop_front(cb_k, num_tiles_k * chunk_size);
+}
 
-    if (!skip_in1_pop) {
-        cb_pop_front(in1_cb, K * in1_row_stride);
-    }
+template <uint32_t num_tiles_v, bool exp_approx_mode, uint16_t scale_bf16>
+void compute_sdpa_recip(uint32_t cb_q, uint32_t sum_dst_offset, uint32_t recip_dst_offset, uint32_t mm2_dst_offset) {
+    PACK((recip_sum<exp_approx_mode, scale_bf16>(sum_dst_offset, recip_dst_offset)));
+    PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
+    sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v>(cb_q);
+    MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
+    sdpa_bcast_col_srca_srcb_reuse_preamble(recip_dst_offset);
+    sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, false, true>(mm2_dst_offset);
+    MATH((t6_semaphore_get<p_stall::MATH>(SFPU_FPU)));
 }

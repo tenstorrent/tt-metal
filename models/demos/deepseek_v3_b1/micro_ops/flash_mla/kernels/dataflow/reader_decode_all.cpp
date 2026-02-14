@@ -42,18 +42,16 @@ void kernel_main() {
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t ncrisc_brisc_sync_semaphore_id = get_compile_time_arg_val(10);
     constexpr uint32_t receiver_ready_semaphore_id = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_q_in = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(13);
 
-    // TensorAccessorArgs for K (KV cache in DRAM) and pos tensor
-    constexpr auto k_args = TensorAccessorArgs<15>();
-    constexpr auto pos_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    // TensorAccessorArgs for K (KV cache in DRAM) only - position is read directly from sharded L1
+    constexpr auto k_args = TensorAccessorArgs<14>();
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);  // Position is height-sharded in L1
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
@@ -66,22 +64,10 @@ void kernel_main() {
     const uint32_t output_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // Get cur_pos from position tensor (MLA decode is always causal)
-    // With single batch, cur_pos is at index 0
-    uint32_t cur_pos;
-    {
-        cb_reserve_back(cb_index_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
-
-        const auto pos_reader = TensorAccessor(pos_args, pos_addr, 32);  // 32-byte aligned stick
-        uint64_t tensor_index_noc_addr = pos_reader.get_noc_addr(0);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, 32);
-        noc_async_read_barrier();
-
-        cb_push_back(cb_index_id, 1);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-        cur_pos = index_ptr[0];  // Single batch, position at index 0
-    }
+    // Get cur_pos from height-sharded position tensor (directly from local L1)
+    // Position tensor is replicated on every core - just read from the local shard address
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    uint32_t cur_pos = pos_ptr[0];
 
     // Sequence length assignment (no sliding window for MLA)
     auto [k_num_chunks, k_chunk_start, k_chunk_end] =
@@ -208,7 +194,6 @@ void kernel_main() {
                 noc_semaphore_inc(sender_receiver_ready_noc_addr, 1);
 
                 // Step 3: Receiver waits for multicast data
-                DeviceZoneScopedN("mcast-receiver-wait");
                 noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                 noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);
             }

@@ -47,14 +47,14 @@ void kernel_main() {
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(11);
     constexpr uint32_t num_tree_reduction_steps = get_compile_time_arg_val(12);
     constexpr uint32_t receiver_ready_semaphore_id = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_out_in = get_compile_time_arg_val(15);
     constexpr uint32_t cb_ms_in = get_compile_time_arg_val(16);
     constexpr uint32_t cb_out_o = get_compile_time_arg_val(17);
     constexpr uint32_t cb_out_ms = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_intermed_out = get_compile_time_arg_val(19);
 
     uint32_t arg_idx = 0;
+    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);  // Position is height-sharded in L1
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const bool is_mcast_sender = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -67,14 +67,9 @@ void kernel_main() {
     tt_l1_ptr uint32_t* tree_reduction_info = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_tree_reduction_steps * 4;
 
-    // Get cur_pos from position tensor (MLA decode is always causal)
-    uint32_t cur_pos;
-    {
-        cb_wait_front(cb_index_id, 1);
-        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-        cur_pos = index_ptr[0];  // Single batch, position at index 0
-    }
+    // Get cur_pos from height-sharded position tensor (directly from local L1)
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    uint32_t cur_pos = pos_ptr[0];
 
     // Sequence length assignment
     auto [k_num_chunks, k_chunk_start, k_chunk_end] =
@@ -111,7 +106,7 @@ void kernel_main() {
 
         constexpr uint8_t MCAST_NOC = 0;
         const uint64_t mcast_noc_addr =
-            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
+            get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0, MCAST_NOC);
         const uint64_t mcast_sem_addr = mcast_noc_addr | mcast_semaphore_addr;
 
         noc_semaphore_set(mcast_semaphore_ptr, 1);
@@ -151,11 +146,10 @@ void kernel_main() {
     // =========================================================================
     // Tree Reduction
     // =========================================================================
-    constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
+    constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_out_o);
     constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes_intermed;
     // PNHt = 1, m and s packed into single tile
     constexpr uint32_t ms_write_size = tile_bytes_intermed;
-    constexpr uint32_t per_step_buffer_size = o_write_size + ms_write_size;
 
     constexpr uint32_t bits_per_step = 1;
     constexpr uint32_t step_mask = (1U << bits_per_step) - 1;
@@ -163,8 +157,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
 
-    bool needs_reduction = (k_chunk_end - k_chunk_start < k_num_chunks);
     uint32_t num_active_s_blocks = (k_num_chunks < num_cores_per_head) ? k_num_chunks : num_cores_per_head;
+    bool needs_reduction = (num_active_s_blocks > 1);
+    uint32_t cb_ms_in_base_addr = get_write_ptr(cb_ms_in);
+    uint32_t cb_out_in_base_addr = get_write_ptr(cb_out_in);
 
     if (needs_reduction) {
         for (uint32_t step = 0; step < num_tree_reduction_steps; ++step) {
@@ -178,28 +174,24 @@ void kernel_main() {
                 continue;
             }
 
-            uint32_t step_buffer_offset = step * per_step_buffer_size;
-
             if (role_code == 1) {
                 // SENDER
                 DeviceZoneScopedN("tree-reduction-sender");
-
                 cb_wait_front(cb_out_o, out_chunk_tiles);
                 cb_wait_front(cb_out_ms, 1);  // m and s packed into single tile
-
-                uint64_t output_write_addr =
-                    get_noc_addr(partner_x, partner_y, get_write_ptr(cb_intermed_out) + step_buffer_offset);
+                uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0);
+                uint64_t output_write_addr = output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
 
                 // Write m/s (packed in single tile)
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, false, /*posted=*/true>(
                     get_read_ptr(cb_out_ms), output_write_addr, ms_write_size);
-                output_write_addr += ms_write_size;
 
+                output_write_addr = output_write_coord | (cb_out_in_base_addr + step * o_write_size);
                 // Write O
                 noc_async_write<NOC_MAX_BURST_SIZE + 1, false, /*posted=*/true>(
                     get_read_ptr(cb_out_o), output_write_addr, o_write_size);
 
-                uint64_t partner_semaphore_addr = get_noc_addr(partner_x, partner_y, reducer_semaphore_addr);
+                uint64_t partner_semaphore_addr = output_write_coord | reducer_semaphore_addr;
                 noc_semaphore_inc(partner_semaphore_addr, step_semaphore_inc<bits_per_step>(step));
 
                 noc_async_posted_writes_flushed();
@@ -211,7 +203,10 @@ void kernel_main() {
             } else if (role_code == 2) {
                 // RECEIVER
                 DeviceZoneScopedN("tree-reduction-receiver");
-
+                // Read m/s (packed in single tile)
+                cb_reserve_back(cb_ms_in, 1);
+                // Read O
+                cb_reserve_back(cb_out_in, out_chunk_tiles);
                 while (true) {
                     invalidate_l1_cache();
                     uint32_t sem_val = *in0_receiver_semaphore_addr_ptr;
@@ -220,22 +215,8 @@ void kernel_main() {
                         break;
                     }
                 }
-
-                // TODO: Get rid of the intermediate CB and copy
-                uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out) + step_buffer_offset);
-
-                // Read m/s (packed in single tile)
-                cb_reserve_back(cb_ms_in, 1);
-                noc_async_read(intermed_l1_read_addr, get_write_ptr(cb_ms_in), ms_write_size);
-                intermed_l1_read_addr += ms_write_size;
-                noc_async_read_barrier();
                 cb_push_back(cb_ms_in, 1);
-
-                // Read O
-                cb_reserve_back(cb_out_o, out_chunk_tiles);
-                noc_async_read(intermed_l1_read_addr, get_write_ptr(cb_out_o), o_write_size);
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
+                cb_push_back(cb_out_in, out_chunk_tiles);
             }
         }
     }

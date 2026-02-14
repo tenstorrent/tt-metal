@@ -8,6 +8,8 @@
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srcb_reuse_api.h"
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_bcast_col_srca_srcb_reuse_api.h"
+#include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_sdpa_reduce_row.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
@@ -33,9 +35,9 @@ ALWI void sdpa_bcast_col_reuse_postamble() { MATH((llk_math_sdpa_bcast_col_srcb_
 
 template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
 ALWI void sdpa_bcast_col_reuse_tiles(
-    uint32_t in_cb_id, uint32_t in2_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in_cb_id, in_tile_index)));
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in2_cb_id, in_tile_index)));
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in0_cb_id, in_tile_index)));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in1_cb_id, in_tile_index)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse<eltwise_binary_type, num_tiles, DST_ACCUM_MODE, MATH_FIDELITY>(
         dst_tile_index)));
 }
@@ -47,8 +49,72 @@ ALWI void sdpa_mul_bcast_col_reuse_tiles_init(uint32_t icb0) {
 
 template <uint32_t num_tiles>
 ALWI void sdpa_mul_bcast_col_reuse_tiles(
-    uint32_t in_cb_id, uint32_t in2_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    sdpa_bcast_col_reuse_tiles<ELWMUL, num_tiles>(in_cb_id, in2_cb_id, in_tile_index, dst_tile_index);
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    sdpa_bcast_col_reuse_tiles<ELWMUL, num_tiles>(in0_cb_id, in1_cb_id, in_tile_index, dst_tile_index);
+}
+
+template <EltwiseBinaryType eltwise_binary_type = ELWADD, uint32_t num_tiles>
+ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY>(
+        icb0, icb0, false)));
+}
+
+template <bool clear_dest = false>
+ALWI void sdpa_bcast_col_srca_srcb_reuse_preamble(uint32_t isrc) {
+    UNPACK((llk_unpack_A_sdpa_set_srca_srcb_dummy_valid()));
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble<DST_SYNC_MODE, DST_ACCUM_MODE, clear_dest>(isrc)));
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    uint32_t num_tiles,
+    bool skip_signalling = false,
+    bool fused_signalling = false>
+ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse<
+          eltwise_binary_type,
+          num_tiles,
+          DST_ACCUM_MODE,
+          MATH_FIDELITY,
+          skip_signalling,
+          fused_signalling>(dst_tile_index)));
+}
+
+template <uint32_t num_tiles>
+ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
+    sdpa_bcast_col_srca_srcb_reuse_tiles_init<ELWSUB, num_tiles>(icb0);
+}
+
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
+    sdpa_bcast_col_srca_srcb_reuse_tiles<ELWSUB, num_tiles, skip_signalling, fused_signalling>(dst_tile_index);
+}
+
+template <uint32_t num_tiles>
+ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init(uint32_t icb0) {
+    sdpa_bcast_col_srca_srcb_reuse_tiles_init<ELWMUL, num_tiles>(icb0);
+}
+
+template <uint32_t num_tiles, bool skip_signalling = false, bool fused_signalling = false>
+ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(uint32_t dst_tile_index) {
+    sdpa_bcast_col_srca_srcb_reuse_tiles<ELWMUL, num_tiles, skip_signalling, fused_signalling>(dst_tile_index);
+}
+
+template <DataFormat format>
+ALWI void sdpa_reduce_row_init() {
+    MATH((llk_math_sfpu_sdpa_reduce_row_init<APPROX, DST_ACCUM_MODE, format>()));
+}
+
+template <DataFormat format, uint32_t block_width>
+ALWI void sdpa_reduce_max_row(uint src_index, uint dst_index, bool prev_max = false) {
+    MATH((llk_math_sfpu_sdpa_reduce_max_row<APPROX, DST_ACCUM_MODE, format, block_width>(
+        src_index, dst_index, prev_max)));
+}
+
+template <DataFormat format, uint32_t block_width>
+ALWI void sdpa_reduce_sum_row(uint src_index, uint dst_index, bool prev_sum = false) {
+    MATH((llk_math_sfpu_sdpa_reduce_sum_row<APPROX, DST_ACCUM_MODE, format, block_width>(
+        src_index, dst_index, prev_sum)));
 }
 
 }  // namespace ckernel
@@ -165,13 +231,12 @@ template <
     bool normalize,
     uint32_t block_size,
     uint32_t scale_fp32,
-    int vector_mode = (int)VectorMode::C>
+    int vector_mode = (int)VectorMode::C,
+    bool pop_ms = false>
 ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
     copy_tile_to_dst_init_short(cb_worker_ms);
-
     cb_wait_front(cb_worker_ms, 1);
     cb_wait_front(cb_prev_ms, 1);
-
     constexpr uint32_t dst_reg_0 = 0;  // prev_ms
     constexpr uint32_t dst_reg_1 = 1;  // worker_ms
     constexpr uint32_t dst_reg_2 = 2;  // cur_ms output
@@ -181,7 +246,14 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
     tile_regs_acquire();
     copy_tile(cb_prev_ms, 0, dst_reg_0);
     copy_tile(cb_worker_ms, 0, dst_reg_1);
+    if constexpr (pop_ms) {
+        cb_pop_front(cb_prev_ms, 1);
+        cb_pop_front(cb_worker_ms, 1);
+    }
     MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
+    // Initialize SRCB reuse for L tile broadcast multiply
+    // TODO: Optimize init sequence with copy_tile
+    sdpa_mul_bcast_col_reuse_tiles_init<block_size>(cb_l_for_init);
     sdpa_bcast_col_reuse_preamble<normalize>();
 
     // Not final reduction: pack out stats and release regs
@@ -193,9 +265,6 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
         cb_push_back(cb_cur_ms, 1);
         tile_regs_release();
     }
-
-    // Initialize SRCB reuse for L tile broadcast multiply
-    sdpa_mul_bcast_col_reuse_tiles_init<block_size>(cb_l_for_init);
 }
 
 /**
@@ -210,15 +279,27 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
  * @param tile_index Starting tile index within the CB (for current block)
  * @param acquire_regs Whether to acquire tile_regs (false if regs already held from MS phase)
  */
-template <uint32_t block_size>
+template <uint32_t block_size, bool manage_cbs = false>
 ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, uint32_t tile_index, bool acquire_regs) {
     if (acquire_regs) {
         tile_regs_acquire();
     }
+    if constexpr (manage_cbs) {
+        cb_wait_front(cb_l2, block_size);
+        cb_wait_front(cb_l1, block_size);
+    }
     sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0);
+    if constexpr (manage_cbs) {
+        cb_pop_front(cb_l2, block_size);
+        cb_pop_front(cb_l1, block_size);
+        cb_reserve_back(cb_l_out, block_size);
+    }
     tile_regs_commit();
     tile_regs_wait();
     pack_tile_block(0, cb_l_out, block_size);
+    if constexpr (manage_cbs) {
+        cb_push_back(cb_l_out, block_size);
+    }
     tile_regs_release();
 }
 
@@ -231,10 +312,13 @@ ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, u
  * @param cb_worker_ms Worker MS tile CB (to pop)
  * @param cb_prev_ms Previous MS tile CB (to pop)
  */
+template <bool pop_ms = true>
 ALWI void sdpa_tail_finalize(uint32_t cb_worker_ms, uint32_t cb_prev_ms) {
     sdpa_bcast_col_reuse_postamble();
-    cb_pop_front(cb_prev_ms, 1);
-    cb_pop_front(cb_worker_ms, 1);
+    if constexpr (pop_ms) {
+        cb_pop_front(cb_prev_ms, 1);
+        cb_pop_front(cb_worker_ms, 1);
+    }
 }
 
 // =============================================================================
@@ -275,31 +359,20 @@ ALWI void sdpa_tail(
     uint32_t cb_l2,
     uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
-    // Phase 2: Wait for all L tiles and reserve output space
-    constexpr uint32_t total_tiles = num_blocks * block_size;
-    cb_wait_front(cb_l2, total_tiles);
-    cb_wait_front(cb_l1, total_tiles);
-    cb_reserve_back(cb_l_out, total_tiles);
-
-    // Phase 3: Process all L blocks
+    // Phase 2: Process all L blocks
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, 0, false);
+        sdpa_tail_l_block<block_size, true>(cb_l1, cb_l2, cb_l_out, 0, false);
     }
     for (uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, i * block_size, true);
+        sdpa_tail_l_block<block_size, true>(cb_l1, cb_l2, cb_l_out, 0, true);
     }
 
-    // Phase 4: Push output and pop L inputs
-    cb_push_back(cb_l_out, total_tiles);
-    cb_pop_front(cb_l2, total_tiles);
-    cb_pop_front(cb_l1, total_tiles);
-
-    // Phase 5: Finalize (postamble + pop MS)
-    sdpa_tail_finalize(cb_worker_max_sum, cb_prev_max_sum);
+    // Phase 3: Finalize (postamble + pop MS)
+    sdpa_tail_finalize<false>(cb_worker_max_sum, cb_prev_max_sum);
 }
 
 }  // namespace ckernel
