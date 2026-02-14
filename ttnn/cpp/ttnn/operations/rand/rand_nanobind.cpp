@@ -36,7 +36,7 @@ void bind_rand_operation(nb::module_& mod) {
             low (float, optional): The lower bound of the range (inclusive).
             high (float, optional): The upper bound of the range (exclusive).
             seed (int, optional): An optional seed to initialize the random number generator
-                                for reproducible results. Defaults to 0.
+                                for reproducible results.
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
@@ -56,7 +56,9 @@ void bind_rand_operation(nb::module_& mod) {
                const MemoryConfig& memory_config,
                float from,
                float to,
-               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
+               std::optional<uint32_t> seed) {
+                return self(shape, device, dtype, layout, memory_config, from, to, seed);
+            },
             nb::arg("shape"),
             nb::arg("device"),
             nb::kw_only(),
@@ -65,6 +67,6 @@ void bind_rand_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
             nb::arg("low") = 0.0f,
             nb::arg("high") = 1.0f,
-            nb::arg("seed") = 0});
+            nb::arg("seed") = nb::none()});
 }
 }  // namespace ttnn::operations::rand

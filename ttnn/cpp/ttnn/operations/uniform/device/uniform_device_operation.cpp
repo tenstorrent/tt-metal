@@ -41,7 +41,7 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
 
 tt::stl::hash::hash_t UniformDeviceOperation::compute_program_hash(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
+    cached_operation_attributes.seed = std::nullopt;
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
@@ -52,7 +52,7 @@ ttnn::Tensor uniform(
     const Tensor& input,
     const float from,
     const float to,
-    const uint32_t seed,
+    const std::optional<uint32_t> seed,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::uniform::UniformDeviceOperation;

@@ -17,7 +17,7 @@ struct RandDeviceOperation {
         MeshDevice* device;
         const float from;
         const float to;
-        uint32_t seed;
+        std::optional<uint32_t> seed;
     };
 
     struct tensor_args_t {};
@@ -67,5 +67,5 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     MeshDevice& device,
     float from,
     float to,
-    uint32_t seed);
+    std::optional<uint32_t> seed);
 }  // namespace ttnn::prim

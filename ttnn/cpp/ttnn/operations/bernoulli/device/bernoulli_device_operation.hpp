@@ -11,7 +11,7 @@ namespace ttnn::operations::bernoulli {
 
 struct BernoulliDeviceOperation {
     struct operation_attributes_t {
-        uint32_t seed;
+        std::optional<uint32_t> seed;
         const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -63,7 +63,7 @@ struct BernoulliDeviceOperation {
 namespace ttnn::prim {
 ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t bernoulli(
     const Tensor& input,
-    uint32_t seed,
+    std::optional<uint32_t> seed,
     const std::optional<Tensor>& output = std::nullopt,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
