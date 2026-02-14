@@ -756,3 +756,101 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
     def cleanup(self):
         if self.trace_id is not None:
             ttnn.release_trace(self.device, self.trace_id)
+
+
+class TransferOnlyExecutor(Executor):
+    """
+    Executor that only performs device transfers without model operations.
+
+    This executor runs the model once during compilation to obtain the output schema,
+    then skips all actual model execution and only performs device transfers.
+    Useful for testing theoretical maximum throughput by measuring pure transfer overhead.
+    """
+
+    def __init__(self, model: Callable, device, l1_input_memory_config, cq_id=0):
+        """
+        Executor that only performs device transfers without model operations.
+        """
+        self.model = model
+        self.device = device
+        self.cq_id = cq_id
+        self.l1_input_memory_config = l1_input_memory_config
+        self.output_schema = None
+
+    def get_output_schema(self):
+        if self.output_schema is None:
+            raise RuntimeError("Executor must be compiled before getting the output schema.")
+        return self.output_schema
+
+    def _create_output_schema(self, output):
+        if isinstance(output, ttnn.Tensor):
+            return (output.shape, output.dtype, output.layout, output.memory_config())
+        elif isinstance(output, (list, tuple)):
+            return [self._create_output_schema(t) for t in output]
+        else:
+            raise TypeError(f"Unsupported type in model output: {type(output)}")
+
+    def _deallocate_structured_tensor(self, tensor_struct, force=False):
+        if isinstance(tensor_struct, ttnn.Tensor):
+            if tensor_struct.is_allocated():
+                ttnn.deallocate(tensor_struct, force=force)
+        elif isinstance(tensor_struct, (list, tuple)):
+            for t in tensor_struct:
+                self._deallocate_structured_tensor(t, force=force)
+
+    def _create_dummy_output(self):
+        """Creates a dummy output tensor matching the schema for skip mode."""
+        if self.output_schema is None:
+            raise RuntimeError("Output schema must be available to create dummy output")
+
+        def _create_tensor_from_schema(schema):
+            if isinstance(schema, (list, tuple)) and not all(isinstance(x, int) for x in schema[0]):
+                return [_create_tensor_from_schema(s) for s in schema]
+            else:
+                shape, dtype, layout, memory_config = schema
+                if not isinstance(shape, ttnn.Shape):
+                    shape = ttnn.Shape(shape)
+                return ttnn.allocate_tensor_on_device(shape, dtype, layout, self.device, memory_config)
+
+        return _create_tensor_from_schema(self.output_schema)
+
+    def get_read_cq(self):
+        return self.cq_id
+
+    def compile(self, host_input):
+        """
+        Compiles the model by running it once to obtain output schema.
+        """
+        self._validate_input(host_input)
+        # Run model once to get output schema
+        output_tensor = self._execute_single_for_compilation(host_input)
+        self.output_schema = self._create_output_schema(output_tensor)
+        self._deallocate_structured_tensor(output_tensor, force=True)
+        ttnn.synchronize_device(self.device)
+
+    def _validate_input(self, host_input):
+        if host_input.storage_type() != ttnn.StorageType.HOST:
+            raise ValueError("Input tensor must be on host")
+
+    def _execute_single_for_compilation(self, input_tensor):
+        """Run model once during compilation to get output schema."""
+        l1_input_tensor = ttnn.to_device(input_tensor, device=self.device, memory_config=self.l1_input_memory_config)
+        output_tensor = self.model(l1_input_tensor)
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)
+        return output_tensor
+
+    def _execute_single(self, input_tensor):
+        """Execute transfers only, skip model execution."""
+        l1_input_tensor = ttnn.to_device(input_tensor, device=self.device, memory_config=self.l1_input_memory_config)
+        dummy_output = self._create_dummy_output()
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)
+        return dummy_output
+
+    def execute(self, host_inputs: list) -> Iterable[ttnn.Tensor]:
+        for host_input in host_inputs:
+            yield self._execute_single(host_input)
+
+    def cleanup(self):
+        pass
