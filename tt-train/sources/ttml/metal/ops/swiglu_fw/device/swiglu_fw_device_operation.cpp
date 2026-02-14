@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,10 +102,8 @@ ttsl::hash::hash_t SwiGLUForwardDeviceOperation::compute_program_hash(
     const auto& w2_logical_shape = w2.logical_shape();
     const auto& w3 = tensor_args.w3;
     const auto& w3_logical_shape = w3.logical_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SwiGLUForwardDeviceOperation>(
         args,
-        program_factory.index(),
         input.dtype(),
         input_logical_shape,
         w1.dtype(),
@@ -124,15 +122,15 @@ namespace ttnn::prim {
 
 ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return_value_t ttml_swiglu_fw(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& m1,
-    const ttnn::Tensor& m2,
-    const ttnn::Tensor& m3,
+    const ttnn::Tensor& w1,
+    const ttnn::Tensor& w2,
+    const ttnn::Tensor& w3,
     const std::optional<ttnn::Tensor>& preallocated_swiglu) {
     using OperationType = ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{};
     auto tensor_args = OperationType::tensor_args_t{
-        .input = input_tensor, .w1 = m1, .w2 = m2, .w3 = m3, .preallocated_swiglu = preallocated_swiglu};
+        .input = input_tensor, .w1 = w1, .w2 = w2, .w3 = w3, .preallocated_swiglu = preallocated_swiglu};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

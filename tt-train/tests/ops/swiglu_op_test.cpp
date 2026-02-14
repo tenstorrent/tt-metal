@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -206,6 +206,63 @@ TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x256) {
     CompareKernelVsReferenceWithShape({4, 1, 64, 256}, 256);
 }
 
+TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
+    using namespace ttml;
+
+    auto& device = autograd::ctx().get_device();
+
+    // Create a batch size that will force row imbalance:
+    // Use enough rows to fill multiple grid rows with uneven distribution
+    // This ensures some logical grid rows have cores with different workloads
+    const uint32_t batch = 100;
+
+    const std::vector<uint32_t> input_shape = {batch, 1, 32, 64};
+    const uint32_t hidden_dim = 128U;
+
+    auto& rng = autograd::ctx().get_generator();
+    const float bound = 1.0f;
+
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(
+        input_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+
+    std::vector<uint32_t> w_shape = {1, 1, input_shape.back(), hidden_dim};
+    std::vector<uint32_t> w2_shape = {1, 1, hidden_dim, input_shape.back()};
+
+    xt::xarray<float> w1_data = xt::empty<float>(w_shape);
+    core::parallel_generate<float>(
+        w1_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    core::parallel_generate<float>(
+        w2_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+    xt::xarray<float> w3_data = xt::empty<float>(w_shape);
+    core::parallel_generate<float>(
+        w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, rng());
+
+    auto input_tensor = autograd::create_tensor(core::from_xtensor(input_data, &device));
+    auto w1_tensor = autograd::create_tensor(core::from_xtensor(w1_data, &device));
+    auto w2_tensor = autograd::create_tensor(core::from_xtensor(w2_data, &device));
+    auto w3_tensor = autograd::create_tensor(core::from_xtensor(w3_data, &device));
+
+    auto reference = swiglu_forward_reference(input_data, w1_data, w2_data, w3_data);
+
+    const float tolerance = 1e-2f;
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+        auto value = output_tensor->get_value();
+        auto output_xtensor = core::to_xtensor(value);
+
+        EXPECT_EQ(output_xtensor.shape(), reference.shape()) << "Unexpected output shape on iteration " << iteration;
+        EXPECT_TRUE(xt::all(xt::isfinite(output_xtensor))) << "Non-finite tensor detected on iteration " << iteration;
+
+        auto diff = output_xtensor - reference;
+        float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
+        float ref_l2 = std::sqrt(xt::sum(xt::square(reference))());
+        const float rel_l2 = diff_l2 / (ref_l2 + 1e-12f);
+        EXPECT_LT(rel_l2, tolerance) << "Relative L2 error too large on iteration " << iteration;
+    }
+}
+
 // 7. Large test: 2x1x128x512, hidden_dim=512
 TEST_F(SwiGLUOpTest, SwiGLU_Large_2x1x128x512) {
     CompareKernelVsReferenceWithShape({2, 1, 128, 512}, 512);
@@ -216,7 +273,111 @@ TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_VeryLarge_1x1x1024x1024) {
     CompareKernelVsReferenceWithShape({1, 1, 1024, 1024}, 1024);
 }
 
-// 9. NanoGPT-like shape: 32x1x256x384, hidden_dim=1024
-TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoGPT_32x1x256x384) {
-    CompareKernelVsReferenceWithShape({32, 1, 256, 384}, 1024);
+// 9. NanoLlama-like shape: 64x1x256x384, hidden_dim=1024
+TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoLlama_64x1x256x384) {
+    CompareKernelVsReferenceWithShape({64, 1, 256, 384}, 1024);
+}
+
+// 9. Edge case: Unbalanced workload where some cores get more rows than others
+// This tests the padding synchronization mechanism in multicast.
+// 57 rows on a 56-core grid means 1 core gets 2 rows, 55 cores get 1 row.
+TEST_F(SwiGLUOpTest, SwiGLU_UnbalancedWorkload_57x1x32x32) {
+    CompareKernelVsReferenceWithShape({57, 1, 32, 32}, 32);
+}
+
+// ============================================================================
+// Section 3: Shape Validation Tests
+// ============================================================================
+// These tests verify that invalid weight shapes are properly rejected.
+// Fused SwiGLU expects: W1[embed, hidden], W3[embed, hidden], W2[hidden, embed]
+// Using wrong layout (e.g., LinearLayer's [out, in]) should fail with clear error.
+// ============================================================================
+
+// 10. Shape validation: W1 has wrong layout [hidden, embed] instead of [embed, hidden]
+TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W1WrongLayout) {
+    using namespace ttml;
+
+    const size_t embed_dim = 64;
+    const size_t hidden_dim = 128;
+
+    // Input: [1, 1, 32, embed_dim]
+    std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
+    std::vector<size_t> w1_wrong_shape = {1, 1, hidden_dim, embed_dim};  // WRONG: [hidden, embed]
+    std::vector<size_t> w2_shape = {1, 1, hidden_dim, embed_dim};        // Correct: [hidden, embed]
+    std::vector<size_t> w3_wrong_shape = {1, 1, hidden_dim, embed_dim};  // WRONG: [hidden, embed]
+
+    xt::xarray<float> input_data = xt::ones<float>(input_shape);
+    xt::xarray<float> w1_wrong = xt::ones<float>(w1_wrong_shape);
+    xt::xarray<float> w2_data = xt::ones<float>(w2_shape);
+    xt::xarray<float> w3_wrong = xt::ones<float>(w3_wrong_shape);
+
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_wrong, &autograd::ctx().get_device()));
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_wrong, &autograd::ctx().get_device()));
+
+    // Should throw due to shape validation: W1[-2]=128 != input[-1]=64
+    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
+    testing::internal::CaptureStdout();
+    EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
+    testing::internal::GetCapturedStdout();  // Discard captured output
+}
+
+// 11. Shape mismatch: W3 doesn't match W1
+TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W3DoesntMatchW1) {
+    using namespace ttml;
+
+    const size_t embed_dim = 64;
+    const size_t hidden_dim = 128;
+
+    std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
+    std::vector<size_t> w1_shape = {1, 1, embed_dim, hidden_dim};
+    std::vector<size_t> w2_shape = {1, 1, hidden_dim, embed_dim};
+    std::vector<size_t> w3_wrong_shape = {1, 1, embed_dim, hidden_dim * 2};  // WRONG: different hidden
+
+    xt::xarray<float> input_data = xt::ones<float>(input_shape);
+    xt::xarray<float> w1_data = xt::ones<float>(w1_shape);
+    xt::xarray<float> w2_data = xt::ones<float>(w2_shape);
+    xt::xarray<float> w3_wrong = xt::ones<float>(w3_wrong_shape);
+
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, &autograd::ctx().get_device()));
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_wrong, &autograd::ctx().get_device()));
+
+    // Should throw due to W3 shape not matching W1
+    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
+    testing::internal::CaptureStdout();
+    EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
+    testing::internal::GetCapturedStdout();  // Discard captured output
+}
+
+// 12. Shape mismatch: W2 has wrong dimensions
+TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W2WrongDimensions) {
+    using namespace ttml;
+
+    const size_t embed_dim = 64;
+    const size_t hidden_dim = 128;
+
+    std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
+    std::vector<size_t> w1_shape = {1, 1, embed_dim, hidden_dim};
+    std::vector<size_t> w2_wrong_shape = {
+        1, 1, embed_dim, hidden_dim};  // WRONG: [embed, hidden] instead of [hidden, embed]
+    std::vector<size_t> w3_shape = {1, 1, embed_dim, hidden_dim};
+
+    xt::xarray<float> input_data = xt::ones<float>(input_shape);
+    xt::xarray<float> w1_data = xt::ones<float>(w1_shape);
+    xt::xarray<float> w2_wrong = xt::ones<float>(w2_wrong_shape);
+    xt::xarray<float> w3_data = xt::ones<float>(w3_shape);
+
+    auto input = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, &autograd::ctx().get_device()));
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_wrong, &autograd::ctx().get_device()));
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
+
+    // Should throw due to W2 shape validation
+    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
+    testing::internal::CaptureStdout();
+    EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
+    testing::internal::GetCapturedStdout();  // Discard captured output
 }

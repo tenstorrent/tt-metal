@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,9 +36,9 @@ namespace ttnn::prim {
 
 ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return_value_t ttml_swiglu_fw(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& m1,
-    const ttnn::Tensor& m2,
-    const ttnn::Tensor& m3,
+    const ttnn::Tensor& w1,
+    const ttnn::Tensor& w2,
+    const ttnn::Tensor& w3,
     const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt);
 
 }  // namespace ttnn::prim

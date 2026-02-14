@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,8 +14,8 @@ ttnn::Tensor swiglu_fw(
         input_tensor,  // [B, 1, S, C]
         w1,            // [1, 1, C, H]
         w2,            // [1, 1, H, C]
-        w3             // [1, 1, C, H]
-    );
+        w3,            // [1, 1, C, H]
+        std::nullopt);
 }
 
 }  // namespace ttml::metal

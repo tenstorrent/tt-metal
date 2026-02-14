@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -52,7 +53,8 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
 
 // Generator the mask tile with horizontal masking.
 // Each tile face is 16x16, and there are 4 faces per tile.
-void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_value, uint32_t mask_width) {
+void generate_mask_tile(
+    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_width) {
     cb_reserve_back(cb_id, onetile);
 
     uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
@@ -73,7 +75,7 @@ void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_
 // where each 32-bit word contains two identical bfloat16 values.
 // This improves performance by writing 512 uint32_t values instead of 1024 uint16_t values.
 // The packed data is written into the circular buffer `cb_id`.
-void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf16_value) {
+void generate_tile_with_packed_bfloat16_value(const uint32_t cb_id, const uint32_t packed_bf16_value) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     // 512 = 32x16
@@ -86,7 +88,7 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
 // Generates a tile for broadcasting a scalar bfloat16 value.
 // Only the first element of the tile is set to the scalar value (upper 16 bits of packed_scalar).
 // This is used for efficient broadcast operations where only the first value is needed.
-void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
+void generate_bcast_scalar_bfloat16(const uint32_t cb_id, const uint32_t packed_scalar) {
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     ptr[0] = packed_scalar >> 16;
@@ -95,7 +97,7 @@ void generate_bcast_scalar_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
 
 // Fills a tile (32x32 bfloat16 values) with a single bfloat16 value.
 // This avoids writing 1024 individual 16-bit values by packing them into 512 32-bit writes.
-void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
+void generate_tile_with_bfloat16_value(const uint32_t cb_id, const uint16_t bf16_value) {
     // Pack the same bfloat16 value into both halves of a 32-bit word
     uint32_t packed_value = (static_cast<uint32_t>(bf16_value) << 16) | bf16_value;
 
@@ -198,7 +200,7 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
 // Converts a bfloat16 (stored in the lower 16 bits) to a float.
 // This is done by shifting the bfloat16 to the upper 16 bits of a 32-bit integer
 // and reinterpreting it as a float using memcpy.
-inline float bfloat16_to_float(uint16_t bf16) {
+inline float bfloat16_to_float(const uint16_t bf16) {
     uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
     float result;
     std::memcpy(&result, &tmp, sizeof(result));
@@ -207,14 +209,14 @@ inline float bfloat16_to_float(uint16_t bf16) {
 
 // Converts a float to bfloat16 by extracting the upper 16 bits
 // of the float's 32-bit binary representation.
-inline uint16_t float_to_bfloat16(float value) {
+inline uint16_t float_to_bfloat16(const float value) {
     uint32_t tmp;
     std::memcpy(&tmp, &value, sizeof(tmp));
     return static_cast<uint16_t>(tmp >> 16);
 }
 
 // Converts a uint32_t bit pattern to a float (bitwise reinterpretation)
-inline float uint32_to_float(uint32_t bits) {
+inline float uint32_to_float(const uint32_t bits) {
     float value;
     std::memcpy(&value, &bits, sizeof(float));
     return value;
@@ -272,42 +274,6 @@ inline void read_tiles_by_row(
 }
 
 /**
- * Utility: read contiguous tiles in column-major order from DRAM to CB.
- *
- * @param cb_idx Circular buffer index to write to
- * @param addr_gen Address generator for DRAM access
- * @param start_idx Starting tile index in DRAM
- * @param num_tiles_to_read Number of tiles to actually read (may be less than num_tiles_to_push for tail blocks)
- * @param tile_bytes Size of each tile in bytes
- * @param stride Stride between consecutive tiles in column-major order
- * @param num_tiles_to_push Number of tiles to reserve/push in CB (buffer capacity)
- * @param UseBarrier Whether to call noc_async_read_barrier() (compile-time)
- */
-template <bool UseBarrier = true, typename AddrGen>
-inline void read_tiles_by_col(
-    const uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    const uint32_t start_idx,
-    const uint32_t num_tiles_to_read,
-    const uint32_t tile_bytes,
-    const uint32_t stride,
-    const uint32_t num_tiles_to_push) {
-    cb_reserve_back(cb_idx, num_tiles_to_push);
-    uint32_t l1_addr = get_write_ptr(cb_idx);
-    for (uint32_t t = 0; t < num_tiles_to_read; ++t) {
-        uint32_t tile_idx = start_idx + t * stride;
-        noc_async_read_page(tile_idx, addr_gen, l1_addr);
-        l1_addr += tile_bytes;
-    }
-    // Note: If UseBarrier is false, caller must ensure noc_async_read_barrier() is called later as well as
-    // cb_push_back()
-    if constexpr (UseBarrier) {
-        noc_async_read_barrier();
-        cb_push_back(cb_idx, num_tiles_to_push);
-    }
-}
-
-/**
  * Utility: write a block of tiles from CB to DRAM in row-major order.
  *
  * @param cb_idx Circular buffer index to read from
@@ -352,7 +318,7 @@ inline void read_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         read_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
     }
 }
@@ -367,14 +333,56 @@ inline void write_full_row_tiles(
     const uint32_t tile_bytes,
     const uint32_t row_start_idx) {
     for (uint32_t j = 0; j < Wt; j += block_size) {
-        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        uint32_t current_block_size = std::min(block_size, Wt - j);
         write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+/**
+ * Read a 2D batch of tiles (num_rows × tiles_per_row) from DRAM into L1.
+ * Uses padding: for row >= valid_num_rows or tile >= valid_tiles_per_row, reuses the last valid row/tile.
+ * Caller must reserve CB (or have writable L1) and call cb_push_back() after when using a CB.
+ *
+ * @param UseBarrier If true, call noc_async_read_barrier() at the end. If false, caller must call it later.
+ * @param addr_gen Address generator for DRAM (get_noc_addr(tile_idx))
+ * @param l1_addr L1 address to write to (contiguous region of num_rows * tiles_per_row * tile_bytes)
+ * @param first_row_start Tile index of the first row start
+ * @param row_stride Tile stride between rows (e.g. full row length)
+ * @param num_rows Number of rows to read (batch height)
+ * @param tiles_per_row Number of tiles per row (batch width)
+ * @param valid_num_rows Valid rows (rows beyond this are padded from last valid row)
+ * @param valid_tiles_per_row Valid tiles per row (columns beyond this are padded from last valid tile)
+ * @param tile_bytes Bytes per tile
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_batched_rows_with_padding(
+    const AddrGen& addr_gen,
+    uint32_t l1_addr,
+    const uint32_t first_row_start,
+    const uint32_t row_stride,
+    const uint32_t num_rows,
+    const uint32_t tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t tile_bytes) {
+    for (uint32_t row = 0U; row < num_rows; ++row) {
+        const uint32_t actual_row = std::min(row, valid_num_rows - 1U);
+        const uint32_t row_tile_start = first_row_start + actual_row * row_stride;
+        for (uint32_t t = 0U; t < tiles_per_row; ++t) {
+            const uint32_t actual_t = std::min(t, valid_tiles_per_row - 1U);
+            const uint64_t noc_addr = addr_gen.get_noc_addr(row_tile_start + actual_t);
+            noc_async_read(noc_addr, l1_addr, tile_bytes);
+            l1_addr += tile_bytes;
+        }
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
     }
 }
 
 // ----- Printing helper functions -----
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool untilize = false) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
     for (uint16_t r = 0; r < 32; ++r) {
@@ -394,4 +402,276 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
                << ENDL();
     }
     DPRINT << "++++++" << ENDL();
+}
+
+// ----- Multicast synchronization helper functions -----
+
+/**
+ * Configuration for loopback multicast (sender is also a receiver).
+ * Captures the 8 parameters that are constant across all mcast operations
+ * within a kernel. Create once, pass to mcast functions for cleaner call sites.
+ */
+struct McastLoopbackConfig {
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr;
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr;
+    uint32_t receiver_sem_addr;
+    uint32_t noc_start_x;
+    uint32_t noc_start_y;
+    uint32_t noc_end_x;
+    uint32_t noc_end_y;
+    uint32_t num_receivers;  // excluding self
+};
+
+/**
+ * Sender side: Wait for N receivers to signal ready, then reset sender semaphore
+ *
+ * @param sender_sem_ptr Local pointer to sender's semaphore
+ * @param num_receivers Number of receiver cores to wait for
+ */
+inline void mcast_sender_wait_for_receivers(volatile tt_l1_ptr uint32_t* sender_sem_ptr, const uint32_t num_receivers) {
+    noc_semaphore_wait(sender_sem_ptr, num_receivers);
+    noc_semaphore_set(sender_sem_ptr, 0U);
+}
+
+/**
+ * Receiver side: Signal sender ready and wait for data
+ *
+ * @param receiver_sem_ptr Local pointer to receiver's semaphore
+ * @param sender_sem_noc_addr NOC address of sender's semaphore
+ */
+inline void mcast_receiver_wait_for_data(
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr, const uint64_t sender_sem_noc_addr) {
+    noc_semaphore_set(receiver_sem_ptr, 0U);
+    noc_semaphore_inc(sender_sem_noc_addr, 1U);
+    noc_async_atomic_barrier();
+    noc_semaphore_wait(receiver_sem_ptr, 1U);
+}
+
+/**
+ * Complete receiver-side multicast operation: signal ready, wait, and receive
+ *
+ * @param cb_idx Circular buffer index
+ * @param block_size Block size for CB operations
+ * @param receiver_sem_ptr Receiver semaphore pointer
+ * @param sender_sem_noc_addr NOC address of sender's semaphore
+ */
+inline void mcast_receiver_reserve_and_receive(
+    const uint32_t cb_idx,
+    const uint32_t block_size,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint64_t sender_sem_noc_addr) {
+    // 1. Reserve CB space
+    cb_reserve_back(cb_idx, block_size);
+
+    // 2. Signal ready and wait for data
+    mcast_receiver_wait_for_data(receiver_sem_ptr, sender_sem_noc_addr);
+
+    // 3. Push to CB (multicast already wrote to L1)
+    cb_push_back(cb_idx, block_size);
+}
+
+// ====== Multicast with loopback support ======
+// These functions support single-sender multicast where the sender is ALSO a receiver.
+// This is used when one core (e.g., 0,0) multicasts to ALL cores including itself.
+
+/**
+ * Sender side (with loopback): Multicast data from L1 to multiple receiver cores INCLUDING self.
+ * Uses noc_async_write_multicast_loopback_src which copies data to sender's own CB as well.
+ *
+ * @param l1_addr Local L1 address of data to multicast
+ * @param noc_start_x Start X coordinate in NOC space (bounding box corner 1)
+ * @param noc_start_y Start Y coordinate in NOC space
+ * @param noc_end_x End X coordinate in NOC space (bounding box corner 2)
+ * @param noc_end_y End Y coordinate in NOC space
+ * @param num_bytes Number of bytes to multicast
+ * @param num_dests_including_self Number of destination cores INCLUDING the sender
+ */
+inline void mcast_sender_send_data_loopback(
+    const uint32_t l1_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_bytes,
+    const uint32_t num_dests_including_self) {
+    const uint64_t multicast_noc_addr = get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, l1_addr);
+    // Use loopback version: sender is also a receiver, so it will copy to its own L1
+    noc_async_write_multicast_loopback_src(l1_addr, multicast_noc_addr, num_bytes, num_dests_including_self, true);
+    noc_async_atomic_barrier();
+}
+
+/**
+ * Sender side (with loopback): Signal all receivers INCLUDING self that data is ready.
+ * For the loopback case, we also set our own semaphore since we're a receiver too.
+ *
+ * @param receiver_sem_ptr Local pointer to receiver semaphore
+ * @param receiver_sem_addr L1 address of receiver semaphore (same on all receivers)
+ * @param noc_start_x Start X coordinate in NOC space
+ * @param noc_start_y Start Y coordinate in NOC space
+ * @param noc_end_x End X coordinate in NOC space
+ * @param noc_end_y End Y coordinate in NOC space
+ * @param num_dests_including_self Number of destination cores INCLUDING the sender
+ */
+inline void mcast_sender_signal_receivers_loopback(
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_dests_including_self) {
+    noc_semaphore_set(receiver_sem_ptr, 1U);
+    const uint64_t receiver_sem_noc_addr =
+        get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_sem_addr);
+    // Use loopback multicast for semaphore as well
+    noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, receiver_sem_noc_addr, num_dests_including_self);
+    noc_async_atomic_barrier();
+}
+
+/**
+ * Complete sender-side multicast operation for batched row reads with padding support.
+ * LOOPBACK VERSION: Sender is also a receiver, multicasts to all cores including self.
+ *
+ * Key difference from non-loopback: uses noc_async_write_multicast_loopback_src and
+ * signals all receivers including self.
+ *
+ * @tparam AddrGen Address generator type
+ * @param cb_idx Circular buffer index
+ * @param addr_gen Address generator for DRAM reads
+ * @param first_row_start Starting tile index of first row
+ * @param tiles_per_row Number of tiles to read per row
+ * @param num_rows Number of rows to batch
+ * @param valid_tiles_per_row Actual valid tiles per row (may be < tiles_per_row for edge blocks)
+ * @param valid_num_rows Actual valid rows (may be < num_rows for edge blocks)
+ * @param row_stride Stride between row starts (tiles per full row in tensor)
+ * @param tile_bytes Bytes per tile
+ * @param sender_sem_ptr Sender semaphore pointer
+ * @param receiver_sem_ptr Receiver semaphore pointer (local - sender is also receiver)
+ * @param receiver_sem_addr Receiver semaphore L1 address
+ * @param noc_start_x NOC start X coordinate
+ * @param noc_start_y NOC start Y coordinate
+ * @param noc_end_x NOC end X coordinate
+ * @param noc_end_y NOC end Y coordinate
+ * @param num_receivers_excluding_self Number of receiver cores NOT including the sender
+ */
+template <typename AddrGen>
+inline void mcast_sender_read_batched_rows_and_send_loopback(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t first_row_start,
+    const uint32_t tiles_per_row,
+    const uint32_t num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t row_stride,
+    const uint32_t tile_bytes,
+    volatile tt_l1_ptr uint32_t* sender_sem_ptr,
+    volatile tt_l1_ptr uint32_t* receiver_sem_ptr,
+    const uint32_t receiver_sem_addr,
+    const uint32_t noc_start_x,
+    const uint32_t noc_start_y,
+    const uint32_t noc_end_x,
+    const uint32_t noc_end_y,
+    const uint32_t num_receivers_excluding_self) {
+    const uint32_t total_tiles = tiles_per_row * num_rows;
+    const uint32_t num_dests_including_self = num_receivers_excluding_self + 1U;
+
+    if (num_receivers_excluding_self > 0U) {
+        // Multicast path with loopback (sender is also receiver)
+        // CRITICAL: Wait for receivers BEFORE reserving CB to avoid deadlock.
+        // If we reserve first and CB is full (compute slow), sender blocks.
+        // Meanwhile receivers have signaled and are waiting for multicast -> deadlock!
+        // 1. Wait for all receivers (excluding self) to signal ready
+        mcast_sender_wait_for_receivers(sender_sem_ptr, num_receivers_excluding_self);
+
+        // 2. Now safe to reserve CB space
+        cb_reserve_back(cb_idx, total_tiles);
+        const uint32_t l1_write_addr = get_write_ptr(cb_idx);
+
+        // 3. Read all rows from DRAM into CB with padding
+        read_batched_rows_with_padding(
+            addr_gen,
+            l1_write_addr,
+            first_row_start,
+            row_stride,
+            num_rows,
+            tiles_per_row,
+            valid_num_rows,
+            valid_tiles_per_row,
+            tile_bytes);
+
+        // 4. Multicast to all cores INCLUDING self (loopback)
+        mcast_sender_send_data_loopback(
+            l1_write_addr,
+            noc_start_x,
+            noc_start_y,
+            noc_end_x,
+            noc_end_y,
+            total_tiles * tile_bytes,
+            num_dests_including_self);
+
+        // 5. Signal all receivers INCLUDING self
+        mcast_sender_signal_receivers_loopback(
+            receiver_sem_ptr,
+            receiver_sem_addr,
+            noc_start_x,
+            noc_start_y,
+            noc_end_x,
+            noc_end_y,
+            num_dests_including_self);
+
+        // 6. Push to CB for local compute
+        cb_push_back(cb_idx, total_tiles);
+    } else {
+        // Single-core path: just read tiles normally
+        cb_reserve_back(cb_idx, total_tiles);
+        const uint32_t l1_addr = get_write_ptr(cb_idx);
+        read_batched_rows_with_padding(
+            addr_gen,
+            l1_addr,
+            first_row_start,
+            row_stride,
+            num_rows,
+            tiles_per_row,
+            valid_num_rows,
+            valid_tiles_per_row,
+            tile_bytes);
+        cb_push_back(cb_idx, total_tiles);
+    }
+}
+
+/**
+ * Convenience overload using McastLoopbackConfig struct.
+ * Reduces parameter count from 17 to 10 for cleaner call sites.
+ */
+template <typename AddrGen>
+inline void mcast_sender_read_batched_rows_and_send_loopback(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t first_row_start,
+    const uint32_t tiles_per_row,
+    const uint32_t num_rows,
+    const uint32_t valid_tiles_per_row,
+    const uint32_t valid_num_rows,
+    const uint32_t row_stride,
+    const uint32_t tile_bytes,
+    const McastLoopbackConfig& cfg) {
+    mcast_sender_read_batched_rows_and_send_loopback(
+        cb_idx,
+        addr_gen,
+        first_row_start,
+        tiles_per_row,
+        num_rows,
+        valid_tiles_per_row,
+        valid_num_rows,
+        row_stride,
+        tile_bytes,
+        cfg.sender_sem_ptr,
+        cfg.receiver_sem_ptr,
+        cfg.receiver_sem_addr,
+        cfg.noc_start_x,
+        cfg.noc_start_y,
+        cfg.noc_end_x,
+        cfg.noc_end_y,
+        cfg.num_receivers);
 }
