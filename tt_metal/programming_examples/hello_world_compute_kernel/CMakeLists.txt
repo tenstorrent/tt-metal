@@ -7,4 +7,9 @@ target_sources(metal_example_hello_world_compute_kernel PRIVATE hello_world_comp
 if(NOT TARGET TT::Metalium)
     find_package(TT-Metalium REQUIRED)
 endif()
-target_link_libraries(metal_example_hello_world_compute_kernel PUBLIC TT::Metalium)
+target_link_libraries(
+    metal_example_hello_world_compute_kernel
+    PUBLIC
+        TT::Metalium
+        tt_metal_ez
+)

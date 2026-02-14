@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/ez/ez.hpp>
 
-using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::ez;
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -28,53 +26,32 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize mesh device, command queue, workload, device range, and program
-    constexpr CoreCoord core = {0, 0};
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
+    DeviceContext ctx(0);
 
-    // Define and create a DRAM-backed replicated mesh buffer with float data type
-    // ReplicatedBufferConfig allocates an identical buffer per device in the mesh (unit mesh ⇒ single device)
+    // Create a small DRAM buffer to hold a single float value.
     constexpr uint32_t buffer_size = 2 * 1024;
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
-    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    std::shared_ptr<distributed::MeshBuffer> dram_buffer =
-        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dram_buffer = ctx.dram_buffer(buffer_size, buffer_size);
 
-    // Configure and create an L1 circular buffer (to move data from DRAM to L1)
-    // Set page size equal to buffer_size so one page equals one transfer unit
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, buffer_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    // Configure and create the kernel
-    KernelHandle data_reader_kernel_id = CreateKernel(
-        program,
-        OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-    // Initialize Float data on host and upload to the DRAM buffer (non-blocking upload)
+    // Upload a float value to the device.
     std::vector<float> init_data = {1.23};
-    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
+    ctx.write(dram_buffer, init_data);
 
-    // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
-    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    // Build the program: a data movement kernel with a CB to transfer data from DRAM to L1.
+    // We use .kernel() with explicit DataMovementConfig to keep the kernel on RISCV_0 (Data Movement
+    // processor 0 / "BR"), matching the original example. (.reader() would assign RISCV_1 instead.)
+    auto program =
+        ProgramBuilder(CoreCoord{0, 0})
+            .cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, /*num_tiles=*/1, /*page_size=*/buffer_size)
+            .kernel(
+                OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default})
+            .runtime_args({dram_buffer->address()})
+            .done()
+            .build();
 
-    fmt::print("Hello, Core {{0, 0}} on Device 0, please handle the data.\n");
-
-    // Wait for completion and close the mesh device
-    distributed::Finish(cq);
-    fmt::print("Thank you, Core {{0, 0}} on Device 0, for handling the data.\n");
-    mesh_device->close();
+    fmt::print("Hello, Core (0, 0) on Device 0, please handle the data.\n");
+    ctx.run(std::move(program));
+    fmt::print("Thank you, Core (0, 0) on Device 0, for handling the data.\n");
 
     return 0;
 }
