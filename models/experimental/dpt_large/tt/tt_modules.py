@@ -607,6 +607,8 @@ class TTAttention:
         self.output_mem = output_mem
         self.program_config = program_config
         self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        # Cache height-sharded memory configs for [B, N] attention shapes.
+        self._height_shard_mc_cache: dict[tuple[int, int, int, int], dict[str, object]] = {}
         # Pre-create TTNN projection weights for device-side output matmul
         try:
             # Use transposed weights to avoid transpose_b flag during linear
@@ -702,21 +704,77 @@ class TTAttention:
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
             try:
-                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                    qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
-                )
+                if explicit_sharded_attn:
+                    # The split-heads op's sharded output path currently shards
+                    # across heads with TILE_HEIGHT shards and can exceed core
+                    # counts for long sequences (e.g., 640 tokens). Split
+                    # interleaved, then explicitly reshard Q/K/V to height-sharded
+                    # layouts across the full core grid for matmul+softmax.
+                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv3, num_heads=H, transpose_key=True
+                    )
+                else:
+                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
+                    )
             except TypeError:
                 # Backward compat: older runtimes may not expose these kwargs.
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
 
             if explicit_sharded_attn:
+                # Height-shard Q/K/V across the full core grid so attention
+                # scores/probs fit in L1 at seq=640.
+                grid = getattr(cfg, "grid", None) if cfg is not None else None
+                if grid is None:
+                    raise RuntimeError("Missing attention core grid in TT config")
+                grid_x, grid_y = int(grid[0]), int(grid[1])
+                cache_key = (int(B), int(N), int(grid_x), int(grid_y))
+                cached = self._height_shard_mc_cache.get(cache_key)
+                if cached is None:
+                    if not hasattr(ttnn, "create_sharded_memory_config"):
+                        raise RuntimeError("ttnn.create_sharded_memory_config unavailable; cannot height-shard attention")
+                    core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                    qv_mc = ttnn.create_sharded_memory_config(
+                        (int(B), int(H), int(N), int(D)),
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    k_mc = ttnn.create_sharded_memory_config(
+                        (int(B), int(H), int(D), int(N)),
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    scores_mc = ttnn.create_sharded_memory_config(
+                        (int(B), int(H), int(N), int(N)),
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    cached = {"qv": qv_mc, "k": k_mc, "scores": scores_mc}
+                    self._height_shard_mc_cache[cache_key] = cached
+
+                qv_mc = cached["qv"]
+                k_mc = cached["k"]
+                scores_mc = cached["scores"]
+
+                try:
+                    q_tt = ttnn.to_memory_config(q_tt, memory_config=qv_mc, dtype=ttnn.bfloat16)
+                    k_tt = ttnn.to_memory_config(k_tt, memory_config=k_mc, dtype=ttnn.bfloat16)
+                    v_tt = ttnn.to_memory_config(v_tt, memory_config=qv_mc, dtype=ttnn.bfloat16)
+                except TypeError:
+                    q_tt = ttnn.to_memory_config(q_tt, memory_config=qv_mc)
+                    k_tt = ttnn.to_memory_config(k_tt, memory_config=k_mc)
+                    v_tt = ttnn.to_memory_config(v_tt, memory_config=qv_mc)
+
                 # Explicit attention path supports sharded operands: QK -> fused scale+mask+softmax -> AV.
                 qk_pc = None if use_default_attn_programs else getattr(cfg, "qk_program_config", None)
                 softmax_pc = None if use_default_attn_programs else getattr(cfg, "softmax_program_config", None)
                 av_pc = None if use_default_attn_programs else getattr(cfg, "av_program_config", None)
 
                 # Scores and probs stay height-sharded for softmax.
-                scores_memcfg = split_memcfg or getattr(self, "output_mem", None) or ttnn.L1_MEMORY_CONFIG
+                scores_memcfg = scores_mc
                 attn_scores = _ttnn_matmul_with_optional_program_config(
                     a=q_tt,
                     b=k_tt,
@@ -738,7 +796,7 @@ class TTAttention:
                     a=attn_probs,
                     b=v_tt,
                     dtype=ttnn.bfloat16,
-                    memory_config=scores_memcfg,
+                    memory_config=qv_mc,
                     program_config=av_pc,
                     op_name="attn_av_matmul",
                 )
@@ -750,7 +808,8 @@ class TTAttention:
                     pass
 
                 try:
-                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=memcfg)
+                    concat_memcfg = tokens_shard_mc or getattr(cfg, "proj_memcfg", None) or memcfg
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=concat_memcfg)
                 except TypeError:
                     merged = ttnn.transformer.concatenate_heads(ctx_tt)
                 ctx = merged
