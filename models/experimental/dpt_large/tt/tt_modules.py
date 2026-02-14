@@ -689,10 +689,17 @@ class TTMLP:
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
             reshardened = False
-            if cfg is not None and not _ttnn_is_sharded(x4):
+            # Prefer the configured MLP sharding grid for FC1/FC2 even if the
+            # incoming tensor is already sharded with a different spec.
+            if cfg is not None:
                 mlp_grid = getattr(cfg, "mlp_core_grid", None)
                 if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
                     try:
+                        # Normalize to interleaved first to avoid shard-spec mismatches.
+                        try:
+                            x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+                        except Exception:
+                            pass
                         grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
                         core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
                         shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)

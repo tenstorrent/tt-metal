@@ -274,10 +274,11 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Prefer a grid whose Y dimension divides the padded sequence tile count
-        # (DPT-Large @384 pads to 640 tokens => 20 tiles). This enables simple
-        # block-sharded layouts without per-core M remainders.
-        grid = (8, 4)
+        # N300 perf: prefer a 1-row grid so WIDTH-sharded / BLOCK-sharded
+        # layouts behave like the reference ViT patterns for small batch sizes.
+        # This keeps program-config `per_core_M` aligned with the full sequence
+        # tile count, while still enabling sharded matmuls.
+        grid = (8, 1)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
