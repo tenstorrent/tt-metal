@@ -710,6 +710,27 @@ class TTAttention:
             )
             # The split-heads op expects a rank-3 [B, N, 3*C] tensor (vit.md pattern).
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
+            if explicit_sharded_attn:
+                # `split_query_key_value_and_split_heads` expects the fused QKV tensor to be
+                # block-sharded across the encoder grid (vit demo reshard step).
+                grid = getattr(cfg, "grid", None) if cfg is not None else None
+                if grid is None:
+                    raise RuntimeError("Missing encoder core grid in TT config")
+                grid_x, grid_y = int(grid[0]), int(grid[1])
+                cache_key = ("qkv3", int(B), int(N), int(C), int(grid_x), int(grid_y))
+                qkv_shard_mc = self._qkv_block_shard_mc_cache.get(cache_key)
+                if qkv_shard_mc is None:
+                    if not hasattr(ttnn, "create_sharded_memory_config"):
+                        raise RuntimeError("ttnn.create_sharded_memory_config unavailable; cannot shard QKV output")
+                    core_grid = ttnn.CoreGrid(y=int(grid_y), x=int(grid_x))
+                    qkv_shard_mc = ttnn.create_sharded_memory_config(
+                        getattr(qkv3, "padded_shape", (int(B), int(N), int(3 * C))),
+                        core_grid=core_grid,
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    )
+                    self._qkv_block_shard_mc_cache[cache_key] = qkv_shard_mc
+                qkv3 = ttnn.to_memory_config(qkv3, qkv_shard_mc)
             # Split to heads (vit.md pattern): returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
             try:
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
