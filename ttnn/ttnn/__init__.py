@@ -280,6 +280,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_optimal_dram_bank_to_logical_worker_assignment,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
