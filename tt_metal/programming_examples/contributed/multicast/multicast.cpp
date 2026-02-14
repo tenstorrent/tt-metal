@@ -171,17 +171,17 @@ int main(int /*argc*/, char** argv) {
         ////////// TENSIX CORE SETUP //////////
         // Define logical sender core and receiver core range (for kernel creation on the host).
         CoreRange all_cores_logical = CoreRange({0, 0}, {3, 0});
-        CoreCoord sender_core_logical = {0, 0};
+        tt::tt_metal::CoreCoord sender_core_logical = {0, 0};
         CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
         // Convert logical coordinates to physical coordinates (necessary for multicasting).
-        CoreCoord sender_core_physical = mesh_device->worker_core_from_logical_core(sender_core_logical);
+        tt::tt_metal::CoreCoord sender_core_physical = mesh_device->worker_core_from_logical_core(sender_core_logical);
         CoreRange receiver_cores_physical = CoreRange(
             mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
             mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
         // Define physical sender core and receiver core range (for runtime arguments on the device).
-        CoreCoord sender_core = sender_core_physical;
-        CoreCoord receiver_core_start = receiver_cores_physical.start_coord;
-        CoreCoord receiver_core_end = receiver_cores_physical.end_coord;
+        tt::tt_metal::CoreCoord sender_core = sender_core_physical;
+        tt::tt_metal::CoreCoord receiver_core_start = receiver_cores_physical.start_coord;
+        tt::tt_metal::CoreCoord receiver_core_end = receiver_cores_physical.end_coord;
         // Grab the number of destinations, which will act as our "atomic counter" for semaphores, and as a general
         // reference for num of receivers.
         size_t num_dests = receiver_cores_logical.size();
@@ -242,6 +242,11 @@ int main(int /*argc*/, char** argv) {
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile);
 
+        // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+        // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+        const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+        const uint32_t output_dram_buffer_addr = static_cast<uint32_t>(output_dram_buffer->address());
+
         ////////// RUNTIME ARGS SETUP //////////
         // Args for the sender core to multicast tile.
         // They must have access to coordinates of all receiver cores, to execute multicast operation.
@@ -256,7 +261,7 @@ int main(int /*argc*/, char** argv) {
              sender,
              receiver,
              dram_bank_id,
-             src0_dram_buffer->address(),
+             src0_dram_buffer_addr,
              sizeof(bfloat16) * TILE_HW,
              num_dests});
         // Args for the receiver cores to receive tile.
@@ -271,7 +276,7 @@ int main(int /*argc*/, char** argv) {
         int tile_index = 0;
         for (const CoreCoord& core : receiver_cores_logical) {
             SetRuntimeArgs(
-                program, outbound_kernel_id, core, {output_dram_buffer->address(), static_cast<uint32_t>(tile_index)});
+                program, outbound_kernel_id, core, {output_dram_buffer_addr, static_cast<uint32_t>(tile_index)});
             tile_index++;
         }
 

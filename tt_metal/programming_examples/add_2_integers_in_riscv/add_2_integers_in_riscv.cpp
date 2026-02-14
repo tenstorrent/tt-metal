@@ -41,7 +41,7 @@ int main() {
     Program program = CreateProgram();
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
-    constexpr CoreCoord core = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
     // Adding 2 integers in RISC-V thus a buffer size of 4 bytes.
     constexpr uint32_t buffer_size = sizeof(uint32_t);
@@ -95,18 +95,27 @@ int main() {
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+    const uint32_t src0_l1_buffer_addr = static_cast<uint32_t>(src0_l1_buffer->address());
+    const uint32_t src1_l1_buffer_addr = static_cast<uint32_t>(src1_l1_buffer->address());
+    const uint32_t dst_l1_buffer_addr = static_cast<uint32_t>(dst_l1_buffer->address());
+
     // Set the arguments for the kernel. The arguments are set in the order they are defined in the kernel source code.
     SetRuntimeArgs(
         program,
         kernel_id,
         core,
         {
-            src0_dram_buffer->address(),
-            src1_dram_buffer->address(),
-            dst_dram_buffer->address(),
-            src0_l1_buffer->address(),
-            src1_l1_buffer->address(),
-            dst_l1_buffer->address(),
+            src0_dram_buffer_addr,
+            src1_dram_buffer_addr,
+            dst_dram_buffer_addr,
+            src0_l1_buffer_addr,
+            src1_l1_buffer_addr,
+            dst_l1_buffer_addr,
         });
 
     // Add the program to the workload and enqueue it for execution on the MeshDevice.

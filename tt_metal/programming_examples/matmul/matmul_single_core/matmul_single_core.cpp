@@ -160,10 +160,11 @@ void matmul_single_core(
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
 
-    // Set kernel arguments
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_addr = static_cast<uint32_t>(dst_dram_buffer->address());
     tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
 
     tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});

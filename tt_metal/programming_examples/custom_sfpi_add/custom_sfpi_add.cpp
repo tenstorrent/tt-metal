@@ -68,7 +68,7 @@ int main() {
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0} (the most top-left core).
-        constexpr CoreCoord core = {0, 0};
+        constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
         // Create 3 circular buffers. Think of them as pipes moving data from one core to another.
         // cb_src0 and cb_src1 are used to move data from the reader kernel to the compute kernel.
@@ -149,9 +149,15 @@ int main() {
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, /*blocking=*/false);
         distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, /*blocking=*/false);
 
+        // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+        // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+        const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+        const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+        const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
         // Set the runtime arguments for the kernels. This also registers the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {src0_dram_buffer_addr, src1_dram_buffer_addr, n_tiles});
+        SetRuntimeArgs(program, writer, core, {dst_dram_buffer_addr, n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
         // Add the program to the workload for the mesh.

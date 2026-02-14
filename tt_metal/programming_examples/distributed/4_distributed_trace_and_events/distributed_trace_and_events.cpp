@@ -108,10 +108,15 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
     SetRuntimeArgs(*program, eltwise_binary_kernel, cores_for_program, {num_tiles, 1});
 
-    const std::array<uint32_t, 7> reader_args = {
-        src0_buf->address(), 0, num_tiles, src1_buf->address(), 0, num_tiles, 0};
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_buf_addr = static_cast<uint32_t>(src0_buf->address());
+    const uint32_t src1_buf_addr = static_cast<uint32_t>(src1_buf->address());
+    const uint32_t output_buf_addr = static_cast<uint32_t>(output_buf->address());
 
-    const std::array<uint32_t, 3> writer_args = {output_buf->address(), 0, num_tiles};
+    const std::array<uint32_t, 7> reader_args = {src0_buf_addr, 0, num_tiles, src1_buf_addr, 0, num_tiles, 0};
+
+    const std::array<uint32_t, 3> writer_args = {output_buf_addr, 0, num_tiles};
 
     SetRuntimeArgs(*program, unary_writer_kernel, cores_for_program, writer_args);
     SetRuntimeArgs(*program, binary_reader_kernel, cores_for_program, reader_args);

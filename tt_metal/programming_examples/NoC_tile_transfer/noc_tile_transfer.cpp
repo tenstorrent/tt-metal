@@ -27,8 +27,8 @@ int main() {
     Program program = CreateProgram();
 
     // Core range setup
-    constexpr CoreCoord core0 = {0, 0};
-    constexpr CoreCoord core1 = {0, 1};
+    constexpr tt::tt_metal::CoreCoord core0 = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core1 = {0, 1};
     const auto core0_physical_coord = mesh_device->worker_core_from_logical_core(core0);
     const auto core1_physical_coord = mesh_device->worker_core_from_logical_core(core1);
 
@@ -103,11 +103,16 @@ int main() {
         core1,
         tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src_dram_buffer_addr = static_cast<uint32_t>(src_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
     // Runtime args setup
-    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});
+    SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer_addr});
     SetRuntimeArgs(program, core0_writer_kernel_id, core0, {core1_physical_coord.x, core1_physical_coord.y, sem_id});
     SetRuntimeArgs(program, core1_reader_kernel_id, core1, {core0_physical_coord.x, core0_physical_coord.y, sem_id});
-    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer_addr});
 
     // Program enqueue (non-blocking). Wait for completion before reading back.
     workload.add_program(device_range, std::move(program));
