@@ -730,10 +730,18 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (needs_to_call_loss) {
+                    auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count() /
+                                     1000000.0;
                     if (multihost_config.enable_mpi) {
                         fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                     }
-                    fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
+                    fmt::print(
+                        "Step: {}, Loss: {}, Timestamp: {:.6f}\n",
+                        global_step,
+                        gradient_accumulator_helper.average_loss(),
+                        timestamp);
                 }
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
