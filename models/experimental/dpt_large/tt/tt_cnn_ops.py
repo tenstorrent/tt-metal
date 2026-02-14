@@ -219,17 +219,27 @@ def tt_upsample_nchw(
             memory_config=memory_config,
         )
     except RuntimeError as exc:
-        # Bilinear upsample can require large L1 halo buffers on N300.
-        # Fall back to nearest on TT to keep the practical hot path alive.
-        if mode == "bilinear" and "Out of Memory" in str(exc):
+        # Some L1 configurations can OOM due to halo buffers; fall back to DRAM
+        # rather than failing the entire model path.
+        if memory_config != ttnn.DRAM_MEMORY_CONFIG and "Out of Memory" in str(exc):
             y_nhwc = ttnn.upsample(
                 input_tensor=x_nhwc,
                 scale_factor=sf,
-                mode="nearest",
-                memory_config=memory_config,
+                mode=mode,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            raise
+        # Bilinear upsample can require large L1 halo buffers on N300.
+        # Fall back to nearest on TT to keep the practical hot path alive.
+            if mode == "bilinear" and "Out of Memory" in str(exc):
+                y_nhwc = ttnn.upsample(
+                    input_tensor=x_nhwc,
+                    scale_factor=sf,
+                    mode="nearest",
+                    memory_config=memory_config,
+                )
+            else:
+                raise
     # Some TTNN upsample configurations return sharded outputs; permute/transpose
     # can be invalid for those shard specs. Ensure interleaved before NCHW permute.
     y_nhwc = _ensure_interleaved(y_nhwc)

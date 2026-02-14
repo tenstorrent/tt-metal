@@ -228,6 +228,7 @@ class DPTFeatureFusionLayerTT(nn.Module):
                         target_hw=(hs_shape[-2], hs_shape[-1]),
                         mode="bilinear",
                         align_corners=False,
+                        memory_config=self.memcfg,
                         op_name="dpt_fusion.residual.resize",
                     )
                 residual_out = self.residual_layer1(residual)
@@ -241,6 +242,7 @@ class DPTFeatureFusionLayerTT(nn.Module):
                 mode="bilinear",
                 align_corners=self.align_corners,
                 approx_align_corners=self.approx_align_corners,
+                memory_config=self.memcfg,
                 expected_input_hw=(in_h, in_w),
                 op_name="dpt_fusion.hidden_state.upsample",
             )
@@ -433,6 +435,7 @@ class DPTDepthEstimationHeadTT(nn.Module):
             mode="bilinear",
             align_corners=True,
             approx_align_corners=self.tt_approx_align_corners,
+            memory_config=self.memcfg,
             expected_input_hw=_shape4_hw(hidden_state),
             op_name="dpt_depth_head.upsample",
         )
