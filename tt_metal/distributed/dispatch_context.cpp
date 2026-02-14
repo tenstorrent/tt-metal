@@ -50,7 +50,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     }
     // Query the number of command queues requested
     populate_fd_kernels(active_devices, num_hw_cqs);
-    device_manager->configure_and_load_fast_dispatch_kernels();
+    device_manager->initialize_dispatch_firmware();
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
