@@ -618,26 +618,49 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
                cq_interface.completion_fifo_rd_toggle == write_toggle;
     };
 
-    // Handler for the timeout
-    auto on_timeout = [&exit_condition]() {
-        exit_condition.store(true);
-
-        MetalContext::instance().on_dispatch_timeout_detected();
-
-        TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
-    };
-
     // Get dispatch progress for timeout detection
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
         return get_cq_dispatch_progress(this->device_id, cq_id);
     };
 
+    auto timeout_duration = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+
+    // Retry once on timeout - many non-deterministic failures are transient and resolve on retry.
+    bool timeout_occurred = false;
+    auto on_timeout_first_attempt = [&timeout_occurred]() {
+        timeout_occurred = true;
+        // Don't throw on first attempt - we'll retry
+    };
+
     loop_and_wait_with_timeout(
-        wait_operation_body,
-        wait_condition,
-        on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+        wait_operation_body, wait_condition, on_timeout_first_attempt, timeout_duration, get_dispatch_progress);
+
+    if (timeout_occurred) {
+        // First attempt timed out - log and retry once
+        log_warning(
+            tt::LogMetal,
+            "Completion queue wait timed out on first attempt (device_id={}, cq_id={}), retrying once...",
+            this->device_id,
+            cq_id);
+
+        // Brief delay before retry
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Handler for final timeout - this one throws
+        auto on_timeout_final = [&exit_condition]() {
+            exit_condition.store(true);
+
+            MetalContext::instance().on_dispatch_timeout_detected();
+
+            TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
+        };
+
+        loop_and_wait_with_timeout(
+            wait_operation_body, wait_condition, on_timeout_final, timeout_duration, get_dispatch_progress);
+
+        // If we get here, retry succeeded
+        log_info(tt::LogMetal, "Completion queue wait succeeded on retry");
+    }
 
     return write_ptr_and_toggle;
 }
