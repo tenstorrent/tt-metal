@@ -297,7 +297,6 @@ static std::vector<Tensor> pool2d_L1(
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-        input_tensor_sharded.memory_config(),
         is_out_tiled,
         config_tensor_in_dram);
 

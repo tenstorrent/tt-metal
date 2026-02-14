@@ -293,7 +293,6 @@ ConvTranspose2dResult conv_transpose2d_L1(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            input_tensor_post_tm.memory_config(),
             /*is_out_tiled*/ true,
             conv_config.config_tensors_in_dram);
 
