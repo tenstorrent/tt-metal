@@ -114,8 +114,8 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         cb_sharded_output = CBHandle{};
     }
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /** reader
      */

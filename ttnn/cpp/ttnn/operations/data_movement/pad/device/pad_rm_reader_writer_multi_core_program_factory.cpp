@@ -210,8 +210,8 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
 
     Buffer* src0_buffer = a.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t cb_id = tt::CBIndex::c_0;
     uint32_t cb_npages = 16;  // multibuffering for perf

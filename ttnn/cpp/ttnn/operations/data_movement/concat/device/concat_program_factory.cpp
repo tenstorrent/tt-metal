@@ -111,8 +111,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     const uint32_t num_input_tensors = input_tensors.size();
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_pages = 2;

@@ -31,8 +31,8 @@ FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t num_cb_tiles = 16;
     TT_FATAL(

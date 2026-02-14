@@ -29,8 +29,8 @@ PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

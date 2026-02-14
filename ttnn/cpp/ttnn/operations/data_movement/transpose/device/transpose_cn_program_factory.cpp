@@ -40,8 +40,8 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
+    TT_ASSERT(output_tensor.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output_tensor.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

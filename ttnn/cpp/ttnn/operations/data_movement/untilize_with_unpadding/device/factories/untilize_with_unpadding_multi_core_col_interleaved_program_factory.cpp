@@ -66,8 +66,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create(
     create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_col, output_cb_data_format);
 
     Buffer* src0_buffer = a.buffer();
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
 

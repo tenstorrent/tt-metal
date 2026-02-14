@@ -210,8 +210,8 @@ SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     constexpr uint32_t src0_cb_index = 0;
 

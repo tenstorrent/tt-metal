@@ -290,10 +290,9 @@ ReshapeViewTiledProgramFactory::cached_program_t ReshapeViewTiledProgramFactory:
 
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
+    TT_ASSERT(input_tensor.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
-
-    TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);

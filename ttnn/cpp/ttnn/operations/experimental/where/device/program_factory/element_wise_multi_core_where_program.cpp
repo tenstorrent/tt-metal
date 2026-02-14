@@ -82,8 +82,8 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
 
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     CompileTimeWriterKernelArgs writer_compile_time_args = {.cb_dst = output_cb_index};
     std::map<std::string, std::string> writer_defines;
     std::vector<uint32_t> writer_compile_time_vec = ttnn::kernel_utils::to_vector(writer_compile_time_args);

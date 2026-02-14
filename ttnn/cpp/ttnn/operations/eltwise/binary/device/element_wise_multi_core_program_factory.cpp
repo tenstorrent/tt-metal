@@ -71,8 +71,8 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         max_block_size = find_max_block_size(num_tiles_per_shard);
     }
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& all_device_cores = operation_attributes.worker_grid;
 

@@ -114,10 +114,10 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
     tt::tt_metal::Tensor& out0 = output_tensors[0];
     tt::tt_metal::Tensor& out1 = output_tensors[1];
 
+    TT_FATAL(out0.is_allocated(), "Output 0 buffer should be allocated on device!");
     tt::tt_metal::Buffer* out0_buffer = out0.buffer();
-    TT_FATAL(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");
+    TT_FATAL(out1.is_allocated(), "Output 1 buffer should be allocated on device!");
     tt::tt_metal::Buffer* out1_buffer = out1.buffer();
-    TT_FATAL(out1_buffer != nullptr, "Output 1 buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

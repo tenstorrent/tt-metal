@@ -53,8 +53,8 @@ ConcatenateHeadsProgramFactory::cached_program_t ConcatenateHeadsProgramFactory:
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt_metal::Buffer* out_buffer = output.buffer();
-    TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

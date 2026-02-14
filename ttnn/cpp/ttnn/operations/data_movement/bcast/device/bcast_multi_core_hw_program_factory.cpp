@@ -70,8 +70,8 @@ BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory:
 
     Buffer* src0_buffer = a.buffer();
     Buffer* src1_buffer = b.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = 0;
     const uint32_t num_input_tiles = 2;

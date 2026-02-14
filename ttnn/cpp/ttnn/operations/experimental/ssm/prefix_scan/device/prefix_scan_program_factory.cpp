@@ -27,8 +27,8 @@ PrefixScanProgramFactory::cached_program_t PrefixScanProgramFactory::create(
     auto* a_buffer = a.buffer();
     auto* bx_buffer = bx.buffer();
     auto* h_buffer = h_prev.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device");
     auto* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);

@@ -43,8 +43,8 @@ PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactor
     auto pad_value_const_tensor_addr = pad_value_const_tensor.mesh_buffer()->address();
 
     Buffer* src0_buffer = a.buffer();
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = tt::CBIndex::c_0;

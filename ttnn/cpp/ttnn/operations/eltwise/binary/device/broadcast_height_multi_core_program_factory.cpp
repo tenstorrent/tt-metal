@@ -86,8 +86,8 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     auto* src0_buffer = a.buffer();
     auto* src1_buffer = b->buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     auto* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;

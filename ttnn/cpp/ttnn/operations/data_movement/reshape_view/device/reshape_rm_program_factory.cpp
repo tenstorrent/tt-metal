@@ -44,9 +44,9 @@ ReshapeViewRMProgramFactory::cached_program_t ReshapeViewRMProgramFactory::creat
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t responsibility = ((input_log_shape[-2] - 1) / num_cores_total) + 1;

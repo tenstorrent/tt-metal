@@ -61,15 +61,15 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
 
     if (has_input_grad) {
         const auto& input_grad_tensor = input_grad.value();
+        TT_ASSERT(input_grad_tensor.is_allocated(), "input_grad buffer should be allocated on device!");
         auto* dst0_buffer = input_grad_tensor.buffer();
-        TT_ASSERT(dst0_buffer != nullptr, "input_grad buffer should be allocated on device!");
         dst0_address = dst0_buffer->address();
     }
 
     if (has_other_grad) {
         const auto& other_grad_tensor = other_grad.value();
+        TT_ASSERT(other_grad_tensor.is_allocated(), "other_grad buffer should be allocated on device!");
         auto* dst1_buffer = other_grad_tensor.buffer();
-        TT_ASSERT(dst1_buffer != nullptr, "other_grad buffer should be allocated on device!");
         dst1_address = dst1_buffer->address();
     }
 

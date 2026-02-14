@@ -69,8 +69,8 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     tt::tt_metal::CreateCircularBuffer(program, total_cores, pad_val_cb_config);
 
     Buffer* input_buffer = a.buffer();
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);

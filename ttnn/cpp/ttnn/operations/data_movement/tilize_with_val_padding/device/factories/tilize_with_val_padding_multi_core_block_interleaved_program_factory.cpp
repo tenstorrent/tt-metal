@@ -131,9 +131,9 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
             output_cb_data_format);
     }
 
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
     uint32_t packed_pad_value = detail::get_packed_value(a, operation_attributes.pad_value);
