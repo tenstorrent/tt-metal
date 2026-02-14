@@ -108,9 +108,15 @@ void BankManager::init_allocators(DeviceAddr size_bytes, uint32_t alignment_byte
     allocated_buffers_.resize(n);
     allocated_ranges_cache_.resize(n);
 
+    // L1 is small and fragmentation-sensitive; prefer BEST-fit to preserve larger contiguous blocks
+    // for subsequent allocations under top-down patterns.
+    const auto search_policy = (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL)
+        ? allocator::FreeListOpt::SearchPolicy::BEST
+        : allocator::FreeListOpt::SearchPolicy::FIRST;
+
     for (uint32_t allocator_id = 0; allocator_id < n; ++allocator_id) {
         allocators_[allocator_id] = std::make_unique<allocator::FreeListOpt>(
-            size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
+            size_bytes, offset, alignment_bytes, alignment_bytes, search_policy);
     }
 }
 
