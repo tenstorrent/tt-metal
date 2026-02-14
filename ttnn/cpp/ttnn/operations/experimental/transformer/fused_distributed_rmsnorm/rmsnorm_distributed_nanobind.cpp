@@ -35,6 +35,9 @@ void bind_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
                 * - BFLOAT16
                   - TILE
 
+            Arguments:
+              - :attr:`dtype`: Output dtype for the stats tensor (default BFLOAT16). Can be BFLOAT16 or FLOAT32.
+
             Returns:
               - A TILE-layout tensor of dtype ``dtype`` (default BFLOAT16) with the same leading dimensions as
                 :attr:`input_tensor` and with the last padded dimension equal to TILE_WIDTH (32). The tile holds
@@ -83,7 +86,7 @@ void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - BFLOAT16
+                * - BFLOAT16 or FLOAT32
                   - TILE
 
               .. list-table:: weight (gamma)
@@ -111,7 +114,7 @@ void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
                   - dtype
                   - layout
                 * - [1, 1, seq_len, head_dim]
-                  - BFLOAT16
+                  - BFLOAT16 or FLOAT32
                   - TILE
 
             Arguments:

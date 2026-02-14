@@ -37,8 +37,20 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
     };
 
+    // Helper lambda to assert tensor properties: tilized, bfloat16 or float32, on device, allocated
+    auto check_tile_bf16_or_fp32_device_alloc = [](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, tensor.layout());
+        TT_FATAL(
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::FLOAT32,
+            "{} tensor must be BFLOAT16 or FLOAT32, got: {}",
+            name,
+            tensor.dtype());
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+    };
+
     check_tile_bf16_device_alloc(a, "Input tensor 0");
-    check_tile_bf16_device_alloc(stats, "Input tensor 1");
+    check_tile_bf16_or_fp32_device_alloc(stats, "Stats tensor");
 
     // stats has 1 tile columns per device
     TT_FATAL(
@@ -105,8 +117,8 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
         const auto& rope_sin = rope_sin_opt.value();
 
         check_tile_bf16_device_alloc(transformation_mat, "Transformation_mat");
-        check_tile_bf16_device_alloc(rope_cos, "Rope cos");
-        check_tile_bf16_device_alloc(rope_sin, "Rope sin");
+        check_tile_bf16_or_fp32_device_alloc(rope_cos, "Rope cos");
+        check_tile_bf16_or_fp32_device_alloc(rope_sin, "Rope sin");
 
         // Ensure transformation_mat has 4 dimensions: [1, 1, 32, 32]
         TT_FATAL(

@@ -59,6 +59,7 @@ def run_distributed_fused_rmsnorm(
     num_heads_per_device=1,
     use_weight=True,
     use_rope=False,
+    rope_dtype=None,
 ):
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -81,6 +82,9 @@ def run_distributed_fused_rmsnorm(
     tt_rope_sin = None
     tt_transformation_mat = None
     if use_rope:
+        # Use rope_dtype if provided, otherwise default to dtype
+        effective_rope_dtype = rope_dtype if rope_dtype is not None else dtype
+
         head_dim = inp_shape[-1] // num_heads
         rope_cos = torch.randn(1, 1, inp_shape[2], head_dim // 2)
         rope_cos = torch.stack([rope_cos, rope_cos], dim=-1).flatten(-2)
@@ -90,10 +94,18 @@ def run_distributed_fused_rmsnorm(
         transformation_mat = get_rot_transformation_mat()
 
         tt_rope_cos = ttnn.from_torch(
-            rope_cos, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            rope_cos,
+            dtype=effective_rope_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_rope_sin = ttnn.from_torch(
-            rope_sin, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            rope_sin,
+            dtype=effective_rope_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         tt_transformation_mat = ttnn.from_torch(
@@ -341,3 +353,42 @@ def test_distributed_fused_rmsnorm_program_cache(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.float32], ids=["FLOAT32_stats"])
+@pytest.mark.parametrize("rope_dtype", [ttnn.float32], ids=["FLOAT32_rope"])
+@pytest.mark.parametrize("seqlen", [2048], ids=["seqlen2048"])
+@pytest.mark.parametrize("hidden_dim", [2048], ids=["hidden_dim2048"])
+@pytest.mark.parametrize("num_heads_per_device", [1], ids=["num_heads1"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
+@pytest.mark.parametrize("num_simulated_devices", [8], ids=["num_simulated_devices8"])
+def test_distributed_fused_rmsnorm_fp32_rope(
+    device,
+    num_simulated_devices,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    rope_dtype,
+    num_heads_per_device,
+    use_weight,
+    use_rope,
+    reset_seeds,
+):
+    """Test that rope_cos and rope_sin can be FLOAT32 while input is BFLOAT16."""
+    num_heads = num_heads_per_device * num_simulated_devices
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    run_distributed_fused_rmsnorm(
+        device,
+        num_simulated_devices,
+        inp_shape,
+        dtype,
+        stats_dtype,
+        num_heads_per_device,
+        use_weight,
+        use_rope,
+        rope_dtype,
+    )
