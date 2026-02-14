@@ -34,9 +34,7 @@ void kernel_main() {
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(1);
 
     compute_kernel_hw_startup(cb_in, cb_transpose_in);
-    pack_untilize_init(cb_in, cb_transpose_in);
     transpose_wh_init(cb_in, cb_transpose_in);
-
     pack_untilize_dest_init<1>(cb_transpose_in);
 
     for (uint32_t i = 0; i < num_batches; i++) {
