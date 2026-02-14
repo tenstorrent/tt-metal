@@ -375,6 +375,10 @@ class CMakeBuild(build_ext):
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
+        # Generate type stubs for IDE autocomplete (PEP 561 compliance)
+        # This uses nanobind's built-in stubgen to create _ttnn.pyi
+        self._generate_stubs(source_dir, build_dir)
+
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
         assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
         ext = list(self.extensions)[0]
@@ -395,6 +399,63 @@ class CMakeBuild(build_ext):
 
     def is_editable_install_(self):
         return self.inplace
+
+    def _generate_stubs(self, source_dir, build_dir):
+        """
+        Generate Python type stubs for ttnn._ttnn using nanobind.stubgen.
+
+        This enables IDE autocomplete for ttnn operations and makes the package
+        PEP 561 compliant (typed package marker).
+        """
+        stub_output_dir = Path(self.build_lib) / "ttnn"
+
+        # We need to temporarily add the build lib to path so nanobind can import _ttnn
+        lib_dir = build_dir / get_lib_dir()
+
+        env = os.environ.copy()
+        # Add the library path so _ttnn.so can be found
+        existing_path = env.get("PYTHONPATH", "")
+        pythonpath_entries = [str(lib_dir), str(self.build_lib)]
+        if existing_path:
+            pythonpath_entries.append(existing_path)
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+
+        # Also need LD_LIBRARY_PATH for shared libs
+        existing_ld = env.get("LD_LIBRARY_PATH", "")
+        ld_entries = [str(lib_dir)]
+        if existing_ld:
+            ld_entries.append(existing_ld)
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(ld_entries)
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "nanobind.stubgen",
+            "-m",
+            "ttnn._ttnn",
+            "-o",
+            str(stub_output_dir),
+            "-M",
+            "py.typed",
+            "--include-private",
+        ]
+
+        print(f"Generating type stubs for ttnn._ttnn...")
+        try:
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"  ✓ Generated stubs in {stub_output_dir}")
+            else:
+                # Non-fatal: stubs are nice-to-have, not required for functionality
+                print("  ⚠ Stub generation failed (non-fatal). See stubgen output below:")
+                if result.stdout:
+                    print("    ├─ stdout:")
+                    print(result.stdout)
+                if result.stderr:
+                    print("    ├─ stderr:")
+                    print(result.stderr)
+        except Exception as e:
+            print(f"  ⚠ Stub generation skipped: {e}")
 
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])

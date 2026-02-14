@@ -869,6 +869,21 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT
             tt_pybinds
     )
+
+    # Optional: Generate Python type stubs for IDE autocomplete during development
+    # For production wheels, stubs are auto-generated via setup.py
+    # Usage: cmake --build build --target ttnn_stubs
+    add_custom_target(
+        ttnn_stubs
+        COMMAND
+            ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/build_scripts/create_stubs.py -o
+            "${PROJECT_SOURCE_DIR}/ttnn/ttnn"
+        DEPENDS
+            ttnn
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        COMMENT "Generating Python type stubs for ttnn._ttnn..."
+        VERBATIM
+    )
 endif()
 if(TT_INSTALL)
     install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
