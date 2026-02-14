@@ -14,7 +14,9 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
     test_add_int.cpp
+    test_bernoulli_descriptor_benchmark.cpp
     test_broadcast_to.cpp
+    test_conv2d_descriptor_benchmark.cpp
     test_convert_to_hwc_gather.cpp
     test_generic_op.cpp
     test_graph_add.cpp
@@ -25,6 +27,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
+    test_matmul_descriptor_benchmark.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp

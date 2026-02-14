@@ -7,6 +7,7 @@
 
 #include "impl/buffers/semaphore.hpp"
 #include "tt_stl/overloaded.hpp"
+#include <tt_stl/reflection.hpp>
 
 #include <set>
 
@@ -116,6 +117,68 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     result.custom_program_hash = std::nullopt;
 
     return result;
+}
+
+ttsl::hash::hash_t compute_program_descriptor_hash(const ProgramDescriptor& descriptor) {
+    if (descriptor.custom_program_hash) {
+        return *descriptor.custom_program_hash;
+    }
+
+    auto hash_kernel = [](const KernelDescriptor& kernel) -> size_t {
+        return ttsl::hash::hash_objects_with_default_seed(
+            kernel.kernel_source,
+            kernel.source_type,
+            kernel.core_ranges,
+            kernel.compile_time_args,
+            kernel.defines,
+            kernel.common_runtime_args.size(),
+            kernel.runtime_args.size(),
+            kernel.config.index(),
+            kernel.config);
+    };
+
+    auto hash_cb_format_descriptor = [](const CBFormatDescriptor& format_descriptor) -> size_t {
+        return ttsl::hash::hash_objects_with_default_seed(
+            format_descriptor.buffer_index,
+            format_descriptor.data_format,
+            format_descriptor.page_size,
+            format_descriptor.tile);
+    };
+
+    auto hash_circular_buffer = [&hash_cb_format_descriptor](const CBDescriptor& cb) -> size_t {
+        size_t hash = cb.core_ranges.size();
+        for (const auto& core_range : cb.core_ranges.ranges()) {
+            ttsl::hash::hash_combine(hash, core_range);
+        }
+        ttsl::hash::hash_combine(hash, cb.format_descriptors.size());
+        for (const auto& format_descriptor : cb.format_descriptors) {
+            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
+        }
+        ttsl::hash::hash_combine(hash, cb.remote_format_descriptors.size());
+        for (const auto& format_descriptor : cb.remote_format_descriptors) {
+            ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
+        }
+        ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+        ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+        return hash;
+    };
+
+    auto hash_semaphore = [](const SemaphoreDescriptor& semaphore) -> size_t {
+        return ttsl::hash::hash_objects_with_default_seed(
+            semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
+    };
+
+    size_t hash = 0;
+    for (const auto& kernel : descriptor.kernels) {
+        ttsl::hash::hash_combine(hash, hash_kernel(kernel));
+    }
+    for (const auto& cb : descriptor.cbs) {
+        ttsl::hash::hash_combine(hash, hash_circular_buffer(cb));
+    }
+    for (const auto& semaphore : descriptor.semaphores) {
+        ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
+    }
+    return hash;
 }
 
 }  // namespace tt::tt_metal
