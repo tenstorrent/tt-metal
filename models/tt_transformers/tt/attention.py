@@ -801,14 +801,22 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        xqkv_fused = ttnn.linear(
-            x_11SH,
-            self.wqkv,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
-            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
-        )
+        if seq_len > 128:
+            xqkv_fused = ttnn.experimental.minimal_matmul(
+                x_11SH,
+                self.wqkv,
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+            )
+        else:
+            xqkv_fused = ttnn.linear(
+                x_11SH,
+                self.wqkv,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
+                compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+            )
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
