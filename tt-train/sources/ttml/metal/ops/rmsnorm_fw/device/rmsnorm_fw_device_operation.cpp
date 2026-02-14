@@ -26,7 +26,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
-            tensor.buffer() != nullptr,
+            tensor.is_allocated(),
             "Operands to RMSNormForward need to be allocated in buffers on the device. Buffer is null. Tensor name {}",
             name);
 

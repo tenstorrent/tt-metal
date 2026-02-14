@@ -29,7 +29,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.storage_type()));
 
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        TT_FATAL(tensor.is_allocated(), "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
             tensor.layout() == required_layout,

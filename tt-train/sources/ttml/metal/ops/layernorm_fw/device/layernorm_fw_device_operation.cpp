@@ -26,13 +26,13 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tt::tt_metal::StorageType::DEVICE),
             enchantum::to_string(tensor.storage_type()));
 
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        TT_FATAL(tensor.is_allocated(), "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Tensor '{}' buffer must be in DRAM. Buffer of type {}",
             name,
-            enchantum::to_string(tensor.buffer()->buffer_type()));
+            enchantum::to_string(tensor.memory_config().buffer_type()));
 
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
