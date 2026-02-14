@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <chrono>
+#include <cstring>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -84,7 +85,8 @@ void update_paged_dram_read(
 // copies both into completion buffer
 void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_t>& data, uint32_t data_size_bytes) {
     uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
-    CQDispatchCmd expected_cmd{};
+    CQDispatchCmd expected_cmd;
+    std::memset(&expected_cmd, 0, sizeof(CQDispatchCmd));
     expected_cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
     // Include cmd in transfer
     expected_cmd.write_linear_host.length = data_size_bytes + sizeof(CQDispatchCmd);
