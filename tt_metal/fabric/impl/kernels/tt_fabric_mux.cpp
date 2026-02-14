@@ -178,11 +178,10 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    // this approach stalls
-
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL, volatile tt_reg_ptr uint32_t*>
         full_size_channel_worker_interface_zero;
 
+    // cheap type cast
     union {
         uint32_t addr;
         size_t uladdr;
