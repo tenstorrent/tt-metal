@@ -334,12 +334,6 @@ void MetalContext::initialize(
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
     watcher_server_->attach_devices();
-
-    // Register teardown function, but only once.
-    if (not teardown_registered_) {
-        std::atexit([]() { MetalContext::instance().teardown(); });
-        teardown_registered_ = true;
-    }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
@@ -419,9 +413,52 @@ void MetalContext::teardown() {
     }
 }
 
+// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
+std::atomic<MetalContext*> g_instance{nullptr};
+std::mutex g_instance_mutex;
+bool registered_atexit = false;
+
 MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
-    return inst.get();
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (instance) {
+        // There is a potential race condition here if the instance is being torn down while this call is running or
+        // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
+        // from the teardown process (maybe on one of several threads) and is synchronized with the teardown.
+        return *instance;
+    }
+    std::lock_guard lock(g_instance_mutex);
+    // Check again in case another thread created the instance while we were waiting for the lock.
+    instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
+        instance = new MetalContext();
+        g_instance.store(instance, std::memory_order_release);
+        if (!registered_atexit) {
+            std::atexit([]() {
+                // Don't check device count because the destruction order is complicated and we can't guarantee that the
+                // client isn't holding onto devices on process exit.
+                MetalContext::destroy_instance(false);
+            });
+            registered_atexit = true;
+        }
+    }
+    return *instance;
+}
+
+void MetalContext::destroy_instance(bool check_device_count) {
+    // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
+    // one thread while no work is being done on the MetalContext.
+    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    if (!instance) {
+        return;
+    }
+    if (check_device_count && instance->device_manager() && instance->device_manager()->is_initialized() &&
+        !instance->device_manager()->get_all_active_devices().empty()) {
+        TT_THROW("Cannot destroy MetalContext while devices are still open. Close all devices first.");
+    }
+    delete instance;
+    // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
+    // return the old instance.
+    g_instance.store(nullptr, std::memory_order_release);
 }
 
 // Switch from mock mode to real hardware (requires all devices to be closed).
@@ -566,10 +603,6 @@ MetalContext::MetalContext() {
     }
 
     device_manager_ = std::make_unique<DeviceManager>();
-
-    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
-    // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 const distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() const {
@@ -595,6 +628,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 }
 
 MetalContext::~MetalContext() {
+    teardown();
     device_manager_.reset();
     teardown_base_objects();
 }

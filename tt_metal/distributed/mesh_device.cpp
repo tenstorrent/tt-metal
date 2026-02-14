@@ -730,10 +730,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     ZoneScoped;
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
-
-    if (this->is_initialized()) {
-        ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+    if (not is_initialized()) {
+        return true;
     }
+
+    ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
 
     if (distributed_context_) {
         // Wait for all ranks to be ready to close the mesh device before proceeding.
