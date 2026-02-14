@@ -26,6 +26,10 @@ on:
         required: false
         default: ''
         type: string
+      cutoff-commit:
+        description: "Optional commit SHA to ignore all runs on commits newer than this one. Useful for testing retry logic on older failures when newer runs have already passed."
+        required: false
+        default: ""
 
 
 jobs:
@@ -43,7 +47,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@ebanerjee/enable-retries
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
@@ -51,6 +55,7 @@ jobs:
           slack_ts: ${{ inputs.slack_ts }}
           allow-pings: true
           send-slack-message: ${{ inputs.send-slack-message }}
+          cutoff-commit: ${{ inputs.cutoff-commit }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
