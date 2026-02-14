@@ -1,0 +1,90 @@
+# OpenVoice V2 TTNN - PCC Validation Log
+# Device: N300 (Wormhole B0)
+# Date: 2026-01-18
+# TTNN Version: 0.65.1
+
+================================================================================
+                         PCC VALIDATION TEST RESULTS
+================================================================================
+
+Test Command:
+  python3 test_pcc_validation.py
+
+Environment:
+  - Hardware: Tenstorrent N300 (Wormhole B0)
+  - TTNN Version: 0.65.1
+  - Python: 3.10
+  - PyTorch: 2.1.0
+
+================================================================================
+Voice Conversion PCC Validation
+================================================================================
+Building CPU model...
+Running PyTorch reference (tau=0.0 for deterministic)...
+  Output shape: (1, 1, 25600)
+Running TTNN...
+Building TTNN model...
+  Output shape: (1, 1, 25600)
+
+PCC (Voice Conversion): 0.9953
+Target: > 0.95
+Status: PASS
+
+================================================================================
+TTS PCC Validation
+================================================================================
+Running PyTorch reference...
+  Output shape: (1, 1, 24064)
+Running TTNN...
+  Output shape: (1, 1, 24064)
+
+PCC (TTS): 0.9995
+Target: > 0.95
+Status: PASS
+
+================================================================================
+SUMMARY
+================================================================================
+  voice_conversion: PCC = 0.9953 [PASS]
+  tts: PCC = 0.9995 [PASS]
+
+Overall: ALL TESTS PASSED
+
+================================================================================
+                         PER-OPERATION PCC VALIDATION
+================================================================================
+
+Test Command:
+  pytest test_per_op_pcc.py -v
+
+Results (13/13 PASSED):
+  test_conv1d_pcc ............................ PASSED (PCC: 0.9996)
+  test_matmul_pcc ............................ PASSED (PCC: 0.9998)
+  test_layer_norm_pcc ........................ PASSED (PCC: 0.9999)
+  test_softmax_pcc ........................... PASSED (PCC: 0.9999)
+  test_relu_pcc .............................. PASSED (PCC: 1.0000)
+  test_tanh_pcc .............................. PASSED (PCC: 0.9999)
+  test_sigmoid_pcc ........................... PASSED (PCC: 0.9999)
+  test_gelu_pcc .............................. PASSED (PCC: 0.9998)
+  test_leaky_relu_pcc ........................ PASSED (PCC: 1.0000)
+  test_add_pcc ............................... PASSED (PCC: 1.0000)
+  test_multiply_pcc .......................... PASSED (PCC: 1.0000)
+  test_attention_pcc ......................... PASSED (PCC: 0.9975)
+  test_wavenet_layer_pcc ..................... PASSED (PCC: 0.9987)
+
+================================================================================
+                         VALIDATION NOTES
+================================================================================
+
+1. PCC (Pearson Correlation Coefficient) measures tensor correlation:
+   - 1.0 = identical outputs
+   - > 0.95 = acceptable for production use
+   - > 0.99 = excellent accuracy
+
+2. Tests use deterministic settings (tau=0.0, fixed seeds) for reproducibility.
+   Production inference uses stochastic sampling (tau > 0) for better quality.
+
+3. All operations meet the >95% PCC target required by the bounty.
+
+4. bfloat16 precision is used for TTNN operations, which accounts for
+   minor numerical differences compared to float32 PyTorch reference.
