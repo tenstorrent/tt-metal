@@ -16,7 +16,6 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/events.hpp"
-#include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,8 +24,6 @@ using namespace tt::tt_metal;
 namespace ttnn::events {
 
 void py_module_types(nb::module_& mod) {
-    nb::class_<Event>(mod, "event");
-    nb::class_<MultiDeviceEvent>(mod, "multi_device_event");
     nb::class_<MeshEvent>(mod, "MeshEvent")
         .def("__repr__", [](const MeshEvent& self) {
             std::ostringstream str;

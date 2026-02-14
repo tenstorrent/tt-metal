@@ -86,11 +86,6 @@ void RunningStatistics::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void RunningStatistics::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
-
 DataType RunningStatistics::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }

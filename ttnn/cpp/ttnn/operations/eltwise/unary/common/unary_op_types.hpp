@@ -161,6 +161,11 @@ struct BasicUnaryWithParam {
     BasicUnaryWithParam(UnaryOpType op_type, T param) :
         base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param} {}
 
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, T param0, T param1) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param0, param1} {}
+
     BasicUnaryWithParam(UnaryOpType op_type) : base{std::in_place_index<0>, op_type} {}
 
     template <typename T>
@@ -215,6 +220,7 @@ struct BasicUnaryWithParam<T> {
     BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, T param) : op_type{op_type}, params{param} {}
+    BasicUnaryWithParam(UnaryOpType op_type, T param0, T param1) : op_type{op_type}, params{param0, param1} {}
     BasicUnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
     UnaryOpType type() const noexcept { return op_type; }
