@@ -117,7 +117,7 @@ inline void calculate_tangent() {
         // We need the LSB of the integer later, to determine the sign of the result.
         i = sfpi::reinterpret<sfpi::vInt>(j);
 
-        // Shift mantissa bits back; j is now round(v / PI) in fp32.
+        // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
 
         i <<= 31;
@@ -161,10 +161,9 @@ sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sine() {
-    // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-pi/2, pi/2].
-    // 2. In the case of cos(x), use cos(x) = sin(pi / 2 - abs(x)), using a two-part subtraction to avoid precision
-    // loss.
-    // 3. Now use a polynomial sin(x) = x + x^3 (C0 + x^2 (C1 + x^2 (C2 + x^2 C3))) on [0, pi/2].
+    // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-PI/2, PI/2].
+    // 2. Use odd symmetry (sin(-x) = -sin(x)) via quadrant/sign tracking.
+    // 3. Evaluate sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
 
     // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
     const float P0 = -0x1.92p+1f;               // representable as bf16
@@ -176,7 +175,7 @@ inline void calculate_sine() {
 
     vFloat C3, C2, C1, C0;
 
-    // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
+    // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
     if (is_fp32_dest_acc_en) {
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
@@ -241,9 +240,9 @@ inline void calculate_sine() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosine() {
-    // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-pi/2, pi/2].
-    // 2. In the case of cos(x), use cos(x) = sin(pi / 2 + x).
-    // 3. Now use a polynomial sin(x) = x + x^3 (C0 + x^2 (C1 + x^2 (C2 + x^2 C3))) on [0, pi/2].
+    // 1. Build an odd quadrant index j for PI/2-based reduction.
+    // 2. Reduce to a in [-PI/2, PI/2] and fold sign from the quadrant parity.
+    // 3. Evaluate sin(a) polynomial and use identity cos(x) = sin(x + PI/2).
 
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
     const float P0 = -0x1.92p+0f;               // representable as bf16
@@ -256,7 +255,7 @@ inline void calculate_cosine() {
     vFloat C3, C2, C1, C0;
 
     if constexpr (is_fp32_dest_acc_en) {
-        // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
+        // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
         C1 = 0x1.110edap-7f;
@@ -273,15 +272,15 @@ inline void calculate_cosine() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
-        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         vFloat half;
         half.get() = __builtin_rvtt_sfpxloadi(0, 0x3f00);  // 0.5
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
         __rvtt_vec_t one = __builtin_rvtt_sfpreadlreg(sfpi::vConst1.get());
         __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
 
-        // Compute j = round(v / PI).
-        // First, j = v * (2 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
+        // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
+        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest-even.
         vFloat j;
         j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi, half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
@@ -291,8 +290,8 @@ inline void calculate_cosine() {
 
         j = j + ROUNDING_BIAS;
 
-        // At this point, the mantissa bits of j contain the integer.
-        // Store for later; the LSB determines the sign of the result.
+        // At this point, the mantissa bits of j contain the rounded integer.
+        // Store for later; the LSB tracks quadrant parity for sign selection.
         vInt q = reinterpret<vInt>(j);
 
         j = j + NEG_ROUNDING_BIAS;
@@ -350,7 +349,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
         sfpi::vFloat t1 = t0 * t0;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Found using Sollya
+            // Low-degree minimax polynomial (Sollya) for reduced-precision destination path.
             // > fpminimax(atan(x), [|1,3,5,7|], [|single...|], [2^(-40); 1], relative);
             t1 = PolynomialEvaluator::eval(
                 t1,
@@ -359,7 +358,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
                 0.1555790007114410400390625f,
                 -4.4326744973659515380859375e-2f);
         } else {
-            // Found using Sollya
+            // Higher-degree minimax polynomial (Sollya) for fp32 destination path.
             // > fpminimax(atan(x), [|1,3,5,7,9,11,13,15,17|], [|single...|], [2^(-40); 1], relative);
             t1 = PolynomialEvaluator::eval(
                 t1,
@@ -404,10 +403,10 @@ inline void calculate_atan() {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_asine_maclaurin_series(vFloat val) {
-    // input for [-1:1]
-    // Mclauren series
+    // Valid for x in [-1, 1].
+    // Maclaurin series
     // arcsin(x) = x + [(1/2) *x^3/3] + [(1 * 3) / (2 * 4) * x^5 / 5] + [(1 * 3 * 5) / (2 * 4 * 6) * x^7 / 7 ] + ...
-    // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11a
+    // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11
 
     vFloat tmp = val;
     vFloat val_square = val * val;
@@ -451,7 +450,7 @@ inline void calculate_asin() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_acos() {
     // SFPU microcode
-    // acos = (pi/2 - asin)
+    // acos(x) = PI/2 - asin(x)
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
