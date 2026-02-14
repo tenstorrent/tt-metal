@@ -202,6 +202,7 @@ def test_create_manifest_basic(sample_hf_config):
     assert d["dtype"] == "BFLOAT16"  # dtype.__name__ returns uppercase
     assert d["layout"] == "TILE"  # layout.__name__ returns "TILE" for TILE_LAYOUT
     assert "memory_config" in d
+    assert d["mesh_shape"] is None
     assert "hf_config" in d
     assert "preprocessor" in d
     assert "postprocessor" in d
@@ -233,6 +234,7 @@ def test_create_manifest_multi_name(sample_hf_config):
     assert "dtype" in d
     assert "layout" in d
     assert "memory_config" in d
+    assert d["mesh_shape"] is None
 
 
 def test_compute_fingerprint_stable():
@@ -374,6 +376,7 @@ def test_on_disk_cache_storage_manifest_includes_mesh_mapper(
         preprocessor=_identity,
         postprocessor=_identity,
         mesh_mapper=mapper,
+        mesh_shape=tuple(mesh_device.shape),
     )
     cache_key = CacheKey(fingerprint=manifest.get_fingerprint(), manifest=manifest)
     safe_name = _safe_name_from_manifest(manifest)
@@ -384,6 +387,7 @@ def test_on_disk_cache_storage_manifest_includes_mesh_mapper(
     if expected_mesh_mapper["mesh_shape_override"] is not None:
         expected_mesh_mapper["mesh_shape_override"] = list(expected_mesh_mapper["mesh_shape_override"])
     assert payload["mesh_mapper"] == expected_mesh_mapper
+    assert payload["mesh_shape"] == list(mesh_device.shape)
 
 
 def test_on_disk_cache_storage_missing_key(tmp_path, device):

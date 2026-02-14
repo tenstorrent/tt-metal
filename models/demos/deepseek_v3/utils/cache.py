@@ -1,6 +1,9 @@
+import fcntl
 import inspect
 import json
+import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import md5
@@ -66,6 +69,7 @@ class CacheManifest:
     preprocessor: Callable
     postprocessor: Callable
     mesh_mapper: MeshMapper | None = None
+    mesh_shape: tuple[int, ...] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-friendly dict for fingerprinting."""
@@ -81,6 +85,7 @@ class CacheManifest:
             "layout": self.layout.__name__,
             "memory_config": memory_config_to_dict(self.memory_config) if self.memory_config is not None else None,
             "mesh_mapper": mesh_mapper_to_dict(self.mesh_mapper) if self.mesh_mapper is not None else None,
+            "mesh_shape": list(self.mesh_shape) if self.mesh_shape is not None else None,
             "hf_config": json.dumps(self.hf_config, sort_keys=True),
             "preprocessor": compute_func_fingerprint(self.preprocessor),
             "postprocessor": compute_func_fingerprint(self.postprocessor),
@@ -105,6 +110,7 @@ def create_manifest(
     preprocessor: Callable,
     postprocessor: Callable,
     mesh_mapper: MeshMapper | None = None,
+    mesh_shape: tuple[int, ...] | None = None,
 ) -> CacheManifest:
     """Build a CacheManifest for the given tensor request parameters."""
     return CacheManifest(
@@ -116,6 +122,7 @@ def create_manifest(
         preprocessor=preprocessor,
         postprocessor=postprocessor,
         mesh_mapper=mesh_mapper,
+        mesh_shape=mesh_shape,
     )
 
 
@@ -126,6 +133,36 @@ def compute_fingerprint(manifest: dict[str, Any]) -> str:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@contextmanager
+def _exclusive_lock(path: Path, *, ensure_dir: Path | None = None):
+    if ensure_dir is not None:
+        ensure_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    with os.fdopen(fd, "r+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write(final_path: Path, write_fn: Callable[[Path], None]) -> None:
+    if final_path.suffix:
+        tmp_name = f"{final_path.stem}.tmp.{os.getpid()}{final_path.suffix}"
+    else:
+        tmp_name = f"{final_path.name}.tmp.{os.getpid()}"
+    tmp_path = final_path.with_name(tmp_name)
+    try:
+        write_fn(tmp_path)
+        os.replace(tmp_path, final_path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 class CacheStorage(Protocol):
@@ -181,28 +218,37 @@ class OnDiskCacheStorage:
         safe_name = _safe_name_from_manifest(key.manifest)
         return self.cache_root / f"{safe_name}__{key.fingerprint}.manifest.json"
 
-    def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
-        self.cache_root.mkdir(parents=True, exist_ok=True)
-        tensor_path = self._tensor_path(key)
-        ttnn.dump_tensor(tensor_path, tensor)
+    def _lock_path(self, key: CacheKey) -> Path:
+        safe_name = _safe_name_from_manifest(key.manifest)
+        return self.cache_root / f"{safe_name}__{key.fingerprint}.lock"
 
+    def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
+        tensor_path = self._tensor_path(key)
         manifest_path = self._manifest_path(key)
-        created_at = None
-        if manifest_path.is_file():
-            try:
-                existing_payload = json.loads(manifest_path.read_text())
-                created_at = existing_payload.get("created_at")
-            except json.JSONDecodeError:
-                raise ValueError(f"Invalid manifest file: {manifest_path}")
-        now = _utc_now_iso()
-        if created_at is None:
-            created_at = now
-        manifest_payload = key.manifest.to_dict()
-        manifest_payload["fingerprint"] = key.fingerprint
-        manifest_payload["created_at"] = created_at
-        manifest_payload["last_modified"] = now
-        with manifest_path.open("w", encoding="utf-8") as f:
-            json.dump(manifest_payload, f, indent=2, sort_keys=True)
+        lock_path = self._lock_path(key)
+
+        with _exclusive_lock(lock_path, ensure_dir=self.cache_root):
+            created_at = None
+            if manifest_path.is_file():
+                try:
+                    existing_payload = json.loads(manifest_path.read_text())
+                    created_at = existing_payload.get("created_at")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid manifest file: {manifest_path}")
+
+            _atomic_write(tensor_path, lambda p: ttnn.dump_tensor(p, tensor))
+
+            now = _utc_now_iso()
+            if created_at is None:
+                created_at = now
+            manifest_payload = key.manifest.to_dict()
+            manifest_payload["fingerprint"] = key.fingerprint
+            manifest_payload["created_at"] = created_at
+            manifest_payload["last_modified"] = now
+            _atomic_write(
+                manifest_path,
+                lambda p: p.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8"),
+            )
 
     def has(self, key: CacheKey) -> bool:
         return self._tensor_path(key).is_file()
@@ -265,8 +311,9 @@ class TensorCache:
             raise ValueError("Invalid configuration: device must be provided")
 
         names = [name] if isinstance(name, str) else list(name)
+        mesh_shape = tuple(device.shape) if isinstance(device, ttnn.MeshDevice) else None
         manifest = create_manifest(
-            names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor, mesh_mapper
+            names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor, mesh_mapper, mesh_shape
         )
         fingerprint = manifest.get_fingerprint()
         key = CacheKey(fingerprint=fingerprint, manifest=manifest)
