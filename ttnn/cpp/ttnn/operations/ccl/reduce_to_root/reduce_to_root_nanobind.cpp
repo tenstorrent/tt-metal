@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "reduce_to_root.hpp"
 
 namespace ttnn::operations::ccl {
@@ -63,49 +63,23 @@ void bind_reduce_to_root(nb::module_& mod) {
                         topology=ttnn.Topology.Linear)
             )doc";
 
-    using OperationType = decltype(ttnn::reduce_to_root);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"reduce_to_root">(
         mod,
-        ttnn::reduce_to_root,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor_l,
-               const ttnn::Tensor& input_tensor_s,
-               const ttnn::Tensor& input_tensor_m,
-               const MeshCoordinate& root_coord,
-               const float scale_fp32,
-               const std::optional<ttnn::Tensor>& output_tensor_l,
-               const std::optional<ttnn::Tensor>& output_tensor_s,
-               const std::optional<ttnn::Tensor>& output_tensor_m,
-               const std::optional<ttnn::Tensor>& intermediate_tensor,
-               const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-               const tt::tt_fabric::Topology topology) {
-                return self(
-                    input_tensor_l,
-                    input_tensor_s,
-                    input_tensor_m,
-                    root_coord,
-                    scale_fp32,
-                    topology,
-                    output_tensor_l,
-                    output_tensor_s,
-                    output_tensor_m,
-                    intermediate_tensor,
-                    input_mux_cores);
-            },
+        ttnn::overload_t(
+            &ttnn::reduce_to_root,
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_s").noconvert(),
             nb::arg("input_tensor_m").noconvert(),
             nb::arg("root_coord"),
             nb::kw_only(),
             nb::arg("scale_fp32") = 1.0f,
+            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear),
             nb::arg("output_tensor_l") = nb::none(),
             nb::arg("output_tensor_s") = nb::none(),
             nb::arg("output_tensor_m") = nb::none(),
             nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("input_mux_cores") = nb::none(),
-            nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Linear)});
+            nb::arg("input_mux_cores") = nb::none()));
 
     mod.def(
         "reduce_to_root_tensor_spec",

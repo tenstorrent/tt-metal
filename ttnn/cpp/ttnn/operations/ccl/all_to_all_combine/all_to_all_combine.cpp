@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteAllToAllCombine::invoke(
+ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,

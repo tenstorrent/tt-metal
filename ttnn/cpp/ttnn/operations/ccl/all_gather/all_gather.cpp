@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteAllGather::invoke(
+ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,

@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteBroadcast::invoke(
+ttnn::Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
     const uint32_t num_links,

@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_to_all_combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -62,49 +62,23 @@ void bind_all_to_all_combine(nb::module_& mod) {
                                     output_shard_dim=output_shard_dim)
         )doc";
 
-    using OperationType = decltype(ttnn::all_to_all_combine);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_to_all_combine">(
         mod,
-        ttnn::all_to_all_combine,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_metadata_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const bool local_reduce,
-               const std::optional<uint32_t> output_shard_dim,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
-                return self(
-                    input_tensor,
-                    expert_mapping_tensor,
-                    expert_metadata_tensor,
-                    local_reduce,
-                    num_links,
-                    topology,
-                    memory_config,
-                    cluster_axis,
-                    output_shard_dim,
-                    subdevice_id,
-                    output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::all_to_all_combine,
             nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_metadata_tensor").noconvert(),
             nb::arg("expert_mapping_tensor").noconvert(),
+            nb::arg("expert_metadata_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("local_reduce") = false,
-            nb::arg("output_shard_dim") = 1,
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
             nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none()});
+            nb::arg("topology").noconvert() = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("output_shard_dim") = 1,
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl

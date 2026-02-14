@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteMeshPartition::invoke(
+ttnn::Tensor mesh_partition(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,

@@ -11,25 +11,23 @@
 namespace ttnn {
 namespace operations::ccl {
 
-struct ExecuteReduceScatter {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int32_t dim,
-        std::optional<uint32_t> cluster_axis = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
-        std::optional<uint32_t> chunks_per_sync = std::nullopt,
-        std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
-};
+ttnn::Tensor reduce_scatter(
+    const ttnn::Tensor& input_tensor,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& intermediate_memory_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
 }  // namespace operations::ccl
 
-constexpr auto reduce_scatter =
-    ttnn::register_operation<"ttnn::reduce_scatter", ttnn::operations::ccl::ExecuteReduceScatter>();
+// Export to ttnn namespace
+using operations::ccl::reduce_scatter;
 
 }  // namespace ttnn

@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::ccl {
 
-std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
+std::vector<ttnn::Tensor> reduce_to_root(
     const ttnn::Tensor& input_tensor_l,
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
