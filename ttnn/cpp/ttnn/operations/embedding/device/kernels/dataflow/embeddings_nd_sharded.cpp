@@ -8,8 +8,7 @@
 #include "ttnn/kernel/kernel_utils.hpp"
 #include "embeddings_reader_kernel_args.hpp"
 
-// kernel is implementing the following logic:
-//     output[idx][:] = weights[input[idx]][:];
+//  output[idx][:] = weights[input[idx]][:];
 
 void kernel_main() {
     using namespace ttnn::kernel_utils;

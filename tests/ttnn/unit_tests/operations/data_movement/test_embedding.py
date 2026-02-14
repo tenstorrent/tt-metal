@@ -547,6 +547,7 @@ def test_embedding_oom(
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape",
     [
+        ((2, 2), (1, 1)),  # smallest possible shape
         ((4,), (2,)),  # 1d
         ((4, 8), (2, 2)),  # 2d small shard shape to test alignment
         ((4, 64), (2, 32)),  # 2d
@@ -554,6 +555,8 @@ def test_embedding_oom(
         ((4, 2, 64, 64), (2, 2, 32, 32)),  # 4d
         ((4, 4, 8, 8, 8), (2, 2, 4, 4, 4)),  # 5d
         ((8, 32, 32), (8, 16)),  # shard_shape dim < input_shape dim
+        ((8, 24, 24), (8, 8)),  # uneven num of shards
+        ((20, 20), (10, 10)),  # non-power of 2 shapes
     ],
 )
 @pytest.mark.parametrize(
@@ -570,6 +573,7 @@ def test_embedding_oom(
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))]),  # row
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),  # col
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3))]),  # row with offset
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 2))]),  # uneven num of cores
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),  # grid
         ttnn.CoreRangeSet(
             [
@@ -592,8 +596,6 @@ def test_nd_sharded_embedding(
 ):
     if output_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Tile layout is not supported for ND-sharded tensors")
-        if input_shard_shape[-1] % ttnn.TILE_SIZE != 0:
-            pytest.skip(f"Input shard shape {input_shard_shape} is not a multiple of tile width {ttnn.TILE_SIZE}")
 
     torch.manual_seed(1234)
 
