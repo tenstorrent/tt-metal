@@ -161,10 +161,6 @@ void JitBuildEnv::init(
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
     }
 
-    if (rtoptions.get_riscv_debug_info_enabled()) {
-        common_flags += "-g ";
-    }
-
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
