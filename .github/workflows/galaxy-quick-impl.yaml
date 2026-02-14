@@ -169,7 +169,7 @@ jobs:
 
           pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
 
-          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-2-20-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
+          pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async -k check" --timeout=300;
           pytest "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-mesh_device0-8-2-2-fabric_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
           pytest "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_1d_line]" --timeout=300;
 
