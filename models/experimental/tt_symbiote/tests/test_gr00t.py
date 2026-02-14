@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 import time
 import torch
 import ttnn
@@ -119,11 +120,7 @@ def test_gr00t_inference_validation(device):
     target_numel = reduce(operator.mul, shape, 1)
     assert target_numel == 903168 and padded.numel() > target_numel
 
-    class ViewFunc:
-        def name(self):
-            return "aten::view"
-
-    result = DispatchManager.dispatch_to_torch_wrapper(ViewFunc(), (padded, shape), {})
+    result = DispatchManager.dispatch_to_torch_wrapper(SimpleNamespace(name=lambda: "aten::view"), (padded, shape), {})
     out = result.to_torch if hasattr(result, "to_torch") else result
     assert out.shape == shape and out.numel() == target_numel
 
