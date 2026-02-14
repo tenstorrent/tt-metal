@@ -413,6 +413,7 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
         pytest.skip(
             "Skipping test case due to division by zero not being handled properly in bfloat16 with rounding_mode=None and fast_and_approximate_mode=True"
         )
+
     in_data1 = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 7.0, 9.75], dtype=torch_dtype)
     in_data2 = torch.tensor([0.0, 0.0, 0.0, 1.0, -1.0, 2.5, -14.25], dtype=torch_dtype)
     input_tensor1 = ttnn.from_torch(
@@ -421,6 +422,17 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
     input_tensor2 = ttnn.from_torch(
         in_data2, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+
+    # Verify TT_FATAL is raised when fast_and_approximate_mode is used with rounding_mode
+    if fast_and_approximate_mode and rounding_mode is not None:
+        with pytest.raises(RuntimeError, match="fast_and_approximate_mode cannot be used with rounding_mode"):
+            ttnn.div(
+                input_tensor1,
+                input_tensor2,
+                fast_and_approximate_mode=fast_and_approximate_mode,
+                rounding_mode=rounding_mode,
+            )
+        return
 
     output_tensor = ttnn.div(
         input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, rounding_mode=rounding_mode

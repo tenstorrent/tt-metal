@@ -132,6 +132,9 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
     ),
 )
 def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, device):
+    if fast_and_approximate_mode and rounding_mode is not None:
+        pytest.skip("fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')")
+
     if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
@@ -160,6 +163,9 @@ def test_binary_div_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes,
     ),
 )
 def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shapes, device):
+    if fast_and_approximate_mode and rounding_mode is not None:
+        pytest.skip("fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')")
+
     if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
@@ -189,6 +195,9 @@ def test_binary_div_ttnn_ci(fast_and_approximate_mode, rounding_mode, input_shap
     ),
 )
 def test_binary_div_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, device):
+    if fast_and_approximate_mode and rounding_mode is not None:
+        pytest.skip("fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')")
+
     if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
@@ -226,6 +235,9 @@ def test_binary_div_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_sha
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
 def test_binary_div_scalar_ttnn(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
+    if fast_and_approximate_mode and rounding_mode is not None:
+        pytest.skip("fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')")
+
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.div(
@@ -250,6 +262,9 @@ def test_binary_div_scalar_ttnn(fast_and_approximate_mode, rounding_mode, input_
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
 def test_binary_div_scalar_ttnn_opt(fast_and_approximate_mode, rounding_mode, input_shapes, value, device):
+    if fast_and_approximate_mode and rounding_mode is not None:
+        pytest.skip("fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')")
+
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
