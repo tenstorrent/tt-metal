@@ -38,6 +38,7 @@ set(SOURCES
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
+    modules/distributed/grouped_query_attention_test.cpp
     serialization/model_serializer_test.cpp
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
@@ -47,6 +48,7 @@ set(SOURCES
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
+    ops/distributed/ring_attention_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp

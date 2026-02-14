@@ -60,6 +60,10 @@ ttml::autograd::TensorPtr GradientAccumulator::scale(ttml::autograd::TensorPtr &
 }
 
 void GradientAccumulator::update(float loss, size_t samples) {
+    auto pctx = ttml::autograd::ctx().get_parallelism_context();
+    if (pctx.is_ddp_enabled()) {
+        samples = samples * pctx.get_ddp_size();
+    }
     m_total_loss += loss * samples * static_cast<float>(m_accumulation_steps);
     m_total_samples += samples;
     ++m_steps;

@@ -39,7 +39,7 @@ public:
         if (check_32_chips()) {
             ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
             ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }

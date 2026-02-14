@@ -42,7 +42,8 @@ GPTBlock::GPTBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_pr
     register_module(attention, "attention");
 }
 
-autograd::TensorPtr GPTBlock::operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+autograd::TensorPtr GPTBlock::operator()(
+    const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     auto residual = input;
     auto x = (*ln1)(input);
     x = (*attention)(x, mask);

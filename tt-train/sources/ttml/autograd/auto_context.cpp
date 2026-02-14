@@ -132,24 +132,39 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 ParallelismContext::ParallelismContext(
     const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
     TT_FATAL(
-        (uint32_t)config.enable_ddp + (uint32_t)config.enable_tp == mesh_device.shape().dims(),
-        "The number of parallelization axes must be equal to the number of mesh shape dimensions");
+        !(config.enable_ddp && config.enable_cp),
+        "DP and CP cannot be enabled simultaneously. This combination is not currently supported.");
 
+    TT_FATAL(
+        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp ==
+            mesh_device.shape().dims(),
+        "Mesh shape dimensions must be greater than the number of parallelization axes");
+
+    // Axis assignment order: DP -> CP -> TP
     uint32_t axis = 0;
     if (config.enable_ddp) {
         m_ddp_axis = axis++;
         m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
+    }
+    if (config.enable_cp) {
+        m_cp_axis = axis++;
+        m_cp_size = mesh_device.shape()[m_cp_axis.value()];
     }
     if (config.enable_tp) {
         m_tp_axis = axis++;
         m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
     }
 }
+
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
     if (!m_parallelism_context) {
         throw std::runtime_error("ParallelismContext is not initialized.");
     }
     return *m_parallelism_context;
+}
+
+bool AutoContext::is_parallelism_context_initialized() const {
+    return m_parallelism_context != nullptr;
 }
 
 void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
@@ -164,6 +179,13 @@ const uint32_t ParallelismContext::get_ddp_size() const {
         return 1U;
     }
     return m_num_ddp_devices;
+}
+
+const uint32_t ParallelismContext::get_cp_size() const {
+    if (!m_cp_axis.has_value()) {
+        return 1U;
+    }
+    return m_cp_size;
 }
 
 const uint32_t ParallelismContext::get_tp_size() const {

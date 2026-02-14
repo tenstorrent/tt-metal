@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "autograd/tensor.hpp"
 
 namespace ttml::ops {
@@ -33,7 +35,13 @@ autograd::TensorPtr rope(
     const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params, const uint32_t token_position);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& rope_scaling_params);
+    uint32_t head_dim,
+    uint32_t sequence_length,
+    float theta,
+    const RopeScalingParams& rope_scaling_params,
+    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr);
+
+ttnn::Tensor gen_trans_mat();
 
 RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,

@@ -124,7 +124,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
 }
 
 autograd::TensorPtr DistributedLlama::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
     for (auto& block : blocks) {

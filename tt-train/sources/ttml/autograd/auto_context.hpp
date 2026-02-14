@@ -21,6 +21,7 @@ enum class GradMode { ENABLED, DISABLED };
 struct DistributedConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
+    bool enable_cp = false;
 };
 
 class ParallelismContext {
@@ -38,10 +39,14 @@ public:
     [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
         return m_tp_axis;
     }
+    [[nodiscard]] std::optional<uint32_t> get_cp_axis() const {
+        return m_cp_axis;
+    }
 
     // Size queries (computed from mesh_device->shape())
     [[nodiscard]] const uint32_t get_ddp_size() const;
     [[nodiscard]] const uint32_t get_tp_size() const;
+    [[nodiscard]] const uint32_t get_cp_size() const;
 
     [[nodiscard]] const bool is_tp_enabled() const {
         return m_tp_axis.has_value();
@@ -49,10 +54,15 @@ public:
     [[nodiscard]] const bool is_ddp_enabled() const {
         return m_ddp_axis.has_value();
     }
+    [[nodiscard]] const bool is_cp_enabled() const {
+        return m_cp_axis.has_value();
+    }
 
 private:
     std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
+    std::optional<uint32_t> m_cp_axis = std::nullopt;
+    uint32_t m_cp_size = 1U;
     uint32_t m_num_ddp_devices = 1U;
     uint32_t m_num_tp_devices = 1U;
 };
@@ -109,6 +119,8 @@ public:
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
     [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
+
+    [[nodiscard]] bool is_parallelism_context_initialized() const;
 
     void initialize_parallelism_context(const DistributedConfig& config);
 

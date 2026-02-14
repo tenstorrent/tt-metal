@@ -181,7 +181,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
 
 ttml::autograd::TensorPtr Llama::operator()(
     const ttml::autograd::TensorPtr& x,
-    const ttml::autograd::TensorPtr& mask,
+    const std::optional<ttml::autograd::TensorPtr>& mask,
     std::shared_ptr<common::transformer::KvCache> kv_cache,
     const uint32_t new_tokens) {
     // Pad input tokens to nearest multiple of 32 before embedding
@@ -226,11 +226,13 @@ ttml::autograd::TensorPtr Llama::operator()(
 
     if (kv_cache) {
         // Inference mode with KV cache
-        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+        for (uint32_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+
+            TT_FATAL(mask.has_value(), "Mask has to be provided in inference mode with KV cache");
+            out = (*llama_block)(out, mask.value(), kv_cache, block_idx, new_tokens);
         }
     } else {
         // Training mode or inference without cache

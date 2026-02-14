@@ -14,27 +14,43 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const std::optional<uint32_t> dp_dim) {
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t> cluster_axes) {
     auto* device = &autograd::ctx().get_device();
-    TT_FATAL(!dp_dim.has_value() || dp_dim.value() < device->shape().dims(), "Cluster axis must be within mesh shape");
-    const auto dp_size = autograd::ctx().get_parallelism_context().get_ddp_size();
-    assert(dp_size >= 1U);
-    // no need to synchronize if there is only one device
-    if (dp_size == 1U) {
+    if (cluster_axes.size() == 0) {
         return tensor;
     }
+    uint32_t scaler = 1U;
+    for (const auto& cluster_axis : cluster_axes) {
+        TT_FATAL(cluster_axis < device->shape().dims(), "Cluster axis must be within mesh shape");
+        scaler *= device->shape()[cluster_axis];
+    }
+    if (scaler == 1U) {
+        return tensor;
+    }
+    auto result = tensor;
+    for (const auto& cluster_axis : cluster_axes) {
+        result = ttnn::all_reduce(result, cluster_axis);
+    }
 
-    auto result = ttnn::all_reduce(tensor, dp_dim);
-    result = ttnn::multiply(result, 1.0F / static_cast<float>(dp_size));
+    result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
     return result;
 }
 
 void synchronize_gradients(const serialization::NamedParameters& parameters) {
+    if (!autograd::ctx().is_parallelism_context_initialized()) {
+        return;
+    }
     const auto& pctx = autograd::ctx().get_parallelism_context();
-    const auto dp_dim = pctx.get_ddp_axis();
+    ttnn::SmallVector<uint32_t> cluster_axes;
+    if (pctx.is_cp_enabled()) {
+        cluster_axes.push_back(pctx.get_cp_axis().value());
+    }
+    if (pctx.is_ddp_enabled()) {
+        cluster_axes.push_back(pctx.get_ddp_axis().value());
+    }
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_dim));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes));
         }
     }
 }

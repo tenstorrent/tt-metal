@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
@@ -30,7 +32,7 @@ public:
     explicit DistributedLlama(const LlamaConfig& config);
     virtual ~DistributedLlama() = default;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) override;
 };
 
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config);
