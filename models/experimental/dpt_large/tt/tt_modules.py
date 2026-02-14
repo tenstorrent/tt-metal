@@ -533,15 +533,9 @@ class TTAttention:
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] tensors
-            split_kwargs = dict(num_heads=H, transpose_key=False)
-            try:
-                cfg = getattr(self, "program_config", None)
-                split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
-                if split_memcfg is not None:
-                    split_kwargs["memory_config"] = split_memcfg
-            except Exception:
-                pass
-            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, **split_kwargs)
+            q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv3, num_heads=H, transpose_key=False
+            )
             scale = 1.0 / math.sqrt(D)
             sdpa_kwargs = dict(is_causal=False, scale=scale)
             if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
@@ -689,17 +683,10 @@ class TTMLP:
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
             reshardened = False
-            # Prefer the configured MLP sharding grid for FC1/FC2 even if the
-            # incoming tensor is already sharded with a different spec.
-            if cfg is not None:
+            if cfg is not None and not _ttnn_is_sharded(x4):
                 mlp_grid = getattr(cfg, "mlp_core_grid", None)
                 if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
                     try:
-                        # Normalize to interleaved first to avoid shard-spec mismatches.
-                        try:
-                            x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-                        except Exception:
-                            pass
                         grid_x, grid_y = int(mlp_grid[0]), int(mlp_grid[1])
                         core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
                         shape_for_shard = getattr(x4, "padded_shape", None) or getattr(x4, "shape", None)

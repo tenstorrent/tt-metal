@@ -274,11 +274,8 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # N300 perf: prefer a 1-row grid so WIDTH-sharded / BLOCK-sharded
-        # layouts behave like the reference ViT patterns for small batch sizes.
-        # This keeps program-config `per_core_M` aligned with the full sequence
-        # tile count, while still enabling sharded matmuls.
-        grid = (8, 1)
+        # Single-card N300 often exposes a harvested 8x7 worker grid.
+        grid = (8, 7)
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
         grid = (8, 10)
@@ -332,15 +329,17 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
             # Keep the default configs if the runtime doesn't expose these types/attrs.
             pass
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
-    # Disable custom attention matmul/softmax program configs if forced.
+    # Disable custom attention configs if forced or if sharding would exceed grid width.
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
+    if head_seq_tiles is not None and head_seq_tiles > grid[0]:
+        disable_attn_pc = True
 
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
-    # split_query_key_value_and_split_heads is most efficient (and sometimes
-    # required) with height-sharded outputs.
     split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
+    if disable_attn_pc:
+        split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
     return TTLayerConfig(
         grid=grid,
@@ -350,10 +349,10 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         use_fused_ops=True,
         activation_fused=True,
         l1_resident=True,
-        use_block_sharded=True,
+        use_block_sharded=False,
         sdpa_grid=grid,
-        qkv_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None),
-        proj_memcfg=getattr(ttnn, "L1_BLOCK_SHARDED_MEMORY_CONFIG", None) or getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        qkv_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
+        proj_memcfg=getattr(ttnn, "L1_MEMORY_CONFIG", None),
         # When MLP resharding is enabled in tt_modules.py, we run FC1/FC2 with
         # block-sharded activations for better matmul utilization (N300).
         mlp_memcfg=(
