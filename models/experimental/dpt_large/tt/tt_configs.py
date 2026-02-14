@@ -388,16 +388,8 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         softmax_program_config=softmax_pc,
         av_program_config=av_pc,
         proj_program_config=proj_pc,
-        ff1_program_config=(
-            None
-            if config.device.endswith("n300")
-            else (mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config"))
-        ),
-        ff2_program_config=(
-            None
-            if config.device.endswith("n300")
-            else (mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config"))
-        ),
+        ff1_program_config=(mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config")),
+        ff2_program_config=(mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")),
         ln_program_config=prog_cfgs.get("layernorm_before_program_config"),
         ln_compute_config=prog_cfgs.get("ln_compute_config"),
         use_default_attention_programs=(True if config.device.endswith("n300") else disable_attn_pc),
