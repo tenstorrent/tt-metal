@@ -6,7 +6,6 @@
 
 #include <vector>
 #include <optional>
-#include <api/tt-metalium/event.hpp>
 #include <api/tt-metalium/sub_device_types.hpp>
 
 #include <tt_stl/assert.hpp>

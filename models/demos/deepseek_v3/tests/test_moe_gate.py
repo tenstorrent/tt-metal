@@ -2,25 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
+
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
+        ("prefill", _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
@@ -40,6 +44,7 @@ def test_forward_pass(
     set_deterministic_env,
 ):
     """Test forward pass against reference model."""
+
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights

@@ -50,8 +50,6 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
 
-    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
-
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
@@ -72,22 +70,24 @@ void kernel_main() {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
                 const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-                const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+                const auto q_row_end_tile = q_row_start_tile + Sq_chunk_t;
+                const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_end_tile, 0, DHt);
 
                 read_block(
-                    cat_q_generator, q_slice, cb_q_in, q_tile_bytes, barrier_threshold, false /*transpose*/
+                    cat_q_generator, q_slice, q_row_end_tile, cb_q_in, q_tile_bytes, false /*transpose*/
                 );
 
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                     const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
-                    const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_start_tile + Sk_chunk_t, 0, DHt);
+                    const auto kv_row_end_tile = kv_row_start_tile + Sk_chunk_t;
+                    const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_end_tile, 0, DHt);
 
                     read_block(
-                        cat_k_generator, kv_slice, cb_k_in, k_tile_bytes, barrier_threshold, true /*transpose*/
+                        cat_k_generator, kv_slice, kv_row_end_tile, cb_k_in, k_tile_bytes, true /*transpose*/
                     );
 
                     read_block(
-                        cat_v_generator, kv_slice, cb_v_in, v_tile_bytes, barrier_threshold, false /*transpose*/
+                        cat_v_generator, kv_slice, kv_row_end_tile, cb_v_in, v_tile_bytes, false /*transpose*/
                     );
                 }
             }

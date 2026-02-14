@@ -1,0 +1,77 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "MESH4"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 4
+    policy: RELAXED
+  }
+}
+mesh_descriptors {
+  name: "MESH2"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 4
+    policy: RELAXED
+  }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "MESH4" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "MESH2" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "MESH2" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "MESH4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections{
+    nodes { mesh { mesh_descriptor: "MESH4" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections{
+    nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "MESH2" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 15
+  }
+  physical_asic_position {
+    tray_id: 2
+    asic_location: 4
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 1
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 3
+    asic_location: 4
+  }
+}
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 2
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 4
+    asic_location: 8
+  }
+}
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

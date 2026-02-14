@@ -20,7 +20,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::interleaved_to_sharded {
+namespace ttnn::prim {
 
 // Hardcoded for non-partial interleaved_to_sharded operation
 // to keep backward compatibility after migration to new infra
@@ -29,11 +29,11 @@ constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
 InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const InterleavedToShardedParams&  /*operation_attributes*/,
+    const InterleavedToShardedInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
-    const auto& output = tensor_return_value;
+    const auto& output = output_tensor;
     // Keep explicit bool init to match legacy behavior which forced it true
     bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
 
@@ -128,16 +128,17 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t num_trids = 4;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
-        if (is_blackhole) {
-            scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
-        } else {
-            scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
-        }
+
+        // This is done to mitigate the alignment issues.
+        // See issue #34414.
+        scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(num_trids * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
@@ -154,7 +155,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row, num_trids};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -194,7 +195,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = detail::calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -381,11 +382,11 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
 
 void InterleavedToShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const InterleavedToShardedParams&  /*operation_attributes*/,
+    const InterleavedToShardedInputs& tensor_args,
+    Tensor& output_tensor) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -413,4 +414,4 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::interleaved_to_sharded
+}  // namespace ttnn::prim

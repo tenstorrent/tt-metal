@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 send
@@ -60,4 +61,5 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
     DeviceTimestampedData("NoC Index", noc_index);
+    DeviceTimestampedData("Number of subordinates", num_subordinates);
 }

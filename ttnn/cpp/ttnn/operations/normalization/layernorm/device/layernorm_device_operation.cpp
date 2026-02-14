@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -13,20 +14,14 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return LayerNormShardedProgramFactory{};
-    } else {
-        return LayerNormMultiCoreProgramFactory{};
     }
-}
-
-void LayerNormDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    return LayerNormMultiCoreProgramFactory{};
 }
 
 void LayerNormDeviceOperation::validate_on_program_cache_miss(
@@ -261,28 +256,30 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                         "Height sharded memory layout is not supported, got: {}",
                         a.memory_config().memory_layout());
                 } else {
+                    uint32_t num_cores_c = bbox.end_coord.x - bbox.start_coord.x + 1;
+                    uint32_t num_cores_r = bbox.end_coord.y - bbox.start_coord.y + 1;
                     if (row_wise) {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
+                            tt::div_up(Kt, num_cores_c) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.x + 1)));
+                            tt::div_up(Kt, num_cores_c));
                         TT_FATAL(
-                            Mt / (bbox.end_coord.y + 1) == program_config.block_h,
+                            Mt / num_cores_r == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
                             program_config.block_h,
-                            Mt / (bbox.end_coord.y + 1));
+                            Mt / num_cores_r);
                     } else {
                         TT_FATAL(
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
+                            tt::div_up(Kt, num_cores_r) == program_config.block_w,
                             "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
-                            tt::div_up(Kt, (bbox.end_coord.y + 1)));
+                            tt::div_up(Kt, num_cores_r));
                         TT_FATAL(
-                            Mt / (bbox.end_coord.x + 1) == program_config.block_h,
+                            Mt / num_cores_c == program_config.block_h,
                             "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
                             program_config.block_h,
-                            Mt / (bbox.end_coord.x + 1));
+                            Mt / num_cores_c);
                     }
                 }
                 if (b.has_value()) {
@@ -329,7 +326,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.program_config);
 }
 
-spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
+TensorSpec LayerNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
@@ -353,7 +350,8 @@ spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
                     auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
                     return TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
-                } else if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+                }
+                if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
@@ -388,7 +386,7 @@ spec_return_value_t LayerNormDeviceOperation::compute_output_specs(
         operation_attributes.program_config);
 }
 
-tensor_return_value_t LayerNormDeviceOperation::create_output_tensors(
+Tensor LayerNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return std::visit(
         [&](const auto& program_config) -> tensor_return_value_t {
@@ -405,24 +403,21 @@ tensor_return_value_t LayerNormDeviceOperation::create_output_tensors(
         operation_attributes.program_config);
 }
 
-}  // namespace ttnn::operations::normalization::layer_norm
-
-namespace ttnn::prim {
-ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_return_value_t layer_norm(
+Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& residual_input_tensor,
     const MemoryConfig& output_mem_config,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
-    ttnn::operations::normalization::LayerNormType norm_type,
-    ttnn::operations::normalization::DistributedLayerNormStage distributed_norm_stage,
-    const std::optional<const Tensor>& stats) {
-    using OperationType = ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{
+    LayerNormType norm_type,
+    DistributedLayerNormStage distributed_norm_stage,
+    const std::optional<const Tensor>& stats,
+    const std::optional<const Tensor>& recip_tensor) {
+    auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
         .eps = epsilon,
@@ -431,14 +426,16 @@ ttnn::operations::normalization::layer_norm::LayerNormDeviceOperation::tensor_re
         .compute_kernel_config = compute_kernel_config,
         .dtype = dtype,
     };
-    auto tensor_args = OperationType::tensor_args_t{
+    auto tensor_args = LayerNormInputs{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
         .weight = weight,
         .bias = bias,
         .stats = stats,
+        .recip_tensor = recip_tensor,
     };
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);
 }
+
 }  // namespace ttnn::prim

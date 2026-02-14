@@ -3,14 +3,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/add_int_sfpu.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/pack.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/add_int_sfpu.h"
 
 #define DEBUG_PRINT 0
 
@@ -28,9 +28,7 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -127,8 +125,8 @@ void MAIN {
     uint32_t current_idx_col;
     uint32_t current_idx_row;
     if constexpr (return_indices) {
-        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
-        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(2);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(3);
         current_idx_col = start_col;
         current_idx_row = start_row;
 
@@ -214,7 +212,7 @@ void MAIN {
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
-                        add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        add_int_tile<DataFormat::UInt16>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
 
                         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                     }
@@ -339,5 +337,3 @@ void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

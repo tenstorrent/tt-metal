@@ -259,8 +259,9 @@ def run_test_perplexity(
         # "decode_4096",
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_perplexity(
-    t3k_mesh_device,
+    mesh_device,
     reset_seeds,
     llm_mode,
     max_seq_len,
@@ -282,7 +283,7 @@ def test_mixtral_perplexity(
         batch_size = 32
 
     return run_test_perplexity(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         batch_size=batch_size,
         llm_mode=llm_mode,
         max_seq_len=max_seq_len,

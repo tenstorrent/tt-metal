@@ -5,17 +5,16 @@
 #include "update_cache_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
-        return program::FillCacheMultiCoreProgramFactory{};
-    } else {
-        return program::UpdateCacheMultiCoreProgramFactory{};
+        return FillCacheMultiCoreProgramFactory{};
     }
+    return UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
@@ -109,12 +108,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
-        if (input_tensor.device()->arch() == tt::ARCH::GRAYSKULL) {
-            TT_FATAL(
-                cache_tensor.dtype() == DataType::BFLOAT16,
-                "#12931: Update Cache currently produces non-deterministic output on GS when converting data types for "
-                "cache tensor");
-        }
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -155,19 +148,14 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-void UpdateKVCacheOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
-spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+TensorSpec UpdateKVCacheOperation::compute_output_specs(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
-tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+Tensor UpdateKVCacheOperation::create_output_tensors(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;
 }
@@ -178,25 +166,22 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-}  // namespace ttnn::operations::kv_cache
-
-namespace ttnn::prim {
-ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(
+Tensor update_cache(
     const Tensor& cache,
     const Tensor& input,
     const uint32_t batch_idx,
     const uint32_t update_index,
     const uint32_t batch_offset,
-    const ttnn::operations::kv_cache::UpdateCacheOpType op_type,
+    const UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    using OperationType = ttnn::operations::kv_cache::UpdateKVCacheOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<UpdateKVCacheOperation>(
+        KvCacheParams{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        OperationType::tensor_args_t{.cache = cache, .input = input});
+        KvCacheInputs{.cache = cache, .input = input});
 }
+
 }  // namespace ttnn::prim

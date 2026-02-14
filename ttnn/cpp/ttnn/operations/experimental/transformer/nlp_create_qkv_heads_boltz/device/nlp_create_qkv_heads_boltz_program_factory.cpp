@@ -118,7 +118,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+            "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
 
@@ -126,7 +126,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
             tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+                "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
                 core_group_2,
                 tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
         }
@@ -234,7 +234,7 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
 
 void NlpCreateHeadsBoltzDeviceOperation::Interleaved::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* src_buffer = tensor_args.input_tensor_q.buffer();
@@ -481,7 +481,7 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
 void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();

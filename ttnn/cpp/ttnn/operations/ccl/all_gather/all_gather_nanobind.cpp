@@ -33,6 +33,9 @@ void bind_all_gather(nb::module_& mod) {
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
             num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            chunks_per_sync (int, optional): Hyperparameter.
+            num_workers_per_link (int, optional): Hyperparameter.
+            num_buffers_per_channel (int, optional): Hyperparameter.
             sub_core_grids (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
 
         Returns:
@@ -68,6 +71,9 @@ void bind_all_gather(nb::module_& mod) {
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
+               const std::optional<uint32_t> chunks_per_sync,
+               const std::optional<uint32_t> num_workers_per_link,
+               const std::optional<uint32_t> num_buffers_per_channel,
                const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor,
@@ -78,6 +84,9 @@ void bind_all_gather(nb::module_& mod) {
                     optional_output_tensor,
                     num_links,
                     topology,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel,
                     sub_core_grids);
             },
             nb::arg("input_tensor").noconvert(),
@@ -89,6 +98,9 @@ void bind_all_gather(nb::module_& mod) {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("num_links") = nb::none(),
             nb::arg("topology") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()});
 }
 

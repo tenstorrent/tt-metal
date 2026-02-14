@@ -3,6 +3,7 @@
 set(LLRT_SRC
     llrt.cpp
     core_descriptor.cpp
+    firmware_capability.cpp
     rtoptions.cpp
     tlb_config.cpp
     tt_cluster.cpp
@@ -10,6 +11,7 @@ set(LLRT_SRC
     tt_memory.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
+    metal_soc_descriptor.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})

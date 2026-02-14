@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step1 {
 
 MorehNllLossStep1DeviceOperation::program_factory_t MorehNllLossStep1DeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return Factory{};
 }
 
 void MorehNllLossStep1DeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
 
@@ -32,11 +33,6 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
 }
 
 void MorehNllLossStep1DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehNllLossStep1DeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }

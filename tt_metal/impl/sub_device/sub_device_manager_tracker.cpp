@@ -4,7 +4,6 @@
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -38,6 +37,7 @@ namespace tt::tt_metal {
 SubDeviceManagerTracker::SubDeviceManagerTracker(
     IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
+    TT_FATAL(device_ != nullptr, "SubDeviceManagerTracker requires a valid device");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
     active_sub_device_manager_ = default_sub_device_manager_;
@@ -63,7 +63,7 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
-    // when MeshCommandQueue + CommandQueue are unified under the same API
+    // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
@@ -75,15 +75,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 sub_device_manager->get_core_go_message_mapping());
         }
     } else {
-        for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-            auto& hw_cq = device_->command_queue(cq_id);
-            // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(
-                cq_id == 0,
-                num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
-        }
+        TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
     }
     sub_device_manager->reset_sub_device_stall_group();
 }

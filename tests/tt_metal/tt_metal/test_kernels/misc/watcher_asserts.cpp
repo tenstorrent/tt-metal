@@ -9,14 +9,11 @@
 /*
  * A test for the assert feature.
 */
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
-void kernel_main() {
-#else
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC)
+#include "api/compute/common.h"
 #endif
 
+void kernel_main() {
     uint32_t a = get_arg_val<uint32_t>(0);
     uint32_t b = get_arg_val<uint32_t>(1);
     uint32_t assert_type = get_arg_val<uint32_t>(2);
@@ -57,19 +54,12 @@ void MAIN {
     }
 #else
 #if defined(TRISC0) or defined(TRISC1) or defined(TRISC2)
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-    volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+    volatile tt_l1_ptr uint8_t * const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))
+        ->subordinate_sync.map[COMPILE_FOR_TRISC + 1];  // first entry is for NCRISC
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif
 
     ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
 #endif
-
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 }
-#else
-}
-}
-#endif

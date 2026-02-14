@@ -13,13 +13,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 TOPK_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 
 # Sub-core grids for mesh device tests
-SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8, 9))])
+SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))])
 
 
 # k=32 matches the DeepSeek v3 MoE gating configuration, where the gate selects 32 experts per token.
 K_VALUE = 32
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "shape",
     [
@@ -76,6 +77,7 @@ def test_topk_single_device(shape, dtype, device):
     assert cosine_sim > 0.99, f"Cosine similarity {cosine_sim} is less than 0.99"
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "shape",

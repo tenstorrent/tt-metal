@@ -4,16 +4,11 @@
 #include "prod_nc_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::reduction::prod_nc {
+namespace ttnn::prim {
 
 ProdNcDeviceOperation::program_factory_t ProdNcDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::ProdNcProgramFactory{};
-}
-
-void ProdNcDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return ProdNcProgramFactory{};
 }
 
 void ProdNcDeviceOperation::validate_on_program_cache_miss(
@@ -49,24 +44,22 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
 }
 
 ProdNcDeviceOperation::spec_return_value_t ProdNcDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Inplace operation - return output tensor's spec
     return tensor_args.output.tensor_spec();
 }
 
 ProdNcDeviceOperation::tensor_return_value_t ProdNcDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Inplace operation - return output tensor
     return tensor_args.output;
 }
 
-}  // namespace ttnn::operations::reduction::prod_nc
-
-namespace ttnn::prim {
 ttnn::Tensor prod_nc(const ttnn::Tensor& input, const ttnn::Tensor& output, int64_t dim) {
-    using OperationType = ttnn::operations::reduction::prod_nc::ProdNcDeviceOperation;
+    using OperationType = ProdNcDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.dim = dim},
         OperationType::tensor_args_t{.input = input, .output = output});
 }
+
 }  // namespace ttnn::prim

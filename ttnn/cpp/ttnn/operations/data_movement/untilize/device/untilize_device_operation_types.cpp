@@ -4,7 +4,7 @@
 
 #include "untilize_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::untilize_helper {
+namespace ttnn::prim::untilize_helper {
 uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor) {
     for (uint32_t curr_div = starting_divisor; curr_div > 0; curr_div--) {
         if (dividend % (curr_div * divisor_factor) == 0) {
@@ -13,4 +13,4 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     }
     return 1;
 }
-}  // namespace ttnn::operations::data_movement::untilize_helper
+}  // namespace ttnn::prim::untilize_helper

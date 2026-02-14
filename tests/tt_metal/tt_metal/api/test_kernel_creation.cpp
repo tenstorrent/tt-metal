@@ -16,7 +16,7 @@
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
@@ -66,7 +66,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto& dispatch_core_config = get_dispatch_core_config();
-        CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+        CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         std::vector<CoreCoord> dispatch_cores =
             tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;

@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tilize.h"
 
 
 
@@ -43,8 +43,7 @@ FORCE_INLINE void tilize(
     cb_push_back(cb_out, total_tiles_per_block);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_in_batch = get_compile_time_arg_val(0);
     constexpr uint32_t cb_tiled_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_transpose_in0 = get_compile_time_arg_val(2);
@@ -71,4 +70,3 @@ void MAIN {
         pack_untilize_uninit(cb_transpose_in0);
     }
 }
-}  // namespace NAMESPACE

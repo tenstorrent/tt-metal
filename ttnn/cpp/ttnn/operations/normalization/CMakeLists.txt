@@ -1,7 +1,7 @@
 add_library(ttnn_op_normalization ${LIB_TYPE})
 add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
-target_precompile_headers(ttnn_op_normalization REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_normalization REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
 set_target_properties(
     ttnn_op_normalization
@@ -37,7 +37,14 @@ target_sources(
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
-            softmax/device/softmax_program_factory.hpp
+            softmax/device/softmax_program_factory_general.hpp
+            softmax/device/softmax_program_factory_general_w_small.hpp
+            softmax/device/softmax_program_factory_general_w_large.hpp
+            softmax/device/softmax_program_factory_general_h_small.hpp
+            softmax/device/softmax_program_factory_general_h_large.hpp
+            softmax/device/softmax_program_factory_general_c_large.hpp
+            softmax/device/softmax_program_factory_attention_optimized.hpp
+            softmax/device/softmax_program_factory_attention_optimized_sharded.hpp
             softmax/softmax.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -61,6 +68,7 @@ target_sources(
         layernorm/device/layernorm_common.cpp
         layernorm/device/layernorm_op_multi_core.cpp
         layernorm/device/layernorm_op_multi_core_sharded.cpp
+        layernorm/device/sharded_layernorm_factory_helpers.cpp
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_device_operation.cpp
         layernorm_distributed/device/layernorm_post_all_gather_program_factory.cpp
@@ -73,7 +81,14 @@ target_sources(
         rmsnorm/rmsnorm.cpp
         softmax/softmax.cpp
         softmax/device/softmax_device_operation.cpp
-        softmax/device/softmax_program_factory.cpp
+        softmax/device/softmax_program_factory_general.cpp
+        softmax/device/softmax_program_factory_general_w_small.cpp
+        softmax/device/softmax_program_factory_general_w_large.cpp
+        softmax/device/softmax_program_factory_general_h_small.cpp
+        softmax/device/softmax_program_factory_general_h_large.cpp
+        softmax/device/softmax_program_factory_general_c_large.cpp
+        softmax/device/softmax_program_factory_attention_optimized.cpp
+        softmax/device/softmax_program_factory_attention_optimized_sharded.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

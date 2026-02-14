@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -358,44 +359,42 @@ TopologyMappingResult map_mesh_to_physical(
                     used[pj] = false;
                 }
                 return false;
-            } else {
-                // Next must be an unused neighbor of prev_phys
-                size_t remain = n_log - idx_in_path;
-                for (size_t pj : phys_adj_idx[prev_phys]) {
-                    if (used[pj]) {
-                        continue;
-                    }
-                    if (phys_deg[pj] < log_deg[li]) {
-                        continue;
-                    }
-                    // Check mesh rank compatibility
-                    if (node_to_host_rank.at(log_nodes[li]) != asic_to_host_rank.at(phys_nodes[pj])) {
-                        continue;
-                    }
-                    // Check pinning restrictions if any
-                    if (!restricted_phys_indices_for_logical[li].empty()) {
-                        if (std::find(
-                                restricted_phys_indices_for_logical[li].begin(),
-                                restricted_phys_indices_for_logical[li].end(),
-                                pj) == restricted_phys_indices_for_logical[li].end()) {
-                            continue;
-                        }
-                    }
-                    // Reachability pruning
-                    size_t reach = reachable_unused_count(pj);
-                    if (reach < remain) {
-                        continue;
-                    }
-                    used[pj] = true;
-                    mapping[li] = static_cast<int>(pj);
-                    if (place(idx_in_path + 1, pj)) {
-                        return true;
-                    }
-                    mapping[li] = -1;
-                    used[pj] = false;
+            }  // Next must be an unused neighbor of prev_phys
+            size_t remain = n_log - idx_in_path;
+            for (size_t pj : phys_adj_idx[prev_phys]) {
+                if (used[pj]) {
+                    continue;
                 }
-                return false;
+                if (phys_deg[pj] < log_deg[li]) {
+                    continue;
+                }
+                // Check mesh rank compatibility
+                if (node_to_host_rank.at(log_nodes[li]) != asic_to_host_rank.at(phys_nodes[pj])) {
+                    continue;
+                }
+                // Check pinning restrictions if any
+                if (!restricted_phys_indices_for_logical[li].empty()) {
+                    if (std::find(
+                            restricted_phys_indices_for_logical[li].begin(),
+                            restricted_phys_indices_for_logical[li].end(),
+                            pj) == restricted_phys_indices_for_logical[li].end()) {
+                        continue;
+                    }
+                }
+                // Reachability pruning
+                size_t reach = reachable_unused_count(pj);
+                if (reach < remain) {
+                    continue;
+                }
+                used[pj] = true;
+                mapping[li] = static_cast<int>(pj);
+                if (place(idx_in_path + 1, pj)) {
+                    return true;
+                }
+                mapping[li] = -1;
+                used[pj] = false;
             }
+            return false;
         };
 
         bool ok = place(0, n_phys);
@@ -962,6 +961,7 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
 }
 
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+    tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     std::map<MeshId, PhysicalAdjacencyMap> adjacency_map;
@@ -976,7 +976,6 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         auto z_channels = std::unordered_set<uint8_t>{8, 9};
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {

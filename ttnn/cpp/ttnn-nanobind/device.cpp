@@ -37,7 +37,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -99,7 +98,6 @@ namespace ttnn::device {
 
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
-        .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
         .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
 
@@ -137,8 +135,7 @@ void py_device_module_types(nb::module_& m_device) {
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
         .def_ro("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
         .def_ro("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
-        .def_ro(
-            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_ro("total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
         .def_ro("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
         .def_ro(
             "largest_contiguous_bytes_free_per_bank",
@@ -326,9 +323,13 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> nb::list {
             auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
-            return std::vector<uint32_t>(result.cbegin(), result.cend());
+            nb::list py_list;
+            for (auto val : result) {
+                py_list.append(val);
+            }
+            return py_list;
         },
         nb::arg("unpadded_shape"),
         R"doc(
@@ -348,12 +349,6 @@ void device_module(nb::module_& m_device) {
 
         )doc");
 
-    m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
-        Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
-    )doc");
-    m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
-        Disables kernel compilation cache from being persistent across runs
-    )doc");
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 
@@ -463,9 +458,9 @@ void device_module(nb::module_& m_device) {
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "ReadDeviceProfiler",
-        [](MeshDevice* device) {
+        [](MeshDevice* mesh_device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL, prof_metadata);
         },
         nb::arg("device"),
         R"doc(

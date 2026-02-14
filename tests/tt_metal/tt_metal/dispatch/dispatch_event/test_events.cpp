@@ -6,8 +6,6 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
-#include "impl/dispatch/command_queue.hpp"
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <future>
 #include <initializer_list>

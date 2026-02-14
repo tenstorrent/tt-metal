@@ -32,6 +32,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 12,    // Copy paged data to the ringbuffer
     CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 13,  // Set an offset in the ringbuffer for later reads.
     CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 14,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED = 15,    // relay linear data from multiple srcs to dispatcher
     CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
@@ -55,7 +56,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
-    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
+    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
+    CQ_DISPATCH_CMD_MAX_COUNT,                        // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -87,10 +89,11 @@ struct CQPrefetchBaseCmd {
 
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH)
 struct CQPrefetchRelayLinearCmd {
-    uint16_t pad1;
-    uint64_t length;
+    uint8_t pad1;
+    uint16_t pad2;
     uint32_t noc_xy_addr;
     uint64_t addr;
+    uint64_t length;
 } __attribute__((packed));
 
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only
@@ -100,7 +103,7 @@ struct CQPrefetchRelayLinearHCmd {
     uint16_t pad2;
     uint32_t noc_xy_addr;
     uint64_t addr;
-    uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0xff;
@@ -180,6 +183,23 @@ struct CQPrefetchRelayRingbufferSubCmd {
     uint32_t length;
 } __attribute__((packed));
 
+struct CQPrefetchRelayLinearPackedCmd {
+    uint8_t pad;
+    uint16_t count;
+    uint32_t noc_xy_addr;
+    uint32_t total_length;  // aggregate length of all sub-read-cmds
+    uint32_t stride;        // stride to start of next cmd
+} __attribute__((packed));
+
+struct CQPrefetchRelayLinearPackedSubCmd {
+    uint64_t addr;    // linear address
+    uint32_t length;  // read length
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+// 12 bytes per sub_cmd, same as paged_packed
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS = 35;
+
 // 16 byte commands.
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
@@ -192,6 +212,7 @@ struct CQPrefetchCmd {
         CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
         CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
         CQPrefetchRelayRingbufferCmd relay_ringbuffer;
+        CQPrefetchRelayLinearPackedCmd relay_linear_packed;
     } __attribute__((packed));
 };
 
@@ -310,6 +331,23 @@ struct CQDispatchWritePackedLargeCmd {
     uint16_t write_offset_index;
 } __attribute__((packed));
 
+// Unicast variant of packed large write with uint32_t length
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS = 35;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD = 0xffffffff;
+
+struct CQDispatchWritePackedLargeUnicastSubCmd {
+    uint32_t noc_xy_addr;
+    uint32_t addr;  // if 0xffffffff, data is discarded (not sent)
+    uint32_t length;
+} __attribute__((packed));
+
+struct CQDispatchWritePackedLargeUnicastCmd {
+    uint8_t type;
+    uint16_t count;  // number of sub-cmds
+    uint16_t alignment;
+    uint16_t write_offset_index;
+} __attribute__((packed));
+
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NONE = 0x00;
 // Issue a write barrier
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
@@ -388,6 +426,7 @@ struct CQDispatchCmd {
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWritePackedLargeCmd write_packed_large;
+        CQDispatchWritePackedLargeUnicastCmd write_packed_large_unicast;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;

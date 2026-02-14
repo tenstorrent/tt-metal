@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_abs_pow_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -21,13 +22,13 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 MorehAbsPowOperation::program_factory_t MorehAbsPowOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // Case for int32
     return MorehAbsPowFactory{};
 }
 
 void validate_tensors(
-    const MorehAbsPowOperation::operation_attributes_t& operation_attributes,
+    const MorehAbsPowOperation::operation_attributes_t& /*operation_attributes*/,
     const MorehAbsPowOperation::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
@@ -41,10 +42,6 @@ void MorehAbsPowOperation::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehAbsPowOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-};
 MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {

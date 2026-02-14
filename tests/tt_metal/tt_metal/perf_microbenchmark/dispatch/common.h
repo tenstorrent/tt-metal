@@ -284,7 +284,7 @@ inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool 
                     counted = true;
                 }
 
-                TT_ASSERT(this->all_data.contains(core));
+                TT_FATAL(this->all_data.contains(core), "Core {} not found in all_data", core);
                 this->all_data[core][0].data.push_back(datum);
                 this->all_data[core][0].valid.push_back(true);
             }
@@ -404,7 +404,7 @@ inline bool DeviceData::validate_one_core(
         core_string = "PCIE";
     } else {
         log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
-        TT_ASSERT(false, "Core type not found");
+        TT_FATAL(false, "Core type not found");
     }
 
     // Read results from device and compare to expected for this core.
@@ -771,7 +771,7 @@ public:
     // Helper for random number generation in a range [min, max]
     template <typename T>
     T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
+        static_assert(std::is_integral_v<T>, "T must be an integral type");
         std::uniform_int_distribution<T> dist(min, max);
         return dist(rng_);
     }
@@ -1073,7 +1073,11 @@ protected:
             per_iter_total += cmd.size_bytes();
         }
 
-        const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
+        // For the barrier wait command
+        DeviceCommandCalculator cmd_calc;
+        cmd_calc.add_dispatch_wait();
+
+        const uint64_t total_cmd_bytes = num_iterations * per_iter_total + cmd_calc.write_offset_bytes();
         log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
 
         // PHASE 3: Reserve and write commands
@@ -1112,8 +1116,6 @@ protected:
         // Without this, there can be occasional timeouts in MetalContext::initialize_and_launch_firmware()
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
-        DeviceCommandCalculator cmd_calc;
-        cmd_calc.add_dispatch_wait();
         HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
         cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());

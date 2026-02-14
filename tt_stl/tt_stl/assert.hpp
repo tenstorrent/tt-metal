@@ -40,6 +40,7 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     char** strings = backtrace_symbols(array, s);
     if (strings == nullptr) {
         std::cout << "backtrace_symbols error." << std::endl;
+        free(array);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
         return bt;
     }
     for (size_t i = skip; i < s; ++i) {

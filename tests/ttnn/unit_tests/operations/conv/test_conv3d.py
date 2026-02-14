@@ -8,6 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 
 def _out_size(in_size, pad, stride, k):
@@ -161,7 +162,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     assert pcc_passed, pcc_message
 
 
-@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("B", [1, 2])
 @pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [64])
 @pytest.mark.parametrize("T", [8, 11])
@@ -171,6 +172,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -188,6 +190,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -205,6 +208,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -218,3 +222,66 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
             )
 
     assert device.num_program_cache_entries() == 2
+
+
+@skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
+    [
+        # Exact Qwen2.5-VL-3B parameters from oct19_conv3d_xla.log (issue #35201)
+        # Input: (2204, 3, 2, 14, 14) -> Output: (2204, 1280, 1, 1, 1)
+        # Kernel=(2, 14, 14), Stride=(2, 14, 14), full-spatial convolution to 1x1x1
+        # Using C_in_block=16, C_out_block=32 to fit large kernel in L1 memory
+        # Patch size = 2*14*14*16 = 6,272 elements → 196 tiles
+        [(2204, 3, 2, 14, 14), 1280, (2, 14, 14), (2, 14, 14), (0, 0, 0), "zeros", (16, 32, 1, 1, 1)],
+    ],
+    ids=["qwen_exact_with_blocking"],
+)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #29024")
+def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking):
+    """Test Conv3d with exact Qwen2.5-VL-3B parameters (issue #35201).
+
+    Uses custom blocking (C_in_block=16, C_out_block=32, spatial_blocks=1) to fit
+    the large kernel=(2, 14, 14) in L1 memory. This is a full-spatial convolution
+    that reduces 2×14×14 input to 1×1×1 output with 1280 output channels.
+    """
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+
+    # Prepare weights with specified C_in_block
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
+    assert pcc_passed, pcc_message

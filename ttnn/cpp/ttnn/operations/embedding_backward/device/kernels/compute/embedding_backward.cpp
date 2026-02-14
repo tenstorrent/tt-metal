@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/reshuffle.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reshuffle.h"
+#include "api/compute/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t tiles_per_core = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(0);
@@ -73,4 +72,3 @@ void MAIN {
         cb_pop_front(cb_grad, max_tiles_per_core);
     }
 }
-}  // namespace NAMESPACE

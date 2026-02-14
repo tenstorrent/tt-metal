@@ -141,6 +141,42 @@ def _coerce_to_optional_string(value: Any) -> str | None:
     return str(value)
 
 
+def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
+    """
+    Build card_type string from run metadata with fallback to ttnn device query.
+
+    Priority:
+    1. runner_label from CI environment (e.g., N150, N300, BH-LLMBox)
+    2. ttnn device count query at runtime (for local runs without RUNNER_LABEL)
+    3. arch name only as final fallback
+    """
+    if not run_metadata:
+        return "n/a"
+
+    # Get architecture from run_metadata (always available via ARCH_NAME env var)
+    arch = run_metadata.get("device") or run_metadata.get("card_type") or "n/a"
+
+    # Priority 1: try to get runner_label from CI environment
+    runner_label = run_metadata.get("runner_label")
+    if runner_label:
+        return f"{arch} ({runner_label})"
+
+    # Priority 2 fallback: query ttnn for device count at runtime
+    try:
+        import ttnn
+
+        num_devices = ttnn.GetNumAvailableDevices()
+        if num_devices and num_devices > 0:
+            device_label = "device" if num_devices == 1 else "devices"
+            return f"{arch} ({num_devices} {device_label})"
+    except Exception:
+        # ttnn not available or query failed - fall through to arch-only
+        pass
+
+    # Final fallback: just the architecture name
+    return arch
+
+
 def _add_e2e_metrics(metrics: set, raw: dict[str, Any]) -> None:
     e2e_perf = raw.get("e2e_perf")
     if e2e_perf is not None:
@@ -339,22 +375,9 @@ class FileResultDestination(ResultDestination):
             exception = str(raw.get("exception", None))
             error_hash = generate_error_hash(exception)
 
-            # Extract machine info if available
-            machine_info = header.get("traced_machine_info")
-            card_type_str = "n/a"
-            if machine_info and isinstance(machine_info, list) and len(machine_info) > 0:
-                # machine_info is a list of dicts, take the first one
-                first_machine = machine_info[0]
-                if isinstance(first_machine, dict):
-                    board_type = first_machine.get("board_type", "")
-                    device_series = first_machine.get("device_series", "")
-                    card_count = first_machine.get("card_count", "")
-                    # Format as "Wormhole n300 (1 card)" or similar
-                    if board_type and device_series:
-                        card_type_str = f"{board_type} {device_series}"
-                        if card_count:
-                            cards_label = "card" if card_count == 1 else "cards"
-                            card_type_str += f" ({card_count} {cards_label})"
+            # Build card_type_str from the running system's metadata
+            # Priority: 1) runner_label from CI env, 2) ttnn device query at runtime, 3) arch name only
+            card_type_str = _get_card_type_str(self._run_metadata)
 
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
@@ -369,7 +392,9 @@ class FileResultDestination(ResultDestination):
                 error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
-                model_name=header.get("traced_source", "n/a"),
+                model_name=header.get("traced_source", "n/a")
+                if isinstance(header.get("traced_source"), str)
+                else ", ".join(header.get("traced_source", ["n/a"])),
                 op_kind=_op_kind,
                 op_name=_op_name,
                 framework_op_name="sweep",

@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 
 using namespace sfpi;
 
@@ -62,15 +61,6 @@ inline void calculate_erfc() {
         v_endif;
         dst_reg[0] = x;
         dst_reg++;
-    }
-}
-
-template <SfpuType operation, bool APPROXIMATION_MODE>
-inline void calculate_sfpu_erf_erfc() {
-    if constexpr (operation == SfpuType::erf) {
-        calculate_erf<APPROXIMATION_MODE>();
-    } else if constexpr (operation == SfpuType::erfc) {
-        calculate_erfc<APPROXIMATION_MODE>();
     }
 }
 

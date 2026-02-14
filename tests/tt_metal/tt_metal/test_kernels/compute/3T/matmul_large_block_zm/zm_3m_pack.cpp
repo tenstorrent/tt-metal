@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "llk_pack_common.h"
 #include "llk_pack.h"
-namespace NAMESPACE {
 
 inline void tilize_activation(
     uint32_t in0_subblock_h,
@@ -88,12 +87,12 @@ inline void pack_block(
     }
 }
 
-void pack_main() {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     llk_pack_init();
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
     llk_init_packer_dest_offset_registers<false>();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
     // outer row block size (in inner row blocks)
@@ -159,4 +158,3 @@ void pack_main() {
         pack_block(in0_num_subblocks, in1_num_subblocks, out_subblock_num_tiles, matmul_out_cb_id);
     }
 }
-}  // namespace NAMESPACE

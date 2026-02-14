@@ -31,6 +31,9 @@ def test_with_ops(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    # Ensure all binaries are compiled/loaded before starting trace capture.
+    # Trace capture does not allow device writes (e.g. binary loading) on fast dispatch paths.
+    ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(100):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
@@ -42,9 +45,15 @@ def test_with_ops(device):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}], indirect=True
+    "device_params,capture_count,replay_count",
+    [
+        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 100, 5),
+        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 5, 600),
+    ],
+    indirect=["device_params"],
+    ids=["100-5", "5-600"],
 )
-def test_with_ops_single_core(device):
+def test_with_ops_single_core(device, capture_count, replay_count):
     torch.manual_seed(0)
     m = 1024
     k = 1024
@@ -62,12 +71,14 @@ def test_with_ops_single_core(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    # Ensure all binaries are compiled/loaded before starting trace capture.
+    ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    for i in range(100):
+    for i in range(capture_count):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(5):
+    for i in range(replay_count):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
 
@@ -93,19 +104,23 @@ def test_with_ops_multiple_trace_ids(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    # Warm-up the add op as well so its binaries are loaded outside trace capture.
+    ttnn.add(a, b)
+    # Ensure all binaries are compiled/loaded before starting trace capture.
+    ttnn.synchronize_device(device)
 
     trace_ids = []
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(3):
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        trace_ids.append(tid)
+        ttnn.add(a, b)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    trace_ids.append(tid)
 
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(2):
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        trace_ids.append(tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    trace_ids.append(tid)
 
     for i in range(3):
         random.seed(i)
@@ -143,11 +158,13 @@ def test_with_ops_trace_with_non_trace(device):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
 
     trace_ids = []
+    # Ensure all binaries are compiled/loaded before starting trace capture.
+    ttnn.synchronize_device(device)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(10):
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        trace_ids.append(tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    trace_ids.append(tid)
 
     for _ in range(2):
         for tid in trace_ids:

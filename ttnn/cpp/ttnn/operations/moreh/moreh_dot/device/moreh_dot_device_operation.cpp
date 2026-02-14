@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -10,12 +11,13 @@
 
 namespace ttnn::operations::moreh::moreh_dot {
 MorehDotOperation::program_factory_t MorehDotOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // For now we litteraly don't care and return a single factory. Whatever
     return SingleCore{};
 }
 
-void MorehDotOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehDotOperation::validate(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
@@ -38,11 +40,6 @@ void MorehDotOperation::validate(const operation_attributes_t& operation_attribu
 }
 
 void MorehDotOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-}
-
-void MorehDotOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 }

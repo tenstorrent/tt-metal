@@ -8,12 +8,12 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+
 namespace ttnn::operations::experimental::ccl {
 Matmul_RS::Matmul_RS_PF::cached_mesh_workload_t Matmul_RS::Matmul_RS_PF::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -53,7 +53,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
             tensor_return_value.at(2),
             program,
             fused_op_signaler);
-        auto matmul_sv = matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        auto matmul_sv = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
             tensor_args.matmul.input_tensor,
             {tensor_args.matmul.weight_tensor, tensor_args.second_weight_tensor.value()},
@@ -69,32 +69,31 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
             tt::CBIndex::c_6 /*start cb index*/,
             reduce_scatter_core_range);
         return {std::move(program), shared_variables_t{reduce_scatter_sv, matmul_sv}};
-    } else {
-        std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
-        auto reduce_scatter_sv = LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
-            operation_attributes.rs_op,
-            mesh_coordinate,
-            tensor_args.rs,
-            tensor_return_value.at(1),
-            program,
-            fused_op_signaler);
-        auto matmul_sv = matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
-            program,
-            tensor_args.matmul.input_tensor,
-            {tensor_args.matmul.weight_tensor},
-            std::nullopt /*bias*/,
-            {tensor_return_value.at(0)},
-            operation_attributes.matmul.bcast_batch.value(),
-            operation_attributes.matmul.compute_kernel_config.value(),
-            operation_attributes.matmul.program_config.value(),
-            operation_attributes.matmul.untilize_out,
-            fused_op_signaler,
-            operation_attributes.matmul.global_cb,
-            sub_device_id /*sub_device_id*/,
-            tt::CBIndex::c_6 /*start cb index*/,
-            reduce_scatter_core_range);
-        return {std::move(program), shared_variables_t{reduce_scatter_sv, matmul_sv}};
     }
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
+    auto reduce_scatter_sv = LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
+        operation_attributes.rs_op,
+        mesh_coordinate,
+        tensor_args.rs,
+        tensor_return_value.at(1),
+        program,
+        fused_op_signaler);
+    auto matmul_sv = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        program,
+        tensor_args.matmul.input_tensor,
+        {tensor_args.matmul.weight_tensor},
+        std::nullopt /*bias*/,
+        {tensor_return_value.at(0)},
+        operation_attributes.matmul.bcast_batch.value(),
+        operation_attributes.matmul.compute_kernel_config.value(),
+        operation_attributes.matmul.program_config.value(),
+        operation_attributes.matmul.untilize_out,
+        fused_op_signaler,
+        operation_attributes.matmul.global_cb,
+        sub_device_id /*sub_device_id*/,
+        tt::CBIndex::c_6 /*start cb index*/,
+        reduce_scatter_core_range);
+    return {std::move(program), shared_variables_t{reduce_scatter_sv, matmul_sv}};
 }
 
 void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
@@ -111,14 +110,14 @@ void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
                 operation_attributes.rs_op,
                 tensor_args.rs,
                 tensor_return_value.at(2));
-            reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            ttnn::prim::reuse_mcast_1d_optimized_helpers::override_program_parameters(
                 shared_variables.matmul_shared_vars,
-                &operation_attributes.matmul,
+                operation_attributes.matmul.global_cb,
                 program,
-                {tensor_args.matmul.input_tensor,
-                 tensor_args.matmul.weight_tensor,
-                 tensor_args.second_weight_tensor.value()},
-                {},
+                {{tensor_args.matmul.input_tensor,
+                  tensor_args.matmul.weight_tensor,
+                  tensor_args.second_weight_tensor.value()},
+                 {}},
                 {tensor_return_value.at(0), tensor_return_value.at(1)});
         }
     } else {
@@ -130,12 +129,11 @@ void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
                 operation_attributes.rs_op,
                 tensor_args.rs,
                 tensor_return_value.at(1));
-            reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            ttnn::prim::reuse_mcast_1d_optimized_helpers::override_program_parameters(
                 shared_variables.matmul_shared_vars,
-                &operation_attributes.matmul,
+                operation_attributes.matmul.global_cb,
                 program,
-                {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor},
-                {},
+                {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {}},
                 {tensor_return_value.at(0)});
         }
     }

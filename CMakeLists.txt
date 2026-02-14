@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.24...3.30)
+cmake_minimum_required(VERSION 3.24...4.2)
 
-# Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
+# Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
-# Clear any compile options that may have been set by consuming projects that have leaked into us.
+# Clear any compile options that may have been set by consuming projects that have leaked.
 set_directory_properties(
     PROPERTIES
         COMPILE_OPTIONS
@@ -35,11 +35,8 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
-message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-# FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -ggnu-pubnames -DDEBUG -fno-omit-frame-pointer")
 
@@ -107,6 +104,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
+# Reduce verbose "-- Up-to-date:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE LAZY)
+
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
@@ -117,7 +117,6 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
-message(STATUS "Build TT Telemetry Server: ${BUILD_TELEMETRY}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
@@ -272,10 +271,6 @@ add_subdirectory(ttnn)
 
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
-endif()
-
-if(BUILD_TELEMETRY)
-    add_subdirectory(${PROJECT_SOURCE_DIR}/tt_telemetry)
 endif()
 
 ############################################################################################################################

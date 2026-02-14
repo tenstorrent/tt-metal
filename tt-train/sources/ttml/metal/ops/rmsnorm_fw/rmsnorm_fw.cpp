@@ -6,9 +6,9 @@
 
 #include "device/rmsnorm_fw_device_operation.hpp"
 
-namespace ttml::metal::ops::rmsnorm_fw {
+namespace ttml::metal {
 
-std::vector<std::optional<ttnn::Tensor>> RMSNormForwardOperation::invoke(
+std::vector<std::optional<ttnn::Tensor>> rmsnorm_fw(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& gamma_tensor, bool return_intermediates, float epsilon) {
     auto result = ttnn::prim::ttml_rmsnorm_fw(input_tensor, gamma_tensor, return_intermediates, epsilon);
 
@@ -19,4 +19,4 @@ std::vector<std::optional<ttnn::Tensor>> RMSNormForwardOperation::invoke(
     return {result[0], result[1]};
 }
 
-}  // namespace ttml::metal::ops::rmsnorm_fw
+}  // namespace ttml::metal

@@ -8,7 +8,7 @@ set_target_properties(
 )
 
 # Add the protobuf generated headers directory for tests
-target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_factory_system_descriptor
@@ -19,6 +19,33 @@ target_link_libraries(
         protobuf::libprotobuf
         yaml-cpp::yaml-cpp
 )
+
+# Make sure protobuf files are generated before compiling
+add_dependencies(test_factory_system_descriptor scaleout_generated_protos)
+
+# Test for descriptor merger functionality
+add_executable(test_descriptor_merger test_descriptor_merger.cpp)
+
+set_target_properties(
+    test_descriptor_merger
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_descriptor_merger
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+# Make sure protobuf files are generated before compiling descriptor merger tests
+add_dependencies(test_descriptor_merger scaleout_generated_protos)
 
 # Test for link retraining validation
 add_executable(
@@ -46,7 +73,7 @@ target_include_directories(
     test_link_retraining
     SYSTEM
     PRIVATE
-        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 
 target_link_libraries(
@@ -77,8 +104,8 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_BINARY_DIR}/tools/scaleout
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+        ${Metalium_BINARY_DIR}/tools/scaleout
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
         "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
@@ -94,4 +121,5 @@ target_link_libraries(
 
 # Make sure protobuf files are generated before compiling
 add_dependencies(test_cabling_descriptor_mgd_generation scaleout_generated_protos)
+add_dependencies(test_cabling_descriptor_mgd_generation fabric_generated_protos)
 add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)

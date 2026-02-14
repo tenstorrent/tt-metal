@@ -22,7 +22,7 @@ namespace tt::test_utils {
 template <typename PackType, typename ValueType>
 std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     static_assert(
-        std::is_integral<PackType>::value,
+        std::is_integral_v<PackType>,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
     TT_FATAL(
         sizeof(PackType) >= sizeof(ValueType),
@@ -57,7 +57,7 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
 template <typename ValueType, typename PackType>
 std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
     static_assert(
-        std::is_integral<PackType>::value,
+        std::is_integral_v<PackType>,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
     TT_FATAL(
         sizeof(PackType) > sizeof(ValueType),

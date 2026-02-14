@@ -1,25 +1,24 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #ifndef __OVERLAY_ADDRESSES_HPP__
 #define __OVERLAY_ADDRESSES_HPP__
 
-#include <tt_tensix_noc_overlay_reg.h>
-#include <overlay_reg.h>
-#include <noc_config_reg.h>
+#include <cstdint>
+#include "internal/tt-2xx/quasar/noc/tt_tensix_noc_overlay_reg.h"
+#include "internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h"
 
 #define MEM_PORT_CACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define PERIPH_PORT_BASE_ADDR (uint64_t)TT_CLUSTER_CTRL_REG_MAP_BASE_ADDR
-#define GLOBAL_CMD_BUF_CFG_BASE_ADDR (uint64_t)TT_GLOBAL_CMD_BUF_CFG_REG_MAP_BASE_ADDR
-#define GLOBAL_CMD_BUF_BASE_ADDR (uint64_t)TT_GLOBAL_CMD_BUF_REG_MAP_BASE_ADDR
 #define L2_FLUSH_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH64_REG_ADDR
 #define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR
 #define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR
 
-#define WRITE_REG32(addr, val) ((*((volatile uint32_t*)(addr))) = (val))
-#define READ_REG32(addr) (*((volatile uint32_t*)(addr)))
+#define WRITE_REG32(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
+#define READ_REG32(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
 
 #define WRITE_REG64(addr, val) ((*((volatile uint64_t*)(addr))) = (val))
 #define READ_REG64(addr) (*((volatile uint64_t*)(addr)))
@@ -32,22 +31,6 @@
 
 #define WRITE_PERIPH_PORT64(offset, val) ((*((volatile uint64_t*)((PERIPH_PORT_BASE_ADDR + offset)))) = (val))
 #define READ_PERIPH_PORT64(offset) (*((volatile uint64_t*)((PERIPH_PORT_BASE_ADDR + offset))))
-
-#define WRITE_GLOBAL_CMD_BUF_CFG_PORT32(offset, val) \
-    ((*((volatile uint32_t*)((GLOBAL_CMD_BUF_CFG_BASE_ADDR + offset)))) = (val))
-#define READ_GLOBAL_CMD_BUF_CFG_PORT32(offset) (*((volatile uint32_t*)((GLOBAL_CMD_BUF_CFG_BASE_ADDR + offset))))
-
-#define WRITE_GLOBAL_CMD_BUF_CFG_PORT64(offset, val) \
-    ((*((volatile uint64_t*)((GLOBAL_CMD_BUF_CFG_BASE_ADDR + offset)))) = (val))
-#define READ_GLOBAL_CMD_BUF_CFG_PORT64(offset) (*((volatile uint64_t*)((GLOBAL_CMD_BUF_CFG_BASE_ADDR + offset))))
-
-#define WRITE_GLOBAL_CMD_BUF_PORT32(offset, val) \
-    ((*((volatile uint32_t*)((GLOBAL_CMD_BUF_BASE_ADDR + offset)))) = (val))
-#define READ_GLOBAL_CMD_BUF_PORT32(offset) (*((volatile uint32_t*)((GLOBAL_CMD_BUF_BASE_ADDR + offset))))
-
-#define WRITE_GLOBAL_CMD_BUF_PORT64(offset, val) \
-    ((*((volatile uint64_t*)((GLOBAL_CMD_BUF_BASE_ADDR + offset)))) = (val))
-#define READ_GLOBAL_CMD_BUF_PORT64(offset) (*((volatile uint64_t*)((GLOBAL_CMD_BUF_BASE_ADDR + offset))))
 
 #define WRITE_POSTCODE(mhartid, postcode) (WRITE_PERIPH_PORT32(C0_POSTCODE + (0x8 * mhartid), postcode))
 #define WRITE_SCRATCH(num, val) (WRITE_PERIPH_PORT32(SCRATCH_0_OFFSET + (0x8 * num), val))

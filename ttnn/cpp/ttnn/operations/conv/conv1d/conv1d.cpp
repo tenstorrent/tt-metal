@@ -11,9 +11,9 @@
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::conv::conv1d {
+namespace ttnn {
 
-Result Conv1dOperation::invoke(
+Conv1dResult conv1d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -55,7 +55,7 @@ Result Conv1dOperation::invoke(
     };
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
-        std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
+        std::get<static_cast<int>(ConvResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             input_tensor_4d,
             weight_tensor,
             device,
@@ -74,21 +74,22 @@ Result Conv1dOperation::invoke(
             conv_config,
             compute_config,
             memory_config,
-            conv2d::Conv2dSliceConfig{
+            ttnn::prim::Conv2dSliceConfig{
                 .slice_type =
-                    conv2d::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
+                    ttnn::prim::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 
     if (return_output_dim && return_weights_and_bias) {
-        return Result(std::tuple(output_tensor, std::get<1>(output_dimensions), weights_and_bias));
-    } else if (return_output_dim) {
-        return Result(std::tuple(output_tensor, std::get<1>(output_dimensions)));
-    } else if (return_weights_and_bias) {
-        return Result(std::tuple(output_tensor, weights_and_bias));
-    } else {
-        return Result(output_tensor);
-    };
+        return Conv1dResult(std::tuple(output_tensor, std::get<1>(output_dimensions), weights_and_bias));
+    }
+    if (return_output_dim) {
+        return Conv1dResult(std::tuple(output_tensor, std::get<1>(output_dimensions)));
+    }
+    if (return_weights_and_bias) {
+        return Conv1dResult(std::tuple(output_tensor, weights_and_bias));
+    }
+    return Conv1dResult(output_tensor);
 }
 
-}  // namespace ttnn::operations::conv::conv1d
+}  // namespace ttnn

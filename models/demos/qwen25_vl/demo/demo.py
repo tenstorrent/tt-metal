@@ -359,6 +359,9 @@ def test_demo(
 
     processor = model_args.processor
     tokenizer = model_args.tokenizer
+
+    # NOTE: For qwen 2.5 vl, we do not use QK fused ops
+    model_args.use_qk_fused = False
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     # Load vision model and processor
@@ -569,6 +572,8 @@ def test_demo(
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
+                    else:
+                        all_outputs[user].append(user_tok)
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
@@ -631,9 +636,20 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-7B" not in model_args.base_model_name:
-        # todo: fix this issue before enabling BERTScore check for 7B model:
-        #        https://github.com/tenstorrent/tt-metal/issues/34167
+    # Quick sanity check that the model doesn't produce special tokens=garbage output
+    is_special_tokens_produced = [False] * len(all_outputs)
+    for i, output in enumerate(all_outputs):
+        # output = output[len(encoded_prompts[i]):]
+        is_eos = [token in tokenizer.stop_tokens for token in output]
+        if any(is_eos):
+            output = output[: is_eos.index(True)]
+        is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
+    if any(is_special_tokens_produced):
+        logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
+        if is_ci_env:
+            raise RuntimeError("Model produced special tokens")
+
+    if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 

@@ -20,12 +20,10 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 
-namespace ttnn::operations::data_movement::repeat::program {
+namespace ttnn::prim {
 
 RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
     // We are repeating the last dim on a 2D shape
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
@@ -109,9 +107,9 @@ RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::creat
 
 void RepeatProgramFactoryLastDim::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& /*operation_attributes*/,
+    const RepeatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -129,4 +127,4 @@ void RepeatProgramFactoryLastDim::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::repeat::program
+}  // namespace ttnn::prim

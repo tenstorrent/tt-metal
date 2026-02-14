@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
-#include "ttnn/operations/matmul/device/matmul_op.hpp"  //TODO: migrate this code to use new matmul API. This code relies on the old matmul struct
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <unordered_map>
+#include <tt_stl/overloaded.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program {
-
-using Tensors = std::vector<Tensor>;
+namespace ttnn::experimental::prim {
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
@@ -25,7 +25,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     Tensor& matmul_output_tensor,
 
     /* All Gather Params */
-    IDevice* target_device,
+    IDevice* /*target_device*/,
     const MeshCoordinate& target_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
@@ -76,20 +76,11 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
     );
 
-    // Matmul
-    std::optional<tt::tt_metal::operation::ProgramWithCallbacks>
-        matmul_program_with_callbacks;  // TODO: migrate to not use the old program_with_callbacks in matmul old program
-                                        // factories
-    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<Tensors>>
-        matmul_override_runtime_arguments_callback;  // TODO: migrate to not use the old
-                                                     // override_runtime_arguments_callback in matmul old program
-                                                     // factories
-
+    decltype(AllGatherMatmulAsyncSharedVariables::matmul_shared_variables) matmul_shared_variables;
     std::visit(
-        [&](const auto& config) {
-            using ProgramConfigType = std::decay_t<decltype(config)>;
-            if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        ttsl::overloaded{
+            [&](const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& config) {
+                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
                     program,
                     all_gather_output_tensor,
                     weight_tensor,
@@ -99,17 +90,12 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                     compute_kernel_config,
                     config,
                     untilize_out,
-                    matmul_fused_op_signaler);  // TODO: migrate to not use the old program_with_callbacks in matmul old
-                                                // program factories
-                matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks
-                        ->override_runtime_arguments_callback;  // TODO: migrate to not use the old
-                                                                // override_runtime_arguments_callback in matmul old
-                                                                // program factories
-            } else if (std::is_same_v<
-                           ProgramConfigType,
-                           operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                    matmul_fused_op_signaler);
+                program = std::move(cached_program.program);
+                matmul_shared_variables = std::move(cached_program.shared_variables);
+            },
+            [&](const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
                     all_gather_output_tensor,
                     {weight_tensor},
@@ -121,24 +107,15 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                     untilize_out,
                     matmul_fused_op_signaler,
                     std::nullopt,
-                    std::nullopt);  // TODO: migrate to not use the old program_with_callbacks in matmul old program
-                                    // factories
-                matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks
-                        ->override_runtime_arguments_callback;  // TODO: migrate to not use the old
-                                                                // override_runtime_arguments_callback in matmul old
-                                                                // program factories
-            } else {
-                TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
-            }
-        },
-        program_config);
+                    std::nullopt);
 
-    if (!matmul_program_with_callbacks.has_value()) {
-        TT_THROW("Matmul program with callbacks not created");  // TODO: migrate to not use the old
-                                                                // matmul_program_with_callbacks in matmul old program
-                                                                // factories
-    }
+                program = std::move(cached_program.program);
+                matmul_shared_variables = std::move(cached_program.shared_variables);
+            },
+            [&](const auto& /*config*/) {
+                TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
+            }},
+        program_config);
 
     // Create the all gather fused op signaler
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
@@ -149,52 +126,43 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         matmul_fused_op_signaler->fused_op_signaler_mode);
 
     // All Gather
-    tt::tt_metal::operation::ProgramWithCallbacks
-        program_with_callbacks =  // TODO: migrate to not use the old program_with_callbacks in all_gather_async old
-                                  // program factories
-        ttnn::all_gather_async_minimal_default_helper(
-            matmul_program_with_callbacks->program,
-            input_tensor,
-            target_device_coord,
-            forward_coord,
-            backward_coord,
-            all_gather_output_tensor,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            topology,
-            semaphore,
-            barrier_semaphore,
-            using_persistent_buffers,
-            sub_device_id,
-            all_gather_fused_op_signaler,
-            chunks_per_sync,
-            num_workers_per_direction_opt,
-            num_buffers_per_channel,
-            core_grid_offset,
-            false);  // reverse_order = false by default
-    const auto all_gather_override_runtime_arguments_callback =
-        program_with_callbacks.override_runtime_arguments_callback;  // TODO: migrate to not use the old
-                                                                     // override_runtime_arguments_callback in
-                                                                     // all_gather_async old program factories
+    auto all_gather_async_shared_variables = ttnn::build_all_gather_async_minimal_default_program_artifacts(
+        program,
+        input_tensor,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
+        all_gather_output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        all_gather_fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset,
+        false,  // reverse_order = false by default
+        std::nullopt);
 
     return cached_program_t(
-        {std::move(program_with_callbacks.program),
+        {std::move(program),
          shared_variables_t{
-             .all_gather_override_runtime_arguments_callback =
-                 all_gather_override_runtime_arguments_callback,  // TODO: migrate to not use the old
-                                                                  // override_runtime_arguments_callback in matmul and
-                                                                  // all_gather_async old program factories
-             .matmul_override_runtime_arguments_callback = matmul_override_runtime_arguments_callback}});
+             .matmul_shared_variables = std::move(matmul_shared_variables),
+             .all_gather_async_shared_variables = std::move(all_gather_async_shared_variables)}});
 }
 
 AllGatherMatmulAsyncMeshWorkloadFactory::cached_mesh_workload_t
 AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllGatherMatmulAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -204,21 +172,21 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
         IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : tensor_args.input_tensor.device();
 
         uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-            tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async.cluster_axis);
+            tensor_args.input_tensor, mesh_coord, operation_attributes.all_gather_async_attributes.cluster_axis);
 
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
             mesh_coord,
             1,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.cluster_axis);
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.cluster_axis);
 
         std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             tensor_args.input_tensor,
             mesh_coord,
             -1,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.cluster_axis);
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.cluster_axis);
 
         auto cached_program = create_at(
             tensor_args.input_tensor,
@@ -230,18 +198,18 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
             mesh_coord,
             forward_coord,
             backward_coord,
-            operation_attributes.all_gather_async.dim,
-            operation_attributes.all_gather_async.num_links,
-            operation_attributes.all_gather_async.ring_size,
+            operation_attributes.all_gather_async_attributes.dim,
+            operation_attributes.all_gather_async_attributes.num_links,
+            operation_attributes.all_gather_async_attributes.ring_size,
             device_index,
-            operation_attributes.all_gather_async.topology,
-            operation_attributes.all_gather_async.semaphore,
-            operation_attributes.all_gather_async.barrier_semaphore,
-            operation_attributes.all_gather_async.using_persistent_buffers,
-            operation_attributes.all_gather_async.sub_device_id,
-            operation_attributes.all_gather_async.chunks_per_sync,
-            operation_attributes.all_gather_async.num_workers_per_link,
-            operation_attributes.all_gather_async.num_buffers_per_channel,
+            operation_attributes.all_gather_async_attributes.topology,
+            operation_attributes.all_gather_async_attributes.semaphore,
+            operation_attributes.all_gather_async_attributes.barrier_semaphore,
+            operation_attributes.all_gather_async_attributes.using_persistent_buffers,
+            operation_attributes.all_gather_async_attributes.sub_device_id,
+            operation_attributes.all_gather_async_attributes.chunks_per_sync,
+            operation_attributes.all_gather_async_attributes.num_workers_per_link,
+            operation_attributes.all_gather_async_attributes.num_buffers_per_channel,
             operation_attributes.all_gather_core_grid_offset,
 
             tensor_args.bias,
@@ -259,37 +227,61 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
 
 void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllGatherMatmulAsyncParams& operation_attributes,
+    const AllGatherMatmulAsyncInputs& tensor_args,
+    AllGatherMatmulAsyncResult& tensor_return_value) {
     // Fuse the override runtime arguments callbacks
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        if (shared_vars.matmul_override_runtime_arguments_callback.has_value()) {
-            shared_vars.matmul_override_runtime_arguments_callback
-                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in matmul old program
-                           // factories
-                    &operation_attributes,
-                    program,
-                    {tensor_return_value[0], tensor_args.weight_tensor}, /* all gather output tensor, weight tensor */
-                    {tensor_args.bias},
-                    {tensor_return_value[1]} /* matmul output tensor */
-                );
-        }
+        std::visit(
+            ttsl::overloaded{
+                [&](const ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t&
+                        mm_shared_variables) {
+                    std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
+                    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+                        program,
+                        mm_shared_variables,
+                        operation_attributes.matmul,
+                        {{tensor_return_value[0], tensor_args.weight_tensor},
+                         {tensor_args.bias},
+                         {tensor_return_value[1]}},
+                        matmul_output_tensors);
+                },
+                [&](const ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t&
+                        mm_shared_variables) {
+                    std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
+                    ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
+                        program,
+                        mm_shared_variables,
+                        operation_attributes.matmul,
+                        {{tensor_return_value[0], tensor_args.weight_tensor},
+                         {tensor_args.bias},
+                         {tensor_return_value[1]}},
+                        matmul_output_tensors);
+                },
+                [&](const auto& /*config*/) {
+                    TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
+                }},
+            shared_vars.matmul_shared_variables);
 
-        if (shared_vars.all_gather_override_runtime_arguments_callback.has_value()) {
-            shared_vars.all_gather_override_runtime_arguments_callback
-                .value()(  // TODO: migrate to not use the old override_runtime_arguments_callback in all_gather_async
-                           // old program factories
-                    &operation_attributes,
-                    program,
-                    {tensor_args.input_tensor}, /* input tensor */
-                    {tensor_args.bias},
-                    {tensor_return_value[0]} /* all gather output tensor */
-                );
-        }
+        auto& all_gather_async_shared_variables = shared_vars.all_gather_async_shared_variables;
+        const auto& all_gather_async_attributes = operation_attributes.all_gather_async_attributes;
+        all_gather_async_minimal_default_helper_override_runtime_arguments(
+            program,
+            all_gather_async_shared_variables.reader_kernel_id,
+            all_gather_async_shared_variables.writer_kernel_id,
+            all_gather_async_shared_variables.all_cores,
+            all_gather_async_attributes.num_links,
+            all_gather_async_shared_variables.num_directions_per_link,
+            all_gather_async_shared_variables.num_workers_per_direction,
+            all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
+            all_gather_async_shared_variables.num_cores_per_link,
+            all_gather_async_attributes.barrier_semaphore,
+            all_gather_async_attributes.semaphore,
+            tensor_args.input_tensor,
+            tensor_return_value[0]);
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_matmul_async::program
+}  // namespace ttnn::experimental::prim

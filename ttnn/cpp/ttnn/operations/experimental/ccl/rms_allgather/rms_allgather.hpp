@@ -17,7 +17,7 @@ namespace operations::fused::normalization {
 struct ExecuteFusedRMSNorm {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+        const ttnn::prim::LayerNormProgramConfig& program_config,
         uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const GlobalSemaphore& semaphore,
@@ -37,7 +37,7 @@ struct ExecuteFusedRMSNorm {
 
 }  // namespace operations::fused::normalization
 
-constexpr auto fused_rms_1_1_32_8192 = ttnn::
-    register_operation<"ttnn::fused_rms_1_1_32_8192", ttnn::operations::fused::normalization::ExecuteFusedRMSNorm>();
+constexpr auto fused_rms_minimal =
+    ttnn::register_operation<"ttnn::fused_rms_minimal", ttnn::operations::fused::normalization::ExecuteFusedRMSNorm>();
 
 }  // namespace ttnn

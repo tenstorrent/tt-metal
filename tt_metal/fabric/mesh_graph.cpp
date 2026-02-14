@@ -18,6 +18,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
@@ -25,7 +26,6 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include "physical_system_descriptor.hpp"
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include "impl/context/metal_context.hpp"
 #include <numeric>
 #include <set>
 #include <cmath>
@@ -100,12 +100,17 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
-MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
+MeshGraph::MeshGraph(
+    tt::tt_metal::ClusterType cluster_type,
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd(filepath, true);
-        this->initialize_from_mgd(mgd, fabric_config);
+        mesh_graph_desc_file_path_ = filepath;
+        mesh_graph_descriptor_.emplace(filepath, true);
+        this->initialize_from_mgd(
+            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -120,6 +125,12 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
             mesh_graph_desc_file_path);
     }
 }
+
+MeshGraph::MeshGraph(
+    const tt::Cluster& cluster,
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<FabricConfig> fabric_config) :
+    MeshGraph(cluster.get_cluster_type(), mesh_graph_desc_file_path, fabric_config) {}
 
 void MeshGraph::add_to_connectivity(
     MeshId src_mesh_id, ChipId src_chip_id, MeshId dest_mesh_id, ChipId dest_chip_id, RoutingDirection port_direction) {
@@ -188,11 +199,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
-    if (has_flag(fabric_type, FabricType::TORUS_X)) {
+    if (has_flag(fabric_type, FabricType::TORUS_X) and mesh_shape[1] > 1) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
     }
-    if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+    if (has_flag(fabric_type, FabricType::TORUS_Y) and mesh_shape[0] > 1) {
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
@@ -215,7 +226,8 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
-void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config) {
+void MeshGraph::initialize_from_mgd(
+    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -225,10 +237,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
-        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE)
-                           ? mgd.get_num_eth_ports_per_direction()
-                           : 0,  // Z set to the same number as xy if in black hole
-    };
+        .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
     // Count total meshes including switches (switches are treated as meshes internally)
     uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
@@ -368,12 +377,13 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         FabricType effective_fabric_type;
 
         if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
-                    "FabricConfig requests topology {} which requires more connectivity than MGD provides {}. "
+                    "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
                     "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
+                    enchantum::to_string(*fabric_config),
                     enchantum::to_string(requested_fabric_type),
                     enchantum::to_string(mgd_fabric_type));
             }
@@ -511,7 +521,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         FabricType effective_fabric_type;
 
         if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
                 TT_THROW(
@@ -866,16 +876,12 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
  */
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(
-    MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction) {
+    MeshShape mesh_shape,
+    tt::tt_fabric::FabricType fabric_type,
+    tt::tt_fabric::FabricReliabilityMode reliability_mode,
+    tt::ARCH arch,
+    std::uint32_t num_connections_per_direction) {
     MeshGraph mesh_graph;
-
-    // Get chip spec from MetalContext
-    const auto& metal_context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = metal_context.get_cluster();
-    tt::ARCH arch = cluster.get_cluster_desc()->get_arch();
-
-    // Get reliability mode from fabric config (stored in MetalContext)
-    tt::tt_fabric::FabricReliabilityMode reliability_mode = metal_context.get_fabric_reliability_mode();
 
     // Use the provided num_connections_per_direction
     std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;

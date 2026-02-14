@@ -12,14 +12,11 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::plusone::program {
+namespace ttnn::experimental::prim {
 
 PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PlusoneParams& operation_attributes, const Tensor& input, Tensor& /*tensor_return_value*/) {
     tt::tt_metal::Program program{};
-    const auto& input = tensor_args.input;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
@@ -77,11 +74,8 @@ PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
 }
 
 void PlusOneProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t&) {
-    auto* src_buffer = tensor_args.input.buffer();
+    cached_program_t& cached_program, const PlusoneParams&, const Tensor& input, Tensor&) {
+    auto* src_buffer = input.buffer();
 
     auto& program = cached_program.program;
     const auto& cores = cached_program.shared_variables.cores;
@@ -93,4 +87,4 @@ void PlusOneProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::plusone::program
+}  // namespace ttnn::experimental::prim

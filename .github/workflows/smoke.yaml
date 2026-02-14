@@ -23,12 +23,19 @@ on:
         required: false
         type: boolean
         default: false
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   smoke:
+    timeout-minutes: 30
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-stable', inputs.runner))
+        (github.workflow == 'Blackhole post-commit tests' && github.ref_name == 'main' && inputs.runner == 'P150b-viommu')
+          && 'tt-ubuntu-2204-p150b-viommu-post-commit'
+          || format('tt-ubuntu-2204-{0}-stable', inputs.runner)
       }}
     container:
       image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image))) || 'docker-image-unresolved!' }}
@@ -40,19 +47,51 @@ jobs:
       volumes:
         - /work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-      options: --device /dev/tenstorrent
+      # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
+      options: --device /dev/tenstorrent ${{ contains(fromJSON('["N300-llmbox", "in-service-dedicated-merge-gate"]'), inputs.runner) && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
+      - name: Check available memory in container for WH LB 2
+        run: |
+          # You never know with GH!!!
+          set -e
+
+          # Read memory limit for container cgroup from cgroup v2 or v1
+          memory_bytes=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || \
+                         cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)
+
+          if [ -z "$memory_bytes" ]; then
+              echo "Unable to read memory limit from cgroup (v1 or v2)" >&2
+              exit 1
+          fi
+
+          # 256GB = 274877906944 bytes
+          max_bytes_wh_lb2=274877906944
+
+          if [ "$memory_bytes" -gt "$max_bytes_wh_lb2" ]; then
+              echo "Error: Container memory limit ${memory_bytes} upcoming max of 256GB (${max_bytes_wh_lb2} bytes)" >&2
+              exit 1
+          fi
+
+          echo "Memory limit validated: ${memory_bytes} bytes"
+
       - name: Install packages
+        timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
@@ -78,6 +117,14 @@ jobs:
         run: |
           rm -f /work/coverage/*.profraw || true
 
+      - name: Set up env vars for watcher
+        if: ${{ inputs.enable-watcher == true }}
+        run: |
+          echo "Enabling TT Metal Watcher"
+          echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+
       - name: Run a test
         id: test
         timeout-minutes: 15
@@ -85,7 +132,6 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-          # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke

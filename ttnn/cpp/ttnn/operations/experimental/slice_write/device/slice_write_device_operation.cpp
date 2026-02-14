@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::experimental::prim {
 
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -26,25 +26,20 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     if (input.is_sharded()) {
         TT_FATAL(!has_step, "Step is not supported for sharded slice_write operation");
         if (input.layout() == Layout::ROW_MAJOR) {
-            return program::SliceWriteRMShardedInputProgramFactory{};
-        } else if (input.layout() == Layout::TILE) {
-            return program::SliceWriteTiledShardedInputProgramFactory{};
-        } else {
-            TT_THROW("Unsupported input memory layout for slice_write operation");
+            return SliceWriteRMShardedInputProgramFactory{};
         }
-    } else {
-        return program::SliceWriteRMInterleavedProgramFactory{};
-    }
-}
+        if (input.layout() == Layout::TILE) {
+            return SliceWriteTiledShardedInputProgramFactory{};
+        }
+        TT_THROW("Unsupported input memory layout for slice_write operation");
 
-void SliceWriteDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    } else {
+        return SliceWriteRMInterleavedProgramFactory{};
+    }
 }
 
 void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();
@@ -89,53 +84,37 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape().rank());
 }
 
-spec_return_value_t SliceWriteDeviceOperation::compute_output_specs(
+TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output.tensor_spec();
 }
 
 tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& output_tensor = tensor_args.output;
-    const auto& input_shape = input_tensor.padded_shape();
+    log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(args, tensor_args);
 
-    operation::Hash hash = operation::hash_operation<SliceWriteDeviceOperation>(
-        args,                            // Includes slice_start, slice_end, step
-        program_factory.index(),         // ✅ CRITICAL: Factory variant index (3 factories)
-        input_tensor.dtype(),            // Affects CB data formats
-        input_tensor.element_size(),     // Affects compile-time args, CB configs
-        input_tensor.memory_config(),    // Affects factory selection, num_cores_channels
-        input_tensor.layout(),           // Affects factory selection
-        input_shape,                     // Affects CB sizes, num_unpadded_sticks
-        input_tensor.physical_volume(),  // Affects num_unpadded_sticks → CB sizes
-        input_tensor.shard_spec(),       // Affects core ranges, CB sizes (if sharded)
-        output_tensor.dtype(),           // Affects compile-time args (RMInterleaved)
-        output_tensor.element_size(),    // Affects compile-time args (RMInterleaved)
-        output_tensor.padded_shape()     // Affects defines (TiledSharded)
-    );
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<SliceWriteDeviceOperation>(
+        args, tensor_args, program_factory.index());
 }
 
-tensor_return_value_t SliceWriteDeviceOperation::create_output_tensors(
+Tensor SliceWriteDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output;
 }
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
+Tensor slice_write(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
-    using OperationType = ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation;
+    using OperationType = ttnn::experimental::prim::SliceWriteDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .slice_start = slice_start,

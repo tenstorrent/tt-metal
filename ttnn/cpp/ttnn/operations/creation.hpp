@@ -14,10 +14,12 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn {
 
@@ -86,13 +88,13 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        tt::tt_metal::write_tensor(host_tensor, *optional_output_tensor, /*blocking=*/false);
+        tt::tt_metal::tensor_impl::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
-    } else if (device != nullptr) {
-        return host_tensor.to_device(device, output_mem_config);
-    } else {
-        return host_tensor;
     }
+    if (device != nullptr) {
+        return host_tensor.to_device(device, output_mem_config);
+    }
+    return host_tensor;
 }
 
 }  // namespace detail
@@ -189,35 +191,32 @@ Tensor full_like_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().layout() : layout.value_or(tensor.layout());
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
-    auto arch = tensor.device()->arch();
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_tile_layout &&
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
-             (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) &&
+             dtype_value == DataType::FLOAT32) &&
             tensor.storage_type() == StorageType::DEVICE) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
-        } else {
-            return full_impl(
-                tensor.logical_shape(),
-                fill_value,
-                dtype_value,
-                layout_value,
-                device ? device : tensor.device(),
-                memory_config.value_or(tensor.memory_config()),
-                optional_output_tensor);
         }
-    } else {
         return full_impl(
             tensor.logical_shape(),
             fill_value,
             dtype_value,
             layout_value,
             device ? device : tensor.device(),
-            memory_config,
+            memory_config.value_or(tensor.memory_config()),
             optional_output_tensor);
     }
+    return full_impl(
+        tensor.logical_shape(),
+        fill_value,
+        dtype_value,
+        layout_value,
+        device ? device : tensor.device(),
+        memory_config,
+        optional_output_tensor);
 }
 
 template <detail::boxed FillValue>
@@ -249,8 +248,7 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(
-            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+        return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
 
@@ -301,7 +299,7 @@ struct EmptyLike {
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
         MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
-        return allocate_tensor_on_device(
+        return create_device_tensor(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device_ptr);
     }

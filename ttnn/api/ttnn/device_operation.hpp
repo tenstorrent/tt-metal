@@ -19,9 +19,11 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -52,8 +54,6 @@ template <typename... Ts>
     static constexpr std::variant<Ts...> table[] = {Ts{}...};
     return table[i];
 }
-
-inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
 template <typename device_operation_t>
 auto compute_program_hash(
@@ -131,9 +131,6 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
         // For MeshAdapter operations, we recurse to get the name of the underlying device operation
         return get_operation_name<typename device_operation_t::device_operation_t>(operation_attributes);
-    } else if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
-        // TODO: remove this if statement once OldInfraDeviceOperation is removed
-        return device_operation_t::get_type_name(operation_attributes);
     } else {
         return tt::stl::get_type_name<device_operation_t>();
     }
@@ -145,7 +142,7 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_id,
+    std::size_t /*device_id*/,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     tt::stl::hash::hash_t program_hash,
@@ -177,19 +174,19 @@ inline void log_operation(
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
-    bool program_cache_hit) {}
+    std::size_t /*device_id*/,
+    const typename device_operation_t::operation_attributes_t& /*operation_attributes*/,
+    const typename device_operation_t::tensor_args_t& /*tensor_args*/,
+    tt::stl::hash::hash_t /*program_hash*/,
+    bool /*program_cache_hit*/) {}
 
 #endif
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
-    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    [[maybe_unused]] const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
     mesh_device_operation_utils::set_runtime_id(workload);
@@ -227,7 +224,11 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+        mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+    } else {
+        mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+    }
 
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
@@ -245,6 +246,37 @@ void handle_mesh_adapter_cache_hit(
             enqueue_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
         });
+}
+
+// Helper for logging operation info to inspector
+template <DeviceOperationConcept mesh_device_operation_t>
+void emit_mesh_workload_annotation(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args) {
+
+    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+        auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+
+        auto index = 0;
+        // tensor args - format as comma-separated list
+        constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+        fmt::memory_buffer tensor_args_buffer;
+        tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);  // Will grow if needed
+
+        tt::stl::reflection::visit_object_of_type<Tensor>(
+            [&index, &tensor_args_buffer](const Tensor& tensor) {
+                if (index > 0) {
+                    fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
+                }
+                fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, tensor);
+                index++;
+            },
+            tensor_args);
+
+        tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
+            workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+    }
 }
 
 // Helper for creating and caching a mesh workload
@@ -284,7 +316,22 @@ void create_and_cache_mesh_workload(
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            if (program_cache.is_enabled()) {
+            emit_mesh_workload_annotation<mesh_device_operation_t>(
+                cached_workload.workload, operation_attributes, tensor_args);
+
+            // Don't cache programs during NO_DISPATCH graph capture mode because
+            // buffer addresses are invalid (address=0). Caching such programs would
+            // cause issues when later running in NORMAL mode.
+            // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
+            bool hook_blocks = false;
+            if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+                auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
+                if (processor_hooks) {
+                    hook_blocks = processor_hooks->get_block();
+                }
+            }
+            bool should_cache = program_cache.is_enabled() && !hook_blocks;
+            if (should_cache) {
                 program_cache.insert(
                     program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
                 auto& cached_program_factory = program_cache.get(program_hash);
@@ -541,14 +588,14 @@ typename device_operation_t::tensor_return_value_t launch(
                 tensor_return_value);
         } else {
             // Fall back to default topology imputation
-            auto [output_topology_placements, output_topology_shape] =
+            auto output_topology_result =
                 detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor.value());
 
             tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+                [&output_topology_result](const Tensor& output_tensor) {
                     auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_shape,
-                        output_topology_placements,
+                        output_topology_result.second,
+                        output_topology_result.first,
                         output_tensor.tensor_topology().mesh_coords());
                     return output_tensor.with_tensor_topology(topology);
                 },

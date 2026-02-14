@@ -12,9 +12,11 @@
 #include <cstddef>
 #include <cstdint>
 
-enum RouterState : uint8_t { STANDBY = 0, ACTIVE = 1, PAUSED = 2, DRAINING = 3 };
+enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, DRAINING = 3, RETRAINING = 4 };
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
+
+static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 1;
 
 // TODO: this V2 needs to be deleted.
 //       Just for avoiding conflicts.
@@ -65,11 +67,14 @@ struct DynamicInfo {
 };
 
 struct StaticInfo {
+    uint32_t version;
     uint16_t mesh_id;
+    uint16_t neighbor_mesh_id;
     uint8_t device_id;
+    uint8_t neighbor_device_id;
     uint8_t direction;
-    uint32_t fabric_config;
     DynamicStatistics supported_stats;
+    uint32_t fabric_config;
 };
 
 struct FabricTelemetryStaticOnly {
@@ -79,4 +84,6 @@ struct FabricTelemetryStaticOnly {
 struct FabricTelemetry {
     StaticInfo static_info;
     DynamicInfo dynamic_info;
+    uint32_t postcode;
+    uint32_t scratch[7];
 };

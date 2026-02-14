@@ -8,7 +8,6 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -51,26 +50,13 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace ttnn::operations::experimental {
-Tensor BcastTo::invoke(
+namespace ttnn::experimental {
+Tensor broadcast_to(
     const Tensor& input,
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
-
-    TT_FATAL(
-        input.dtype() == DataType::BFLOAT16 or input.dtype() == DataType::FLOAT32,
-        "For input dtype {}, only bfloat16 and float32 are supported",
-        input.dtype());
-
-    if (output.has_value()) {
-        TT_FATAL(
-            output.value().dtype() == DataType::BFLOAT16 or output.value().dtype() == DataType::FLOAT32,
-            "For output dtype {}, only bfloat16 and float32 are supported",
-            output.value().dtype());
-    }
-
     return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

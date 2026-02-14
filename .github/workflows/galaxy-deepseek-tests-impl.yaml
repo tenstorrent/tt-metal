@@ -36,7 +36,8 @@ jobs:
         run: |
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" }
+            { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
+            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -102,7 +103,7 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
         if: ${{ matrix.test-group.test-type == 'module' }}
@@ -113,8 +114,17 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+      - name: Run DeepSeek long seq len module tests
+        if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_mla.py --timeout 900 --durations=0
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=16384 pytest models/demos/deepseek_v3/tests/test_decoder_block.py --timeout 2400 --durations=0
+          # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
+          DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py --timeout 2500 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

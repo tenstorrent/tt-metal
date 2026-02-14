@@ -72,7 +72,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
-            pip install -r tools/triage/requirements.txt
+            uv pip install -r tools/triage/requirements.txt
             TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

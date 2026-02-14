@@ -17,7 +17,6 @@
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
@@ -28,6 +27,10 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 namespace ttnn::operations::conv {
 using namespace tt;
@@ -167,7 +170,7 @@ Tensor convert_tensor_to_tiled_layout_common(
 template <typename T>
 Tensor create_tensor_from_owned_buffer(
     tt::tt_metal::HostBuffer buf, DataType& output_dtype, ttnn::Shape& output_shape) {
-    if constexpr (std::is_same<T, float>::value) {
+    if constexpr (std::is_same_v<T, float>) {
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
@@ -228,7 +231,12 @@ Tensor to_weight_special_padding_tile_layout(
                 w_shape[1],
                 16,  // Minimum work per thread
                 [&output_buffer, &input_buffer, &w_shape, &weight_matrix_cols, &block_height_padding](
-                    uint32_t out_t, uint32_t in_t, uint32_t k_start, uint32_t k_end, uint32_t c_start, uint32_t c_end) {
+                    uint32_t /*out_t*/,
+                    uint32_t /*in_t*/,
+                    uint32_t k_start,
+                    uint32_t k_end,
+                    uint32_t c_start,
+                    uint32_t c_end) {
                     for (auto r = 0; r < w_shape[2]; r++) {
                         for (auto s = 0; s < w_shape[3]; s++) {
                             for (auto c = c_start; c < c_end; c++) {
@@ -282,7 +290,12 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
             w_shape[0],  // Co
             w_shape[1],  // Ci
             16,          // Minimum work per thread
-            [&](uint32_t out_t, uint32_t in_t, uint32_t co_start, uint32_t co_end, uint32_t ci_start, uint32_t ci_end) {
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
+                uint32_t co_start,
+                uint32_t co_end,
+                uint32_t ci_start,
+                uint32_t ci_end) {
                 for (auto kh = 0; kh < w_shape[2]; kh++) {
                     for (auto kw = 0; kw < w_shape[3]; kw++) {
                         for (auto ci = ci_start; ci < ci_end; ci++) {
@@ -332,39 +345,38 @@ Tensor to_weight_tile_layout(
     }
     const ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
-    auto compute =
-        [&w_shape, weight_matrix_cols, &output_shape, output_dtype](const tt::tt_metal::HostBuffer& input_host_buffer) {
-            auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+    auto compute = [&w_shape, weight_matrix_cols, &output_shape, output_dtype](
+                       const tt::tt_metal::HostBuffer& input_host_buffer) {
+        auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
-            auto output_buffer = std::vector<T>(output_shape.volume());
-            WeightLayoutThreader::parallel_for_channels(
-                w_shape[0],
-                w_shape[1],
-                16,  // Minimum work per thread
-                [&](uint32_t out_t,
-                    uint32_t in_t,
-                    uint32_t out_start,
-                    uint32_t out_end,
-                    uint32_t in_start,
-                    uint32_t in_end) {
-                    for (auto r = 0; r < w_shape[2]; r++) {
-                        for (auto s = 0; s < w_shape[3]; s++) {
-                            for (auto c = in_start; c < in_end; c++) {
-                                for (auto k = out_start; k < out_end; k++) {
-                                    auto matrix_idx = k + (c * weight_matrix_cols) +
-                                                      (s * w_shape[1] * weight_matrix_cols) +
-                                                      (r * w_shape[3] * w_shape[1] * weight_matrix_cols);
-                                    auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) +
-                                               (c * w_shape[2] * w_shape[3]) + (r * w_shape[3]) + s;
-                                    output_buffer[matrix_idx] = input_buffer[idx];
-                                }
+        auto output_buffer = std::vector<T>(output_shape.volume());
+        WeightLayoutThreader::parallel_for_channels(
+            w_shape[0],
+            w_shape[1],
+            16,  // Minimum work per thread
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
+                uint32_t out_start,
+                uint32_t out_end,
+                uint32_t in_start,
+                uint32_t in_end) {
+                for (auto r = 0; r < w_shape[2]; r++) {
+                    for (auto s = 0; s < w_shape[3]; s++) {
+                        for (auto c = in_start; c < in_end; c++) {
+                            for (auto k = out_start; k < out_end; k++) {
+                                auto matrix_idx = k + (c * weight_matrix_cols) + (s * w_shape[1] * weight_matrix_cols) +
+                                                  (r * w_shape[3] * w_shape[1] * weight_matrix_cols);
+                                auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) + (c * w_shape[2] * w_shape[3]) +
+                                           (r * w_shape[3]) + s;
+                                output_buffer[matrix_idx] = input_buffer[idx];
                             }
                         }
                     }
-                });
-            return create_host_buffer_for_conv_weight<T>(
-                tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
-        };
+                }
+            });
+        return create_host_buffer_for_conv_weight<T>(
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_dtype, output_shape);
+    };
 
     const TensorSpec output_spec(
         output_shape, tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
@@ -469,8 +481,8 @@ Tensor to_weight_tile_layout_block_sharded(
             out_num_channel_shards,
             in_num_channel_shards,
             1,  // Minimum work per thread
-            [&](uint32_t out_t,
-                uint32_t in_t,
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
                 uint32_t out_start,
                 uint32_t out_end,
                 uint32_t in_start,
@@ -639,6 +651,10 @@ static Tensor conv_group_weight_zero_pad_helper(
                           const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
         auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
         auto output_buffer = std::vector<T>(output_weight_shape.volume());
+
+        auto original_strides = compute_strides(original_weight_shape);
+        auto output_strides = compute_strides(output_weight_shape);
+
         for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
             int new_batch_idx = curr_batch_idx;
 
@@ -654,14 +670,13 @@ static Tensor conv_group_weight_zero_pad_helper(
                     for (int m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
+                            ttnn::SmallVector<uint32_t>{curr_batch_idx, j, k, m}, original_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto new_channel_idx = new_channel_start_idx + j;
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, m},
-                            compute_strides(output_weight_shape));
+                            ttnn::SmallVector<uint32_t>{new_batch_idx, new_channel_idx, k, m}, output_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -690,12 +705,15 @@ static Tensor conv_depthwise_weight_bcast_helper(
         auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
         // Create a new buffer with the output shape
         auto output_buffer = std::vector<T>(output_weight_shape.volume());
+        auto original_strides = compute_strides(original_weight_shape);
+        auto output_strides = compute_strides(output_weight_shape);
+
         WeightLayoutThreader::parallel_for_channels(
             output_weight_shape[0],
             output_weight_shape[1],
             16,  // Minimum work per thread
-            [&](uint32_t out_t,
-                uint32_t in_t,
+            [&](uint32_t /*out_t*/,
+                uint32_t /*in_t*/,
                 uint32_t out_start,
                 uint32_t out_end,
                 uint32_t in_start,
@@ -705,10 +723,10 @@ static Tensor conv_depthwise_weight_bcast_helper(
                         for (int k = 0; k < output_weight_shape[2]; k++) {
                             for (int l = 0; l < output_weight_shape[3]; l++) {
                                 auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                    ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
+                                    ttnn::SmallVector<uint32_t>{i, 0, k, l}, original_strides);
                                 auto value = conv_weight_tensor_buffer[value_flat_input_index];
                                 auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                    ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
+                                    ttnn::SmallVector<uint32_t>{i, j, k, l}, output_strides);
                                 output_buffer[output_flat_input_index] = value;
                             }
                         }
@@ -796,6 +814,8 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
         uint32_t out_channels_per_group = original_weight_shape[1];
         uint32_t in_channels_per_group = in_channels / num_groups;
 
+        auto original_weight_strides = compute_strides(original_weight_shape);
+        auto output_weight_strides = compute_strides(output_weight_shape);
         for (int i = 0; i < original_weight_shape[0]; i++) {  // in_channels
             // Find which group this input channel belongs to
             auto group_id = i / in_channels_per_group;
@@ -808,12 +828,12 @@ static Tensor conv_transpose2d_group_weight_zero_pad_helper(
                     for (int w = 0; w < original_weight_shape[3]; w++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, c, h, w}, compute_strides(original_weight_shape));
+                            ttnn::SmallVector<uint32_t>{i, c, h, w}, original_weight_strides);
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{i, global_out_channel, h, w}, compute_strides(output_weight_shape));
+                            ttnn::SmallVector<uint32_t>{i, global_out_channel, h, w}, output_weight_strides);
                         output_buffer[output_flat_input_index] = value;
                     }
                 }
@@ -949,8 +969,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                 out_channels,
                 in_channels,
                 16,  // Minimum work per thread
-                [&](uint32_t out_t,
-                    uint32_t in_t,
+                [&](uint32_t /*out_t*/,
+                    uint32_t /*in_t*/,
                     uint32_t out_start,
                     uint32_t out_end,
                     uint32_t in_start,
@@ -1027,7 +1047,7 @@ void validate_host_conv_bias(const ttnn::Tensor& bias_tensor) {
 // Validate device conv weights format (minimal validation for main path)
 bool is_valid_device_conv_weights(
     const ttnn::Tensor& weight_tensor,
-    uint32_t in_channels,
+    uint32_t /*in_channels*/,
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype) {
     if (weight_tensor.layout() != Layout::TILE) {
@@ -1541,7 +1561,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_out_channels,
         out_channels);
 
-    uint32_t in_channels_padded = tt::round_up(in_channels, params.input_channels_alignment);
     uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
 
     uint32_t out_channel_padding = out_channels_padded - out_channels;
@@ -1555,7 +1574,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         auto output_parallel_config = params.output_parallel_config.value();
         uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(input_parallel_config);
         uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
-        in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
+        uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
         out_channels_padded = calculate_out_channels_padded(out_channels, output_parallel_config);
         out_channel_padding = out_channels_padded - out_channels;
         ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
@@ -1738,7 +1757,7 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    const std::optional<const Conv2dSliceConfig>& /*dram_slice_config_*/) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 

@@ -56,6 +56,8 @@ private:
 
 }  // namespace tt::tt_metal
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& global_semaphore);
+
 namespace std {
 
 template <>

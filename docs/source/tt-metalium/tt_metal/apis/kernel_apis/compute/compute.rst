@@ -115,7 +115,6 @@ Comparison and logical operations
   unary_le_tile
   unary_max_tile
   unary_min_tile
-  max_tile
   binary_max_tile
   binary_min_tile
   ltz_tile
@@ -226,6 +225,7 @@ Data manipulation and processing
   identity_tile
   mask_tile
   where_tile
+  addcmul_tile
   reshuffle_rows_tile
   typecast_tile
   dropout_tile

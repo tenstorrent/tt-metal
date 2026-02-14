@@ -13,7 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
@@ -61,8 +61,6 @@ namespace tt::tt_metal {
 TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
-    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     std::vector<int> devices_to_open;
     for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
         devices_to_open.push_back(device_id);

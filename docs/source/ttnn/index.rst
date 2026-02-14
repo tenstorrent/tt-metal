@@ -12,7 +12,7 @@ Welcome to TT-NN documentation!
    ttnn/about
    ttnn/get_started
    ttnn/installing
-   ttnn/usage
+   ttnn/tutorials/tutorials/ttnn_intro.ipynb
    ttnn/tensor
    ttnn/api
    ttnn/tutorials

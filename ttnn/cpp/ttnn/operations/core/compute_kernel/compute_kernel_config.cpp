@@ -23,117 +23,40 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_l1_acc,
     bool default_dst_full_sync_en,
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
-    DeviceComputeKernelConfig defaultConfig;
-    if (device_kernel_config.has_value()) {
-        auto compute_kernel_config = device_kernel_config.value();
-        std::visit(
-            [&](auto&& compute_kernel_config) {
-                using T = std::decay_t<decltype(compute_kernel_config)>;
-                if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                    TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-                    MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
-                    bool math_approx_mode = compute_kernel_config.math_approx_mode;
-                    bool dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
-                    defaultConfig = GrayskullComputeKernelConfig{
-                        .math_fidelity = math_fidelity,
-                        .math_approx_mode = math_approx_mode,
-                        .dst_full_sync_en = dst_full_sync_en};
-                } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                    TT_ASSERT(
-                        ttnn::device::is_wormhole_or_blackhole(arch),
-                        "kernel config is not for wormhole_b0 or blackhole");
-                    MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
-                    bool math_approx_mode = compute_kernel_config.math_approx_mode;
-                    bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
-                    bool packer_l1_acc = compute_kernel_config.packer_l1_acc;
-                    bool dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
-                    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
-                        compute_kernel_config.throttle_level;
-                    defaultConfig = WormholeComputeKernelConfig{
-                        .math_fidelity = math_fidelity,
-                        .math_approx_mode = math_approx_mode,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .packer_l1_acc = packer_l1_acc,
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .throttle_level = throttle_level};
-                } else {
-                    TT_THROW("arch not supported");
-                }
-            },
-            compute_kernel_config);
-        return defaultConfig;
-    } else {
-        if (arch == tt::ARCH::GRAYSKULL) {
-            return GrayskullComputeKernelConfig{
-                .math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
-        } else if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
-            return WormholeComputeKernelConfig{
-                .math_fidelity = default_fidelity,
-                .math_approx_mode = default_approx_mode,
-                .fp32_dest_acc_en = default_fp32_acc,
-                .packer_l1_acc = default_l1_acc,
-                .dst_full_sync_en = default_dst_full_sync_en,
-                .throttle_level = default_throttle_level};
-        } else {
-            TT_THROW("arch not supported");
-        }
-    }
-}
+    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
 
-tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    if (not compute_kernel_config.has_value()) {
-        return tt::ARCH::Invalid;
+    if (device_kernel_config.has_value()) {
+        return device_kernel_config.value();
     }
-    return std::visit(
-        [](auto&& compute_kernel_config) -> tt::ARCH {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return tt::ARCH::GRAYSKULL;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                return tt::ARCH::WORMHOLE_B0;
-            } else if constexpr (std::is_same_v<T, BlackholeComputeKernelConfig>) {
-                return tt::ARCH::BLACKHOLE;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config.value());
+
+    return ComputeKernelConfig{
+        .math_fidelity = default_fidelity,
+        .math_approx_mode = default_approx_mode,
+        .fp32_dest_acc_en = default_fp32_acc,
+        .packer_l1_acc = default_l1_acc,
+        .dst_full_sync_en = default_dst_full_sync_en,
+        .throttle_level = default_throttle_level};
 }
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
         return false;
     }
-    return std::visit(
-        [](auto&& compute_kernel_config) -> bool {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return false;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                return compute_kernel_config.fp32_dest_acc_en;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config.value());
+    return compute_kernel_config.value().fp32_dest_acc_en;
+}
+
+bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return false;
+    }
+    return compute_kernel_config.value().dst_full_sync_en;
 }
 
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (not compute_kernel_config.has_value()) {
         return MathFidelity::Invalid;
     }
-    return std::visit(
-        [](auto&& compute_kernel_config) -> MathFidelity {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                return compute_kernel_config.math_fidelity;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config.value());
+    return compute_kernel_config.value().math_fidelity;
 }
 
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
@@ -141,53 +64,18 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     if (not compute_kernel_config.has_value()) {
         return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
     }
-    return std::visit(
-        [](auto&& compute_kernel_config) -> ttnn::operations::compute_throttle_utils::ThrottleLevel {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                return ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                return compute_kernel_config.throttle_level;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config.value());
+    return compute_kernel_config.value().throttle_level;
 }
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-    bool packer_l1_acc;
-    bool dst_full_sync_en;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = false;
-                packer_l1_acc = false;
-                dst_full_sync_en = false;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_ASSERT(
-                    ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
-                packer_l1_acc = compute_kernel_config.packer_l1_acc;
-                dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
-
-    return std::make_tuple(math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en);
+    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "Only Wormhole and Blackhole architectures are supported");
+    return std::make_tuple(
+        compute_kernel_config.math_fidelity,
+        compute_kernel_config.math_approx_mode,
+        compute_kernel_config.fp32_dest_acc_en,
+        compute_kernel_config.packer_l1_acc,
+        compute_kernel_config.dst_full_sync_en);
 }
 
 uint32_t get_dest_reg_count(
@@ -205,21 +93,14 @@ uint32_t get_dest_reg_count(
     // Note: if DATUMS_PER_ROW will change in a future architecture, then
     // this code will need to be updated to use an architecture specific value.
     uint32_t available_reg_count = (DEST_REGISTER_FULL_SIZE * DATUMS_PER_ROW) / (tile_width * tile_height);
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if (!compute_kernel_config.dst_full_sync_en) {
-                available_reg_count /= 2;
-            }
-            if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                // Note: using bfloat16 as baseline to be conservative, even
-                // if smaller formats could have a larger register count.
-                if (compute_kernel_config.fp32_dest_acc_en) {
-                    available_reg_count /= 2;
-                }
-            }
-        },
-        compute_kernel_config);
+    if (!compute_kernel_config.dst_full_sync_en) {
+        available_reg_count /= 2;
+    }
+    // Note: using bfloat16 as baseline to be conservative, even
+    // if smaller formats could have a larger register count.
+    if (compute_kernel_config.fp32_dest_acc_en) {
+        available_reg_count /= 2;
+    }
     return available_reg_count;
 }
 

@@ -1,0 +1,86 @@
+name: Analyze ND Failures
+
+on:
+  schedule:
+    # Run every hour at minute 0
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      update_mode:
+        description: 'Mode: update (sync new errors) or rebuild (recreate all issues)'
+        required: false
+        default: 'update'
+        type: choice
+        options:
+          - update
+          - rebuild
+      start_date:
+        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
+        required: false
+        type: string
+      end_date:
+        description: "End date (cutoff) for fetching Slack messages (format: 'January 31, 2026'). Messages after this date are ignored. Leave empty for no cutoff."
+        required: false
+        default: ""
+
+jobs:
+  analyze-nd-failures:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Calculate start date (default to 3 days ago)
+        id: calc-date
+        if: ${{ !inputs.start_date }}
+        shell: bash
+        run: |
+          # Calculate date 3 days ago and format as "January 1, 2026"
+          # Remove leading zero from day using sed for portability
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            START_DATE=$(date -d "3 days ago" "+%B %d, %Y" | sed 's/ 0/ /')
+          else
+            # macOS uses different date command
+            START_DATE=$(date -v-3d "+%B %d, %Y" | sed 's/ 0/ /')
+          fi
+          echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+          echo "Using calculated start date: $START_DATE"
+
+      - name: Run analyze nd failures
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+        with:
+          # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
+          # github_token: Personal Access Token for creating/updating GitHub issues
+          github_token: ${{ secrets.EVAN_PAT }}
+          # slack_token: Slack Bot Token for fetching messages
+          slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          # channel_id: Slack channel ID to fetch messages from
+          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          update_mode: ${{ inputs.update_mode || 'update' }}
+          start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
+          end_date: ${{ inputs.end_date || '' }}
+          workflow_file: '.github/workflows/analyze-nd-failures.yaml'
+
+      - name: Install infra dependencies
+        if: ${{ !cancelled() }}
+        run: pip install -r infra/requirements-infra.txt
+
+      - name: Create job failure cluster JSON
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
+
+      - name: Upload job failure cluster data
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
+          username: job-failure-cluster-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com

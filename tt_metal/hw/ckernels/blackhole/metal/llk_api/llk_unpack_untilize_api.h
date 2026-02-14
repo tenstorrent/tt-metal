@@ -22,33 +22,8 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
 
 inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t unpA_ch1_x_stride = (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float32   ? 4
-                                      : (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                                                 : 1;
-    std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
-
     WAYPOINT("UPUW");
-    // Check that unpacker is done (all contexts freed up) before starting hw configuration
-    wait_for_idle();
-
-    // Reset address counters
-    unpacker_addr_counter_init();
-
-    // Wait for cfg to be free to edit
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-
-    // Reset the values to default in unpack AB common.
-    TT_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_NOP;  // Wait for WRCFG to complete (takes 2 cycles)
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
-    cfg_reg_rmw_tensix<
-        UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32,
-        UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT,
-        UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
-    TTI_NOP;
-    TTI_NOP;  // Do we need this for WH?
+    _llk_unpack_untilize_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
     WAYPOINT("UPUD");
 }
 

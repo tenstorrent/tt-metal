@@ -37,7 +37,7 @@ void set_or_update_runtime_arguments(
     KernelHandle writer_kernel_id,
     KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
-    const BcastToOperation::operation_attributes_t& operation_attributes,
+    const BcastToOperation::operation_attributes_t& /*operation_attributes*/,
     const BcastToOperation::tensor_args_t& tensor_args,
     BcastToOperation::tensor_return_value_t& output,
     F handle_args) {
@@ -184,12 +184,22 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
+    // Enable fp32_dest_acc_en and unpack_to_dest_mode for 32-bit formats (Float32, Int32, UInt32)
+    bool is_32bit_format = input_data_format == tt::DataFormat::Float32 || input_data_format == tt::DataFormat::Int32 ||
+                           input_data_format == tt::DataFormat::UInt32;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (is_32bit_format) {
+        unpack_to_dest_mode[(uint32_t)tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.compute_kernel),
         all_device_cores,
         tt::tt_metal::ComputeConfig{
-            .math_approx_mode = false, .compile_args = {(uint32_t)tt::CBIndex::c_0, (uint32_t)tt::CBIndex::c_1}});
+            .fp32_dest_acc_en = is_32bit_format,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = false,
+            .compile_args = {(uint32_t)tt::CBIndex::c_0, (uint32_t)tt::CBIndex::c_1}});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

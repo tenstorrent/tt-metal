@@ -80,7 +80,7 @@ using std::chrono::microseconds;
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
+std::vector<T> slice_vec(const std::vector<T>& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -111,12 +111,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_max_page_size_and_num_pages(
     if (total_size <= max_page_size) {
         // If total size fits in one page, use it
         return {total_size, 1, total_size};
-    } else {
-        // Use max_page_size for all pages except the last one
-        uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
-        uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
-        return {max_page_size, num_pages, last_page_size};
-    }
+    }  // Use max_page_size for all pages except the last one
+    uint32_t num_pages = (total_size + max_page_size - 1) / max_page_size;
+    uint32_t last_page_size = total_size - ((num_pages - 1) * max_page_size);
+    return {max_page_size, num_pages, last_page_size};
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
@@ -124,8 +122,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const CoreRangeSet& all_cores,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
-    uint32_t num_tiles_cb,
-    uint32_t num_tiles_per_core,
+    uint32_t /*num_tiles_cb*/,
+    uint32_t /*num_tiles_per_core*/,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
@@ -201,9 +199,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 bool validation(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     std::vector<uint32_t>& input_vec,
-    const uint32_t& num_cores,
+    const uint32_t& /*num_cores*/,
     std::vector<CoreCoord>& all_cores,
-    const uint32_t& num_tiles_per_core,
+    const uint32_t& /*num_tiles_per_core*/,
     const uint32_t& cb_addr,
     const uint32_t& single_tile_size,
     uint32_t num_tiles_cb,
@@ -282,15 +280,12 @@ bool validation(
 }
 
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
-    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
     constexpr uint32_t BH_DRAM_BANDWIDTH_GB_PER_SEC = 512;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
     } else if (arch == tt::ARCH::BLACKHOLE) {
         dram_bandwidth_gb_per_sec = BH_DRAM_BANDWIDTH_GB_PER_SEC;
     }
@@ -364,7 +359,7 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
 
         if (use_device_profiler) {
@@ -416,7 +411,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        TT_ASSERT(
+        TT_FATAL(
             device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
@@ -572,8 +567,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
         return 0;
-    } else {
-        log_error(LogTest, "Test Failed");
-        return 1;
     }
+    log_error(LogTest, "Test Failed");
+    return 1;
 }

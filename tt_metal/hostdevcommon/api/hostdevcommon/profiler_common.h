@@ -13,6 +13,7 @@
 namespace kernel_profiler {
 
 static constexpr int SUM_COUNT = 2;
+static constexpr uint32_t DRAM_PROFILER_ADDRESS_STALLED = 0xFFFFFFFF;
 
 enum BufferIndex {
     ID_HH,
@@ -43,7 +44,7 @@ enum ControlBuffer {
     DEVICE_BUFFER_END_INDEX_T2,
     FW_RESET_H,
     FW_RESET_L,
-    DRAM_PROFILER_ADDRESS,
+    DRAM_PROFILER_ADDRESS_DEFAULT,  // Used in normal profiler operation
     RUN_COUNTER,
     NOC_X,
     NOC_Y,
@@ -51,10 +52,34 @@ enum ControlBuffer {
     CORE_COUNT_PER_DRAM,
     DROPPED_ZONES,
     PROFILER_DONE,
-    TRACE_REPLAY_STATUS
+    TRACE_REPLAY_STATUS,
+    // Used for device debug dump mode. Needs to come last in the control buffer
+    // because we first update the host buffer end index and then the DRAM buffer address
+    DRAM_PROFILER_ADDRESS_BR_ER_0,
+    DRAM_PROFILER_ADDRESS_NC_0,
+    DRAM_PROFILER_ADDRESS_T0_0,
+    DRAM_PROFILER_ADDRESS_T1_0,
+    DRAM_PROFILER_ADDRESS_T2_0,
 };
 
-enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };
+enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT, TS_DATA_16B };
+
+// Number of expected uint64_t data values for each PacketType
+template <PacketTypes packet_type>
+struct TimestampedDataSize {
+    // No checks
+    static constexpr std::uint32_t size = 0;
+};
+
+template <>
+struct TimestampedDataSize<TS_DATA> {
+    static constexpr std::uint32_t size = 1;
+};
+
+template <>
+struct TimestampedDataSize<TS_DATA_16B> {
+    static constexpr std::uint32_t size = 2;
+};
 
 // TODO: use data types in profile_msg_t rather than addresses/sizes
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;

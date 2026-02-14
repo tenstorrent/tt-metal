@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "batch_norm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -29,7 +30,7 @@ inline void check_tensor_BN(const Tensor& tensor, std::string_view name, std::ui
 }  // namespace
 
 void BatchNormOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
     // input (N, C, H, W)
@@ -56,7 +57,7 @@ void BatchNormOperation::validate_tensors(
 }
 
 BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return BatchNormFactory();
 }
 
@@ -95,11 +96,6 @@ void BatchNormOperation::validate_on_program_cache_miss(
             "bias tensor must be interleaved");
     }
 
-    BatchNormOperation::validate_on_program_cache_hit(operation_attributes, tensor_args);
-};
-
-void BatchNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 

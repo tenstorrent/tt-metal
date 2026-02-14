@@ -5,9 +5,6 @@
 
 import torch
 import ttnn
-import math
-from tt_lib.utils import tilize as tilize_util
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -77,14 +74,33 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
+    # Handle both sample suite (tuple) and model_traced suite (dict, if ever treated as binary)
+    if isinstance(input_shape, dict) and "self" in input_shape:
+        # This is model_traced suite - dict with 'self' key (shouldn't happen for unary, but handle it)
+        shape = input_shape["self"] if isinstance(input_shape["self"], tuple) else tuple(input_shape["self"])
+    elif isinstance(input_shape, (tuple, list)):
+        shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
     else:
         shape = input_shape
+
+    # Ensure padded_shape is also a tuple
+    if isinstance(padded_shape, list):
+        padded_shape = tuple(padded_shape)
+
+    # Validation: padded_shape must be >= input_shape in each dimension
+    if isinstance(shape, tuple) and isinstance(padded_shape, tuple):
+        if len(shape) != len(padded_shape):
+            raise ValueError(f"Padded shape rank {len(padded_shape)} must match input shape rank {len(shape)}")
+        for i, (input_dim, padded_dim) in enumerate(zip(shape, padded_shape)):
+            if padded_dim < input_dim:
+                raise ValueError(
+                    f"Padded shape {padded_shape} must be >= input shape {shape} in each dimension, "
+                    f"but dimension {i} has padded={padded_dim} < input={input_dim}"
+                )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -95,10 +111,19 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Check if we need to override layout for bfloat8_b/bfloat4_b
+    # These dtypes REQUIRE TILE layout, so we use TILE even though
+    # tilize_with_val_padding normally takes ROW_MAJOR input
+    dtype_str = str(input_a_dtype).upper() if input_a_dtype else ""
+    needs_tile_layout = "BFLOAT8_B" in dtype_str or "BFLOAT4_B" in dtype_str
+
+    # Use TILE layout for bfloat8_b/bfloat4_b, otherwise use specified layout
+    actual_layout = ttnn.TILE_LAYOUT if needs_tile_layout else input_a_layout
+
     # Build from_torch arguments based on storage_type
     from_torch_kwargs = {
         "dtype": input_a_dtype,
-        "layout": input_a_layout,
+        "layout": actual_layout,
     }
 
     # Only add device and memory_config if not HOST storage

@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
@@ -88,7 +89,7 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 
 }  // namespace ttnn::operations::data_movement
 
-namespace ttnn::operations::data_movement::slice {
+namespace ttnn::prim {
 
 void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -170,11 +171,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void SliceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -223,7 +219,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+Tensor SliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -240,7 +236,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     const auto& input = tensor_args.input;
 
     if (args.use_tensor_args) {
-        return program::SliceTileTensorArgsProgramFactory{};
+        return SliceTileTensorArgsProgramFactory{};
     }
 
     // Check if we have step != 1
@@ -248,33 +244,29 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
 
     if (input.layout() == Layout::ROW_MAJOR) {
         if (input.is_sharded()) {
-            return program::SliceRmShardedProgramFactory{};
-        } else if (has_step) {
-            return program::SliceRmStrideProgramFactory{};
-        } else {
-            return program::SliceRmProgramFactory{};
+            return SliceRmShardedProgramFactory{};
         }
-    } else {
-        // Layout::TILE
-        return program::SliceTileProgramFactory{};
+        if (has_step) {
+            return SliceRmStrideProgramFactory{};
+        }
+        return SliceRmProgramFactory{};
     }
+    // Layout::TILE
+    return SliceTileProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>
 SliceDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, const Tensor& output) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args, const Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = output;
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor, true);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::data_movement::slice
-
-namespace ttnn::prim {
-ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_value_t slice(
+SliceDeviceOperation::tensor_return_value_t slice(
     const Tensor& input,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
@@ -287,7 +279,7 @@ ttnn::operations::data_movement::slice::SliceDeviceOperation::tensor_return_valu
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+    using OperationType = ttnn::prim::SliceDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},

@@ -54,7 +54,7 @@ void bind_mse_loss_function(nb::module_& mod) {
                const Tensor& prediction,
                const LossReductionMode mode,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> optional_output_tensor) -> ttnn::Tensor {
+               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(ref, prediction, mode, memory_config, optional_output_tensor);
             },
             nb::arg("input_reference"),
@@ -96,7 +96,7 @@ void bind_mae_loss_function(nb::module_& mod) {
                const Tensor& prediction,
                const LossReductionMode mode,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> optional_output_tensor) -> ttnn::Tensor {
+               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
                 return self(ref, prediction, mode, memory_config, optional_output_tensor);
             },
             nb::arg("input_reference"),

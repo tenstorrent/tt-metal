@@ -8,7 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -70,23 +70,11 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 - The (optional) preallocated output tensor must have ROW_MAJOR layout
         )doc";
 
-    using OperationType = decltype(ttnn::argmax);
-    bind_registered_operation(
+    ttnn::bind_function<"argmax">(
         mod,
-        ttnn::argmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<int> dim,
-               const bool keepdim,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::argmax,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
@@ -94,7 +82,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("use_multicore") = false,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

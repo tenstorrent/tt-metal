@@ -138,7 +138,7 @@ class MeshConfig:
             tensor,
             dim=3,
             multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=4,
+            num_links=ccl_manager.num_links,
             memory_config=memory_config,
             topology=ccl_manager.topology,
             cluster_axis=axis,
@@ -153,7 +153,7 @@ class MeshConfig:
             mesh_device=ccl_manager.mesh_device,
             topology=ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=4,
+            num_links=ccl_manager.num_links,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
@@ -180,7 +180,7 @@ class MeshConfig:
             mesh_device=ccl_manager.mesh_device,
             topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=4,
+            num_links=ccl_manager.num_links,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )

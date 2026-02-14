@@ -14,6 +14,7 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "stream_io_map.h"
 #include "tensix.h"
 #include "wormhole/wh_hal.hpp"
 #include "impl/context/metal_context.hpp"
@@ -267,7 +268,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-        } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+        }
+        if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
             // Move addresses in the NCRISC memory range to l1 (copied by kernel)
             return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE_SCRATCH;
         }
@@ -311,9 +313,9 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
 
     this->device_features_func_ = [](DispatchFeature feature) -> bool {
         switch (feature) {
-            case DispatchFeature::ETH_MAILBOX_API: return false;
+            case DispatchFeature::ETH_MAILBOX_API:
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
         }
@@ -333,6 +335,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->operand_start_stream_ = OPERAND_START_STREAM;
+    this->has_stream_registers_ = true;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -374,11 +378,6 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_
             processor_type_idx == 1) {
             launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
         }
-    };
-
-    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
-        // No checks
-        return true;
     };
 
     this->max_pinned_memory_count_ = 12;

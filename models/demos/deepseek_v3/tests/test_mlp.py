@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -9,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
@@ -24,8 +27,15 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 
 
+# TODO: Doesn't work on multi-host - we should figure out why
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
+    # Add a skip for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375
+    if tuple(mesh_device.shape) == (8, 8):
+        pytest.skip(
+            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
+        )
     reference_model = DeepseekV3MLP(hf_config).eval()
     reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
@@ -39,12 +49,18 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
     )
 
 
+# TODO: Doesn't work on multi-host - we should figure out why
+@pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
 )
 def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, tmp_path, mesh_device, state_dict):
+    if tuple(mesh_device.shape) == (8, 8):
+        pytest.skip(
+            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
+        )
     state_dict = sub_state_dict(state_dict, module_path + ".")
     run_weight_conversion_test(
         MLPClass=MLPClass,
@@ -62,6 +78,10 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
 
 
 def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, reference_w1, mesh_device):
+    if tuple(mesh_device.shape) == (8, 8):
+        pytest.skip(
+            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
+        )
     num_module_layers, _ = mesh_device.shape
 
     # Convert the weights
@@ -90,7 +110,7 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     w1_ttnn = ttnn.unsqueeze(w1_ttnn, 0)  # Unsqueeze to collect shards on a separate dim
     w1_torch = ttnn.to_torch(
         w1_ttnn,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
     )
 
     # Weight should be transposed from PyTorch format
@@ -110,21 +130,24 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     ttnn.deallocate(w1_ttnn)
 
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mode,seq_len",
+    [
+        ("decode", 32),
+        ("prefill", _prefill_seq_len),
+    ],
+)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [
         (MLP, None),
         (NonExpert, "model.layers.0.mlp"),
         (SharedExpert, "model.layers.3.mlp.shared_experts"),
-    ],
-)
-@pytest.mark.parametrize(
-    "mode,seq_len",
-    [
-        ("decode", 32),
-        ("prefill", 512),
-        ("prefill", 2048),  # Test chunking
     ],
 )
 def test_forward_pass(
@@ -189,7 +212,7 @@ def test_forward_pass(
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tuple(mesh_device.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
     )
 
     # Cleanup

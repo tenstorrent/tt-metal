@@ -6,8 +6,9 @@
 
 #include <optional>
 
+#include "tt-metalium/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -15,7 +16,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -29,15 +30,23 @@ struct LayerNormMultiCoreProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
+
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value);
+
+    // Returns the default core range for non-sharded LayerNorm if a
+    // core range override is not provided
+    static CoreRangeSet default_core_range(IDevice* device);
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

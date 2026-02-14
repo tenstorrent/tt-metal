@@ -18,7 +18,11 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
+
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -52,7 +56,7 @@ std::vector<CBInfo> get_cb_info(
     const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> /*input_shape*/,
     std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
@@ -597,7 +601,7 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t num_blocks_act_h,
+    uint32_t /*num_blocks_act_h*/,
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype,
@@ -668,9 +672,9 @@ bool is_split_reader_viable(
 
 void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
@@ -757,4 +761,4 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_tiles = get_arg_val<uint32_t>(i++);
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
-    const auto norm_type = get_arg_val<uint32_t>(i++);
 
     std::uint8_t input_id{0};
     const auto cb_input = input_id++;    // input(==tmp_pow_sum)
@@ -73,5 +71,4 @@ void MAIN {
     }
     // x^p
     power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
-}  // void MAIN
-}  // namespace NAMESPACE
+}

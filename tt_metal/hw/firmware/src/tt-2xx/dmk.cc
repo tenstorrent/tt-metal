@@ -10,7 +10,6 @@
 #include "tensix_types.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"
-#include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
@@ -53,7 +52,6 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    asm("FENCE.i");
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG

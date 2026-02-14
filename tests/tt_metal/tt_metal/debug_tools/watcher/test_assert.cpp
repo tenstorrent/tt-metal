@@ -90,7 +90,7 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                     .noc = tt_metal::NOC::RISCV_0_default});
-                            risc = " brisc";
+                            risc = "BRISC";
                             break;
                         case 1:
                             assert_kernel = CreateKernel(
@@ -100,19 +100,22 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                                     .noc = tt_metal::NOC::RISCV_1_default});
-                            risc = "ncrisc";
+                            risc = "NCRISC";
                             break;
                         default: TT_THROW("Unsupported DM processor id {}", processor_id);
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
-                    TT_ASSERT(0 <= processor_id && processor_id < 3);
+                    TT_FATAL(
+                        0 <= processor_id && processor_id < 3,
+                        "processor_id {} must be 0, 1, or 2 for COMPUTE",
+                        processor_id);
                     assert_kernel = CreateKernel(
                         program_,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor_id), "1"}}});
-                    risc = fmt::format("trisc{}", processor_id);
+                    risc = fmt::format("TRISC{}", processor_id);
                     break;
             }
             break;
@@ -157,7 +160,7 @@ static void RunTest(
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 67;
+        const uint32_t line_num = 63;
         expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
             "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "

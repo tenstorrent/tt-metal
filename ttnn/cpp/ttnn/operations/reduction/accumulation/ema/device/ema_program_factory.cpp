@@ -12,25 +12,24 @@
 
 #include <bit>
 
-namespace ttnn::operations::reduction::ema::program {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 
 constexpr auto ema_buffer_depth = 2;
 
 EmaProgramFactory::cached_program_t EmaProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
+    IDevice* device = input.device();
 
     // Grid sizing
     // -----------
     // If empty grid size, use all cores
     auto grid_size = operation_attributes.grid_size;
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
-        grid_size = input.device()->compute_with_storage_grid_size();
+        grid_size = device->compute_with_storage_grid_size();
     }
     auto num_cores_available = grid_size.x * grid_size.y;
 
@@ -117,26 +116,24 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
 
     // Create kernels
     // --------------
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_reader.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_args});
+            .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_compile_args});
 
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_writer.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_args});
+            .processor = DataMovementProcessor::RISCV_1, .noc = writer_noc, .compile_args = writer_compile_args});
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp",
@@ -185,9 +182,9 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
 
 void EmaProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const EmaParams& /*operation_attributes*/,
+    const EmaInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
 
@@ -203,4 +200,4 @@ void EmaProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::ema::program
+}  // namespace ttnn::prim

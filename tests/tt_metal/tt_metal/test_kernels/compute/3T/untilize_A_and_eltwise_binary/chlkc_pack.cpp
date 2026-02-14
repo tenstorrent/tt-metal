@@ -5,14 +5,13 @@
 #include <cstdint>
 #include "llk_pack_common.h"
 #include "llk_pack.h"
-namespace NAMESPACE {
 
-void pack_main() {
+void kernel_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
 
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
@@ -35,4 +34,3 @@ void pack_main() {
         }
     }
 }
-}  // namespace NAMESPACE

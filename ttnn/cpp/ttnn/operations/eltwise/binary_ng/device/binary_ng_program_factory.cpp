@@ -79,68 +79,6 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
     return TensorMemoryLayout::INTERLEAVED;
 }
 
-const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
-
-inline auto is_uneven(const TensorSpec& t) {
-    if (not t.memory_config().is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = get_shard_spec(t)->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
-    // scalar value treated as interleaved
-    if (!b.has_value()) {
-        return false;
-    }
-
-    // does not work for width and block sharding, pcc error,
-    // maybe support later to improve performance
-    // if (!b.has_value() && a.memory_config().is_sharded()) {
-    //     return !is_uneven(a);
-    // }
-
-    if (!c.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
-        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
-            return false;
-        }
-        if (a.memory_config().buffer_type() == BufferType::DRAM ||
-            b->memory_config().buffer_type() == BufferType::DRAM ||
-            c.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::optional<AllShardSpecs> get_shard_specs(
     const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
@@ -151,7 +89,9 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c)) {
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
         // treat as interleaved
         return std::nullopt;
     }
@@ -489,33 +429,32 @@ KernelName get_reader_kernel_name_and_defines(
     const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
     if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
         return KernelName::ReaderNoBcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
         return KernelName::ReaderRowBcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::COL_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
         return KernelName::ReaderColBcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         return KernelName::ReaderRowBColABcastNg;
-    } else if (
-        subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
         return KernelName::ReaderScalarBcastNg;
-    } else {
-        TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
     }
+    TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
 }
 
 void overwrite_compute_kernel_name_and_defines(
@@ -786,7 +725,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32;
+                            c_data_format == tt::DataFormat::Float32 ||
+                            (a_data_format == tt::DataFormat::Float32 && b_data_format == tt::DataFormat::Float32) ||
+                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
@@ -827,8 +769,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
-        if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_int";
+        if (b_dtype == DataType::INT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        } else if (b_dtype == DataType::UINT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";

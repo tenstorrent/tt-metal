@@ -18,6 +18,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <experimental/fabric/control_plane.hpp>
+
+// NOLINTBEGIN(bugprone-branch-clone)
 
 using std::vector;
 
@@ -44,6 +47,7 @@ enum class EnvVarID {
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
+    TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -95,6 +99,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,          // Disable use of SFPLOADMACRO instructions
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -119,6 +124,8 @@ enum class EnvVarID {
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
+    TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
     // WATCHER SYSTEM
@@ -145,10 +152,10 @@ enum class EnvVarID {
     // INSPECTOR
     // ========================================
     TT_METAL_INSPECTOR,                                // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
     TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_JIT_ANALYTICS,                            // Enable JIT analytics
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
@@ -159,6 +166,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
     TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
     TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
+    TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
     TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
     TT_METAL_DPRINT_FILE,                      // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
@@ -183,6 +191,11 @@ enum class EnvVarID {
     // FABRIC CONFIGURATION
     // ========================================
     TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
+
+    // ========================================
+    // JIT BUILD CONFIGURATION
+    // ========================================
+    TT_METAL_BACKEND_DUMP_RUN_CMD,  // Dump JIT build commands to stdout
 };
 
 // Environment variable name for TT-Metal root directory
@@ -311,6 +324,8 @@ const std::string& RunTimeOptions::get_cache_dir() const {
     return this->cache_dir_;
 }
 
+const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
+
 const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
         TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH");
@@ -336,7 +351,7 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 // Uses switch statement for efficient dispatch
 //
 // IMPORTANT: Most cases assume 'value' is non-null (enforced by InitializeFromEnvVars loop guard).
-// Only TT_METAL_INSPECTOR_LOG_PATH and TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
+// Only TT_METAL_RISCV_DEBUG_INFO explicitly handle nullptr
 // for default value initialization.
 
 void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
@@ -362,6 +377,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->is_kernel_dir_env_var_set = true;
             this->kernel_dir = normalize_path(value) + "/";
             break;
+
+        // TT_METAL_LOGS_PATH
+        // Directory for generated logs and debug output (dprint, watcher, profiler, etc.)
+        // Default: Current working directory if not set
+        // Usage: export TT_METAL_LOGS_PATH=/path/to/logs
+        case EnvVarID::TT_METAL_LOGS_PATH: this->logs_dir_ = normalize_path(value) + "/"; break;
 
         // TT_METAL_SIMULATOR
         // Path to simulator executable. When set, overrides mock cluster mode if both are set.
@@ -635,6 +656,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DISABLE_SFPLOADMACRO
+        // Disable use of SFPLOADMACRO instructions.
+        // Default: 0 (use SFPLOADMACRO instructions)
+        // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
+        case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -792,8 +819,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: nullopt (uses profiler default)
         // Usage: export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=500
         case EnvVarID::TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: {
-            // Only set the program support count if device profiler is also enabled
-            if (this->profiler_enabled && value) {
+            if (value) {
                 this->profiler_program_support_count = std::stoi(value);
             }
             break;
@@ -810,8 +836,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (dump to files)
         // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
         case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
-            // Only disable dumping to files if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
+            if (is_env_enabled(value)) {
                 this->profiler_disable_dump_to_files = true;
             }
             break;
@@ -825,6 +850,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only disable pushing to Tracy GUI if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_DUMP
+        // Enable experimental NOC debug dump mode. In this mode,
+        // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
+        // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
+        case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
+            if (is_env_enabled(value)) {
+                this->set_experimental_noc_debug_dump_enabled(true);
             }
             break;
         }
@@ -863,6 +899,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
         case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
             this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
+
+        // TT_METAL_DISPATCH_PROGRESS_UPDATE_MS
+        // Dispatch kernel progress update period in milliseconds.
+        // Default: 100ms
+        // Usage: export TT_METAL_DISPATCH_PROGRESS_UPDATE_MS=200
+        case EnvVarID::TT_METAL_DISPATCH_PROGRESS_UPDATE_MS:
+            this->dispatch_progress_update_ms = std::stoul(value);
             break;
 
         // ========================================
@@ -1015,18 +1059,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
-        // TT_METAL_INSPECTOR_LOG_PATH
-        // Sets the log path for inspector output.
-        // Default: Defaults to {TT_METAL_RUNTIME_ROOT}/generated/inspector
-        // Usage: export TT_METAL_INSPECTOR_LOG_PATH=/path/to/inspector/logs
-        case EnvVarID::TT_METAL_INSPECTOR_LOG_PATH:
-            if (value) {
-                this->inspector_settings.log_path = std::filesystem::path(value);
-            } else {
-                this->inspector_settings.log_path = std::filesystem::path(this->get_root_dir()) / "generated/inspector";
-            }
-            break;
-
         // TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT
         // Controls whether initialization is considered important for inspector. Set to '0' to disable.
         // Default: false (not important)
@@ -1062,6 +1094,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 }
             }
             this->set_riscv_debug_info_enabled(enable_riscv_debug_info);
+            break;
+        }
+
+        // TT_METAL_JIT_ANALYTICS_
+        // Enable JIT compiler state information. Disable state by default; override with 1.
+        // Default: '0', or disable
+        // Usage: export TT_METAL_JIT_ANALYTICS=1  # in disable state by default
+        case EnvVarID::TT_METAL_JIT_ANALYTICS: {
+            jit_analytics_enabled = false;
+            if (value) {
+                if (strcmp(value, "1") == 0) {
+                    jit_analytics_enabled = true;
+                }
+            }
+            this->set_jit_analytics_enabled(jit_analytics_enabled);
             break;
         }
 
@@ -1137,6 +1184,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: all chips
         // Usage: export TT_METAL_DPRINT_CHIPS=0,1,2
         case EnvVarID::TT_METAL_DPRINT_CHIPS:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
+        // TT_METAL_DPRINT_NODES
+        // Specifies fabric node IDs for debug printing. Supports 'all' or comma-separated list of node IDs.
+        // Cannot specify both TT_METAL_DPRINT_NODES and TT_METAL_DPRINT_CHIPS.
+        // Default: all nodes
+        // Usage: export TT_METAL_DPRINT_NODES="(M0,D0),(M0,D1)"
+        case EnvVarID::TT_METAL_DPRINT_NODES:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
@@ -1224,6 +1280,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->disable_xip_dump = is_env_enabled(value);
             break;
         }
+
+        // TT_METAL_BACKEND_DUMP_RUN_CMD
+        // Dump JIT build commands to stdout for debugging kernel compilation.
+        // Default: false
+        // Usage: export TT_METAL_BACKEND_DUMP_RUN_CMD=1
+        case EnvVarID::TT_METAL_BACKEND_DUMP_RUN_CMD: this->dump_build_commands = is_env_enabled(value); break;
     }
 }
 
@@ -1238,14 +1300,17 @@ void RunTimeOptions::InitializeFromEnvVars() {
         }
     }
 
-    // TT_METAL_INSPECTOR_LOG_PATH: Set default path if not specified
-    if (std::getenv("TT_METAL_INSPECTOR_LOG_PATH") == nullptr) {
-        HandleEnvVar(EnvVarID::TT_METAL_INSPECTOR_LOG_PATH, nullptr);
-    }
+    // Set inspector log path
+    this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
 
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
         HandleEnvVar(EnvVarID::TT_METAL_RISCV_DEBUG_INFO, nullptr);
+    }
+
+    // TT_METAL_JIT_ANALYTICS: Inherit from inspector if not explicitly set
+    if (std::getenv("TT_METAL_JIT_ANALYTICS") == nullptr) {
+        HandleEnvVar(EnvVarID::TT_METAL_JIT_ANALYTICS, nullptr);
     }
     ParseWatcherEnv();
 }
@@ -1411,13 +1476,23 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
-    ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
+    bool chips_specified = ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
+    bool nodes_specified = ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
+    if (nodes_specified && chips_specified) {
+        TT_THROW(
+            "Cannot specify both TT_METAL_{}_CHIPS and TT_METAL_{}_NODES",
+            RunTimeDebugFeatureNames[feature],
+            RunTimeDebugFeatureNames[feature]);
+    } else if (!nodes_specified && !chips_specified) {
+        // All chips are enabled if neither chips nor nodes are specified
+        feature_targets[feature].all_chips = true;
+    }
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS", hal);
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
     ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
     ParseFeaturePrependDeviceCoreRisc(feature, feature_env_prefix + "_PREPEND_DEVICE_CORE_RISC");
 
-    // Set feature enabled if the user asked for any feature cores
+    // Set feature enabled if the user asked for any feature cores, chips, or nodes
     feature_targets[feature].enabled = false;
     for (auto& core_type_and_all_flag : feature_targets[feature].all_cores) {
         if (core_type_and_all_flag.second != RunTimeDebugClassNoneSpecified) {
@@ -1499,9 +1574,10 @@ void RunTimeOptions::ParseFeatureCoreRange(
     feature_targets[feature].cores[core_type] = cores;
 }
 
-void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
+bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
     std::vector<int> chips;
     char* env_var_str = std::getenv(env_var.c_str());
+    bool specified = env_var_str != nullptr;
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
@@ -1521,11 +1597,50 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    // Default is no chips are specified is all
-    if (chips.empty()) {
-        feature_targets[feature].all_chips = true;
-    }
     feature_targets[feature].chip_ids = chips;
+
+    return specified;
+}
+
+bool RunTimeOptions::ParseFeatureNodeIds(RunTimeDebugFeatures feature, const std::string& env_var) {
+    char* env_var_str = std::getenv(env_var.c_str());
+    bool specified = env_var_str != nullptr;
+    while (env_var_str != nullptr && *env_var_str != '\0') {
+        while (*env_var_str == ' ' || *env_var_str == '"') {
+            env_var_str++;
+        }
+        if (*env_var_str == '\0') {
+            break;
+        }
+        // Can also have "all"
+        if (strcmp(env_var_str, "all") == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
+        uint32_t mesh_id, chip_id;
+        // Parse format: (M<n>, D<n>) with optional spaces, e.g. (M0, D1)
+        if (sscanf(env_var_str, "(M%u , D%u)", &mesh_id, &chip_id) != 2 &&
+            sscanf(env_var_str, "(M%u, D%u)", &mesh_id, &chip_id) != 2 &&
+            sscanf(env_var_str, "(M%u,D%u)", &mesh_id, &chip_id) != 2) {
+            TT_THROW(
+                "Invalid format for {}: '{}'. Expected format: (Mn,Dn) or 'all'. Example: (M0,D0),(M0,D1)",
+                env_var,
+                env_var_str);
+        }
+
+        feature_targets[feature].node_ids.push_back(tt_fabric::FabricNodeId(tt_fabric::MeshId{mesh_id}, chip_id));
+        env_var_str = strchr(env_var_str, ')');
+        if (env_var_str != nullptr) {
+            env_var_str++;  // Skip ')'
+            while (*env_var_str == ',') {
+                env_var_str++;
+            }
+            if (*env_var_str == '\0') {
+                break;
+            }
+        }
+    }
+    return specified;
 }
 
 void RunTimeOptions::ParseFeatureRiscvMask(
@@ -1589,4 +1704,38 @@ tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
     return dispatch_core_config;
 }
 
+void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {
+    if (enabled) {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+        experimental_noc_debug_dump_enabled = true;
+    } else {
+        profiler_enabled = false;
+        profiler_noc_events_enabled = false;
+        experimental_noc_debug_dump_enabled = false;
+    }
+}
+
+void RunTimeOptions::resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane) {
+    for (auto& target : feature_targets) {
+        if (!target.node_ids.empty()) {
+            // Clear the chip IDs because the chip ID from fabric node IDs come from the MGD which can change
+            // during runtime
+            // We only allowed specifying chip ID xor node ID so clearing the chip IDs is safe
+            target.chip_ids.clear();
+            std::unordered_set<int> seen_chip_ids;
+            for (const auto& node_id : target.node_ids) {
+                ChipId chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
+                int chip_id_int = static_cast<int>(chip_id);
+                if (seen_chip_ids.insert(chip_id_int).second) {
+                    target.chip_ids.push_back(chip_id_int);
+                    fmt::print("Resolved fabric node ID {} to chip ID {}\n", node_id, chip_id_int);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace tt::llrt
+
+// NOLINTEND(bugprone-branch-clone)

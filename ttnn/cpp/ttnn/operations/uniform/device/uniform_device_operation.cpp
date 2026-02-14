@@ -8,7 +8,7 @@
 namespace ttnn::operations::uniform {
 
 UniformDeviceOperation::program_factory_t UniformDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
     return ProgramFactory{};
 }
 
@@ -28,18 +28,13 @@ void UniformDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void UniformDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 TensorSpec UniformDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.input.tensor_spec();
 }
 
 UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Since this is an in-place operation, return the input tensor to be updated directly
     return tensor_args.input;
 }
@@ -61,6 +56,7 @@ ttnn::Tensor uniform(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
+    TT_FATAL(input.device() != nullptr, "Uniform: Input tensor needs to be on device");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             from,

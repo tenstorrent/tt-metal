@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_bmm_8bank for reuse
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uintptr_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t Mt = get_arg_val<uint32_t>(2);
     uint32_t Nt = get_arg_val<uint32_t>(4);
     uint32_t batch = get_arg_val<uint32_t>(7);

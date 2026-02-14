@@ -65,9 +65,9 @@ jobs:
             "swin-s": false,
             "vovnet": false,
             "efficientnetb0": false,
-            "oft": false,
             "panoptic-deeplab": false,
-            "non-civ2": false
+            "non-civ2": false,
+            "ops-perf-tests": false
           }'
 
           if [[ "$requested_models" == "all" ]]; then
@@ -136,8 +136,8 @@ jobs:
           group_models='{
             "N300 WH B0 not yet ported": ["non-civ2"],
             "N300 WH B0 Set 1": ["stable-diffusion-xl", "stable-diffusion-1-4", "distilbert", "vgg", "bert-tiny", "squeezebert", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit"],
-            "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0"],
-            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "oft", "panoptic-deeplab"]
+            "N300 WH B0 Set 2": ["mamba", "metal-bert-large-11", "mobilenetv2", "vanilla-unet", "swin-v2", "swin-s", "vovnet", "efficientnetb0", "ops-perf-tests"],
+            "P150 BH": ["stable-diffusion-1-4", "vgg-unet", "resnet50", "ufld-v2", "sentence-bert", "functional-unet", "vit", "panoptic-deeplab", "ops-perf-tests"]
           }'
 
           # Original matrix definition
@@ -225,9 +225,9 @@ jobs:
         with:
           device_perf_model_name: "non-civ2_tests"
           commands: |
-            pytest models/demos/mnist/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/mnist/tests -m models_device_performance_bare_metal
             pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-            pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -245,7 +245,7 @@ jobs:
         with:
           device_perf_model_name: "stable_diffusion_1_4"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+            pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion-1-4'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -263,7 +263,7 @@ jobs:
         with:
           device_perf_model_name: "vgg"
           commands: |
-            pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/vgg/tests/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['vgg'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -272,7 +272,7 @@ jobs:
         with:
           device_perf_model_name: "vgg_unet"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/vgg_unet/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vgg-unet'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -300,7 +300,7 @@ jobs:
         with:
           device_perf_model_name: "resnet50"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['resnet50'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -309,7 +309,7 @@ jobs:
         with:
           device_perf_model_name: "ufld_v2"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/ufld_v2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/ufld_v2/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ufld-v2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -354,7 +354,7 @@ jobs:
         with:
           device_perf_model_name: "mobilenetv2"
           commands: |
-            pytest models/demos/mobilenetv2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/mobilenetv2/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['mobilenetv2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -363,7 +363,7 @@ jobs:
         with:
           device_perf_model_name: "vit"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vit/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/vit/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vit'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -372,7 +372,7 @@ jobs:
         with:
           device_perf_model_name: "vanilla_unet"
           commands: |
-            pytest models/demos/vanilla_unet/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/vanilla_unet/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['vanilla-unet'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -412,26 +412,6 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['efficientnetb0'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: oft tests
-        env:
-          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "oft"
-          commands: |
-            pytest models/experimental/oft/tests/test_device_perf_oft.py -m models_device_performance_bare_metal --timeout=600
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible &&  matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['oft'] }}
-
-      - name: panoptic_deeplab tests (20 cores)
-        env:
-          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "panoptic_deeplab_20_cores"
-          commands: |
-            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores -m models_device_performance_bare_metal --timeout=600
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
-
       - name: panoptic_deeplab tests (110 cores)
         env:
           TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
@@ -441,6 +421,15 @@ jobs:
           commands: |
             pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_110_cores -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
+
+      - name: ops perf tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "ops-perf-tests"
+          commands: |
+            pytest tests/ttnn/perf_tests/operations/conv -m models_device_performance_bare_metal --timeout=300
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
         id: generate-device-perf-report

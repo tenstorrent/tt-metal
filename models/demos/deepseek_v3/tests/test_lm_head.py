@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -38,6 +40,10 @@ class DeepseekV3LMHead(nn.Module):
         return self.lm_head(hidden_states)
 
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -49,10 +55,10 @@ class DeepseekV3LMHead(nn.Module):
     "mode,seq_len",
     [
         ("decode", 32),
-        ("prefill", 1024),
-        ("prefill", 2048),
+        ("prefill", _prefill_seq_len),
     ],
 )
+@pytest.mark.requires_device(["TG"])
 def test_forward_pass(
     mode: str,
     seq_len: int,

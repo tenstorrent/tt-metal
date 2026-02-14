@@ -139,8 +139,7 @@ Synchronization with the reader and writer kernels, as well as between the three
 #include <compute_kernel_api/common.h>
 #include <compute_kernel_api/eltwise_binary.h>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
@@ -170,7 +169,6 @@ void MAIN {
 
         cb_push_back(cb_out, 1);                    // Pack
     }
-}
 }
 ```
 
@@ -537,9 +535,8 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 ```c++
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
-auto event = std::make_shared<Event>();
-device->command_queue(0).enqueue_record_event(event);
-device->command_queue(1).enqueue_wait_for_event(event);
+MeshEvent event = mesh_device->mesh_command_queue(0).enqueue_record_event();
+mesh_device->mesh_command_queue(1).enqueue_wait_for_event(event);
 ```
 
 ### SPMD in Metalium

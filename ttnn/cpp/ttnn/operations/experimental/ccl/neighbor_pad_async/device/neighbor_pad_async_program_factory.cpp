@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -27,13 +27,13 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::neighbor_pad {
+namespace ttnn::experimental::prim {
 
 NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const NeighborPadAsyncInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -52,9 +52,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
 
 void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const NeighborPadAsyncParams& operation_attributes,
+    const NeighborPadAsyncInputs& tensor_args,
+    Tensor& tensor_return_value) {
     // Update runtime arguments for each program in the workload
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
@@ -105,35 +105,22 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 }
 
 NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const NeighborPadAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const NeighborPadAsyncInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = tensor_args.input_tensor.device()->get_view();
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    devices_to_use = (operation_attributes.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                                              : mesh_view.get_devices_on_row(mesh_coordinate[0]);
-    uint32_t target_ring_size = devices_to_use.size();
 
-    // cluster_axis
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            }
-        }
-    }
+    // Use MeshCoordinates to find forward and backward devices
+    // This is safe on bigmesh where remote devices might not exist on this rank
+    uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, ttnn::ccl::Topology::Linear, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, -1, ttnn::ccl::Topology::Linear, operation_attributes.cluster_axis);
 
     // Program creation
     Program program{};
@@ -190,8 +177,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             }
         }
     } else {
-        is_first_device = !backward_device.has_value();
-        is_last_device = !forward_device.has_value();
+        is_first_device = !backward_coord.has_value();
+        is_last_device = !forward_coord.has_value();
         if (!is_first_device) {
             backward_device_offset = 1;
         }
@@ -318,23 +305,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
-                if (backward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                writer_rt_args.push_back(backward_coord.has_value());
+                if (backward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
             } else {
-                writer_rt_args.push_back(forward_device.has_value());
+                writer_rt_args.push_back(forward_coord.has_value());
 
-                if (forward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                if (forward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
@@ -354,7 +337,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> local_writer_kernel_ids;
     std::vector<CoreCoord> local_copy_core_coords;
     {
-        auto compute_grid = target_device->compute_with_storage_grid_size();
+        auto compute_grid = mesh_device->compute_with_storage_grid_size();
         CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid.x - 1, compute_grid.y - 1}));
         CoreRangeSet fabric_cores = worker_core_ranges;
         CoreRangeSet local_copy_cores = all_cores.subtract(fabric_cores);
@@ -457,4 +440,4 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .num_directions = num_directions});
 }
 
-}  // namespace ttnn::operations::experimental::ccl::neighbor_pad
+}  // namespace ttnn::experimental::prim

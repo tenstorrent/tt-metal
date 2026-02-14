@@ -51,7 +51,6 @@ using namespace tt::test_utils;
 namespace unit_tests_common::matmul::test_matmul_large_block {
 
 void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -59,7 +58,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
         }
         case MathFidelity::HiFi2:
         case MathFidelity::LoFi: {
-            math_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            math_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -71,14 +70,14 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
     uint32_t M,
     uint32_t N,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h) {
+    uint32_t /*out_subblock_h*/) {
     uint32_t num_bytes_for_df = 2;
 
     uint32_t in0_cb = 0;

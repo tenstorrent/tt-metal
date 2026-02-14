@@ -335,7 +335,7 @@ struct Rdiv {
     static Tensor invoke(
         const Tensor& input_tensor,
         float value,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -476,9 +476,6 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW);
 // Unaries with two float parameter
 REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
 
-// Unaries with integer parameter
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-
 // Unaries with optional integer parameter
 REGISTER_UNARY_OPERATION_WITH_OPTIONAL_INTEGER_PARAMETER(round, ROUND, int32_t);
 
@@ -508,6 +505,9 @@ constexpr auto swish = ttnn::register_operation<"ttnn::swish", ttnn::operations:
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();
+constexpr auto power = ttnn::register_operation<
+    "ttnn::power",
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>>();
 constexpr auto gt_unary = ttnn::register_operation<
     "ttnn::gt_unary",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GT>>();

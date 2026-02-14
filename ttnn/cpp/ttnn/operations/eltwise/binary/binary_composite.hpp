@@ -29,7 +29,7 @@ namespace operations::binary {
 struct ExecutePower {
     static Tensor invoke(
         const Tensor& input_tensor,
-        uint32_t exponent,
+        int32_t exponent,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
@@ -104,11 +104,11 @@ struct ExecuteDiv {
     static Tensor invoke(
         const Tensor& input_a,
         const Tensor& input_b,
-        bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        bool fast_and_approximate_mode = false,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
@@ -118,8 +118,8 @@ struct ExecuteDiv {
     static Tensor invoke(
         const Tensor& input,
         float value,
-        bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
+        bool fast_and_approximate_mode = false,
+        const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         std::optional<Tensor> output = std::nullopt,
@@ -159,14 +159,14 @@ struct ExecuteBiasGelu {
     static Tensor invoke(
         const ttnn::Tensor& input_tensor_a,
         const float bias,
-        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<const DataType>& /*dtype*/ = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/ = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/ = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/ = {},
+        std::optional<bool> /*use_legacy*/ = std::nullopt,
+        const std::optional<CoreRangeSet>& /*sub_core_grids*/ = std::nullopt) {
         return ttnn::gelu(
             ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
             true,

@@ -99,6 +99,7 @@ constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
+constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -142,7 +143,7 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;     // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
-    volatile uint32_t local_cb_mask;
+    volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
@@ -160,7 +161,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -170,10 +171,9 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
-static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
@@ -192,57 +192,9 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
+// save space for the structure, device side will cast to the corrrect structure
 struct subordinate_sync_msg_t {
-#if defined(ARCH_QUASAR)
-    // Quasar: expanded structure for multiple DM cores
-    union {
-        struct {
-            volatile uint64_t allDMs;
-            volatile uint32_t allNeo0;
-            volatile uint32_t allNeo1;
-            volatile uint32_t allNeo2;
-            volatile uint32_t allNeo3;
-        };
-        struct {
-            volatile uint8_t dm1;  // Keep dm1 name for compatibility
-            volatile uint8_t dm2;
-            volatile uint8_t dm3;
-            volatile uint8_t dm4;
-            volatile uint8_t dm5;
-            volatile uint8_t dm6;
-            volatile uint8_t dm7;
-            volatile uint8_t padding;
-            volatile uint8_t neo0Trisc0;
-            volatile uint8_t neo0Trisc1;
-            volatile uint8_t neo0Trisc2;
-            volatile uint8_t neo0Trisc3;
-            volatile uint8_t neo1Trisc0;
-            volatile uint8_t neo1Trisc1;
-            volatile uint8_t neo1Trisc2;
-            volatile uint8_t neo1Trisc3;
-            volatile uint8_t neo2Trisc0;
-            volatile uint8_t neo2Trisc1;
-            volatile uint8_t neo2Trisc2;
-            volatile uint8_t neo2Trisc3;
-            volatile uint8_t neo3Trisc0;
-            volatile uint8_t neo3Trisc1;
-            volatile uint8_t neo3Trisc2;
-            volatile uint8_t neo3Trisc3;
-            uint8_t pad[12];
-        };
-    } __attribute__((packed));
-#else
-    // WH/BH: original compact structure for single DM core + triscs
-    union {
-        volatile uint32_t all;
-        struct {
-            volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
-            volatile uint8_t trisc0;
-            volatile uint8_t trisc1;
-            volatile uint8_t trisc2;
-        };
-    };
-#endif
+    volatile uint8_t map[subordinate_map_size];
 };
 
 constexpr int num_waypoint_bytes_per_riscv = 4;
@@ -303,7 +255,9 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCReadsFlushedTripped = 4,
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
-    DebugAssertNCriscNOCPostedWritesSentTripped = 7
+    DebugAssertNCriscNOCPostedWritesSentTripped = 7,
+    DebugAssertRtaOutOfBounds = 8,
+    DebugAssertCrtaOutOfBounds = 9
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

@@ -61,7 +61,7 @@ struct MatmulConfig {
 };
 
 std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -365,7 +365,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 }
 
 bool assign_runtime_args_to_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     distributed::MeshWorkload& workload,
     int num_cores_r,
     int num_cores_c,
@@ -606,7 +606,8 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+    }
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "This test is disabled in WH B0");
         GTEST_SKIP();
     }

@@ -1,7 +1,7 @@
 add_library(ttnn_op_pool ${LIB_TYPE})
 add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 
-target_precompile_headers(ttnn_op_pool REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_pool REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
 set_target_properties(
@@ -14,8 +14,10 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    device/kernels/*
     generic/device/kernels/*
     grid_sample/device/kernels/*
+    rotate/device/kernels/*
     upsample/device/kernels/*
 )
 
@@ -41,11 +43,17 @@ target_sources(
         grid_sample/device/grid_sample_utils.cpp
         grid_sample/grid_sample.cpp
         grid_sample/grid_sample_prepare_grid.cpp
+        rotate/device/rotate_device_operation.cpp
+        rotate/device/rotate_nearest_program_factory.cpp
+        rotate/device/rotate_bilinear_program_factory.cpp
+        rotate/rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp
+        upsample/device/upsample_common.cpp
         upsample/device/upsample_device_operation.cpp
         upsample/device/upsample_program_factory_multicore_sharded.cpp
         upsample/device/upsample_program_factory_multicore_interleaved.cpp
+        upsample/device/upsample_nearest_float_program_factory.cpp
         upsample/upsample.cpp
 )
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt_backend_api_types.hpp>
 #include <unordered_map>
 

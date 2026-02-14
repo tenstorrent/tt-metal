@@ -122,6 +122,7 @@ class BlockShardedStrategyConfiguration(ShardedStrategyConfiguration):
     override_core_grid: Optional[ttnn.CoreRangeSet] = None
     act_block_h_override: int = 0
     act_block_w_div: int = 1
+    override_output_sharding_config: bool = False
 
     def get_tensor_memory_layout(self):
         return ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -455,6 +456,7 @@ def sharding_strategy_to_conv2d_config(sharding_strategy: ShardingStrategy):
     elif isinstance(sharding_strategy, BlockShardedStrategyConfiguration):
         output["act_block_h_override"] = sharding_strategy.act_block_h_override
         output["act_block_w_div"] = sharding_strategy.act_block_w_div
+        output["override_output_sharding_config"] = sharding_strategy.override_output_sharding_config
     else:
         raise ValueError(f"Invalid sharding ShardedStrategyConfiguration was encountered: {sharding_strategy}")
 

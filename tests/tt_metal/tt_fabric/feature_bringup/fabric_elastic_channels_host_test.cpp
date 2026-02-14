@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cassert>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
@@ -746,14 +745,9 @@ int main(int argc, char** argv) {
     }
 
     // Check hardware prerequisites
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_error(tt::LogTest, "Need at least 2 devices to run this test");
-        return -1;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_error(tt::LogTest, "Test must be run on WH");
         return -1;
     }
 
@@ -818,28 +812,26 @@ int main(int argc, char** argv) {
         log_info(tt::LogAlways, "Pipe mode finished: {}/{} test cases successful", successful_tests, test_count);
         return (successful_tests == test_count && test_count > 0) ? 0 : -1;
 
-    } else {
-        // Traditional CLI mode: single test from command line arguments
-        TestConfig config{};
-        try {
-            config = parse_cli_config(argc, argv);
+    }  // Traditional CLI mode: single test from command line arguments
+    TestConfig config{};
+    try {
+        config = parse_cli_config(argc, argv);
 
-            // Align packet size if needed
-            if (config.packet_size % 16 != 0) {
-                log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
-                config.packet_size = tt::align(config.packet_size, 16);
-            }
-
-            validate_test_config(config);
-
-        } catch (const std::exception& e) {
-            log_error(tt::LogTest, "Configuration error: {}", e.what());
-            log_info(tt::LogTest, "For pipe mode, use: {} --pipe-mode", argv[0]);
-            return -1;
+        // Align packet size if needed
+        if (config.packet_size % 16 != 0) {
+            log_warning(tt::LogTest, "Packet size is not aligned to 16 bytes. Aligning to 16 bytes.");
+            config.packet_size = tt::align(config.packet_size, 16);
         }
 
-        // Run single test case
-        int result = run_test_case(config, test_fixture);
-        return result;
+        validate_test_config(config);
+
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Configuration error: {}", e.what());
+        log_info(tt::LogTest, "For pipe mode, use: {} --pipe-mode", argv[0]);
+        return -1;
     }
+
+    // Run single test case
+    int result = run_test_case(config, test_fixture);
+    return result;
 }

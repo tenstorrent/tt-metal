@@ -5,10 +5,9 @@
 #include <benchmark/benchmark.h>
 
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/cpp/ttnn/operations/core/core.hpp>
+#include <ttnn/operations/core/core.hpp>
 #include "bfloat16.hpp"
 #include "constants.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -37,7 +36,7 @@ void BM_host_bfloat8_conversion(benchmark::State& state) {
     }
     auto tensor = ttnn::distributed::from_host_shards(tensors, device->shape());
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto converted_tensor = ttnn::to_dtype(tensor, ttnn::DataType::BFLOAT8_B);
         benchmark::DoNotOptimize(converted_tensor);
     }

@@ -9,21 +9,21 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
-    for ([[maybe_unused]] auto v : args) {
+    for (auto v : args) {
         log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
     }
 }
 
 // This is currently mostly hardcoded for resnet shapes
 inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
-split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint32_t ntiles_h, uint32_t ntiles_w) {
+split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint32_t ntiles_w) {
     uint32_t ncores, ncores_h, ncores_w, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h;
-
-    ncores_h = 1;
 
     // each batch needs to be padded independently
     switch (nbatch) {
@@ -91,13 +91,13 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
             break;
 
         default:
-            TT_ASSERT(false, "unhandled nbatch. TODO");
+            TT_THROW("Unsupported nbatch value {} for pad operation. Supported values are 1, 2, and 8.", nbatch);
 
             // generic case -- TODO
 
             // one of the following will be 0 when grid_size.y != nbatch
-            uint32_t nbatch_per_core_h = nbatch / grid_size.y;   // floor
-            uint32_t ncores_per_batch_h = grid_size.y / nbatch;  // floor
+            nbatch_per_core_h = nbatch / grid_size.y;   // floor
+            ncores_per_batch_h = grid_size.y / nbatch;  // floor
             if (nbatch == grid_size.y) {
                 nbatch_per_core_h = 1;
                 ncores_per_batch_h = 1;
@@ -115,16 +115,19 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                 nbatch_per_core_h = 1;
             } else if (ncores_per_batch_h == 0) {
                 // unsupported case. TODO.
-                TT_ASSERT(false);
+                TT_THROW(
+                    "Unsupported configuration: multiple batches per core along height dimension "
+                    "(nbatch={}, grid_size.y={})",
+                    nbatch,
+                    grid_size.y);
                 // there are multiple batch per core along h
                 // ncores_per_batch_h = 1;
             } else {
-                TT_THROW("Something went terribly wrong in splitting acrtoss cores");
+                TT_THROW("Something went terribly wrong in splitting across cores");
             }
             break;
     }
 
-    ncores_w = 1;
     switch (ntiles_w) {
         case 2: ncores_w = 2; break;
         case 4: ncores_w = 4; break;
@@ -154,9 +157,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
 }  // namespace
 
 PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
@@ -193,7 +194,6 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t nbatch = output_padded_shape[0];
-    uint32_t nchannel = output_padded_shape[1];
     // first the batch dim is distributed along H, and within each batch then the tiles are distributed.
     auto
         [ncores,
@@ -204,7 +204,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
          ntiles_per_core_h,
          ntiles_per_core_w,
          nbatch_per_core_h,
-         ncores_per_batch_h] = split_across_cores(grid_size, nbatch, nchannel, ntiles_h, ntiles_w);
+         ncores_per_batch_h] = split_across_cores(grid_size, nbatch, ntiles_h, ntiles_w);
 
     [[maybe_unused]] int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
@@ -368,9 +368,9 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
 
 void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
+    Tensor& output) {
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
 
@@ -393,4 +393,4 @@ void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

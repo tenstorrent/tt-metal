@@ -8,7 +8,7 @@
 #include "untilize_with_unpadding_multi_core_shared_variables.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::untilize_with_unpadding::program {
+namespace ttnn::prim {
 
 struct UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory {
     using shared_variables_t = UntilizeWithUnpaddingMultiCoreSharedVariables;
@@ -16,15 +16,13 @@ struct UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+        const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        const tensor_return_value_t& tensor_return_value);
+        const UntilizeWithUnpaddingParams& operation_attributes,
+        const Tensor& input,
+        const Tensor& output);
 };
 
-}  // namespace ttnn::operations::data_movement::untilize_with_unpadding::program
+}  // namespace ttnn::prim

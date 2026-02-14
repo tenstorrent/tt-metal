@@ -87,6 +87,10 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape) {
     return strides;
 }
 
+std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides) {
+    return std::inner_product(indices.begin(), indices.end(), strides.begin(), std::size_t{0});
+}
+
 }  // namespace tt::tt_metal
 
 nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {

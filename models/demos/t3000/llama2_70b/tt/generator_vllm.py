@@ -20,7 +20,7 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, t3k_mesh_device, max_batch_size):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size):
         # TODO: pass in model args and tt args as parameters from vllm
         @dataclass
         class ModelArgs:
@@ -41,11 +41,11 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
             llama_version=llama_version,
         )
 
-        check_mesh_device(t3k_mesh_device, model_config)
+        check_mesh_device(mesh_device, model_config)
 
         # initialize arg classes
         model_args = ModelArgs(llama_version=llama_version, ckpt_dir=ckpt_dir, max_batch_size=max_batch_size)
-        tt_args = TTArgs(mesh_device=t3k_mesh_device, cache_path=cache_path)
+        tt_args = TTArgs(mesh_device=mesh_device, cache_path=cache_path)
 
         # load state dict
         state_dict = load_llama_state_dict(model_args.ckpt_dir, n_layers=model_args.num_layers)

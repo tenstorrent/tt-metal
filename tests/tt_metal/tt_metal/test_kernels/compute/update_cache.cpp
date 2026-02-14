@@ -4,12 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/common.h"
+#include "api/compute/untilize.h"
+#include "api/compute/tilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
@@ -55,4 +54,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

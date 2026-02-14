@@ -9,13 +9,13 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -24,25 +24,23 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>
-#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
-#include "jit_build/build.hpp"
+#include "impl/context/metal_context.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
@@ -52,7 +50,6 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
-#include "sub_device/sub_device_manager_tracker.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -85,9 +82,9 @@ Device::Device(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
-    uint32_t completion_queue_reader_core,
+    uint32_t /*completion_queue_reader_core*/,
     size_t worker_l1_size) :
-    id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
+    id_(device_id) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
@@ -129,36 +126,14 @@ bool Device::is_mmio_capable() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_) == this->id_;
 }
 
-CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+CoreRangeSet Device::worker_cores(HalProgrammableCoreType /*core_type*/, SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "worker_cores is deprecated for device");
+    return CoreRangeSet{};
 }
 
-uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
-}
-
-void Device::initialize_default_sub_device_state(
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
-    // Create the default sub-device manager representing the entire chip
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
-
-    auto sub_devices = {SubDevice(std::array{
-        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
-        CoreRangeSet(std::move(active_eth_core_ranges))})};
-
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this,
-        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
-        sub_devices);
+uint32_t Device::num_worker_cores(HalProgrammableCoreType /*core_type*/, SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "num_worker_cores is deprecated for device");
+    return 0U;
 }
 
 std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
@@ -253,14 +228,17 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
+    // SystemMemoryManager now has internal stubs for mock devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
-    auto cq_shared_state = std::make_shared<CQSharedState>();
-    cq_shared_state->sub_device_cq_owner.resize(1);
+    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<HWCommandQueue>(
-            this, cq_shared_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc));
     }
 }
 
@@ -342,11 +320,31 @@ void Device::init_command_queue_device() {
                 this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
+
+    // Precompute NOC data for go signals and set on dispatch command queues
+    const auto& active_eth_cores = get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
+
+    const NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
+    uint32_t idx = 0U;
+    vector_aligned<uint32_t> noc_mcast_unicast_data;
+    for (uint32_t i = 0U; i < num_sub_devices(); ++i) {
+        for (const auto& core_range : active_eth_core_ranges) {
+            noc_mcast_unicast_data.resize(idx + core_range.size());
+            for (const auto& core : core_range) {
+                const auto virtual_core = virtual_core_from_logical_core(core, CoreType::ETH);
+                noc_mcast_unicast_data[idx++] = get_noc_unicast_encoding(noc_index, virtual_core);
+            }
+        }
+    }
+
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_go_signal_noc_data_and_dispatch_sems(
-            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
-            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
+        hw_cq->set_go_signal_noc_data_and_dispatch_sems(num_sub_devices(), noc_mcast_unicast_data);
     }
 }
 
@@ -389,12 +387,6 @@ void Device::configure_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
-// backward compatibility
-void Device::init_fabric() {
-    this->compile_fabric();
-    this->configure_fabric();
-}
-
 bool Device::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
@@ -432,13 +424,14 @@ bool Device::initialize(
         worker_l1_size,
         max_worker_l1_size);
     log_debug(tt::LogMetal, "Worker L1 size: {} Max: {}", worker_l1_size, max_worker_l1_size);
-    std::uint32_t max_alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1));
-    uint32_t worker_l1_unreserved_start = tt::align(
+
+    const uint32_t max_alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1));
+    const uint32_t worker_l1_unreserved_start = tt::align(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    this->initialize_default_sub_device_state(
-        l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+    default_allocator_ =
+        initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal) {
@@ -459,7 +452,7 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
-    sub_device_manager_tracker_.reset(nullptr);
+    default_allocator_.reset();
 
     this->ethernet_cores_.clear();
     this->command_queue_programs_.clear();
@@ -490,6 +483,10 @@ uint32_t Device::dram_size_per_channel() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).dram_view_size;
 }
 
+int Device::get_clock_rate_mhz() const {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(id_);
+}
+
 CoreCoord Device::grid_size() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).grid_size;
 }
@@ -511,16 +508,15 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord);
-        // Derive virtual coord in noc_index space.
-        CoreCoord virtual_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return virtual_coord;
     }
+    const auto& grid_size = this->grid_size();
+    // Coordinate in Physical NOC0 Space. Convert to Virtual.
+    coord = this->virtual_core_from_physical_core(coord);
+    // Derive virtual coord in noc_index space.
+    CoreCoord virtual_coord = {
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return virtual_coord;
 }
 
 CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logical_core) const {
@@ -581,29 +577,28 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     if (noc_index == 0) {
         return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
             virtual_noc_start.x, virtual_noc_start.y, virtual_noc_end.x, virtual_noc_end.y);
-    } else {
-        return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
-            virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
     }
+    return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
 }
 
-const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const { return default_allocator_; }
+
+const std::unique_ptr<Allocator>& Device::allocator() const {
+    const auto& allocator{this->allocator_impl()};
+    return allocator->view();
 }
 
-const std::unique_ptr<Allocator>& Device::allocator() const { return this->allocator_impl()->view(); }
-
-const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_device_id*/) const {
+    return default_allocator_;
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return this->allocator_impl(sub_device_id)->view();
+    const auto& allocator{this->allocator_impl(sub_device_id)};
+    return allocator->view();
 }
 
-uint32_t Device::num_sub_devices() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
-}
+uint32_t Device::num_sub_devices() const { return 1U; }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) const {
     return tt::tt_metal::MetalContext::instance()
@@ -636,23 +631,30 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
-CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
+HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
-    if (!using_fast_dispatch_) {
-        return *(CommandQueue*)(IDevice*)this;
-    }
+    TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
+}
+
+SystemMemoryManager& Device::sysmem_manager() {
+    // SystemMemoryManager handles mock devices internally with stubs
+    // For mock devices, ensure lazy initialization if not already done
+    if (!sysmem_manager_) {
+        sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, 1);
+    }
+    return *sysmem_manager_;
 }
 
 void Device::enable_program_cache() {
@@ -679,69 +681,76 @@ void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocation
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
-bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
+bool Device::has_noc_mcast_txns(SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "has_noc_mcast_txns is deprecated for device");
+    return false;
 }
 
-uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
+uint8_t Device::num_noc_unicast_txns(SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "num_noc_unicast_txns is deprecated for device");
+    return 0U;
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast_data) const {
     if (unicast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
-            sub_device_id);
-    } else {
-        return 0;
+        TT_FATAL(false, "noc_data_start_index is deprecated for unicast mode for device");
     }
+    return 0U;
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
+        return CoreCoord{0, 0};  // Return default for mock devices
+    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
-SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
-}
+SubDeviceManagerId Device::get_active_sub_device_manager_id() const { return SubDeviceManagerId{0U}; }
 
-SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
+SubDeviceManagerId Device::get_default_sub_device_manager_id() const { return SubDeviceManagerId{0U}; }
+
+SubDeviceManagerId Device::create_sub_device_manager(
+    std::initializer_list<SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    TT_FATAL(false, "create_sub_device_manager is deprecated for device");
+    return SubDeviceManagerId{0U};
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    TT_FATAL(false, "create_sub_device_manager is deprecated for device");
+    return SubDeviceManagerId{0U};
 }
 
-SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+void Device::load_sub_device_manager(SubDeviceManagerId /*sub_device_manager_id*/) {
+    TT_FATAL(false, "load_sub_device_manager is deprecated for device");
 }
 
-void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
+void Device::clear_loaded_sub_device_manager() {
+    TT_FATAL(false, "clear_loaded_sub_device_manager is deprecated for device");
 }
 
-void Device::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
-
-void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
+void Device::remove_sub_device_manager(SubDeviceManagerId /*sub_device_manager_id*/) {
+    TT_FATAL(false, "remove_sub_device_manager is deprecated for device");
 }
 
 const std::vector<SubDeviceId>& Device::get_sub_device_ids() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
+    static std::vector<SubDeviceId> ids;
+    TT_FATAL(false, "get_sub_device_ids is deprecated for device");
+    return ids;
 }
 
 const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
+    static std::vector<SubDeviceId> ids;
+    TT_FATAL(false, "get_sub_device_stall_group is deprecated for device");
+    return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
+void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 
 void Device::reset_sub_device_stall_group() {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
+    TT_FATAL(false, "reset_sub_device_stall_group is deprecated for device");
 }
 
 std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
@@ -761,9 +770,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
-                this->id());
+        bool noc_translation_enabled = true;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+            noc_translation_enabled = tt::tt_metal::MetalContext::instance()
+                                          .get_cluster()
+                                          .get_cluster_desc()
+                                          ->get_noc_translation_table_en()
+                                          .at(this->id());
+        }
         bool dram_is_virtualized =
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =
@@ -836,9 +850,8 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
         !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
         return HalMemType::DRAM;
-    } else {
-        return HalMemType::L1;
     }
+    return HalMemType::L1;
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }

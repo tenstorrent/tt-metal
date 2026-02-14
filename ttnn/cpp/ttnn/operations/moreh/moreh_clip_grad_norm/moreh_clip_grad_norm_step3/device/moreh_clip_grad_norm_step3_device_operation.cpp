@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3 {
 
 void MorehClipGradNormStep3Operation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.inputs;
     for (const auto& input : input_tensors) {
         ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step3", "input");
@@ -21,7 +21,7 @@ void MorehClipGradNormStep3Operation::validate_inputs(
 };
 
 MorehClipGradNormStep3Operation::program_factory_t MorehClipGradNormStep3Operation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return ProgramFactory{};
 };
 
@@ -30,14 +30,9 @@ void MorehClipGradNormStep3Operation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehClipGradNormStep3Operation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 // No output
 MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Operation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(tensor_args.inputs.size());
     for (const auto& input : tensor_args.inputs) {
@@ -48,7 +43,7 @@ MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Opera
 
 // No output
 MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Operation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.inputs;
 };
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3

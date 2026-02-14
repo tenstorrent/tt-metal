@@ -18,13 +18,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 
 UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t
 UntilizeMultiCoreParallelizeColumnProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input;
@@ -137,8 +137,7 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
     }
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -239,9 +238,9 @@ UntilizeMultiCoreParallelizeColumnProgramFactory::create(
 
 void UntilizeMultiCoreParallelizeColumnProgramFactory::override_runtime_arguments(
     UntilizeMultiCoreParallelizeColumnProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -265,4 +264,4 @@ void UntilizeMultiCoreParallelizeColumnProgramFactory::override_runtime_argument
     }
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

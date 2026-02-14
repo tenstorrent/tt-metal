@@ -96,9 +96,8 @@ uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
     auto it = buffer_id_to_global_id_map_.find(obj->unique_id());
     if (it != buffer_id_to_global_id_map_.end()) {
         return it->second;
-    } else {
-        TT_THROW("Buffer id: {} not found in global_id map", obj->unique_id());
     }
+    TT_THROW("Buffer id: {} not found in global_id map", obj->unique_id());
 }
 
 bool LightMetalCaptureContext::is_in_map(const Program* obj) {
@@ -125,9 +124,8 @@ uint32_t LightMetalCaptureContext::get_global_id(const Program* obj) {
     auto it = program_id_to_global_id_map_.find(obj->impl().get_id());
     if (it != program_id_to_global_id_map_.end()) {
         return it->second;
-    } else {
-        TT_THROW("Program id: {} not found in global_id map.", obj->impl().get_id());
     }
+    TT_THROW("Program id: {} not found in global_id map.", obj->impl().get_id());
 }
 
 bool LightMetalCaptureContext::is_in_map(const Kernel* obj) { return kernel_to_global_id_map_.contains(obj); }
@@ -152,9 +150,8 @@ uint32_t LightMetalCaptureContext::get_global_id(const Kernel* obj) {
     auto it = kernel_to_global_id_map_.find(obj);
     if (it != kernel_to_global_id_map_.end()) {
         return it->second;
-    } else {
-        TT_THROW("Kernel not found in global_id map.");
     }
+    TT_THROW("Kernel not found in global_id map.");
 }
 
 bool LightMetalCaptureContext::is_in_map(const CBHandle handle) { return cb_handle_to_global_id_map_.contains(handle); }
@@ -179,9 +176,8 @@ uint32_t LightMetalCaptureContext::get_global_id(const CBHandle handle) {
     auto it = cb_handle_to_global_id_map_.find(handle);
     if (it != cb_handle_to_global_id_map_.end()) {
         return it->second;
-    } else {
-        TT_THROW("CBHandle not found in global_id map.");
     }
+    TT_THROW("CBHandle not found in global_id map.");
 }
 
 ////////////////////////////////////////////
