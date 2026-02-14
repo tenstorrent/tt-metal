@@ -134,45 +134,95 @@ struct FabricTelemetrySettings {
 };
 
 class RunTimeOptions {
+    // ======================================================================
+    // Fields ordered to minimize padding (8-byte aligned types first, then
+    // 4-byte aligned, then 1-byte aligned)
+    // ======================================================================
+
+    // 8-byte aligned: std::string, std::filesystem::path, std::chrono::duration,
+    // std::optional<large types>, std::set, arrays of large structures
     std::string root_dir;
-
-    bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
-
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
-
-    bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
-
-    bool is_core_grid_override_todeprecate_env_var_set = false;
     std::string core_grid_override_todeprecate;
-
-    bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
+    std::string profiler_noc_events_report_path;
+    std::string visible_devices;
+    std::string arch_name;
+    std::string mock_cluster_desc_path;
+    std::string dispatch_timeout_command_to_execute;
 
-    bool build_map_enabled = false;
+    // Watcher feature name strings (used in env vars + defines in the device code), as well as a
+    // set to track disabled features.
+    const std::string watcher_waypoint_str = "WAYPOINT";
+    const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
+    const std::string watcher_assert_str = "ASSERT";
+    const std::string watcher_pause_str = "PAUSE";
+    const std::string watcher_ring_buffer_str = "RING_BUFFER";
+    const std::string watcher_stack_usage_str = "STACK_USAGE";
+    const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
+    const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
+    const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
+
+    std::filesystem::path simulator_path = "";
+
+    std::set<std::string> watcher_disabled_features;
 
     WatcherSettings watcher_settings;
-    bool record_noc_transfer_data = false;
-
     InspectorSettings inspector_settings;
+    FabricTelemetrySettings fabric_telemetry_settings;
 
-    bool lightweight_kernel_asserts = false;
+    TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
-    bool enable_llk_asserts = false;
+    // Timeout duration for operations
+    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    bool disable_sfploadmacro = false;
+    // Reliability mode override parsed from environment (RELIABILITY_MODE)
+    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
+    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
+    // to the user override (if it existed)
+    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
+    std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    // Fabric router sync timeout configuration (in milliseconds)
+    // If not set, fabric code will use its own default
+    std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
+    // 4-byte aligned: uint32_t, unsigned, int, std::atomic<bool>, enums, std::optional<small types>
+    uint32_t profiler_perf_counter_mode = 0;
+    uint32_t watcher_debug_delay = 0;
+    unsigned num_hw_cqs = 1;
+    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
+    uint32_t arc_debug_buffer_size = 0;
+    // Dispatch kernel progress update period in milliseconds (default 100ms)
+    uint32_t dispatch_progress_update_ms = 100;
+
+    std::atomic<bool> test_mode_enabled = false;
+    // Force disables using DMA for reads and writes
+    std::atomic<bool> disable_dma_ops = false;
+
+    // 1-byte aligned: bool, uint8_t enums, small structs
+    // Consolidated target device selection
+    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
 
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
     } fabric_profiling_settings;
 
-    TargetSelection feature_targets[RunTimeDebugFeatureCount];
-
-    std::atomic<bool> test_mode_enabled = false;
-
+    bool is_cache_dir_env_var_set = false;
+    bool is_kernel_dir_env_var_set = false;
+    bool is_core_grid_override_todeprecate_env_var_set = false;
+    bool is_custom_fabric_mesh_graph_desc_path_set = false;
+    bool build_map_enabled = false;
+    bool record_noc_transfer_data = false;
+    bool lightweight_kernel_asserts = false;
+    bool enable_llk_asserts = false;
+    bool disable_sfploadmacro = false;
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
@@ -183,127 +233,57 @@ class RunTimeOptions {
     bool profiler_sum = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
-    uint32_t profiler_perf_counter_mode = 0;
-    std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
-    std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
-
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
     // should remain the same size as normal, unlike with null_kernels.
     bool kernels_early_return = false;
-
     bool clear_l1 = false;
     bool clear_dram = false;
-
     bool skip_loading_fw = false;
-
     bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
-    uint32_t watcher_debug_delay = 0;
-
     bool validate_kernel_binaries = false;
-    unsigned num_hw_cqs = 1;
-
     bool using_slow_dispatch = false;
-
     bool enable_dispatch_data_collection = false;
-
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
-
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
-
     bool skip_deleting_built_cache = false;
-
-    std::filesystem::path simulator_path = "";
-
     bool erisc_iram_enabled = false;
-    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
-    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
-    // to the user override (if it existed)
-    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
-
     bool fast_dispatch = true;
-
     bool skip_eth_cores_with_retrain = false;
-
     // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
     // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
-
     // Enable instruction gathering in Tensix core.
     bool enable_gathering = false;
-
-    // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
-    uint32_t arc_debug_buffer_size = 0;
-
-    // Force disables using DMA for reads and writes
-    std::atomic<bool> disable_dma_ops = false;
-
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
-    // Comma-separated list of device IDs to make visible to the runtime
-    std::string visible_devices;
-
-    // Sets the architecture name (only necessary during simulation)
-    std::string arch_name;
-
     // Forces Tracy profiler pushes during execution for real-time profiling
     bool tracy_mid_run_push = false;
-
     // presence-based override to force-disable fabric 2-ERISC regardless of defaults
     bool disable_fabric_2_erisc_mode = false;
-
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
-
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
-
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
-
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
-    FabricTelemetrySettings fabric_telemetry_settings;
-
-    // Mock cluster initialization using a provided cluster descriptor
-    std::string mock_cluster_desc_path;
-
-    // Consolidated target device selection
-    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
-    // Command to run when a dispatch timeout occurs
-    std::string dispatch_timeout_command_to_execute;
-    // Dispatch kernel progress update period in milliseconds (default 100ms)
-    uint32_t dispatch_progress_update_ms = 100;
-
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
-
-    // Reliability mode override parsed from environment (RELIABILITY_MODE)
-    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
-
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
-
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
-
-    // Fabric router sync timeout configuration (in milliseconds)
-    // If not set, fabric code will use its own default
-    std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
-
     // Disable XIP dump
     bool disable_xip_dump = false;
-
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
 
@@ -726,19 +706,6 @@ private:
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
 
-    // Watcher feature name strings (used in env vars + defines in the device code), as well as a
-    // set to track disabled features.
-    const std::string watcher_waypoint_str = "WAYPOINT";
-    const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
-    const std::string watcher_assert_str = "ASSERT";
-    const std::string watcher_pause_str = "PAUSE";
-    const std::string watcher_ring_buffer_str = "RING_BUFFER";
-    const std::string watcher_stack_usage_str = "STACK_USAGE";
-    const std::string watcher_dispatch_str = "DISPATCH";
-    const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
-    const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
-    const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
-    std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };
 
