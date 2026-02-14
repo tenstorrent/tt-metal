@@ -602,9 +602,9 @@ class TTAttention:
                 device=device,
             )
             self._bqkv_tt = ttnn.from_torch(
-                bqkv,
+                bqkv.unsqueeze(0),
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
         except Exception:
