@@ -8,7 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "point_to_point.hpp"
 
 namespace ttnn::operations::point_to_point {
@@ -47,31 +47,21 @@ void bind_point_to_point(nb::module_& mod) {
                         topology=ttnn.Topology.Linear)
             )doc";
 
-    using OperationType = decltype(ttnn::point_to_point);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"point_to_point">(
         mod,
-        ttnn::point_to_point,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& sender_coord,
-               const MeshCoordinate& receiver_coord,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<ttnn::Tensor>& intermediate_tensor,
-               const ccl::Topology topology) {
-                return self(input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::point_to_point,
             nb::arg("input_tensor").noconvert(),
-            nb::arg("sender_coord"),
             nb::arg("receiver_coord"),
+            nb::arg("sender_coord"),
             nb::kw_only(),
+            nb::arg("topology").noconvert() = ccl::Topology::Linear,
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("intermediate_tensor") = nb::none(),
-            nb::arg("topology").noconvert() = ccl::Topology::Linear});
+            nb::arg("intermediate_tensor") = nb::none()));
     mod.def(
         "p2p_compute_intermediate_tensor_spec",
-        p2p_compute_intermediate_tensor_spec,
+        operations::point_to_point::p2p_compute_intermediate_tensor_spec,
         nb::arg("input_tensor"),
         nb::arg("sender_coord"),
         nb::arg("receiver_coord"),

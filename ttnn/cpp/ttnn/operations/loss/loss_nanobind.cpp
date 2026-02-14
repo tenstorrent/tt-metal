@@ -15,7 +15,7 @@
 #include "loss.hpp"
 #include "loss_types.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::loss {
 
@@ -24,8 +24,7 @@ namespace {
 void bind_loss_type(nb::module_& mod) { export_enum<LossReductionMode>(mod, "LossReductionMode"); }
 
 void bind_mse_loss_function(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    auto doc = R"doc(
             Returns mean squared error loss function for `input_reference` and `input_prediction`
 
             Args:
@@ -40,34 +39,23 @@ void bind_mse_loss_function(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-        )doc",
-        ttnn::mse_loss.base_name());
+        )doc";
 
-    using OperationType = decltype(ttnn::mse_loss);
-    bind_registered_operation(
+    ttnn::bind_function<"mse_loss">(
         mod,
-        ttnn::mse_loss,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& ref,
-               const Tensor& prediction,
-               const LossReductionMode mode,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return self(ref, prediction, mode, memory_config, optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::mse_loss,
             nb::arg("input_reference"),
             nb::arg("input_prediction"),
             nb::kw_only(),
             nb::arg("reduction") = LossReductionMode::NONE,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 void bind_mae_loss_function(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    auto doc = R"doc(
             Returns mean absolute error loss function for `input_reference` and `input_prediction`
 
             Args:
@@ -82,29 +70,19 @@ void bind_mae_loss_function(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-        )doc",
-        ttnn::l1_loss.base_name());
+        )doc";
 
-    using OperationType = decltype(ttnn::l1_loss);
-    bind_registered_operation(
+    ttnn::bind_function<"l1_loss">(
         mod,
-        ttnn::l1_loss,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& ref,
-               const Tensor& prediction,
-               const LossReductionMode mode,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return self(ref, prediction, mode, memory_config, optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::l1_loss,
             nb::arg("input_reference"),
             nb::arg("input_prediction"),
             nb::kw_only(),
             nb::arg("reduction") = LossReductionMode::NONE,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace

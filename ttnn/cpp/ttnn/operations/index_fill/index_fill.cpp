@@ -7,9 +7,9 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
 
-namespace ttnn::operations::index_fill {
+namespace ttnn {
 
-Tensor IndexFill::invoke(
+Tensor index_fill(
     const Tensor& input,
     const uint32_t dim,
     const Tensor& index,
@@ -18,4 +18,4 @@ Tensor IndexFill::invoke(
     return ttnn::prim::index_fill(input, dim, index, value, memory_config);
 }
 
-}  // namespace ttnn::operations::index_fill
+}  // namespace ttnn

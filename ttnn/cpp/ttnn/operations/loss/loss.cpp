@@ -53,22 +53,24 @@ Tensor loss_function(
 
 }  // namespace loss_utils
 
-Tensor MseLossOperation::invoke(
+namespace ttnn {
+
+Tensor mse_loss(
     const Tensor& ref,
     const Tensor& prediction,
-    const LossReductionMode mode,
+    LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return loss_utils::loss_function(ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
-Tensor MaeLossOperation::invoke(
+Tensor l1_loss(
     const Tensor& ref,
     const Tensor& prediction,
-    const LossReductionMode mode,
+    LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return loss_utils::loss_function(ref, prediction, LossFunction::MAE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::loss
+}  // namespace ttnn

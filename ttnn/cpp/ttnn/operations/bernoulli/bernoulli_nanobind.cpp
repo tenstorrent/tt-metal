@@ -10,7 +10,7 @@
 #include <nanobind/stl/string.h>
 
 #include "bernoulli.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::bernoulli {
 
@@ -52,17 +52,17 @@ void bind_bernoulli_operation(nb::module_& mod) {
 
         )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"bernoulli">(
         mod,
-        ttnn::bernoulli,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::bernoulli,
             nb::arg("input"),
             nb::arg("seed") = 0,
             nb::kw_only(),
             nb::arg("output") = nb::none(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::bernoulli

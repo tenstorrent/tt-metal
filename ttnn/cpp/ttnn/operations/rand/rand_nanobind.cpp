@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rand.hpp"
 
 namespace ttnn::operations::rand {
@@ -42,21 +42,11 @@ void bind_rand_operation(nb::module_& mod) {
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
         )doc";
 
-    using OperationType = decltype(ttnn::rand);
-    bind_registered_operation(
+    ttnn::bind_function<"rand">(
         mod,
-        ttnn::rand,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& shape,
-               MeshDevice& device,
-               const DataType dtype,
-               const Layout layout,
-               const MemoryConfig& memory_config,
-               float from,
-               float to,
-               uint32_t seed) { return self(shape, device, dtype, layout, memory_config, from, to, seed); },
+        ttnn::overload_t(
+            &ttnn::rand,
             nb::arg("shape"),
             nb::arg("device"),
             nb::kw_only(),
@@ -65,6 +55,6 @@ void bind_rand_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
             nb::arg("low") = 0.0f,
             nb::arg("high") = 1.0f,
-            nb::arg("seed") = 0});
+            nb::arg("seed") = 0));
 }
 }  // namespace ttnn::operations::rand

@@ -11,7 +11,7 @@
 #include <nanobind/stl/variant.h>  // bound function takes a variant
 
 #include "full_like.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
 
 namespace ttnn::operations::full_like {
@@ -31,16 +31,16 @@ void bind_full_like_operation(nb::module_& mod) {
         * :attr:`memory_config`: The memory configuration for the output tensor.
     )doc";
 
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_full_like">(
         mod,
-        ttnn::moreh_full_like,
         doc,
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_full_like,
             nb::arg("input"),
             nb::arg("fill_value"),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::full_like
