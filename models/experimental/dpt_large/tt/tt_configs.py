@@ -182,17 +182,25 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         seqL_t = seq_len_padded // TILE
         dim_t = config.hidden_size // TILE
 
-        core_grid_x, _ = core_grid
+        core_grid_x, core_grid_y = core_grid
+        num_cores = max(1, int(core_grid_x) * int(core_grid_y))
         dim_t__x = max(1, dim_t // core_grid_x)
         head_num = config.num_attention_heads
         head_size_t = max(1, (config.hidden_size // head_num) // TILE)
-        head_seqL_t__x = max(1, (head_num * seqL_t + core_grid_x - 1) // core_grid_x)
+        # For attention we height-shard the flattened [B*H*seqL_t, ...] tiles
+        # across the full core grid (x*y), not just across x.
+        head_seqL_t__x = max(1, (head_num * seqL_t + num_cores - 1) // num_cores)
+        # LayerNorm runs on block-sharded tokens across the same grid. When seqL
+        # tiles divide cleanly along grid_y, each core sees seqL_t/grid_y tiles.
+        ln_block_h = seqL_t
+        if core_grid_y > 1 and (seqL_t % core_grid_y) == 0:
+            ln_block_h = seqL_t // core_grid_y
 
         pc = {
             "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=core_grid,
                 subblock_w=dim_t__x,
-                block_h=seqL_t,
+                block_h=ln_block_h,
                 block_w=dim_t__x,
                 inplace=False,
             ),
@@ -241,7 +249,7 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
             "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=core_grid,
                 subblock_w=dim_t__x,
-                block_h=seqL_t,
+                block_h=ln_block_h,
                 block_w=dim_t__x,
                 inplace=False,
             ),
@@ -338,11 +346,10 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         except Exception:
             # Keep the default configs if the runtime doesn't expose these types/attrs.
             pass
-    head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
-    # Disable custom attention configs if forced or if sharding would exceed grid width.
+    # Disable custom attention configs only when explicitly forced. Attention
+    # ops height-shard across x*y cores, so grid_x-only heuristics are incorrect
+    # for DPT-Large (seq=640 padded).
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
-    if head_seq_tiles is not None and head_seq_tiles > grid[0]:
-        disable_attn_pc = True
 
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")

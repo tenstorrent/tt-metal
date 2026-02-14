@@ -279,15 +279,21 @@ class TTLinear:
         fast_gelu: bool = False,
         program_config=None,
     ):
+        if ttnn is None:
+            raise RuntimeError("TT runtime is unavailable; cannot construct TTLinear")
         # weight: [out, in]
         self.weight_torch = weight
         self.bias_torch = bias
         self.device = device
-        # Keep weights in TILE layout on device to avoid RM<->TILE conversions on every matmul.
-        wt = weight.unsqueeze(0).unsqueeze(0)  # 1,1,out,in
-        self.weight = _tt_from_torch_tile(wt, device)
-        # Bias can remain in row-major layout; keep conversion lightweight.
-        self.bias = _tt_from_torch_rm(bias.unsqueeze(0).unsqueeze(0), device) if bias is not None else None
+        # Upload weights in the format expected by ttnn.linear: [in, out] in TILE.
+        w_t = torch.transpose(weight.detach(), -1, -2).contiguous()
+        self.weight = ttnn.from_torch(w_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Bias can remain row-major.
+        self.bias = (
+            ttnn.from_torch(bias.detach(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            if bias is not None
+            else None
+        )
         self.output_mem = output_mem
         # When fast_gelu is True, enable fused GELU on the matmul where possible.
         # Use "gelu_approx" string so kernels can pick the approximate fast path when supported.
@@ -295,38 +301,46 @@ class TTLinear:
         self.program_config = program_config
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
-        # Phase A: run linear on host to keep shapes simple and rely on
-        # torch.nn.functional.linear for correctness. The logical contract
-        # remains [B, N, C] in and out, even if some callers still provide
-        # a 4D [B, 1, N, C] tensor.
-        x_host = x.cpu()
-        if hasattr(x_host, "layout") and x_host.layout == ttnn.TILE_LAYOUT:
-            x_host = x_host.to(ttnn.ROW_MAJOR_LAYOUT)
-        x_torch = x_host.to_torch()
+        shape = tuple(getattr(x, "shape", ()))
+        if len(shape) == 4:
+            b, one, n, c = shape
+            if int(one) != 1:
+                raise ValueError(f"TTLinear expected [B,1,N,C] or [B,N,C], got {shape}")
+            x4 = x
+            wants_4d = True
+        elif len(shape) == 3:
+            b, n, c = shape
+            x4 = ttnn.reshape(x, (int(b), 1, int(n), int(c)))
+            wants_4d = False
+        else:
+            raise ValueError(f"TTLinear expected 3D/4D TT tensor, got {shape}")
 
-        if x_torch.dim() == 4:
-            b, one, n, c = x_torch.shape
-            if one != 1:
-                raise ValueError(f"TTLinear expected shape [B,1,N,C] or [B,N,C], got {tuple(x_torch.shape)}")
-            x_torch = x_torch.view(b, n, c)
-        elif x_torch.dim() != 3:
-            raise ValueError(f"TTLinear expects 3D [B, N, C], got shape {tuple(x_torch.shape)}")
+        pc_obj = self.program_config
+        memcfg = getattr(pc_obj, "mlp_memcfg", None) if pc_obj is not None else None
+        if memcfg is None:
+            memcfg = self.output_mem or ttnn.DRAM_MEMORY_CONFIG
 
-        x_f32 = x_torch.to(dtype=torch.float32)
-        w = self.weight_torch.to(dtype=torch.float32)
-        b = self.bias_torch.to(dtype=torch.float32) if self.bias_torch is not None else None
-        y = torch.nn.functional.linear(x_f32, w, b)
+        prog = None
+        if pc_obj is not None:
+            prog = getattr(pc_obj, "ff1_program_config", None) if self.activation else getattr(pc_obj, "ff2_program_config", None)
 
-        if self.activation == "gelu_approx":
-            y = torch.nn.functional.gelu(y)
-
-        out = ttnn.from_torch(
-            y,
+        out4 = _ttnn_linear_with_optional_program_config(
+            x=x4,
+            w=self.weight,
+            bias=self.bias,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
+            memory_config=memcfg,
+            program_config=prog,
+            op_name="ttlinear_ff1" if self.activation else "ttlinear_ff2",
         )
-        return out
+        if self.activation and not _program_config_fuses_activation(prog):
+            out4 = ttnn.gelu(out4)
+
+        if wants_4d:
+            return out4
+        out_shape = tuple(getattr(out4, "shape", (int(b), 1, int(n), 0)))
+        out_c = int(out_shape[-1])
+        return ttnn.reshape(out4, (int(b), int(n), out_c))
 
 
 class TTPatchEmbedding:
@@ -665,13 +679,16 @@ class TTAttention:
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # For explicit sharded attention, prefer keeping QKV projection output sharded.
-            if explicit_sharded_attn and split_memcfg is not None:
+            # For explicit sharded attention, keep QKV projection output in the
+            # same block-sharded layout as the incoming tokens. The next
+            # split-heads op will reshard into the requested height-sharded
+            # memory_config for Q/K/V.
+            if explicit_sharded_attn:
                 try:
-                    if hasattr(split_memcfg, "is_sharded") and split_memcfg.is_sharded():
-                        memcfg = split_memcfg
+                    memcfg = ttnn.get_memory_config(x4)
                 except Exception:
-                    pass
+                    if tokens_shard_mc is not None:
+                        memcfg = tokens_shard_mc
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
