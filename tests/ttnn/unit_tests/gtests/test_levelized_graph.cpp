@@ -41,7 +41,7 @@ std::string shape_to_string(tt::stl::Span<const uint32_t> shape) {
 
 class TestLevelizedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
@@ -156,7 +156,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
 }
 
 TEST_F(TestLevelizedGraphCapture, ReductionOp) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{256, 128}),
@@ -220,7 +220,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
 }
 
 TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array3D{16, 32, 64}),
@@ -297,7 +297,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
 }
 
 TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 32}),
@@ -376,7 +376,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{12, 19}),
@@ -450,7 +450,7 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
@@ -563,7 +563,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, ForkTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
@@ -660,7 +660,7 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, JoinTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input_a = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
@@ -748,7 +748,7 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -847,7 +847,7 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
 }
 
 TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1007,7 +1007,7 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1079,7 +1079,7 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
 }
 
 TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1184,7 +1184,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
 }
 
 TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1284,7 +1284,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
 }
 
 TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
@@ -1415,7 +1415,7 @@ for (auto t : tensor_vertices) {
 }
 
 TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1510,7 +1510,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input_a = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -1606,7 +1606,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     // This test demonstrates that when create_device_tensor is captured (tensors created INSIDE the capture),
     // the levelized graph includes BOTH the create_device_tensor operations AND the tensor nodes.
@@ -1812,7 +1812,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
 }
 
 TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     // This test verifies that when tensors are created within the capture,
     // the graph correctly tracks the argument order for non-commutative operations like subtract.
