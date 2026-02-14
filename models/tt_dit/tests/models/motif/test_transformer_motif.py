@@ -153,24 +153,19 @@ def test_transformer_motif(
     assert unexpected == ["pos_embed"]
     assert not missing
 
-    if cache.cache_dir_is_set():
-        cache_path = cache.get_and_create_cache_path(
-            model_name="motif-image-6b",
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=submesh_device.shape,
-            dtype="bf16",
-        )
-        if cache.cache_dict_exists(cache_path):
-            logger.info("loading from cache...")
-            tt_model.from_cached_state_dict(cache.load_cache_dict(cache_path))
-        else:
-            logger.info("loading state dict into TT-NN model...")
-            converted_state_dict = dict(state_dict)
-            convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
-            tt_model.load_torch_state_dict(converted_state_dict)
-            logger.info("saving to cache...")
-            cache.save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
+    def get_state_dict() -> dict[str, torch.Tensor]:
+        converted_state_dict = dict(state_dict)
+        convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
+        return converted_state_dict
+
+    cache.load_model(
+        tt_model,
+        model_name="motif-image-6b",
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=submesh_device.shape,
+        get_torch_state_dict=get_state_dict,
+    )
 
     torch.manual_seed(0)
     latents = torch.randn([batch_size, in_channels, latents_height, latents_width])

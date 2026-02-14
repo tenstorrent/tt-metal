@@ -460,7 +460,7 @@ def test_wan_transformer_model_caching(
         is_fsdp=is_fsdp,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict(), on_host=True)
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
