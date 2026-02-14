@@ -20,6 +20,7 @@
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
 #endif
+#include "internal/dataflow_buffer_init.h"
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
@@ -44,6 +45,8 @@ uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
+
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
 
 namespace ckernel {
 
@@ -202,6 +205,11 @@ int main(int argc, char* argv[]) {
 #endif
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 
         WAYPOINT("R");
         int index =

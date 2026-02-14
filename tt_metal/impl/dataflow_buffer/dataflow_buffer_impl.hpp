@@ -22,7 +22,7 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t (40 bytes)
+// Per-risc config matching dfb_initializer_per_risc_t
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> base_addr = {0};
     std::array<uint32_t, 4> limit = {0};
@@ -31,6 +31,8 @@ struct LocalDFBInterfaceHost {
     uint8_t remapper_pair_index = 0;
     bool should_init_tc = false;
     uint32_t consumer_tcs = 0;
+    uint8_t remapper_consumer_ids_mask = 0;
+    uint8_t producer_client_type = 0;
 };
 
 struct DFBRiscConfig {
@@ -54,8 +56,12 @@ struct DataflowBufferImpl {
     std::array<uint8_t, 4> txn_ids = {0};
     uint8_t num_entries_per_txn_id = 0;
     uint8_t num_entries_per_txn_id_per_tc = 0;
-    uint8_t remapper_consumer_mask = 0;
     uint8_t num_txn_ids = 0;
+
+    // Flag to track if TC/remapper allocation has been finalized
+    bool configs_finalized = false;
+    // Flag to track if this DFB uses remapper (set during finalization)
+    bool use_remapper = false;
 
     std::optional<uint32_t> allocated_address;
 
@@ -80,6 +86,27 @@ public:
 
 private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
+};
+
+// Allocates clientTypes for BLOCKED consumer mode based on consumer RISC ID
+// ClientTypes map to tensix_id: tensix_id = clientType % 4
+// For Tensix RISCs (risc_id 8-11): id_R derived from risc_id = 4 + (risc_id - 8) = NEO_0-NEO_3
+// For DM RISCs (risc_id 0-7): allocate first unused clientType avoiding producer's tensix_id
+class ClientTypeAllocator {
+public:
+    // Allocates a unique clientType for consumer based on consumer's RISC ID
+    // - Tensix RISCs (8-11): id_R derived from risc_id = 4 + (risc_id - 8)
+    // - DM RISCs (0-7): allocate first unused clientType avoiding producer's tensix_id
+    // Returns clientType in [0,7]
+    uint8_t allocate_for_consumer(uint8_t producer_tensix_id, uint8_t consumer_risc_id);
+
+    // Get tensix_id from clientType
+    static uint8_t get_tensix_id(uint8_t client_type) { return client_type % 4; }
+
+    void reset() { used_mask_ = 0; }
+
+private:
+    uint8_t used_mask_ = 0;  // Bitmask of used clientTypes
 };
 
 uint32_t finalize_dfbs(
