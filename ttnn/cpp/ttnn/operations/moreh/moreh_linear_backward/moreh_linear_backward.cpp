@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-std::tuple<bool, bool, bool> MorehLinearBackward::get_required_outputs(const std::vector<bool>& are_required_outputs) {
+static std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_required_outputs) {
     if (are_required_outputs.size() != 3) {
         TT_FATAL(are_required_outputs.size() == 3, "are_required_outputs size must be 3");
     }
@@ -99,7 +99,11 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     return true;
 }
 
-std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
+}  // namespace ttnn::operations::moreh::moreh_linear_backward
+
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_linear_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& weight,
@@ -111,10 +115,13 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     const std::optional<ttnn::MemoryConfig>& input_grad_memory_config,
     const std::optional<ttnn::MemoryConfig>& weight_grad_memory_config,
     const std::optional<ttnn::MemoryConfig>& bias_grad_memory_config,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel = compute_kernel_config.value_or(init_device_compute_kernel_config(
+        output_grad.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+
     std::vector<std::optional<Tensor>> result(3);
     const auto [input_required_grad, weight_required_grad, bias_required_grad] =
-        get_required_outputs(are_required_outputs);
+        operations::moreh::moreh_linear_backward::get_required_outputs(are_required_outputs);
 
     TT_FATAL(
         output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
@@ -125,26 +132,20 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
         output_grad.storage_type() == StorageType::DEVICE,
         "Output grad storage type must be DEVICE but got {}",
         output_grad.storage_type());
-    moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
+    operations::moreh::moreh_linear_backward::moreh_linear_backward_validate(
+        output_grad, input, weight, input_grad, weight_grad, bias_grad);
 
     if (input_required_grad) {
         TT_FATAL(input_grad.has_value(), "input_grad tensor should not be std::nullopt");
         result[0] = ttnn::moreh_matmul(
-            output_grad,
-            weight,
-            false,
-            false,
-            input_grad,
-            std::nullopt,
-            input_grad_memory_config,
-            compute_kernel_config);
+            output_grad, weight, false, false, input_grad, std::nullopt, input_grad_memory_config, compute_kernel);
     }
 
     if (weight_required_grad) {
         TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
         const auto& weight_grad_tensor = weight_grad.value();
 
-        if (is_same_batch_dim(output_grad, weight_grad_tensor)) {
+        if (operations::moreh::moreh_linear_backward::is_same_batch_dim(output_grad, weight_grad_tensor)) {
             ttnn::moreh_matmul(
                 output_grad,
                 input,
@@ -153,34 +154,27 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
                 weight_grad_tensor,
                 std::nullopt,
                 weight_grad_memory_config,
-                compute_kernel_config);
+                compute_kernel);
         } else {
             const auto& temp_weight_grad = ttnn::moreh_matmul(
-                output_grad,
-                input,
-                true,
-                false,
-                std::nullopt,
-                std::nullopt,
-                weight_grad_memory_config,
-                compute_kernel_config);
+                output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_memory_config, compute_kernel);
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
-            ttnn::SmallVector<int64_t> dims =
-                find_reduce_dim(temp_weight_grad.padded_shape(), weight_grad.value().padded_shape());
+            ttnn::SmallVector<int64_t> dims = operations::moreh::moreh_linear_backward::find_reduce_dim(
+                temp_weight_grad.padded_shape(), weight_grad.value().padded_shape());
             ttnn::moreh_sum(
-                temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, compute_kernel_config);
+                temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, compute_kernel);
         }
         result[1] = weight_grad_tensor;
     }
 
     if (bias_required_grad) {
         TT_FATAL(bias_grad.has_value(), "bias_grad tensor should not be std::nullopt");
-        Tensor output_tensor = ttnn::prim::moreh_bias_add_backward(
-            output_grad, bias, bias_grad, bias_grad_memory_config, compute_kernel_config);
+        Tensor output_tensor =
+            ttnn::prim::moreh_bias_add_backward(output_grad, bias, bias_grad, bias_grad_memory_config, compute_kernel);
         result[2] = std::make_optional(output_tensor);
     }
 
     return result;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_linear_backward
+}  // namespace ttnn

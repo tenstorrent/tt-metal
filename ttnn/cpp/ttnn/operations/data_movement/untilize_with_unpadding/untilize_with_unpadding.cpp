@@ -59,9 +59,13 @@ MassagedUntilizeVal build_ndiml_untilize_val(
         .operation = std::move(base_untilize)});
 }
 
-ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& output_tensor_end,
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+Tensor untilize_with_unpadding(
+    const Tensor& input_tensor,
+    const Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize,
@@ -90,10 +94,10 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height =
-        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    bool enough_space_width = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height = operations::data_movement::is_enough_space(
+        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::untilize_with_unpadding(
@@ -108,7 +112,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
             sub_core_grids);
     };
 
-    return build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);
+    return ttnn::operations::data_movement::build_ndiml_untilize_val(base_untilize, sub_core_grids)(input_tensor);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

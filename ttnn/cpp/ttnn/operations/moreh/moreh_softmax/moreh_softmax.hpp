@@ -7,32 +7,38 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_softmax {
-
-#define DEFINE_MOREH_SOFT_OP(name)                                                  \
-    struct name {                                                                   \
-        static Tensor invoke(                                                       \
-            const Tensor& input_tensor,                                             \
-            uint32_t dim,                                                           \
-            const std::optional<Tensor>& output_tensor,                             \
-            const MorehSoftmaxOp op,                                                \
-            const MorehSoftmaxOpParallelizationStrategy strategy,                   \
-            const std::optional<MemoryConfig>& memory_config,                       \
-            const std::optional<DeviceComputeKernelConfig>& compute_kernel_config); \
-    }
-
-DEFINE_MOREH_SOFT_OP(MorehSoftmax);
-DEFINE_MOREH_SOFT_OP(MorehSoftmin);
-DEFINE_MOREH_SOFT_OP(MorehLogSoftmax);
-#undef DEFINE_MOREH_SOFT_OP
-
-}  // namespace ttnn::operations::moreh::moreh_softmax
+namespace ttnn::operations::moreh::moreh_softmax {}  // namespace ttnn::operations::moreh::moreh_softmax
 
 namespace ttnn {
-constexpr auto moreh_softmax =
-    ttnn::register_operation<"ttnn::moreh_softmax", ttnn::operations::moreh::moreh_softmax::MorehSoftmax>();
-constexpr auto moreh_softmin =
-    ttnn::register_operation<"ttnn::moreh_softmin", ttnn::operations::moreh::moreh_softmax::MorehSoftmin>();
-constexpr auto moreh_logsoftmax =
-    ttnn::register_operation<"ttnn::moreh_logsoftmax", ttnn::operations::moreh::moreh_softmax::MorehLogSoftmax>();
+
+using operations::moreh::moreh_softmax::MorehSoftmaxOp;
+using operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy;
+
+Tensor moreh_softmax(
+    const Tensor& input_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const MorehSoftmaxOp op = MorehSoftmaxOp::SOFTMAX,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+Tensor moreh_softmin(
+    const Tensor& input_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const MorehSoftmaxOp op = MorehSoftmaxOp::SOFTMIN,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+Tensor moreh_logsoftmax(
+    const Tensor& input_tensor,
+    uint32_t dim,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const MorehSoftmaxOp op = MorehSoftmaxOp::LOGSOFTMAX,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn

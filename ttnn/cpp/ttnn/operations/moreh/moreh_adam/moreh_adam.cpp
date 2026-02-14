@@ -5,31 +5,33 @@
 #include "moreh_adam.hpp"
 
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
-#include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_adam {
-std::vector<std::optional<Tensor>> MorehAdam::invoke(
+namespace ttnn::operations::moreh::moreh_adam {}  // namespace ttnn::operations::moreh::moreh_adam
+
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_adam(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
     const Tensor& exp_avg_sq_in,
-    const std::optional<float> lr,
-    const std::optional<float> beta1,
-    const std::optional<float> beta2,
-    const std::optional<float> eps,
-    const std::optional<float> weight_decay,
-    const std::optional<uint32_t> step,
-    const std::optional<bool> amsgrad,
+    std::optional<float> lr,
+    std::optional<float> beta1,
+    std::optional<float> beta2,
+    std::optional<float> eps,
+    std::optional<float> weight_decay,
+    std::optional<uint32_t> step,
+    std::optional<bool> amsgrad,
     const std::optional<const Tensor>& max_exp_avg_sq_in,
     const std::optional<const Tensor>& param_out,
     const std::optional<const Tensor>& exp_avg_out,
     const std::optional<const Tensor>& exp_avg_sq_out,
     const std::optional<const Tensor>& max_exp_avg_sq_out,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::moreh_adam(
+    return prim::moreh_adam(
         param_in,
         grad,
         exp_avg_in,
@@ -50,4 +52,4 @@ std::vector<std::optional<Tensor>> MorehAdam::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_adam
+}  // namespace ttnn

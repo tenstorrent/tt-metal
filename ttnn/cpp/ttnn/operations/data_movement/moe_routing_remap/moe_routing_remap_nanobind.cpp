@@ -8,9 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-// #include <tt-metalium/sub_device_types.hpp>
-// #include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "moe_routing_remap.hpp"
 #include "moe_routing_remap_nanobind.hpp"
@@ -52,35 +50,18 @@ Returns:
 
     )doc";
 
-    using OperationType = decltype(ttnn::moe_routing_remap);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"moe_routing_remap">(
         mod,
-        ttnn::moe_routing_remap,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& routing_weights_tensor,
-               const uint32_t non_zero_weight_size,
-               const uint32_t expert_parallel_size,
-               const uint32_t cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(
-                    routing_weights_tensor,
-                    non_zero_weight_size,
-                    expert_parallel_size,
-                    cluster_axis,
-                    memory_config,
-                    optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::moe_routing_remap,
             nb::arg("routing_weights_tensor").noconvert(),
             nb::arg("non_zero_weight_size"),
             nb::arg("expert_parallel_size"),
             nb::arg("cluster_axis"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("optional_output_tensor") = nb::none(),
-        });
+            nb::arg("optional_output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

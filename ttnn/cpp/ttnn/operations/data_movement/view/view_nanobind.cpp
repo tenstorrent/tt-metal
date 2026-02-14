@@ -9,41 +9,14 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
-namespace {
-
-template <typename data_movement_operation_t>
-void bind_view_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const ttnn::Shape& shape)
-                -> ttnn::Tensor { return self(input_tensor, shape); },
-            nb::arg("input_tensor"),
-            nb::arg("shape"),
-        },
-        ttnn::nanobind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& shape) -> ttnn::Tensor { return self(input_tensor, shape); },
-            nb::arg("input_tensor"),
-            nb::arg("shape"),
-        });
-}
-
-}  // namespace
-
 void bind_view(nb::module_& mod) {
-    bind_view_op(
-        mod,
-        ttnn::view,
+    const auto* doc =
         R"doc(
         This is a 0 cost view operation that returns the same tensor that was passed to it but with a new shape
 
@@ -64,6 +37,24 @@ void bind_view(nb::module_& mod) {
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 1, 1, 4), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.view(tensor, (2, 1, 4))
 
-        )doc");
+        )doc";
+
+    // Bind first overload: view(Tensor, Shape)
+    ttnn::bind_function<"view">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, const ttnn::Shape&>(&ttnn::view),
+            nb::arg("input_tensor"),
+            nb::arg("shape")));
+
+    // Bind second overload: view(Tensor, SmallVector<int32_t>)
+    ttnn::bind_function<"view">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, tt::stl::Span<const int32_t>>(&ttnn::view),
+            nb::arg("input_tensor"),
+            nb::arg("shape")));
 }
 }  // namespace ttnn::operations::data_movement

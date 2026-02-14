@@ -9,30 +9,17 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct CopyOperation {
-    static ttnn::Tensor invoke(const Tensor& src_tensor, const Tensor& dst_tensor);
-};
+Tensor copy(const Tensor& src_tensor, const Tensor& dst_tensor);
 
-struct AssignOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input,
-        const MemoryConfig& output_mem_config,
-        std::optional<const DataType> output_dtype = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+namespace operations::data_movement {}  // namespace operations::data_movement
 
-    static ttnn::Tensor invoke(
-        const Tensor& input,
-        const MemoryConfig& output_mem_config,
-        std::optional<const DataType> output_dtype = std::nullopt);
+Tensor assign(
+    const Tensor& input,
+    const MemoryConfig& output_mem_config,
+    std::optional<const DataType> output_dtype = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static ttnn::Tensor invoke(const Tensor& input_a, const Tensor& input_b);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto copy = ttnn::register_operation<"ttnn::copy", ttnn::operations::data_movement::CopyOperation>();
-constexpr auto assign = ttnn::register_operation<"ttnn::assign", ttnn::operations::data_movement::AssignOperation>();
+Tensor assign(const Tensor& input_a, const Tensor& input_b);
 
 }  // namespace ttnn

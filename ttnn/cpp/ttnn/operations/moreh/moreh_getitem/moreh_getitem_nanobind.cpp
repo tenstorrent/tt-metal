@@ -10,21 +10,21 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {
 void bind_moreh_getitem_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_getitem">(
         mod,
-        ttnn::moreh_getitem,
         "Moreh Getitem operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_getitem,
             nb::arg("input") = nb::none(),
             nb::arg("index_tensors"),
             nb::arg("index_dims"),
             nb::kw_only(),
             nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

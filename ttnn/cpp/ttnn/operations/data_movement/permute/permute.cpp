@@ -160,9 +160,13 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
 }  // namespace detail
 
-ttnn::Tensor ExecutePermute::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int64_t>& dims,
+    const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
     const auto input_rank = input_tensor.logical_shape().rank();
@@ -175,7 +179,7 @@ ttnn::Tensor ExecutePermute::invoke(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
-    if (detail::is_permute_nop(input_tensor, normalized_dims)) {
+    if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
@@ -205,7 +209,8 @@ ttnn::Tensor ExecutePermute::invoke(
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }
-    auto output_tensor = detail::permute_launch(itensor, iorder, output_memory_config, pad_value);
+    auto output_tensor =
+        operations::data_movement::detail::permute_launch(itensor, iorder, output_memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
@@ -215,9 +220,8 @@ ttnn::Tensor ExecutePermute::invoke(
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, float pad_value) {
-    return invoke(input_tensor, dims, std::nullopt, pad_value);
+ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, float pad_value) {
+    return permute(input_tensor, dims, std::nullopt, pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

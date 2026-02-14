@@ -4,10 +4,11 @@
 
 #include "view.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto tensor_shape = tensor.logical_shape();
     // First Case, No reshape Required
     if (tensor_shape == shape) {
@@ -41,11 +42,11 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
         tensor_shape_second_last_dim,
         shape_second_last_dim);
     // Perform the View
-    return PerformView(tensor, shape, shape, tile_first_dim, tile_second_dim);
+    return operations::data_movement::PerformView(tensor, shape, shape, tile_first_dim, tile_second_dim);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(tensor, detail::infer_dims_for_reshape(tensor, shape_vector));
+ttnn::Tensor view(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
+    return ttnn::view(tensor, operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

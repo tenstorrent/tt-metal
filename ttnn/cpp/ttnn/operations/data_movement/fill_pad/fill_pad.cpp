@@ -10,10 +10,10 @@
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor FillPadOperation::invoke(
-    const ttnn::Tensor& input_tensor, float fill_value, const std::optional<ttnn::MemoryConfig>& memory_config) {
+Tensor fill_implicit_tile_padding(
+    const Tensor& input_tensor, float fill_value, const std::optional<MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -49,4 +49,4 @@ ttnn::Tensor FillPadOperation::invoke(
     return output_tensor;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

@@ -16,9 +16,7 @@
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
 
-namespace ttnn::operations::data_movement {
-
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 struct UpperRepeatDims {
     static constexpr uint32_t collapsed_upper = 0;
@@ -117,13 +115,17 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
 
     return std::tie(working_tensor, working_repetition_vector);
 }
-}  // namespace detail
 
-ttnn::Tensor RepeatOperation::invoke(
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor repeat(
     const ttnn::Tensor& tensor,
     const ttnn::SmallVector<uint32_t>& provided_repetition_vector,
     const std::optional<MemoryConfig>& provided_output_mem_config) {
-    auto [working_tensor, repetition_vector] = detail::match_input_rank(tensor, provided_repetition_vector);
+    auto [working_tensor, repetition_vector] =
+        operations::data_movement::detail::match_input_rank(tensor, provided_repetition_vector);
     MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());
     auto working_output_mem_config = output_mem_config;
 
@@ -168,12 +170,14 @@ ttnn::Tensor RepeatOperation::invoke(
         }
         // if last dim
         if (it == repetition_vector.crbegin()) {
-            working_tensor = detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
+            working_tensor =
+                operations::data_movement::detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
         }
         // if not last dim
         else {
             auto i = repetition_vector.crend() - it - 1;  // forward index
-            working_tensor = detail::repeat_upper_dims_rm(working_tensor, i, *it, working_output_mem_config);
+            working_tensor = operations::data_movement::detail::repeat_upper_dims_rm(
+                working_tensor, i, *it, working_output_mem_config);
         }
     }
 
@@ -190,9 +194,8 @@ ttnn::Tensor RepeatOperation::invoke(
     return working_tensor;
 }
 
-ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
-    return RepeatOperation::invoke(
-        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
+ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+    return ttnn::repeat(input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

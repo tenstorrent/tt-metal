@@ -8,8 +8,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_dot_backward {
-std::vector<std::optional<Tensor>> MorehDotBackward::invoke(
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& other,
@@ -19,4 +20,4 @@ std::vector<std::optional<Tensor>> MorehDotBackward::invoke(
     return ttnn::prim::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_dot_backward
+}  // namespace ttnn

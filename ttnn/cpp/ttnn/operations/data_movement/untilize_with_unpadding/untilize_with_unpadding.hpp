@@ -7,22 +7,13 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct ExecuteUntilizeWithUnpadding {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& output_tensor_end,
-        const std::optional<MemoryConfig>& memory_config,
-        bool use_multicore = true,
-        bool use_pack_untilize = true,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto untilize_with_unpadding = ttnn::register_operation<
-    "ttnn::untilize_with_unpadding",
-    ttnn::operations::data_movement::ExecuteUntilizeWithUnpadding>();
+Tensor untilize_with_unpadding(
+    const Tensor& input_tensor,
+    const Shape& output_tensor_end,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    bool use_multicore = true,
+    bool use_pack_untilize = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

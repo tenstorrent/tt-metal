@@ -8,63 +8,18 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "interleaved_to_sharded_partial.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
-
-template <typename data_movement_sharded_operation_t>
-void bind_interleaved_to_sharded_partial(
-    nb::module_& mod, const data_movement_sharded_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::variant<CoreCoord, CoreRangeSet>& grid,
-               const std::array<uint32_t, 2>& shard_shape,
-               int64_t& num_slices,
-               int64_t& slice_index,
-               tt::tt_metal::TensorMemoryLayout shard_scheme,
-               tt::tt_metal::ShardOrientation shard_orientation,
-               const std::optional<ttnn::DataType>& output_dtype) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    grid,
-                    shard_shape,
-                    num_slices,
-                    slice_index,
-                    shard_scheme,
-                    shard_orientation,
-                    output_dtype);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("grid"),
-            nb::arg("shard_shape"),
-            nb::arg("num_slices"),
-            nb::arg("slice_index"),
-            nb::arg("shard_scheme"),
-            nb::arg("shard_orientation"),
-            nb::kw_only(),
-            nb::arg("output_dtype") = nb::none(),
-        });
-}
-
-}  // namespace detail
-
 // TODO: Add more descriptions to the arguments
 void bind_interleaved_to_sharded_partial(nb::module_& mod) {
-    detail::bind_interleaved_to_sharded_partial(
-        mod,
-        ttnn::interleaved_to_sharded_partial,
-        R"doc(
+    const auto* doc = R"doc(
         Converts a partial tensor from interleaved to sharded memory layout
 
         Args:
@@ -82,7 +37,30 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
 
             >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.CoreGrid(3,3), 2, 2, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"interleaved_to_sharded_partial">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const std::variant<CoreCoord, CoreRangeSet>&,
+                const std::array<uint32_t, 2>&,
+                int64_t&,
+                int64_t&,
+                tt::tt_metal::TensorMemoryLayout,
+                tt::tt_metal::ShardOrientation,
+                const std::optional<ttnn::DataType>&>(&ttnn::interleaved_to_sharded_partial),
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("grid"),
+            nb::arg("shard_shape"),
+            nb::arg("num_slices"),
+            nb::arg("slice_index"),
+            nb::arg("shard_scheme"),
+            nb::arg("shard_orientation"),
+            nb::kw_only(),
+            nb::arg("output_dtype") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

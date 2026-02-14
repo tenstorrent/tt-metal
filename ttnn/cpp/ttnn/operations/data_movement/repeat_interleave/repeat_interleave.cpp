@@ -4,15 +4,17 @@
 
 #include "repeat_interleave.hpp"
 
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
-ttnn::Tensor ExecuteRepeatInterleave::invoke(
+ttnn::Tensor repeat_interleave(
     const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
@@ -25,7 +27,7 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
     if (normalized_dim == input_rank - 1) {
         auto transposed_input = ttnn::transpose(input_a, -1, -2, mem_config);
-        auto repeated_input = ExecuteRepeatInterleave::invoke(transposed_input, repeat, -2, mem_config);
+        auto repeated_input = ttnn::repeat_interleave(transposed_input, repeat, -2, mem_config);
         return ttnn::transpose(repeated_input, -1, -2, mem_config);
     }
 
@@ -66,4 +68,4 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config) : original_layout;
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

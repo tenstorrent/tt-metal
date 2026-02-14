@@ -9,42 +9,16 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "reshard.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
-
-template <typename data_movement_sharded_operation_t>
-void bind_reshard(nb::module_& mod, const data_movement_sharded_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const data_movement_sharded_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const MemoryConfig& output_memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, output_memory_config, output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("output_memory_config"),
-            nb::arg("output_tensor").noconvert() = nb::none(),
-
-        });
-}
-
-}  // namespace detail
-
 // TODO: Add more descriptions to the arguments
 void bind_reshard(nb::module_& mod) {
-    detail::bind_reshard(
-        mod,
-        ttnn::reshard,
+    const auto* doc =
         R"doc(
         Converts a tensor from one sharded layout to another sharded layout
 
@@ -66,7 +40,16 @@ void bind_reshard(nb::module_& mod) {
             >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
             >>> sharded_tensor = ttnn.reshard(tensor, shard_memory_config)
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"reshard">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            &ttnn::reshard,
+            nb::arg("input_tensor").noconvert(),
+            nb::arg("output_memory_config"),
+            nb::arg("output_tensor").noconvert() = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

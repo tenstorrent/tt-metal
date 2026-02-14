@@ -273,7 +273,10 @@ ttnn::Tensor reshape_tiled(
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
+}  // namespace ttnn::operations::data_movement
+
+// Free function implementations
+ttnn::Tensor ttnn::reshape(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
@@ -285,7 +288,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
 
-    const auto [logical_shape, padded_shape] = shape_corrector(tensor, logical_input_shape, padded_input_shape);
+    const auto [logical_shape, padded_shape] =
+        operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // First Case, No reshape Required
     if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
         return tensor;
@@ -330,7 +334,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
 
     if (this_is_view) {
-        return PerformView(tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+        return operations::data_movement::PerformView(
+            tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
@@ -348,7 +353,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     // Do the reshape in row-major
     if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        return detail::reshape_rm(
+        return operations::data_movement::detail::reshape_rm(
             tensor,
             logical_shape,
             padded_shape,
@@ -358,7 +363,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             pad_value.value_or(default_pad_value),
             sub_core_grid);
     }
-    return reshape_tiled(
+    return operations::data_movement::reshape_tiled(
         tensor,
         logical_shape,
         mem_config,
@@ -367,30 +372,28 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         sub_core_grid);
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
+ttnn::Tensor ttnn::reshape(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
+    return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
+ttnn::Tensor ttnn::reshape(
     const ttnn::Tensor& tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return invoke(
+    return reshape(
         tensor,
-        detail::infer_dims_for_reshape(tensor, shape_vector),
+        operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,
         sub_core_grid);
 }
-
-}  // namespace ttnn::operations::data_movement

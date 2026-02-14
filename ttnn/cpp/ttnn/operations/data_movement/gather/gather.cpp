@@ -147,7 +147,11 @@ Tensor post_gather_transform_tensor(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-Tensor ExecuteGather::invoke(
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+Tensor gather(
     const Tensor& input_tensor,
     const int8_t dim,
     const Tensor& input_index_tensor,
@@ -178,10 +182,10 @@ Tensor ExecuteGather::invoke(
 
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
-    Tensor padded_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
+    Tensor padded_index_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
         input_index_tensor, dim, input_index_tensor_is_dim_last_idx, index_tensor_is_rank_le_4d, true);
 
-    Tensor padded_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
+    Tensor padded_input_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
         input_tensor,
         dim,
         input_tensor_is_dim_last_idx,
@@ -192,7 +196,7 @@ Tensor ExecuteGather::invoke(
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {
         auto& output_tensor = optional_output_tensor.value();
-        output_tensor = CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
+        output_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
             output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
         optional_output_tensor_value = output_tensor;
     }
@@ -206,8 +210,8 @@ Tensor ExecuteGather::invoke(
         optional_output_tensor_value,
         sub_core_grids);
 
-    return CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
+    return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::post_gather_transform_tensor(
         input_index_tensor, gather_tensor, dim, input_index_tensor_is_dim_last_idx, original_index_tensor_lshape);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn
