@@ -93,7 +93,7 @@ TEST(OptionalReferenceTest, MoveConstruction) {
     // Clang Static Analyzer doesn't understand this is safe, so conditionally compile
 #ifndef __clang_analyzer__
     EXPECT_TRUE(ref1.has_value());
-#endif
+#endif  // __clang_analyzer__
 }
 
 TEST(OptionalReferenceTest, CopyAssignment) {
