@@ -695,6 +695,30 @@ class TTAttention:
                 # Backward compat: older runtimes may not expose these kwargs.
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
 
+            # Some runtimes accept the `memory_config` kwarg but still return interleaved
+            # tensors for certain shapes. Force the split outputs into the requested
+            # sharded memory config when doing explicit sharded attention.
+            if explicit_sharded_attn and split_memcfg is not None and not (
+                _ttnn_is_sharded(q_tt) and _ttnn_is_sharded(k_tt) and _ttnn_is_sharded(v_tt)
+            ):
+                try:
+                    try:
+                        q_tt = ttnn.to_memory_config(q_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
+                        k_tt = ttnn.to_memory_config(k_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
+                        v_tt = ttnn.to_memory_config(v_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
+                    except TypeError:
+                        q_tt = ttnn.to_memory_config(q_tt, memory_config=split_memcfg)
+                        k_tt = ttnn.to_memory_config(k_tt, memory_config=split_memcfg)
+                        v_tt = ttnn.to_memory_config(v_tt, memory_config=split_memcfg)
+                except Exception:
+                    # In perf mode, the runner expects attention to stay sharded; surface the failure.
+                    try:
+                        from .perf_counters import strict_program_config_enabled
+                    except Exception:  # pragma: no cover
+                        strict_program_config_enabled = lambda: False  # type: ignore
+                    if strict_program_config_enabled():
+                        raise
+
             # Stage-2 success criteria: attention should remain sharded end-to-end
             # in perf runs (no DRAM "islands").
             try:
