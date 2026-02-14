@@ -332,17 +332,15 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
             # Keep the default configs if the runtime doesn't expose these types/attrs.
             pass
     head_seq_tiles = prog_cfgs.get("_head_seqL_t__x")
-    # Disable custom attention configs if forced or if sharding would exceed grid width.
+    # Disable custom attention matmul/softmax program configs if forced.
     disable_attn_pc = getattr(config, "tt_force_default_attention_programs", False)
-    if head_seq_tiles is not None and head_seq_tiles > grid[0]:
-        disable_attn_pc = True
 
     qk_pc = None if disable_attn_pc else prog_cfgs.get("query_by_key_matmul_program_config")
     softmax_pc = None if disable_attn_pc else prog_cfgs.get("softmax_program_config")
     av_pc = None if disable_attn_pc else prog_cfgs.get("attention_probabilities_by_value_matmul_program_config")
+    # split_query_key_value_and_split_heads is most efficient (and sometimes
+    # required) with height-sharded outputs.
     split_mem = getattr(ttnn, "L1_HEIGHT_SHARDED_MEMORY_CONFIG", None)
-    if disable_attn_pc:
-        split_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
     return TTLayerConfig(
         grid=grid,
