@@ -14,7 +14,6 @@ from torch import nn
 from PIL import Image
 from tqdm import tqdm
 from pathlib import Path
-from types import SimpleNamespace
 from torch.distributions import Beta
 from transformers import PretrainedConfig, AutoTokenizer
 
@@ -111,18 +110,6 @@ def _apply_speed_optimizations():
 def test_gr00t_inference_validation(device):
     torch.manual_seed(42)
     _apply_speed_optimizations()
-
-    from functools import reduce
-    import operator
-
-    padded = torch.randn(2965872, dtype=torch.bfloat16)
-    shape = (1, 1152, 196, 4)
-    target_numel = reduce(operator.mul, shape, 1)
-    assert target_numel == 903168 and padded.numel() > target_numel
-
-    result = DispatchManager.dispatch_to_torch_wrapper(SimpleNamespace(name=lambda: "aten::view"), (padded, shape), {})
-    out = result.to_torch if hasattr(result, "to_torch") else result
-    assert out.shape == shape and out.numel() == target_numel
 
     model_id = "nvidia/GR00T-N1.6-3B"
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)

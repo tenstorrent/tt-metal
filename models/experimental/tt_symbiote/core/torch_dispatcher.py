@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.tt_symbiote.utils.device_management import handle_view
+
+def handle_view(func, args, kwargs):
+    """Handle view operation."""
+    return args[0].reshape(args[1])
+
 
 func_to_torch = {
     "aten::view": handle_view,
