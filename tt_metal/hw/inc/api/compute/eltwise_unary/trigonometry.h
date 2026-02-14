@@ -32,7 +32,7 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(sine, APPROX)); }
  */
 // clang-format on
 ALWI void sin_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN_ITERATIONS(calculate_sine, RC, APPROX, idst, 8));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_sine, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
 }
 
 /**
@@ -55,7 +55,7 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(cosine, APPROX)); }
  */
 // clang-format on
 ALWI void cos_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN_ITERATIONS(calculate_cosine, RC, APPROX, idst, 8));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_cosine, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
 }
 
 /**
@@ -101,7 +101,7 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(tan, APPROX)); }
  */
 // clang-format on
 ALWI void tan_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN_ITERATIONS(calculate_tangent, RC, APPROX, idst, 8));
+    MATH(SFPU_THREE_PARAM_KERNEL_FP32_FIRST(calculate_tangent, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
 }
 
 /**

@@ -20,9 +20,94 @@ static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
+static const float FRAC_2_PI = 0.636619747f;
 
-static const float PI_2_HI = 0x1.921fb4p+0f;
-static const float PI_2_LO = 0x1.4442d2p-24f;
+// Computes v + pi/2, reduced to the interval [-pi/2, pi/2].
+sfpi_inline sfpi::vFloat reduce_pi_shifted(sfpi::vFloat v, sfpi::vInt& i) {
+    // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
+    const float P0 = -0x1.92p+0f;       // representable as bf16
+    const float P1 = -0x1.fbp-12f;      // representable as fp16
+    const float P2 = -0x1.51p-22f;      // requires fp32
+    const float P3 = -0x1.0b4612p-34f;  // requires fp32
+
+    const float ROUNDING_BIAS = 12582912.0f;
+    const float NEG_ROUNDING_BIAS = -12582912.0f;
+
+    sfpi::vFloat j;
+    sfpi::vFloat inv_pi = FRAC_1_PI;
+
+    // j = round(v / PI + 0.5)
+
+    // First, j = v * INV_PI + 0.5.
+    {
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        sfpi::vFloat half;
+        half.get() = __builtin_rvtt_sfpxloadi(0, 0x3f00);
+        j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+
+    // j += 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+    j += ROUNDING_BIAS;
+
+    // We need the LSB of the integer later, to determine the sign of the result.
+    i = sfpi::reinterpret<sfpi::vInt>(j);
+
+    // Shift mantissa bits back; j is now round(v / PI + 0.5) in fp32.
+    j += NEG_ROUNDING_BIAS;
+
+    // j = 2.0 * j - 1.0
+    {
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        vFloat two;
+        __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
+        two.get() = __builtin_rvtt_sfpxloadi(0, 0x4000);  // 2.0
+        j.get() = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
+    }
+
+    // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
+    // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+    sfpi::vFloat a = v + j * P0;
+    // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+    a = a + j * P1;
+    a = a + j * P2;
+    a = a + j * P3;
+
+    return a;
+}
+
+sfpi_inline sfpi::vFloat reduce_pi(sfpi::vFloat v, sfpi::vInt& i) {
+    // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + P2 + P3
+    const float P0 = -0x1.92p+1f;       // representable as bf16
+    const float P1 = -0x1.fbp-11f;      // representable as fp16
+    const float P2 = -0x1.51p-21f;      // requires fp32
+    const float P3 = -0x1.0b4612p-33f;  // requires fp32
+
+    sfpi::vFloat rounding_bias;
+    sfpi::vFloat j;
+    sfpi::vFloat inv_pi = FRAC_1_PI;
+
+    // j = round(v / PI)
+    // j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+    // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+    rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
+    j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    // We need the LSB of the integer later, to determine the sign of the result.
+    i = sfpi::reinterpret<sfpi::vInt>(j);
+
+    // Shift mantissa bits back; j is now round(v / PI) in fp32.
+    j += -rounding_bias;
+
+    // Four-stage Cody-Waite reduction; a = v - j * PI.
+    // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+    sfpi::vFloat a = v + j * P0;
+    // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+    a = a + j * P1;
+    a = a + j * P2;
+    a = a + j * P3;
+
+    return a;
+}
 
 static sfpi_inline vFloat _tan_(vFloat s) {
     vFloat r;
@@ -39,40 +124,106 @@ static sfpi_inline vFloat _tan_(vFloat s) {
     return r;
 }
 
-template <bool APPROXIMATION_MODE>
-static vFloat sfpu_tan(vFloat x);
+static sfpi_inline vFloat _tan_bf16_(vFloat s) {
+    vFloat r;
 
-template <>
-sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
-    return x;
+    r = 0x1.4f1f4ep-4f;
+    r = r * s + 0x1.02b98p-3f;
+    r = r * s + 0x1.55953p-2f;
+    r = r * s;
+
+    return r;
 }
 
+template <bool APPROXIMATION_MODE>
+static vFloat sfpu_tan(vFloat x, vInt i);
+
 template <>
-sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
-    const vFloat s = x * x;
+sfpi_inline vFloat sfpu_tan<true>(vFloat a, vInt i) {
+    vFloat s = a * a;
 
     vFloat t = _tan_(s);
-    vFloat r = t * x + x;
-    v_if(i & 1) {
-        s = x - r;
-        s = t * x + s;
-        t = sfpi::approx_recip(-r);
+    vFloat r = t * a + a;
+
+    v_if(i < 0) {
+        s = sfpi::vConstNeg1 * r + a;
+        s = t * a + s;
+        t = sfpi::approx_recip(r);
+        // one N-R
+        vFloat e = -r * t + sfpi::vConst1;
+        t = -t * e - t;
         r = r * t + sfpi::vConst1;
         r = s * t + r;
         r = r * t + t;
     }
     v_endif;
 
-    return x;
+    return r;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <>
+sfpi_inline vFloat sfpu_tan<false>(vFloat a, vInt i) {
+    vFloat s = a * a;
+
+    vFloat t = _tan_bf16_(s);
+    vFloat r = t * a + a;
+
+    v_if(i < 0) {
+        t = sfpi::approx_recip(r);
+        // one N-R
+        vFloat e = -r * t + sfpi::vConst1;
+        r = -t * e - t;
+    }
+    v_endif;
+
+    return r;
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
-    // SFPU microcode
+    // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
+    const float P0 = -0x1.92p+0f;       // representable as bf16
+    const float P1 = -0x1.fbp-12f;      // representable as fp16
+    const float P2 = -0x1.51p-22f;      // requires fp32
+    const float P3 = -0x1.0b4612p-34f;  // requires fp32
+
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        v -= int32_to_float(float_to_int16(v, 0), 0);
-        dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
+        vFloat v = dst_reg[0];
+        vInt i;
+
+        sfpi::vFloat rounding_bias;
+        sfpi::vFloat j;
+        sfpi::vFloat inv_pio2 = FRAC_2_PI;
+
+        // j = round(v / (PI/2))
+        // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
+        j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+        // We need the LSB of the integer later, to determine the sign of the result.
+        i = sfpi::reinterpret<sfpi::vInt>(j);
+
+        // Shift mantissa bits back; j is now round(v / PI) in fp32.
+        j += -rounding_bias;
+
+        i <<= 31;
+
+        // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
+        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+        sfpi::vFloat a = v + j * P0;
+        // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+        a = a + j * P1;
+        a = a + j * P2;
+        a = a + j * P3;
+
+        a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
+
+        if constexpr (is_fp32_dest_acc_en) {
+            dst_reg[0] = a;
+        } else {
+            dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(a, 0));
+        }
         dst_reg++;
     }
 }
@@ -95,8 +246,8 @@ sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
            ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 }
 
-template <bool IS_COSINE, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sincos_internal() {
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_sine() {
     // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-pi/2, pi/2].
     // 2. In the case of cos(x), use cos(x) = sin(pi / 2 - abs(x)), using a two-part subtraction to avoid precision
     // loss.
@@ -143,14 +294,6 @@ inline void calculate_sincos_internal() {
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
 
-        // If we're computing cosine, we want cos(a) = sin(pi/2 - abs(a)).
-        // Use two-part subtraction to avoid precision loss.
-        if constexpr (IS_COSINE) {
-            a = sfpi::abs(a);
-            a = PI_2 - a;
-            a = a + PI_2_LO;
-        }
-
         q <<= 31;
         vFloat s = a * a;
         a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q);
@@ -165,12 +308,7 @@ inline void calculate_sincos_internal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sine() {
-    calculate_sincos_internal<false, APPROXIMATION_MODE, ITERATIONS>();
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosine() {
     // 1. Reduce argument using a four-stage Cody-Waite reduction to the interval [-pi/2, pi/2].
     // 2. In the case of cos(x), use cos(x) = sin(pi / 2 + x).
@@ -184,11 +322,19 @@ inline void calculate_cosine() {
 
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 
-    // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
-    vFloat C3 = 0x1.5dc908p-19f;
-    vFloat C2 = -0x1.9f70fp-13f;
-    vFloat C1 = 0x1.110edap-7f;
-    vFloat C0 = -0x1.55554cp-3f;
+    vFloat C3, C2, C1, C0;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
+        C3 = 0x1.5dc908p-19f;
+        C2 = -0x1.9f70fp-13f;
+        C1 = 0x1.110edap-7f;
+        C0 = -0x1.55554cp-3f;
+    } else {
+        C2 = -0x1.8b10a4p-13f;
+        C1 = 0x1.10c2a2p-7f;
+        C0 = -0x1.5554a4p-3f;
+    }
 
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
@@ -235,13 +381,22 @@ inline void calculate_cosine() {
         q <<= 31;
         vFloat s = a * a;
         a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q);
-        vFloat r = C3 * s + C2;
-        r = r * s + C1;
-        vFloat c = a * s;
-        r = r * s + C0;
-        r = r * c + a;
 
-        dst_reg[0] = r;
+        if constexpr (is_fp32_dest_acc_en) {
+            vFloat r = C3 * s + C2;
+            r = r * s + C1;
+            vFloat c = a * s;
+            r = r * s + C0;
+            r = r * c + a;
+            dst_reg[0] = r;
+        } else {
+            vFloat r = C2 * s + C1;
+            vFloat c = a * s;
+            r = r * s + C0;
+            r = r * c + a;
+            dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+        }
+
         dst_reg++;
     }
 }
