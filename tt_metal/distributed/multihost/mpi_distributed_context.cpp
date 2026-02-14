@@ -124,8 +124,16 @@ const std::string& MPIDistributedException::error_string() const noexcept { retu
 /* -------------------------- MPIRequest ---------------------------------- */
 
 Status MPIRequest::wait() {
+    // NOTE: MPI-Checker may warn here that "Request has no matching nonblocking call"
+    // This is a false positive - req_ is always initialized via MPI_Isend/MPI_Irecv
+    // in isend()/irecv() before being passed to the MPIRequest constructor.
+    // The analyzer cannot track requests through class members (known limitation).
+    if (done_) {
+        // Already completed, return empty status (MPI_Wait on MPI_REQUEST_NULL is safe but wasteful)
+        return Status{Rank(MPI_ANY_SOURCE), Tag(MPI_ANY_TAG), 0};
+    }
     MPI_Status status{};
-    MPI_CHECK(MPI_Wait(&req_, &status));
+    MPI_CHECK(MPI_Wait(&req_, &status));  // NOLINT(clang-analyzer-optin.mpi.MPI-Checker)
     done_ = true;
 
     int count = 0;
@@ -134,9 +142,12 @@ Status MPIRequest::wait() {
 }
 
 std::optional<Status> MPIRequest::test() {
+    if (done_) {
+        return std::nullopt;
+    }
     MPI_Status status{};
     int flag = 0;
-    MPI_CHECK(MPI_Test(&req_, &flag, &status));
+    MPI_CHECK(MPI_Test(&req_, &flag, &status));  // NOLINT(clang-analyzer-optin.mpi.MPI-Checker)
     if (!flag) {
         return std::nullopt;
     }
