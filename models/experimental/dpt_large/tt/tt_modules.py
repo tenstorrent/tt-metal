@@ -725,14 +725,16 @@ class TTAttention:
                 program_config=qkv_pc,
                 op_name="attn_qkv",
             )
+            # The split-heads op expects a rank-3 [B, N, 3*C] tensor (vit.md pattern).
+            qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
             try:
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                    qkv4, num_heads=H, transpose_key=True, memory_config=split_memcfg
+                    qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
                 )
             except TypeError:
                 # Backward compat: older runtimes may not expose these kwargs.
-                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv4, num_heads=H)
+                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
 
             if explicit_sharded_attn:
                 # Explicit attention path (ViT TTNN pattern) on sharded operands:
