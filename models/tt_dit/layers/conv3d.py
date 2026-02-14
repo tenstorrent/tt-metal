@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import torch
 from loguru import logger
 
 import ttnn
@@ -108,7 +107,7 @@ class ContextParallelConv3d(Module):
         self.padding = (0, height_pad, width_pad)
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0)
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, on_host=True)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0) if bias else None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -128,25 +127,6 @@ class ContextParallelConv3d(Module):
 
         weight = state.get("weight")
         if weight is not None:
-            c_in = weight.shape[1]
-            weight = weight.permute(2, 3, 4, 1, 0)  # kd, hk, kw, c, out_chan
-            align_pad = alignment - c_in % alignment
-            if c_in % alignment != 0:
-                weight = torch.nn.functional.pad(weight, (0, 0, 0, align_pad))
-
-            # Reshape weights so that num_c_in_blocks is the first dimension
-            kd, hk, kw, c_in_aligned, out_channels = weight.shape
-
-            c_in_block = self.conv_config.C_in_block
-            c_in_block = c_in_aligned if c_in_block == 0 else c_in_block
-            num_c_in_blocks = c_in_aligned // c_in_block
-            assert num_c_in_blocks * c_in_block == c_in_aligned
-
-            # Kernel expects num_c_in_blocks to be the first dimension to stride over it
-            weight = weight.reshape(kd, hk, kw, num_c_in_blocks, c_in_block, out_channels)
-            weight = weight.permute(3, 0, 1, 2, 4, 5)
-            weight = weight.reshape(-1, out_channels)
-
             state["weight"] = weight
 
         if "bias" in state:
@@ -206,6 +186,7 @@ class ContextParallelConv3d(Module):
             input_tensor=x_pad_NTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data if self.bias is not None else None,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,

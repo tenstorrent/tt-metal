@@ -50,6 +50,7 @@ void bind_conv3d(nb::module_& mod) {
             [](const decltype(ttnn::experimental::conv3d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
+               ttnn::MeshDevice* device,
                const std::optional<ttnn::Tensor>& bias_tensor,
                const ttnn::experimental::prim::Conv3dConfig& config,
                const tt::tt_metal::DataType& dtype,
@@ -65,6 +66,7 @@ void bind_conv3d(nb::module_& mod) {
                 return self(
                     input_tensor,
                     weight_tensor,
+                    device,
                     bias_tensor,
                     config,
                     dtype,
@@ -81,6 +83,7 @@ void bind_conv3d(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
+            nb::arg("device"),
             nb::arg("bias_tensor") = nb::none(),
             nb::arg("config"),
             nb::arg("dtype"),

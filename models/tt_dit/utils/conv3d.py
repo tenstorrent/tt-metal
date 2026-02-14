@@ -113,29 +113,3 @@ def aligned_channels(channels):
     if channels % ALIGNMENT != 0:
         channels = channels + ALIGN_PAD
     return channels
-
-
-def prepare_conv3d_weights(weight, bias, conv_config):
-    """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    padded_C_in = aligned_channels(C_in)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = conv_config.C_in_block
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert (
-        num_C_in_blocks * C_in_block == C_in_aligned
-    ), f"num_C_in_blocks * C_in_block == C_in_aligned, got {num_C_in_blocks} * {C_in_block} != {C_in_aligned}"
-
-    # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    return w, bias.reshape(1, -1)

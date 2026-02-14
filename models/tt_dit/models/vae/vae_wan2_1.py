@@ -16,7 +16,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import bf16_tensor
 
@@ -291,7 +291,7 @@ class WanCausalConv3d(Module):
 
         if "weight" in state and "bias" in state:
             weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
-            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
+            state["weight"], state["bias"] = weight, bias.reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -393,6 +393,7 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
+            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -695,9 +696,7 @@ class WanConv2d(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state and "bias" in state:
-            state["weight"], state["bias"] = prepare_conv3d_weights(
-                state["weight"].unsqueeze(2), state["bias"], self.conv_config
-            )
+            state["weight"], state["bias"] = state["weight"].unsqueeze(2), state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
