@@ -477,6 +477,7 @@ target_sources(
         tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_interleaved_program_factory.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
+        tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_sharded_program_factory.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
         transpose/device/transpose_device_operation.cpp
         transpose/device/transpose_cn_program_factory.cpp

@@ -20,7 +20,15 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
-        return TilizeWithValPaddingMultiCoreShardedFactory{};
+        auto memory_layout = input_tensor.memory_config().memory_layout();
+        if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED && operation_attributes.use_multicore) {
+            return ttnn::prim::TilizeWithValPaddingMultiCoreShardedFactory{};
+        } else if (
+            memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // HEIGHT/BLOCK sharded using ShardedAddrGen addressing method
+            return ttnn::prim::TilizeWithValPaddingSingleCoreShardedFactory{};
+        }
+        // WIDTH_SHARDED with single-core falls through to existing paths below
     }
     if (!operation_attributes.enough_space_height) {
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -102,23 +110,30 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_HEIGHT);
 
     if (input_tensor.memory_config().is_sharded()) {
+        auto layout = input_tensor.memory_config().memory_layout();
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-            "Input tensor must be width sharded");
+            layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                layout == TensorMemoryLayout::BLOCK_SHARDED,
+            "Input tensor must be properly sharded (WIDTH/HEIGHT/BLOCK_SHARDED)");
         TT_FATAL(
             operation_attributes.output_mem_config.memory_layout() == input_tensor.memory_config().memory_layout(),
             "Output tensor must have the same memory layout as input tensor");
-        for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
-            if (i != input_shape.rank() - 2) {
-                TT_FATAL(
-                    input_shape[i] == operation_attributes.output_padded_shape[i],
-                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
-                    i,
-                    input_shape[i],
-                    i,
-                    operation_attributes.output_padded_shape[i]);
+        TT_FATAL(
+            operation_attributes.output_mem_config.buffer_type() == BufferType::L1,
+            "Sharded output must use L1 buffer");
+
+        if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            // WIDTH_SHARDED: uses existing paths (multicore or single-core)
+            // only height can be padded
+            for (uint32_t i = 0; i < input_tensor.padded_shape().rank(); i++) {
+                if (i != input_shape.rank() - 2) {
+                    TT_FATAL(
+                        input_shape[i] == operation_attributes.output_padded_shape[i],
+                        "For WIDTH_SHARDED, only height can be padded");
+                }
             }
         }
+        // HEIGHT/BLOCK_SHARDED: uses single-core sharded factory with ShardedAddrGen
     }
 }
 
@@ -127,17 +142,15 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
     const auto& input_shape = input_tensor.padded_shape();
 
     if (input_tensor.memory_config().is_sharded()) {
-        auto shard_spec = input_tensor.shard_spec().value();
-        shard_spec.shape[0] =
-            operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        // For sharded output, output logical shape equals output padded shape
+        // tilize_with_val_padding pads the tensor, so logical shape changes to match padded
         return TensorSpec(
-            input_shape,
+            operation_attributes.output_padded_shape,
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
-                mem_config,
-                input_shape,
+                operation_attributes.output_mem_config,
+                operation_attributes.output_padded_shape,
                 operation_attributes.output_padded_shape));
     }
 
