@@ -153,30 +153,24 @@ Tensor UnaryDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    const auto& input_logical_shape = input_tensor.logical_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash;
 
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            args.sub_core_grids,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            args.sub_core_grids,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
-    }
+    // Hash both logical and padded shapes for all layouts
+    // - logical_shape affects computation correctness
+    // - padded_shape affects L1 buffer allocation
+    hash = operation::hash_operation<UnaryDeviceOperation>(
+        args,
+        args.sub_core_grids,
+        program_factory.index(),
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_logical_shape,   // [HASH] Affects computation correctness
+        input_padded_shape,    // [HASH] Affects L1 buffer allocation
+        input_tensor.layout());
 
     return hash;
 }
