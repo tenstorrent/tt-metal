@@ -281,7 +281,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
     const auto in0_tensor_stride_h = transpose_a ? 1 : K;
@@ -1086,7 +1090,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;

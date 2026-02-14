@@ -1537,7 +1537,11 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
 
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
