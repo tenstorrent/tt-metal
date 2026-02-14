@@ -10,7 +10,7 @@
 namespace ttnn::operations::dram_prefetcher {
 
 Tensor ExecuteDramPrefetcher::invoke(
-    std::vector<ttnn::Tensor>& tensors,
+    const std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const bool enable_performance_mode) {
