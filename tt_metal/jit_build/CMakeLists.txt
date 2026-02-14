@@ -34,3 +34,7 @@ endif()
 if(ENABLE_FAKE_KERNELS_TARGET)
     add_subdirectory(fake_kernels_target)
 endif()
+
+if(ENABLE_KERNEL_CLANG_TIDY)
+    add_subdirectory(kernel_clang_tidy)
+endif()
