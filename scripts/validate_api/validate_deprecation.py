@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 """Validate C++ deprecation policy: items must age 30+ days before removal.
 
 Example: [[deprecated]] void oldFunc(); must exist 30+ days before deletion.
@@ -130,42 +131,42 @@ def print_report(existing: List[DeprecatedItem], removed: List[DeprecatedItem]) 
         recent = [i for i in existing if i.age_days is not None and not i.can_remove]
         unknown = [i for i in existing if i.age_days is None]
 
-        print(f"\n📊 Existing: {len(existing)} deprecations")
+        print(f"\n[Summary] Existing: {len(existing)} deprecations")
         for items, label in [
-            (ready, f"ready to remove (≥{Config.MIN_DEPRECATION_DAYS} days)"),
+            (ready, f"ready to remove (>={Config.MIN_DEPRECATION_DAYS} days)"),
             (recent, "not ready yet"),
             (unknown, "unknown age"),
         ]:
             if items:
-                print(f"  • {len(items)} {label}")
+                print(f"  * {len(items)} {label}")
 
-        print(f"\n📋 Existing deprecations:")
+        print(f"\n[Details] Existing deprecations:")
         for item in sorted(existing, key=lambda x: (x.file_path, x.line_number)):
             age_str = f"{item.age_days:.1f} days" if item.age_days is not None else "unknown"
-            status = "✓ removable" if item.can_remove else "⏳ too recent" if item.age_days is not None else "? unknown"
+            status = "removable" if item.can_remove else "too recent" if item.age_days is not None else "unknown"
             print(f"  [{status}] {item.file_path}:{item.line_number} (age: {age_str})")
 
     # Report violations
     violations, valid = partition(lambda i: not i.can_remove, removed)
 
     if removed:
-        print(f"\n📋 Removed deprecations:")
+        print(f"\n[Details] Removed deprecations:")
         for item in sorted(removed, key=lambda x: (x.file_path, x.line_number)):
             age_str = f"{item.age_days:.1f} days" if item.age_days is not None else "unknown"
-            status = "✅ valid" if item.can_remove else "❌ violation"
+            status = "valid" if item.can_remove else "violation"
             print(f"  [{status}] {item.file_path}:{item.line_number} (age: {age_str})")
 
     if violations:
-        print(f"\n❌ POLICY VIOLATIONS: {len(violations)} items removed too early")
+        print(f"\nPOLICY VIOLATIONS: {len(violations)} items removed too early")
         print(f"   (must wait {Config.MIN_DEPRECATION_DAYS} days before removal)")
         for item in violations:
             if item.age_days is not None:
                 wait = Config.MIN_DEPRECATION_DAYS - item.age_days
                 print(
-                    f"  • {item.file_path}:{item.line_number} - {item.age_days:.1f} days old, wait {wait:.1f} more days"
+                    f"  * {item.file_path}:{item.line_number} - {item.age_days:.1f} days old, wait {wait:.1f} more days"
                 )
             else:
-                print(f"  • {item.file_path}:{item.line_number} - unknown age")
+                print(f"  * {item.file_path}:{item.line_number} - unknown age")
 
     # Summary
     print(f"\n{'='*80}")
