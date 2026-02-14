@@ -770,15 +770,11 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         uint32_t num_dram_banks = this->num_dram_channels();
 
         const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled = true;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
-            noc_translation_enabled = tt::tt_metal::MetalContext::instance()
-                                          .get_cluster()
-                                          .get_cluster_desc()
-                                          ->get_noc_translation_table_en()
-                                          .at(this->id());
-        }
+        bool noc_translation_enabled =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
         bool dram_is_virtualized =
+            (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) &&
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
@@ -816,17 +812,23 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-        // Convert to physical worker coordinates to logical. This gets returned to the user.
+        bool is_mock =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
         for (auto physical_worker_core : physical_worker_cores) {
-            tt::umd::CoreCoord logical_coord_translated =
-                soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
-            this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
-                CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
-            TT_ASSERT(
-                logical_coord_translated.core_type == CoreType::TENSIX,
-                "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing workers is "
-                "invalid",
-                logical_coord_translated.str());
+            if (is_mock) {
+                this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                    CoreCoord(physical_worker_core.x, physical_worker_core.y));
+            } else {
+                tt::umd::CoreCoord logical_coord_translated =
+                    soc_desc.translate_coord_to(physical_worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+                this->optimal_dram_bank_to_logical_worker_assignment_.push_back(
+                    CoreCoord(logical_coord_translated.x, logical_coord_translated.y));
+                TT_ASSERT(
+                    logical_coord_translated.core_type == CoreType::TENSIX,
+                    "Worker dram interface core {} should be a Tensix core, algorithm to place DRAM interfacing "
+                    "workers is invalid",
+                    logical_coord_translated.str());
+            }
         }
     }
     return this->optimal_dram_bank_to_logical_worker_assignment_;

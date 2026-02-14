@@ -177,6 +177,10 @@ private:
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
+    std::vector<uint16_t> generate_dram_bank_to_noc_table_by_proximity(ChipId device_id, CoreCoord virtual_core);
+    // Helper function to find rectangular core ranges that share the same DRAM table
+    std::vector<std::pair<CoreRange, std::vector<uint16_t>>> find_rectangular_ranges_with_same_table(
+        ChipId device_id, CoreCoord start_core, CoreCoord end_core);
     void initialize_device_bank_to_noc_tables(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
@@ -221,6 +225,10 @@ private:
     std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
     std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
     std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
+    // Cached bank_id to DRAM view mapping (used for WH proximity-based routing)
+    std::unordered_map<ChipId, std::vector<size_t>> bank_id_to_dram_view_;
+    // Cached per-core proximity-based DRAM tables (used for WH)
+    std::unordered_map<ChipId, std::map<CoreCoord, std::vector<uint16_t>>> dram_bank_to_noc_xy_by_proximity_;
 
     std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_col_to_virtual_col_;
     std::unordered_map<ChipId, std::vector<uint8_t>> worker_logical_row_to_virtual_row_;

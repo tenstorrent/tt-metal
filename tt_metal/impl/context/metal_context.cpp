@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <algorithm>
+#include <limits>
+#include <map>
 #include <mutex>
 #include <future>
 #include <vector>
@@ -1152,6 +1154,10 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
 }
 
 void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
+    // Skip for Mock devices as they don't have real device coordinates or need NOC tables
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
     // Create a dummp allocator to generatoe the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
@@ -1178,17 +1184,25 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
         l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
+    // Cache the bank_id -> dram_view mapping for use by WH proximity-based routing
+    bank_id_to_dram_view_[device_id].clear();
+    bank_id_to_dram_view_[device_id].resize(num_dram_banks);
+    for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        bank_id_to_dram_view_[device_id][bank_id] = allocator.get_dram_channel_from_bank_id(bank_id);
+    }
+
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_->get_target_device_type() != tt::TargetDevice::Mock &&
-                                   cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
-            CoreCoord dram_noc_coord =
-                soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
+            CoreCoord dram_noc_coord;
+            // Always use cached bank_id_to_dram_view since we populate it above
+            dram_noc_coord =
+                soc_d.get_preferred_worker_core_for_dram_view(bank_id_to_dram_view_[device_id][bank_id], noc);
             if (dram_is_virtualized) {
                 noc_x = dram_noc_coord.x;
                 noc_y = dram_noc_coord.y;
@@ -1215,7 +1229,10 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
 }
 
 void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
-    // Generate logical to virtual map for DRAM and L1 banks
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
@@ -1224,18 +1241,203 @@ void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
     worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
 
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        worker_logical_col_to_virtual_col_[device_id].push_back(
-            soc_desc
-                .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
-                .x);
+        if (noc_translation_enabled) {
+            worker_logical_col_to_virtual_col_[device_id].push_back(
+                soc_desc
+                    .translate_coord_to(
+                        {tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                    .x);
+        } else {
+            worker_logical_col_to_virtual_col_[device_id].push_back(x);
+        }
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        worker_logical_row_to_virtual_row_[device_id].push_back(
-            soc_desc
-                .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
-                .y);
+        if (noc_translation_enabled) {
+            worker_logical_row_to_virtual_row_[device_id].push_back(
+                soc_desc
+                    .translate_coord_to(
+                        {tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                    .y);
+        } else {
+            worker_logical_row_to_virtual_row_[device_id].push_back(y);
+        }
     }
+}
+
+std::vector<uint16_t> MetalContext::generate_dram_bank_to_noc_table_by_proximity(
+    ChipId device_id, CoreCoord virtual_core) {
+    // For Wormhole, each DRAM channel has multiple NOC endpoints. This function generates
+    // a per-core table that picks the closest DRAM NOC endpoint for each bank based on
+    // Manhattan distance from the worker core.
+
+    // This function should only be called for Silicon devices as it uses translate_coord_to
+    TT_ASSERT(
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon,
+        "generate_dram_bank_to_noc_table_by_proximity should only be called for Silicon devices");
+
+    // Check cache first
+    if (dram_bank_to_noc_xy_by_proximity_[device_id].contains(virtual_core)) {
+        return dram_bank_to_noc_xy_by_proximity_[device_id].at(virtual_core);
+    }
+
+    const auto& soc_d = cluster_->get_soc_desc(device_id);
+
+    // bank_id_to_dram_view must be pre-populated by generate_device_bank_to_noc_tables
+    TT_ASSERT(
+        bank_id_to_dram_view_.contains(device_id) &&
+        !bank_id_to_dram_view_[device_id].empty(),
+        "bank_id_to_dram_view mapping must be populated before calling generate_dram_bank_to_noc_table_by_proximity");
+
+    const auto& bank_id_to_dram_view = bank_id_to_dram_view_.at(device_id);
+    const size_t num_dram_banks = bank_id_to_dram_view.size();
+    const auto& dram_cores = soc_d.get_dram_cores();
+
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool dram_is_virtualized =
+        noc_translation_enabled && (hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
+
+    tt::umd::CoreCoord worker_noc0_coord = soc_d.translate_coord_to(
+        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+
+    std::vector<uint16_t> dram_bank_to_noc_xy;
+    dram_bank_to_noc_xy.reserve(hal_->get_num_nocs() * num_dram_banks);
+
+    for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+            size_t dram_view = bank_id_to_dram_view[bank_id];
+            size_t physical_channel = soc_d.get_channel_for_dram_view(dram_view);
+            const auto& channel_endpoints = dram_cores.at(physical_channel);
+            CoreCoord closest_endpoint;
+            uint32_t min_distance = std::numeric_limits<uint32_t>::max();
+
+            for (size_t subchan = 0; subchan < channel_endpoints.size(); subchan++) {
+                tt::umd::CoreCoord dram_endpoint_noc0 =
+                    soc_d.get_dram_core_for_channel(physical_channel, subchan, CoordSystem::NOC0);
+
+                uint32_t dx = (worker_noc0_coord.x > dram_endpoint_noc0.x)
+                                  ? (worker_noc0_coord.x - dram_endpoint_noc0.x)
+                                  : (dram_endpoint_noc0.x - worker_noc0_coord.x);
+                uint32_t dy = (worker_noc0_coord.y > dram_endpoint_noc0.y)
+                                  ? (worker_noc0_coord.y - dram_endpoint_noc0.y)
+                                  : (dram_endpoint_noc0.y - worker_noc0_coord.y);
+                uint32_t distance = dx + dy;
+
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    tt::umd::CoreCoord dram_endpoint_translated =
+                        soc_d.get_dram_core_for_channel(physical_channel, subchan, CoordSystem::TRANSLATED);
+                    closest_endpoint = CoreCoord(dram_endpoint_translated.x, dram_endpoint_translated.y);
+                }
+            }
+
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = closest_endpoint.x;
+                noc_y = closest_endpoint.y;
+            } else {
+                noc_x = hal_->noc_coordinate(noc, soc_d.grid_size.x, closest_endpoint.x);
+                noc_y = hal_->noc_coordinate(noc, soc_d.grid_size.y, closest_endpoint.y);
+            }
+            uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
+            dram_bank_to_noc_xy.push_back(xy);
+        }
+    }
+
+    // Cache the result
+    dram_bank_to_noc_xy_by_proximity_[device_id][virtual_core] = dram_bank_to_noc_xy;
+
+    return dram_bank_to_noc_xy;
+}
+
+std::vector<std::pair<CoreRange, std::vector<uint16_t>>> MetalContext::find_rectangular_ranges_with_same_table(
+    ChipId device_id, CoreCoord start_core, CoreCoord end_core) {
+    // Generate tables for all cores and group by table content
+    std::map<std::vector<uint16_t>, std::vector<CoreCoord>> table_to_cores;
+
+    for (uint32_t y = start_core.y; y <= end_core.y; y++) {
+        for (uint32_t x = start_core.x; x <= end_core.x; x++) {
+            CoreCoord core(x, y);
+            auto table = generate_dram_bank_to_noc_table_by_proximity(device_id, core);
+            table_to_cores[table].push_back(core);
+        }
+    }
+
+    // Find rectangular ranges for each unique table
+    std::vector<std::pair<CoreRange, std::vector<uint16_t>>> ranges;
+    for (auto& [table, cores] : table_to_cores) {
+        if (cores.empty()) {
+            continue;
+        }
+
+        // Sort cores by y then x for easier range detection
+        std::sort(cores.begin(), cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            if (a.y != b.y) {
+                return a.y < b.y;
+            }
+            return a.x < b.x;
+        });
+
+        // Find rectangular ranges using a simple greedy approach
+        // Group consecutive rows/columns that form rectangles
+        std::vector<bool> used(cores.size(), false);
+        for (size_t i = 0; i < cores.size(); i++) {
+            if (used[i]) {
+                continue;
+            }
+
+            CoreCoord start = cores[i];
+            CoreCoord end = cores[i];
+            used[i] = true;
+
+            // Try to extend the range horizontally first
+            bool extended = true;
+            while (extended) {
+                extended = false;
+                // Try to extend right
+                CoreCoord next_right = {end.x + 1, end.y};
+                auto it = std::find(cores.begin(), cores.end(), next_right);
+                if (it != cores.end() && !used[std::distance(cores.begin(), it)]) {
+                    end.x++;
+                    used[std::distance(cores.begin(), it)] = true;
+                    extended = true;
+                }
+            }
+
+            // Try to extend vertically (entire row)
+            extended = true;
+            while (extended) {
+                extended = false;
+                CoreCoord next_row_start = {start.x, end.y + 1};
+                bool can_extend_row = true;
+                std::vector<size_t> row_indices;
+
+                // Check if entire next row exists
+                for (uint32_t x = start.x; x <= end.x; x++) {
+                    CoreCoord check_core = {x, end.y + 1};
+                    auto it = std::find(cores.begin(), cores.end(), check_core);
+                    if (it == cores.end() || used[std::distance(cores.begin(), it)]) {
+                        can_extend_row = false;
+                        break;
+                    }
+                    row_indices.push_back(std::distance(cores.begin(), it));
+                }
+
+                if (can_extend_row) {
+                    end.y++;
+                    for (auto idx : row_indices) {
+                        used[idx] = true;
+                    }
+                    extended = true;
+                }
+            }
+
+            ranges.emplace_back(CoreRange(start, end), table);
+        }
+    }
+
+    return ranges;
 }
 
 void MetalContext::initialize_device_bank_to_noc_tables(
@@ -1243,6 +1445,9 @@ void MetalContext::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
@@ -1256,7 +1461,52 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
-    if (end_core.has_value()) {
+    // For Wormhole, generate per-core DRAM tables picking the closest NOC endpoint.
+    // Find rectangular ranges with the same table and multicast to those ranges.
+    if (cluster_->arch() == ARCH::WORMHOLE_B0 && end_core.has_value() &&
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
+        auto start = virtual_core;
+        auto end = end_core.value();
+        auto ranges = find_rectangular_ranges_with_same_table(device_id, start, end);
+
+        for (const auto& [range, dram_bank_to_noc_xy] : ranges) {
+            // Multicast DRAM table to the rectangular range
+            cluster_->noc_multicast_write(
+                dram_bank_to_noc_xy.data(),
+                dram_to_noc_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                mem_bank_to_noc_addr);
+
+            uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                l1_bank_to_noc_xy_[device_id].data(),
+                l1_to_noc_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                l1_noc_addr);
+
+            uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                dram_bank_offset_map_[device_id].data(),
+                dram_offset_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                dram_offset_addr);
+
+            uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+            cluster_->noc_multicast_write(
+                l1_bank_offset_map_[device_id].data(),
+                l1_offset_sz_in_bytes,
+                device_id,
+                range.start_coord,
+                range.end_coord,
+                l1_offset_addr);
+        }
+    } else if (end_core.has_value()) {
         // Multicast to all tensix cores in the range [virtual_core, end_core]
         auto start_core = virtual_core;
         cluster_->noc_multicast_write(
@@ -1294,9 +1544,18 @@ void MetalContext::initialize_device_bank_to_noc_tables(
             end_core.value(),
             l1_offset_addr);
     } else {
-        // Unicast to single core
+        // Unicast to single core (for WH single core, generate per-core table)
+        const std::vector<uint16_t>* dram_table_ptr;
+        std::vector<uint16_t> dram_bank_to_noc_xy;
+        if (cluster_->arch() == ARCH::WORMHOLE_B0 && cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
+            dram_bank_to_noc_xy = generate_dram_bank_to_noc_table_by_proximity(device_id, virtual_core);
+            dram_table_ptr = &dram_bank_to_noc_xy;
+        } else {
+            dram_table_ptr = &dram_bank_to_noc_xy_[device_id];
+        }
+
         cluster_->write_core(
-            dram_bank_to_noc_xy_[device_id].data(),
+            dram_table_ptr->data(),
             dram_to_noc_sz_in_bytes,
             tt_cxy_pair(device_id, virtual_core),
             mem_bank_to_noc_addr);
@@ -1634,14 +1893,24 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     // to multiple DRAM endpoints can hang the card.
     std::unordered_set<tt::umd::CoreCoord> dram_cores;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
+    bool noc_translation_enabled = cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     for (uint32_t dram_channel = 0; dram_channel < num_dram_channels; dram_channel++) {
         for (uint32_t noc = 0; noc < hal_->get_num_nocs(); noc++) {
             auto worker_dram_ep = soc_d.get_preferred_worker_core_for_dram_view(dram_channel, noc);
             auto eth_dram_ep = soc_d.get_preferred_eth_core_for_dram_view(dram_channel, noc);
-            auto physical_worker_dram_ep =
-                soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-            auto physical_eth_dram_ep =
-                soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+            tt::umd::CoreCoord physical_worker_dram_ep;
+            tt::umd::CoreCoord physical_eth_dram_ep;
+            if (noc_translation_enabled) {
+                physical_worker_dram_ep =
+                    soc_d.translate_coord_to(worker_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+                physical_eth_dram_ep =
+                    soc_d.translate_coord_to(eth_dram_ep, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+            } else {
+                physical_worker_dram_ep =
+                    tt::umd::CoreCoord(worker_dram_ep.x, worker_dram_ep.y, CoreType::DRAM, CoordSystem::NOC0);
+                physical_eth_dram_ep =
+                    tt::umd::CoreCoord(eth_dram_ep.x, eth_dram_ep.y, CoreType::DRAM, CoordSystem::NOC0);
+            }
             dram_cores.insert(physical_worker_dram_ep);
             dram_cores.insert(physical_eth_dram_ep);
         }
