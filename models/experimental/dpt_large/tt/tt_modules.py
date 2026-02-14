@@ -665,13 +665,6 @@ class TTAttention:
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # For explicit sharded attention, prefer keeping QKV projection output sharded.
-            if explicit_sharded_attn and split_memcfg is not None:
-                try:
-                    if hasattr(split_memcfg, "is_sharded") and split_memcfg.is_sharded():
-                        memcfg = split_memcfg
-                except Exception:
-                    pass
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -702,14 +695,34 @@ class TTAttention:
                 _ttnn_is_sharded(q_tt) and _ttnn_is_sharded(k_tt) and _ttnn_is_sharded(v_tt)
             ):
                 try:
-                    try:
-                        q_tt = ttnn.to_memory_config(q_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
-                        k_tt = ttnn.to_memory_config(k_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
-                        v_tt = ttnn.to_memory_config(v_tt, memory_config=split_memcfg, dtype=ttnn.bfloat16)
-                    except TypeError:
-                        q_tt = ttnn.to_memory_config(q_tt, memory_config=split_memcfg)
-                        k_tt = ttnn.to_memory_config(k_tt, memory_config=split_memcfg)
-                        v_tt = ttnn.to_memory_config(v_tt, memory_config=split_memcfg)
+                    def _reshard_for_attention(t):
+                        # Prefer a block-sharded spec matching the encoder core grid (Stage-2/3).
+                        if cfg is not None and hasattr(ttnn, "create_sharded_memory_config"):
+                            try:
+                                grid_x, grid_y = int(cfg.grid[0]), int(cfg.grid[1])
+                                core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+                                shape_for_shard = getattr(t, "padded_shape", None) or getattr(t, "shape", None)
+                                shard_mc = ttnn.create_sharded_memory_config(
+                                    shape_for_shard,
+                                    core_grid=core_grid,
+                                    strategy=ttnn.ShardStrategy.BLOCK,
+                                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                                )
+                                try:
+                                    return ttnn.to_memory_config(t, memory_config=shard_mc, dtype=ttnn.bfloat16)
+                                except TypeError:
+                                    return ttnn.to_memory_config(t, memory_config=shard_mc)
+                            except Exception:
+                                pass
+                        # Fallback: try whatever split_memcfg was configured to.
+                        try:
+                            return ttnn.to_memory_config(t, memory_config=split_memcfg, dtype=ttnn.bfloat16)
+                        except TypeError:
+                            return ttnn.to_memory_config(t, memory_config=split_memcfg)
+
+                    q_tt = _reshard_for_attention(q_tt)
+                    k_tt = _reshard_for_attention(k_tt)
+                    v_tt = _reshard_for_attention(v_tt)
                 except Exception:
                     # In perf mode, the runner expects attention to stay sharded; surface the failure.
                     try:
