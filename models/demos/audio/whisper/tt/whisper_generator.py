@@ -132,7 +132,7 @@ class WhisperGenerator:
         # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
         encoder_seq_len = 1500
         self.encoder_hidden_states_per_size = defaultdict(lambda: None)
-        for batch_size in range(1, max_batch_size + 1):
+        for batch_size in [1, 2]:
             self.encoder_hidden_states_per_size[batch_size] = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([batch_size, 1, encoder_seq_len, config.d_model]),
                 ttnn.bfloat16,
@@ -143,7 +143,7 @@ class WhisperGenerator:
 
         # Pre-allocated device tensor for current decode position
         self.current_decode_pos_per_size = defaultdict(lambda: None)
-        for batch_size in range(1, max_batch_size + 1):
+        for batch_size in [1, 2]:
             self.current_decode_pos_per_size[batch_size] = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([batch_size]),
                 ttnn.int32,
@@ -198,8 +198,6 @@ class WhisperGenerator:
         """
         if self.trace_id_decoder[trace_key] is not None:
             return  # Already captured
-
-        logger.info(f"Capturing fully persistent decoder trace for batch size per device {trace_key}")
 
         # Create decoder function that will be traced
         # cross_attn_cache_valid=True because cache was just populated in iteration 0
@@ -297,7 +295,9 @@ class WhisperGenerator:
                 for _ in range(len(generation_params), len(current_batch)):
                     generation_params.append(GenerationParams())
             elif len(generation_params) > len(current_batch):
-                raise ValueError("Generation parameters list cannot be longer than the current batch")
+                raise ValueError(
+                    f"Generation parameters list cannot be longer than the current batch: {len(generation_params)} > {len(current_batch)}"
+                )
         else:
             generation_params = [generation_params] * len(current_batch)
 

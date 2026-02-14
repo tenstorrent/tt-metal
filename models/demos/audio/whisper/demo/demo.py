@@ -324,6 +324,11 @@ def run_demo_whisper_for_conditional_generation_inference(
     run_both_batch_sizes=False,
 ):
     torch.manual_seed(0)
+
+    # Determine all batch sizes we'll iterate over, so we can pre-allocate for the max
+    final_batch_size_per_device = [1, 2] if run_both_batch_sizes else [batch_size_per_device]
+    effective_max_batch_size = max(final_batch_size_per_device)
+
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device,
@@ -333,13 +338,11 @@ def run_demo_whisper_for_conditional_generation_inference(
         task=task,
         prompt=prompt,
         use_trace=use_trace,
-        batch_size_per_device=batch_size_per_device,
+        batch_size_per_device=effective_max_batch_size,
     )
 
     # load data
     input_data = load_input_paths(input_path)
-
-    final_batch_size_per_device = [1, 2] if run_both_batch_sizes else [batch_size_per_device]
 
     for batch_size_per_device in final_batch_size_per_device:
         batch_size = batch_size_per_device * mesh_device.get_num_devices()
@@ -359,12 +362,20 @@ def run_demo_whisper_for_conditional_generation_inference(
                 samplerate, data = wavfile.read(input_file_path)
                 current_batch.append((samplerate, data))
 
+            # Slice generation_params to match the current batch size (it may have been
+            # built for a larger batch when run_both_batch_sizes is True)
+            current_gen_params = (
+                generation_params[:current_batch_size] if isinstance(generation_params, list) else generation_params
+            )
+
             # perform model inference
             if stream:
                 # Handle streaming mode - iterate over generator
                 logger.info(f"Streaming mode enabled for conditional generation inference")
                 last_result = None
-                for result in model_pipeline(current_batch, stream=True, return_perf_metrics=True):
+                for result in model_pipeline(
+                    current_batch, stream=True, return_perf_metrics=True, generation_params_override=current_gen_params
+                ):
                     last_result = result
 
                 # Extract final metrics from last result
@@ -384,7 +395,10 @@ def run_demo_whisper_for_conditional_generation_inference(
             else:
                 # Non-streaming mode
                 ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
-                    current_batch, stream=False, return_perf_metrics=True
+                    current_batch,
+                    stream=False,
+                    return_perf_metrics=True,
+                    generation_params_override=current_gen_params,
                 )
 
             if i >= num_warmup_runs:  # Exclude first compile run
