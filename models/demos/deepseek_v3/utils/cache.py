@@ -2,7 +2,7 @@ import inspect
 import json
 from dataclasses import dataclass
 from hashlib import md5
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 import torch
 
@@ -83,6 +83,15 @@ class CacheManifest:
             "postprocessor": compute_func_fingerprint(self.postprocessor),
         }
 
+    def get_fingerprint(self) -> str:
+        return compute_fingerprint(self.to_dict())
+
+
+@dataclass(frozen=True)
+class CacheKey:
+    fingerprint: str
+    manifest: CacheManifest
+
 
 def create_manifest(
     name: str | Sequence[str],
@@ -140,6 +149,17 @@ def _format_mesh_mapper(mesh_mapper: MeshMapper | None) -> str:
     return ", ".join(parts)
 
 
+class CacheStorage(Protocol):
+    def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
+        ...
+
+    def has(self, key: CacheKey) -> bool:
+        ...
+
+    def get(self, key: CacheKey) -> ttnn.Tensor:
+        ...
+
+
 class InMemoryCacheStorage:
     """
     A cache backed by host memory. Does not persist across runs.
@@ -149,18 +169,14 @@ class InMemoryCacheStorage:
     def __init__(self):
         self.cache = {}
 
-    def set(self, key: str, tensor: ttnn.Tensor):
-        self.cache[key] = tensor
+    def set(self, key: CacheKey, tensor: ttnn.Tensor):
+        self.cache[key.fingerprint] = tensor
 
-    def has(self, key: str) -> bool:
-        return key in self.cache
+    def has(self, key: CacheKey) -> bool:
+        return key.fingerprint in self.cache
 
-    def get(self, key: str) -> ttnn.Tensor:
-        return self.cache[key]
-
-
-# TODO: Implement as Union[InMemoryCacheStorage, OnDiskCacheStorage, RedisCacheStorage, etc.]
-CacheStorage = InMemoryCacheStorage
+    def get(self, key: CacheKey) -> ttnn.Tensor:
+        return self.cache[key.fingerprint]
 
 
 def default_converter(
@@ -168,7 +184,8 @@ def default_converter(
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    device: Optional[ttnn.Device] = None,
+    *,
+    device: ttnn.Device | ttnn.MeshDevice,
     mesh_mapper: MeshMapper | None = None,
 ) -> ttnn.Tensor:
     return ttnn.from_torch(
@@ -235,8 +252,8 @@ class TensorCache:
                 lines.append(f"    fingerprint: {fp[:16]}...")
         print("\n".join(lines))
 
-    def cache_entry_exists_for_fingerprint(self, fingerprint: str):
-        return self.storage.has(fingerprint)
+    def cache_entry_exists_for_key(self, key: CacheKey):
+        return self.storage.has(key)
 
     def get_tensor(
         self,
@@ -246,21 +263,21 @@ class TensorCache:
         preprocessor: Callable[[Sequence[torch.Tensor]], torch.Tensor] = lambda x: x,
         postprocessor: Callable[[ttnn.Tensor], ttnn.Tensor] = lambda x: x,
         memory_config: Optional[ttnn.MemoryConfig] = ttnn.DRAM_MEMORY_CONFIG,
-        device: Optional[ttnn.Device] = None,
+        *,
+        device: ttnn.Device | ttnn.MeshDevice,
         mesh_mapper: MeshMapper | None = None,
     ) -> ttnn.Tensor:
-        # Host tensors will have memory_config=ttnn.DRAM_MEMORY_CONFIG so we need to guard against non-DRAM memory configs here
-        # In the future we should probably make host tensors have memory_config = None since it doesn't make sense to have a memory config for a host tensor
-        if memory_config is not ttnn.DRAM_MEMORY_CONFIG and device is None:
-            raise ValueError("Invalid configuration: specified memory config requires a device")
+        if device is None:
+            raise ValueError("Invalid configuration: device must be provided")
 
         names = [name] if isinstance(name, str) else list(name)
         manifest = create_manifest(
             names, dtype, layout, memory_config, self.hf_config, preprocessor, postprocessor, mesh_mapper
         )
-        fingerprint = compute_fingerprint(manifest.to_dict())
+        fingerprint = manifest.get_fingerprint()
+        key = CacheKey(fingerprint=fingerprint, manifest=manifest)
 
-        if not self.cache_entry_exists_for_fingerprint(fingerprint):
+        if not self.cache_entry_exists_for_key(key):
             for n in names:
                 if n not in self.state_dict:
                     raise KeyError(
@@ -270,14 +287,21 @@ class TensorCache:
             ordered_names = sorted(names)
             source_tensors = [self.state_dict[n] for n in ordered_names]
             preprocess_source_tensor = preprocessor(*source_tensors)
-            tensor = self.converter(preprocess_source_tensor, dtype, layout, memory_config, device, mesh_mapper)
+            tensor = self.converter(
+                preprocess_source_tensor,
+                dtype,
+                layout,
+                memory_config=memory_config,
+                device=device,
+                mesh_mapper=mesh_mapper,
+            )
             tensor = postprocessor(tensor)
             self._entry_manifests[fingerprint] = manifest
-            self.storage.set(fingerprint, tensor)
+            self.storage.set(key, tensor)
             return tensor
         else:
             # Validate cached tensor matches requested dtype, layout and memory config
-            cached_tensor = self.storage.get(fingerprint)
+            cached_tensor = self.storage.get(key)
             assert cached_tensor.dtype == dtype, (
                 f"Cached tensor dtype mismatch: expected {dtype}, got {cached_tensor.dtype}. "
                 f"This should not happen if fingerprinting is correct."

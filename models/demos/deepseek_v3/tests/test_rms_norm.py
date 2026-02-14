@@ -142,8 +142,6 @@ def test_forward_pass(
 
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.999)
 
-    cache.summary()
-
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -60,7 +60,7 @@ def create_weight_config_from_weight_spec(
     module_weight_spec: ModuleWeightSpec,
     path: str,
     cache: TensorCache,
-    device: ttnn.Device | None = None,
+    device: ttnn.Device | ttnn.MeshDevice,
     delimiter: str = ".",
 ):
     """
@@ -71,10 +71,7 @@ def create_weight_config_from_weight_spec(
     weight_config = {}
     for key, value in module_weight_spec.items():
         if isinstance(value, WeightSpec):
-            # TODO: We should be able to shard on host if the device is None
-            mesh_mapper = (
-                value.get_mesh_mapper(device) if device is not None and isinstance(device, ttnn.MeshDevice) else None
-            )
+            mesh_mapper = value.get_mesh_mapper(device) if isinstance(device, ttnn.MeshDevice) else None
 
             name = path + delimiter + key
             tensor = cache.get_tensor(

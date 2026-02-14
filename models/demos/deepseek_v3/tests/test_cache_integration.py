@@ -98,7 +98,7 @@ def test_weight_spec_context_resolves_prefixed_names(sample_state_dict):
     assert embedding_ctx.get_reference_tensor("weight") is sample_state_dict["model.embedding.weight"]
 
 
-def test_cache_integration(sample_hf_config, sample_state_dict):
+def test_cache_integration(sample_hf_config, sample_state_dict, device):
     mesh_shape = (8, 8)
 
     cache_storage = InMemoryCacheStorage()
@@ -114,12 +114,14 @@ def test_cache_integration(sample_hf_config, sample_state_dict):
     whole_model_weight_spec = SimpleModel.create_weight_spec(sample_hf_config, mesh_shape, context.with_prefix("model"))
 
     single_layer_weight_config = create_weight_config_from_weight_spec(
-        single_layer_weight_spec, "model.layers.0", cache
+        single_layer_weight_spec, "model.layers.0", cache, device=device
     )
     embedding_layer_weight_config = create_weight_config_from_weight_spec(
-        embedding_layer_weight_spec, "model.embedding", cache
+        embedding_layer_weight_spec, "model.embedding", cache, device=device
     )
-    whole_model_weight_config = create_weight_config_from_weight_spec(whole_model_weight_spec, "model", cache)
+    whole_model_weight_config = create_weight_config_from_weight_spec(
+        whole_model_weight_spec, "model", cache, device=device
+    )
 
     # Sanity check that the weights are tensors
     assert all(isinstance(v, ttnn.Tensor) for v in single_layer_weight_config.values())
@@ -146,7 +148,7 @@ def test_cache_integration(sample_hf_config, sample_state_dict):
     assert passing, f"Weight1 does not match: {pcc_message}"
 
 
-def test_create_weight_spec_for_real_modules(state_dict, hf_config):
+def test_create_weight_spec_for_real_modules(state_dict, hf_config, device):
     prefix = "model.layers.0.self_attn.kv_a_layernorm"
     weight_key = f"{prefix}.weight"
     mesh_shape = (4, 8)
@@ -164,7 +166,7 @@ def test_create_weight_spec_for_real_modules(state_dict, hf_config):
     # Get the weight spec for the RMSNorm module
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
     weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
-    weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache)
+    weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=device)
 
     assert set(weight_spec.keys()) == {"weight"}, f"Expected weight_spec keys {{'weight'}}, got {weight_spec.keys()}"
     assert isinstance(weight_spec["weight"], WeightSpec)
@@ -172,12 +174,12 @@ def test_create_weight_spec_for_real_modules(state_dict, hf_config):
         "weight"
     }, f"Expected weight_config keys {{'weight'}}, got {weight_config.keys()}"
     assert isinstance(weight_config["weight"], ttnn.Tensor)
-    assert weight_config["weight"].storage_type() == ttnn.StorageType.HOST, "Weight should be on the host"
+    assert weight_config["weight"].storage_type() == ttnn.StorageType.DEVICE, "Weight should be on the device"
 
     # Cache returns the same tensor on second request (cache hit)
-    weight_config_2 = create_weight_config_from_weight_spec(weight_spec, prefix, cache)
+    weight_config_2 = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=device)
     assert weight_config["weight"] is weight_config_2["weight"], "Cache should return same tensor for same spec"
-    assert weight_config_2["weight"].storage_type() == ttnn.StorageType.HOST, "Weight should be on the host"
+    assert weight_config_2["weight"].storage_type() == ttnn.StorageType.DEVICE, "Weight should be on the device"
 
 
 def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, mesh_device):
