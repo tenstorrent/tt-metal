@@ -607,7 +607,7 @@ def test_nd_sharded_embedding(
         pytest.skip(f"Need {shard_core_grid} grid size to run this test but core grid is {compute_grid}")
 
     vocabulary_size = 32
-    # We can test real word scenarios in separate test, but this one is for testing ND tensors
+    # The small hidden dimension allows testing multiple sizes without exceeding L1 capacity.
     hidden_embedding_dim = 16
 
     weights_shape = (vocabulary_size, hidden_embedding_dim)
