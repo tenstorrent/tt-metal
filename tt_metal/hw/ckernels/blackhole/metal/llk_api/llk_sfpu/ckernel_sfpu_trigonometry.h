@@ -135,7 +135,7 @@ static sfpi_inline vFloat _tan_bf16_(vFloat s) {
     return r;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool is_fp32_dest_acc_en>
 static vFloat sfpu_tan(vFloat x, vInt i);
 
 template <>
@@ -261,11 +261,19 @@ inline void calculate_sine() {
 
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 
+    vFloat C3, C2, C1, C0;
+
     // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
-    vFloat C3 = 0x1.5dc908p-19f;
-    vFloat C2 = -0x1.9f70fp-13f;
-    vFloat C1 = 0x1.110edap-7f;
-    vFloat C0 = -0x1.55554cp-3f;
+    if (is_fp32_dest_acc_en) {
+        C3 = 0x1.5dc908p-19f;
+        C2 = -0x1.9f70fp-13f;
+        C1 = 0x1.110edap-7f;
+        C0 = -0x1.55554cp-3f;
+    } else {
+        C2 = -0x1.8b10a4p-13f;
+        C1 = 0x1.10c2a2p-7f;
+        C0 = -0x1.5554a4p-3f;
+    }
 
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -297,13 +305,23 @@ inline void calculate_sine() {
         q <<= 31;
         vFloat s = a * a;
         a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q);
-        vFloat r = C3 * s + C2;
-        r = r * s + C1;
-        vFloat c = a * s;
-        r = r * s + C0;
-        r = r * c + a;
 
-        dst_reg[0] = r;
+        vFloat r;
+        if (is_fp32_dest_acc_en) {
+            r = C3 * s + C2;
+            r = r * s + C1;
+            vFloat c = a * s;
+            r = r * s + C0;
+            r = r * c + a;
+            dst_reg[0] = r;
+        } else {
+            r = C2 * s + C1;
+            vFloat c = a * s;
+            r = r * s + C0;
+            r = r * c + a;
+            dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, 0));
+        }
+
         dst_reg++;
     }
 }
