@@ -26,6 +26,7 @@
 
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/device_print.h"
 
 uint8_t noc_index;
 // Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
@@ -239,6 +240,7 @@ int __attribute__((noinline)) main(void) {
     WRITE_REG(AERISC_RESET_PC, (uint32_t)(void*)resume_from_reset);
     enter_reset();
 #endif
+    DEVICE_PRINT_INITIALIZE_LOCK();
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;

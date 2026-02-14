@@ -18,6 +18,11 @@
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
+// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+#include "jit_build/build_env_manager.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+
 namespace tt::tt_metal {
 
 class DebugToolsMeshFixture : public MeshDispatchFixture {
@@ -295,6 +300,45 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+    }
+};
+
+class DevicePrintFixture : public DebugToolsMeshFixture {
+public:
+    std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
+        // Get the first available mesh device
+        auto mesh_device = this->devices_.at(0);
+
+        // Set up program
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // This tests prints only on a single core
+        constexpr CoreCoord core = {0, 0};  // Print on first core only
+        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
+
+        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
+        auto* device = mesh_device->get_devices()[0];
+        detail::CompileProgram(device, program_);
+
+        // Find compiled kernel and extract format string from it to compare with expected_format_message
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        uint32_t tensix_core_type = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
+        uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
+
+        int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
+
+        const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+
+        const auto& kernel = program_.impl().get_kernel(kernel_handle);
+        const std::string full_kernel_name = kernel->get_full_kernel_name();
+        return build_state.get_target_out_path(full_kernel_name);
     }
 };
 

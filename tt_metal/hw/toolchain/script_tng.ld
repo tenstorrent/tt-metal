@@ -97,6 +97,24 @@ PHDRS {
 /* If not defined data is placed per-cpu after TLS.  */
 IF_KERNEL(IF_TLS(PROVIDE_HIDDEN(DATA_START = 0);))
 SECTIONS {
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
+  .device_print_strings 0x6400000 :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+
+  /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
+  .device_print_strings_info 0x6500000 :
+  {
+      __device_print_strings_info_start = .;
+      KEEP(*(.device_print_strings_info))
+      __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
+
 /* Text-like */
 #if defined(TYPE_KERNEL)
   /DISCARD/ : { *_object.o(.text) }

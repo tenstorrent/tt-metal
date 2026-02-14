@@ -94,6 +94,9 @@ public:
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
 
+    virtual bool GetSectionContents(
+        std::string_view name, std::vector<std::byte>& out, uint64_t& virtual_address) const = 0;
+
 private:
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
     [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
@@ -128,6 +131,20 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
+
+    virtual bool GetSectionContents(
+        std::string_view name, std::vector<std::byte>& out, uint64_t& virtual_address) const override {
+        for (const auto& shdr : GetShdrs()) {
+            const char* sec_name = GetName(shdr);
+            if (name == sec_name) {
+                auto bytes = GetContents(shdr);
+                out.assign(bytes.begin(), bytes.end());
+                virtual_address = shdr.sh_addr;
+                return true;
+            }
+        }
+        return false;
+    }
 
 private:
     [[nodiscard]] auto GetHeader() const -> Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
@@ -257,6 +274,14 @@ ElfFile::~ElfFile() {
     if (!contents_.empty()) {
         munmap(contents_.data(), contents_.size());
     }
+}
+
+bool ElfFile::GetSectionContents(
+    const std::string& section_name, std::vector<std::byte>& content_buffer, uint64_t& virtual_address) const {
+    if (pimpl_ == nullptr) {
+        return false;
+    }
+    return pimpl_->GetSectionContents(section_name, content_buffer, virtual_address);
 }
 
 void ElfFile::ReleaseImpl() {
@@ -498,6 +523,12 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         }
         // If it's allocatable, make sure it's in a segment.
         if (section.sh_flags & SHF_ALLOC && !FindSegment(section)) {
+            std::string_view sec_name = GetName(section);
+            if (sec_name.find(".device_print") != std::string_view::npos) {
+                // Special case: .device_print sections are used for
+                // debug printing, and are not mapped into memory.
+                continue;
+            }
             TT_THROW(
                 "{}: allocatable section {} [{:#x},+{:#x})@{:#x} is not in known segment",
                 path_,
