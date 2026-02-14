@@ -32,16 +32,37 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
   tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
-  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "ci-eval-32"; fail+=$?
 
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_70b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_70b_dp_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_70b_dp_tests"
+
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
+  tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
+
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "performance and ci and DP"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_70b_dp_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -468,6 +489,9 @@ run_t3000_tests() {
 
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests
+
+  # Run llama3_70b DP tests
+  run_t3000_llama3_70b_dp_tests
 
   # Run falcon40b tests
   run_t3000_falcon40b_tests

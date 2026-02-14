@@ -70,7 +70,16 @@
       timeout: 30
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
-  model-name: llama3_70b
+  model-name: llama3.3-70b
+
+- name: t3k_llama3_70b_dp_tests
+  cmd: run_t3000_llama3_70b_dp_tests
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  model-name: llama3.3-70b-DP
 
 - name: t3k_falcon7b_tests
   cmd: run_t3000_falcon7b_tests
