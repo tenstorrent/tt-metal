@@ -53,7 +53,8 @@ elif [[ "$PROFILE" == "galaxies" ]]; then
     CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric_galaxy.yaml}"
     HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/hosts.txt}"
     RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/rank_bindings.yaml}"
-    MPI_EXTRA_ARGS="${MPI_EXTRA_ARGS:---allow-run-as-root --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0}"
+    MPI_EXTRA_ARGS="${MPI_EXTRA_ARGS:---allow-run-as-root}"
+    TCP_INTERFACE="ens5f0np0"
 else
     echo "Error: Unknown profile '$PROFILE'. Use 'loudboxes' or 'galaxies'."
     exit 1
@@ -63,8 +64,15 @@ fi
 ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 # install requirements
-mpirun-ulfm --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
+mpirun-ulfm --hostfile ${HOST_FILE} --tag-output uv pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
 
-CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
+CMD="python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
+
+# Build tt-run arguments: use --tcp-interface if set (multihost MPI settings are default)
+TTRUN_NETWORK_ARGS=""
+if [[ -n "${TCP_INTERFACE:-}" ]]; then
+    TTRUN_NETWORK_ARGS="--tcp-interface ${TCP_INTERFACE}"
+fi
+
 # use tt-run to run the training script across all machines
-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS} --tag-output" ${CMD}
+${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py ${TTRUN_NETWORK_ARGS} --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS}" ${CMD}
