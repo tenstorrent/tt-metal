@@ -16,6 +16,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
+    target_precompile_headers(${TEST_TARGET} REUSE_FROM metal_common_pch)
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
 
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")

@@ -374,4 +374,5 @@ CPMAddPackage(
         "CMAKE_CXX_EXTENSIONS ON"
     PATCHES
         capnproto_capture_this.patch
+        capnproto_pthread.patch
 )

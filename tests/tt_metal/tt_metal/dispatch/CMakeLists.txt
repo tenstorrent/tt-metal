@@ -5,6 +5,7 @@ include(sources.cmake)
 add_library(unit_tests_dispatch_smoke OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Smoke ALIAS unit_tests_dispatch_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_smoke)
+target_precompile_headers(unit_tests_dispatch_smoke REUSE_FROM metal_common_pch)
 target_sources(unit_tests_dispatch_smoke PRIVATE ${UNIT_TESTS_DISPATCH_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_dispatch_smoke
@@ -21,6 +22,7 @@ target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
 add_library(unit_tests_dispatch_basic OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Basic ALIAS unit_tests_dispatch_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_basic)
+target_precompile_headers(unit_tests_dispatch_basic REUSE_FROM metal_common_pch)
 target_sources(unit_tests_dispatch_basic PRIVATE ${UNIT_TESTS_DISPATCH_BASIC_SOURCES})
 target_include_directories(
     unit_tests_dispatch_basic
@@ -36,6 +38,7 @@ target_link_libraries(unit_tests_dispatch_basic PRIVATE test_metal_common_libs)
 add_library(unit_tests_dispatch_slow OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Slow ALIAS unit_tests_dispatch_slow)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_slow)
+target_precompile_headers(unit_tests_dispatch_slow REUSE_FROM metal_common_pch)
 target_sources(unit_tests_dispatch_slow PRIVATE ${UNIT_TESTS_DISPATCH_SLOW_SOURCES})
 target_include_directories(
     unit_tests_dispatch_slow
