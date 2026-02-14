@@ -162,7 +162,14 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                 "Input shard height {} must be a multiple of tile height",
                 input_shard_height);
             if (operation_attributes.output_mem_config.is_sharded()) {
+                TT_FATAL(
+                    operation_attributes.output_mem_config.shard_spec().has_value() ||
+                        operation_attributes.output_mem_config.nd_shard_spec().has_value(),
+                    "Output memory config is sharded but no shard spec or nd shard spec is provided");
                 uint32_t output_dtype_size = input_tensor_a.element_size();
+                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+                    output_dtype_size = 2;
+                }
                 uint32_t output_shard_width;
                 if (operation_attributes.output_mem_config.shard_spec().has_value()) {
                     output_shard_width = operation_attributes.output_mem_config.shard_spec().value().shape[1];
