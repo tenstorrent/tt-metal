@@ -525,12 +525,22 @@ class TTAttention:
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
+            # SDPA rejects sharded operands. Keep the whole attention subgraph
+            # in an interleaved "island" and reshard only once at the end.
+            if hybrid_attn:
+                try:
+                    from .perf_counters import inc_attn_island_interleave
+                except Exception:  # pragma: no cover
+                    inc_attn_island_interleave = None
+                t0 = time.perf_counter()
+                x4 = ttnn.to_memory_config(x4, memory_config=attn_island_memcfg, dtype=ttnn.bfloat16)
+                if callable(inc_attn_island_interleave):
+                    inc_attn_island_interleave((time.perf_counter() - t0) * 1000.0)
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            # If tokens are sharded, keep QKV output sharded as well before interleaving for SDPA.
             if hybrid_attn:
-                memcfg = tokens_shard_mc
+                memcfg = attn_island_memcfg
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -543,17 +553,6 @@ class TTAttention:
                 program_config=qkv_pc,
                 op_name="attn_qkv",
             )
-            if hybrid_attn:
-                # SDPA rejects sharded operands. Interleave just-in-time for SDPA
-                # and immediately reshard after attention.
-                try:
-                    from .perf_counters import inc_attn_island_interleave
-                except Exception:  # pragma: no cover
-                    inc_attn_island_interleave = None
-                t0 = time.perf_counter()
-                qkv4 = ttnn.to_memory_config(qkv4, memory_config=attn_island_memcfg, dtype=ttnn.bfloat16)
-                if callable(inc_attn_island_interleave):
-                    inc_attn_island_interleave((time.perf_counter() - t0) * 1000.0)
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
             # Split to heads: returns [B, H, N, D] tensors
@@ -591,19 +590,6 @@ class TTAttention:
             # Merge heads back to [B, N, C]
             merged = ttnn.transformer.concatenate_heads(ctx_tt)
             ctx = merged
-            if hybrid_attn:
-                try:
-                    from .perf_counters import inc_attn_island_reshard
-                except Exception:  # pragma: no cover
-                    inc_attn_island_reshard = None
-                # Reshard attention output back to the token sharding spec so
-                # residual adds and subsequent MLPs stay sharded.
-                ctx4 = ctx if len(getattr(ctx, "shape", [])) == 4 else ttnn.reshape(ctx, (B, 1, N, C))
-                t1 = time.perf_counter()
-                ctx4 = ttnn.to_memory_config(ctx4, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
-                if callable(inc_attn_island_reshard):
-                    inc_attn_island_reshard((time.perf_counter() - t1) * 1000.0)
-                ctx = ctx4
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
@@ -644,7 +630,7 @@ class TTAttention:
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             if hybrid_attn:
-                memcfg = tokens_shard_mc
+                memcfg = attn_island_memcfg
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
             if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
@@ -657,6 +643,15 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
+            if hybrid_attn:
+                try:
+                    from .perf_counters import inc_attn_island_reshard
+                except Exception:  # pragma: no cover
+                    inc_attn_island_reshard = None
+                t1 = time.perf_counter()
+                out_tt4 = ttnn.to_memory_config(out_tt4, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+                if callable(inc_attn_island_reshard):
+                    inc_attn_island_reshard((time.perf_counter() - t1) * 1000.0)
             # Keep rank stable for residual adds.
             out = out_tt4
             if len(getattr(out_tt4, "shape", [])) == 3:
