@@ -801,15 +801,8 @@ profile_a_b_shape_pairs = [
     "memory_config_input",
     [ttnn.DRAM_MEMORY_CONFIG],
 )
-@pytest.mark.parametrize(
-    "use_legacy",
-    [
-        # True,
-        False,
-    ],
-)
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
-def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input, use_legacy):
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
@@ -829,7 +822,7 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
     for _ in range(2):
-        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=use_legacy)
+        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=None)
         output = ttnn.to_torch(output)
 
         assert (
@@ -921,7 +914,7 @@ def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device):
                 )
 
                 out_pt = torch.add(a_pt, b_pt)
-                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=False)
+                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=None)
                 out_tt_interleaved = ttnn.to_torch(a_tt)
 
                 pcc = ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt)

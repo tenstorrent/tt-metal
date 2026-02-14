@@ -95,7 +95,7 @@ class TtShiftedWindowAttentionV2:
 
         logit_scale = ttnn.exp(logit_scale, fast_and_approximate_mode=False, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        attn = ttnn.multiply(attn, logit_scale, use_legacy=False)
+        attn = ttnn.multiply(attn, logit_scale, use_legacy=None)
 
         ttnn.deallocate(qkv)
         ttnn.deallocate(q)

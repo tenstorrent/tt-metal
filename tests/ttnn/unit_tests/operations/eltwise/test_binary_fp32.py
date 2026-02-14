@@ -392,12 +392,11 @@ def test_bitwise(device, ttnn_function):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_xlogy_ttnn(input_shapes, device, use_legacy):
+def test_binary_xlogy_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
 
-    output_tensor = ttnn.xlogy(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    output_tensor = ttnn.xlogy(input_tensor1, input_tensor2, use_legacy=None)
     golden_function = ttnn.get_golden_function(ttnn.xlogy)
     golden_tensor = golden_function(in_data1, in_data2)
 
