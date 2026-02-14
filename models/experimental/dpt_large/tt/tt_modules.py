@@ -945,6 +945,13 @@ class TTTransformerBlock:
         input_was_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x)
         if input_was_sharded:
             x_int = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            # `to_memory_config` can return an alias in some runtimes; reallocate
+            # to ensure the interleaved island owns its buffer before freeing L1.
+            try:
+                if hasattr(ttnn, "reallocate"):
+                    x_int = ttnn.reallocate(x_int)
+            except Exception:
+                pass
             try:
                 if hasattr(ttnn, "deallocate"):
                     ttnn.deallocate(x)
