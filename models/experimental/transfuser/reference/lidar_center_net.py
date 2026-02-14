@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -150,7 +151,6 @@ class LidarCenterNetHead(BaseDenseHead, BBoxTestMixin):
 
         return center_heatmap_pred, wh_pred, offset_pred, yaw_class_pred, yaw_res_pred, velocity_pred, brake_pred
 
-    # @force_fp32(apply_to=('center_heatmap_preds', 'wh_preds', 'offset_preds', 'yaw_class_preds', 'yaw_res_preds', 'velocity_pred', 'brake_pred'))
     def loss(
         self,
         center_heatmap_preds,
@@ -679,19 +679,6 @@ def process_input(
       target_point: (1, 2)
       target_point_image: (1, 1, 256, 256)
     """
-
-    # config = {
-    #     "img_resolution": (160, 704),
-    #     "scale": 1,
-    #     "img_width": 320,
-    #     "lidar_resolution_width": 256,
-    #     "lidar_resolution_height": 256,
-    #     "aug_degrees": [0],
-    #     "use_target_point_image": False,
-    #     "use_point_pillars": False,
-    # }
-    # if config_values:
-    #     config.update(config_values)
 
     if save_debug_images:
         os.makedirs(debug_output_dir, exist_ok=True)

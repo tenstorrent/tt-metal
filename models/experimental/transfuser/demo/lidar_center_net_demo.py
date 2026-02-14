@@ -1,8 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import sys
 import os
 import torch
 import numpy as np
@@ -16,17 +16,21 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.transfuser.reference.config import GlobalConfig
 from models.experimental.transfuser.reference.lidar_center_net import LidarCenterNet, process_input
 from models.experimental.transfuser.tt.lidar_center_net import LidarCenterNet as TtLidarCenterNet
-from models.experimental.transfuser.tests.test_gpt import create_gpt_preprocessor
+from models.experimental.transfuser.tests.pcc.test_gpt import create_gpt_preprocessor
 
 from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+from ttnn.model_preprocessing import infer_ttnn_module_args as infer_ttnn_module_args_torch
+from models.experimental.transfuser.tests.pcc.test_transfuser_backbone import regroup_model_args
+
+from models.experimental.transfuser.resources.transfuser_dataset import ensure_scenario3_town01_curved_route0
+from models.experimental.transfuser.resources.transfuser_checkpoint import ensure_transfuser_checkpoint_2022
 
 
 # ============================================================
 # Helpers
 # ============================================================
-
-
 def create_lidar_center_net_head_preprocessor(device, weight_dtype=ttnn.bfloat16):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
@@ -205,20 +209,18 @@ def open_tt_device(device_id: int = 0, l1_small_size: int = 16384, trace_region_
 # ============================================================
 # Demo main
 # ============================================================
-
-
 def main():
     parser = argparse.ArgumentParser(description="LidarCenterNet TTNN vs Torch demo (no pytest).")
-    parser.add_argument("--data-root", type=str, required=True, help="Folder with scenario data (images/lidar).")
-    parser.add_argument("--frame", type=str, required=True, help="Frame id inside data_root, e.g., 0120")
-    parser.add_argument("--weights", type=str, required=True, help="Path to Transfuser weight file (.pth)")
+    parser.add_argument("--frame", type=str, default="0120", help="Frame id inside scenario, e.g., 0120")
+    parser.add_argument(
+        "--data-root", type=str, default="", help="Optional: use existing scenario folder (skip download)."
+    )
+    parser.add_argument("--weights", type=str, default="", help="Optional: path to .pth/.pt (skip download).")
     parser.add_argument("--image-arch", type=str, default="regnety_032")
     parser.add_argument("--lidar-arch", type=str, default="regnety_032")
     parser.add_argument("--layers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
 
-    # Fallback flags
-    parser.add_argument("--no-fallback", action="store_true", help="Disable TTNN fallback paths.")
     parser.add_argument(
         "--use-optimized-self-attn",
         action="store_true",
@@ -238,13 +240,15 @@ def main():
     torch.manual_seed(args.seed)
     torch.use_deterministic_algorithms(True)
 
-    # Basic checks
-    if not os.path.isdir(args.data_root):
-        logger.error(f"data_root not found: {args.data_root}")
-        sys.exit(1)
-    if not os.path.isfile(args.weights):
-        logger.error(f"weights file not found: {args.weights}")
-        sys.exit(1)
+    if args.data_root and os.path.isdir(args.data_root):
+        data_root = args.data_root
+    else:
+        data_root = ensure_scenario3_town01_curved_route0()
+
+    if args.weights and os.path.isfile(args.weights):
+        weights_path = args.weights
+    else:
+        weights_path = ensure_transfuser_checkpoint_2022()
 
     device = None
     try:
@@ -253,8 +257,8 @@ def main():
         config.n_layer = args.layers
         config.use_target_point_image = True
 
-        logger.info(f"Loading inputs from {args.data_root}, frame {args.frame}")
-        inputs = process_input(args.data_root, args.frame, config=config, normalize_image=False)
+        logger.info(f"Loading inputs from {data_root}, frame {args.frame}")
+        inputs = process_input(data_root, args.frame, config=config, normalize_image=False)
 
         image = inputs["image"]
         lidar_bev = inputs["lidar"]
@@ -281,8 +285,8 @@ def main():
             use_velocity=False,
         ).eval()
 
-        logger.info(f"Loading and cleaning weights from: {args.weights}")
-        modified_state_dict = load_trained_weights(args.weights)
+        logger.info(f"Loading and cleaning weights from: {weights_path}")
+        modified_state_dict = load_trained_weights(weights_path)
         modified_state_dict = delete_incompatible_keys(
             modified_state_dict,
             [
@@ -369,6 +373,13 @@ def main():
             custom_preprocessor=create_lidar_center_net_head_preprocessor(device, ttnn.bfloat16),
             device=device,
         )
+        model_args = infer_ttnn_module_args_torch(
+            model=torch_model,
+            run_model=lambda model: model(image, lidar_bev, velocity),
+            device=None,
+            absolute_name=True,
+        )
+        model_args = regroup_model_args(model_args)
 
         transfuser_model = ref_layer._model
         tt_layer = TtLidarCenterNet(
@@ -377,7 +388,7 @@ def main():
             config,
             backbone="transFuser",
             torch_model=transfuser_model,
-            use_fallback=(not args.no_fallback),
+            model_args=model_args,
         )
 
         # Convert inputs to TTNN

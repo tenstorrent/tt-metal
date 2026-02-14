@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -28,7 +29,6 @@ class DynamicPointNet(nn.Module):
         """
         feat = self.net(points)
         feat_max = scatter_max(feat, inverse_indices, dim=0)[0]
-        # feat_max = scatter_max(points, inverse_indices, dim=0)[0]
         return feat_max
 
 
@@ -70,12 +70,6 @@ class PointPillarNet(nn.Module):
             & (points[:, 1] < self.max_y)
         )
         points = points[keep, :]
-
-        # Visualize
-        # import open3d as o3d
-        # pcd = o3d.geometry.PointCloud()
-        # pcd.points = o3d.utility.Vector3dVector(points[...,:3].detach().cpu().numpy())
-        # o3d.visualization.draw_geometries([pcd])
 
         coords = (
             points[:, [0, 1]] - torch.tensor([self.min_x, self.min_y], device=points.device)

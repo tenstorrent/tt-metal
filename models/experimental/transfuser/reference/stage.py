@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
@@ -43,54 +44,8 @@ class Stage(nn.Module):
             architecture=image_architecture, normalize=True, out_features=self.config.perception_output_features
         )
 
-        # You don’t prune or delete features outside layer1
-        # just use layer1 in forward
-
-    def fallback(self, image, block_name=None, stage_name=None):
-        """
-        Fallback method for SE module that dynamically accesses the correct stage and block.
-
-        Args:
-            image: Input tensor for SE module
-            block_name: Name of the block (e.g., "b1", "b2", etc.). Defaults to "b1" if None.
-            stage_name: Name of the stage (e.g., "layer1", "layer2", etc.). Must be provided.
-
-        Returns:
-            Output tensor after SE fc1, relu, fc2, and sigmoid operations
-        """
-        if stage_name is None:
-            raise ValueError("stage_name must be provided for fallback method")
-
-        # Use block_name if provided, otherwise default to b1 for backwards compatibility
-        if block_name is None:
-            block_name = "b1"
-
-        # Dynamically access the stage layer based on stage_name
-        stage_layer = getattr(self.image_encoder.features, stage_name)
-        # Dynamically access the block based on block_name
-        block = getattr(stage_layer, block_name)
-
-        # Run SE operations: fc1 -> relu -> fc2 -> sigmoid
-        x = block.se.fc1(image)
-        x = x.relu()
-        x = block.se.fc2(x)
-        x = x.sigmoid()
-
-        return x
-
     def forward(self, image):
         # Dynamically access the stage layer based on stage_name
         stage_layer = getattr(self.image_encoder.features, self.stage_name)
-        # x = stage_layer.b1.conv1(image)
-        # x = stage_layer.b1.conv2(x)
-        # x = stage_layer.b1.se(x)
-        # x = stage_layer.b1.conv3(x)
-        # import pdb; pdb.set_trace()
         x = stage_layer(image)
         return x
-
-    # def forward_c3(self, x):
-    #     # Dynamically access the stage layer based on stage_name
-    #     stage_layer = getattr(self.image_encoder.features, self.stage_name)
-    #     x = stage_layer.b1.conv3(x)
-    #     return x

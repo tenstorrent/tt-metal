@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -11,7 +12,7 @@ from loguru import logger
 from models.experimental.transfuser.reference.gpt_block import Block
 from models.experimental.transfuser.tt.gpt_block import TTGptBlock
 
-from models.experimental.transfuser.tests.test_self_attention import create_self_attn_preprocessor
+from models.experimental.transfuser.tests.pcc.test_self_attention import create_self_attn_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight
 from models.common.utility_functions import (
     tt2torch_tensor,
