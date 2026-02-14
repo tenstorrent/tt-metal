@@ -37,6 +37,7 @@ run_tg_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
+  export TT_GH_CI_INFRA=1
   pytest models/demos/tg/sentence_bert/tests/device_perf_test.py ; fail+=$?
   # Merge all the generated reports
   env python3 models/perf/merge_perf_results.py; fail+=$?
