@@ -619,7 +619,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         CBDescriptor recip_cb_desc;
         recip_cb_desc.total_size = reciprocal_CB_size_bytes;
         recip_cb_desc.core_ranges = all_cores;
-        recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+        recip_cb_desc.format_descriptors.emplace_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_25,
             .data_format = reciprocal_cb_data_format,
             .page_size = reciprocal_CB_size_bytes});

@@ -359,17 +359,17 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t reduce_receiver_semaphore_id = 1;
     uint32_t reduce_second_stage_semaphore_id = 2;
 
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+    program_descriptor.semaphores.emplace_back(SemaphoreDescriptor{
         .id = reduce_sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = core_ranges.all_cores,
         .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+    program_descriptor.semaphores.emplace_back(SemaphoreDescriptor{
         .id = reduce_receiver_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = core_ranges.all_cores,
         .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
+    program_descriptor.semaphores.emplace_back(SemaphoreDescriptor{
         .id = reduce_second_stage_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = core_ranges.all_cores,

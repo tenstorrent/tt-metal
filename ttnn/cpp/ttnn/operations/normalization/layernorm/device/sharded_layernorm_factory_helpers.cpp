@@ -1035,7 +1035,7 @@ void add_cb_descriptors(
         CBDescriptor recip_cb_desc;
         recip_cb_desc.total_size = cb_config.reciprocal_CB_size_bytes;
         recip_cb_desc.core_ranges = core_ranges.all_cores;
-        recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+        recip_cb_desc.format_descriptors.emplace_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_25,
             .data_format = cb_config.reciprocal_cb_data_format,
             .page_size = cb_config.reciprocal_CB_size_bytes});
@@ -1048,7 +1048,7 @@ void add_cb_descriptors(
         CBDescriptor stats_cb_desc;
         stats_cb_desc.total_size = cb_config.stats_cb_size;
         stats_cb_desc.core_ranges = core_ranges.sender_cores;
-        stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+        stats_cb_desc.format_descriptors.emplace_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_7,
             .data_format = cb_config.cb_data_format,
             .page_size = cb_config.single_tile_size});

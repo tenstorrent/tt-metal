@@ -224,6 +224,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
+    core_group.reserve(num_cores_available);
+    core_group_idle.reserve(num_cores_available);
     if (on_subcoregrid) {
         if (is_q_sharded || is_output_sharded) {
             auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);

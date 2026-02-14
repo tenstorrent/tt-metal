@@ -140,6 +140,8 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
     auto const& core_range = shard_spec.grid.bounding_box();
     std::vector<uint32_t> logical_to_noc_row_map;
     std::vector<uint32_t> logical_to_noc_col_map;
+    logical_to_noc_row_map.reserve(core_range.end_coord.y - core_range.start_coord.y + 1);
+    logical_to_noc_col_map.reserve(core_range.end_coord.x - core_range.start_coord.x + 1);
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
         CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), tt::CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
@@ -154,7 +156,8 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
 
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, Tensor const& t) {
     std::vector<uint32_t> args;
-    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
+    const auto& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
+    args.reserve(2 + row_map.size() + col_map.size());
     args.push_back(row_map.size());
     for (unsigned int row : row_map) {
         args.push_back(row);

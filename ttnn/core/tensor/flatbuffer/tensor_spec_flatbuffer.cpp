@@ -9,6 +9,7 @@ namespace {
 
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
         ranges.emplace_back(
             CoreCoord{range->start()->x(), range->start()->y()}, CoreCoord{range->end()->x(), range->end()->y()});
@@ -19,6 +20,7 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& core_range_set) {
     std::vector<flatbuffers::Offset<flatbuffer::CoreRange>> range_offsets;
+    range_offsets.reserve(core_range_set.ranges().size());
     for (const auto& range : core_range_set.ranges()) {
         auto start = flatbuffer::CreateCoreCoord(builder, range.start_coord.x, range.start_coord.y);
         auto end = flatbuffer::CreateCoreCoord(builder, range.end_coord.x, range.end_coord.y);

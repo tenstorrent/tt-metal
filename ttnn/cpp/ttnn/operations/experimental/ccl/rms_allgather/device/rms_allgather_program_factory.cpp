@@ -224,6 +224,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     std::vector<uint32_t> storage_core_noc_y;
     std::vector<CoreCoord> storage_core_coords =
         corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), true);
+    storage_core_noc_x.reserve(storage_core_coords.size());
+    storage_core_noc_y.reserve(storage_core_coords.size());
     for (auto core : storage_core_coords) {
         storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
@@ -1013,6 +1015,11 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
                 (device_index + input_tile_id_start) % stats_tensor_shard_num_pages;
             std::vector<uint32_t> stats_tensor_cores_x;
             std::vector<uint32_t> stats_tensor_cores_y;
+            auto num_stats_cores =
+                (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages -
+                input_tile_id_start / stats_tensor_shard_num_pages;
+            stats_tensor_cores_x.reserve(num_stats_cores);
+            stats_tensor_cores_y.reserve(num_stats_cores);
             for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
                  i < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
                  i++) {

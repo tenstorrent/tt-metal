@@ -139,7 +139,7 @@ static Tensor create_scalar_config_tensor(
     std::vector<uint16_t> config_vector;
 
     size_t max_scalars_cnt = 0;
-    std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
+    std::vector<std::vector<ScalarInfo>> scalars_per_core;
     uint32_t num_iterations = 0;
 
     switch (in_memory_layout) {
@@ -150,6 +150,7 @@ static Tensor create_scalar_config_tensor(
     }
 
     {
+        scalars_per_core.reserve(num_iterations);
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
         uint32_t output_stick_h = 0;

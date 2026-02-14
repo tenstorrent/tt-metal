@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ttnn/common/vector_init.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
 #include <string>
@@ -122,6 +123,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
+    all_input_cores.reserve(input_cores.num_cores());
     for (const CoreRange& range : input_cores.ranges()) {
         for (const CoreCoord& core : range) {
             all_input_cores.push_back(core);
@@ -1055,7 +1057,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         compute_kernel_args.push_back(
             activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
     } else {
-        std::vector<uint32_t> activation_reuse_dummy_args = {0, 0, 0, 0};
+        auto activation_reuse_dummy_args = vector_init<uint32_t>(0u, 0u, 0u, 0u);
         compute_kernel_args.insert(
             compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
@@ -1359,6 +1361,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     }
 
     std::vector<CoreCoord> mcast_sender_cores_vec;
+    mcast_sender_cores_vec.reserve(mcast_sender_cores.num_cores());
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());

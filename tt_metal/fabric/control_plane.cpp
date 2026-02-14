@@ -88,12 +88,14 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
 
     // Get all 4 possible corners ASIC positions
     std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.reserve(4);
     corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
     corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
     corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
     corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
 
     std::vector<FabricNodeId> corner_fabric_node_ids;
+    corner_fabric_node_ids.reserve(4 * mesh_graph.get_all_mesh_ids().size());
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
         corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});

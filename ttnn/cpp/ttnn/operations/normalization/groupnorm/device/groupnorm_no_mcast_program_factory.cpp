@@ -376,7 +376,9 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
     CoreRangeSet mcast_sender_cores_group_2 = CoreRangeSet(mcast_sender_core_ranges_group_2);
 
     std::vector<std::vector<CoreCoord>> mcast_groups;
+    mcast_groups.reserve(sender_groups_count);
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
+    mcast_virtual_groups.reserve(sender_groups_count);
     int group_index = -1;
     for (size_t i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.contains(CoreRange(core_coords[i]))) {

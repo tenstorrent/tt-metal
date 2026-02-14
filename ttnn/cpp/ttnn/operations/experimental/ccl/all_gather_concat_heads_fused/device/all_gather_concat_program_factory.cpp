@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
+#include <ttnn/common/vector_init.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -117,9 +118,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         is_last_chip);
 
     // Get OP Config, topology config
-    std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
-    std::vector<Tensor> temp_tensors = {temp_tensor};
+    auto input_tensors = vector_init<Tensor>(input_tensor);
+    auto output_tensors = vector_init<Tensor>(output_tensor);
+    auto temp_tensors = vector_init<Tensor>(temp_tensor);
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, temp_tensors, operation_attributes.topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ::ttnn::ccl::get_forward_backward_configuration(
@@ -231,6 +232,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     llama_config llama_configuration;
     std::vector<CoreRange> q_cores_vector;
+    q_cores_vector.reserve(llama_configuration.concat_num_cores);
     uint32_t range_count = 0;
     for (auto cr : ring_core_ranges) {
         q_cores_vector.push_back(cr);
@@ -241,6 +243,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     }
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
     std::vector<CoreRange> sem_cores_vector;
+    sem_cores_vector.reserve(llama_configuration.concat_num_cores + 1);
     sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
     range_count = 0;
     for (auto cr : ring_core_ranges) {
@@ -396,6 +399,8 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     std::vector<uint32_t> nlp_local_core_x;
     std::vector<uint32_t> nlp_local_core_y;
+    nlp_local_core_x.reserve(llama_configuration.num_cores_input_tensor);
+    nlp_local_core_y.reserve(llama_configuration.num_cores_input_tensor);
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
         auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
@@ -417,10 +422,20 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         uint32_t output_first_core_tile_start_offset =
             (input_tensor_num_pages * ring_index + input_tile_id_start) % output_interm_tensor_shard_num_pages;
 
+        const auto num_input_cores =
+            (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages -
+            input_tile_id_start / input_tensor_shard_num_pages;
+        const auto num_output_cores =
+            (input_tile_id_end + output_interm_tensor_shard_num_pages - 1) / output_interm_tensor_shard_num_pages -
+            input_tile_id_start / output_interm_tensor_shard_num_pages;
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
         std::vector<uint32_t> output_tensor_cores_x;
         std::vector<uint32_t> output_tensor_cores_y;
+        input_tensor_cores_x.reserve(num_input_cores);
+        input_tensor_cores_y.reserve(num_input_cores);
+        output_tensor_cores_x.reserve(num_output_cores);
+        output_tensor_cores_y.reserve(num_output_cores);
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
@@ -488,10 +503,15 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         };
 
         auto sem_mcast_ranges = CoreRangeSet(llama_configuration.semaphore_mcast_ranges);
+        const auto num_mcast_ranges = sem_mcast_ranges.ranges().size();
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
         std::vector<uint32_t> mcast_end_x;
         std::vector<uint32_t> mcast_end_y;
+        mcast_start_x.reserve(num_mcast_ranges);
+        mcast_start_y.reserve(num_mcast_ranges);
+        mcast_end_x.reserve(num_mcast_ranges);
+        mcast_end_y.reserve(num_mcast_ranges);
 
         for (const auto& range : sem_mcast_ranges.ranges()) {
             auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
@@ -551,6 +571,8 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
         std::vector<uint32_t> input_cores_y;
+        input_cores_x.reserve(llama_configuration.num_cores_input_tensor);
+        input_cores_y.reserve(llama_configuration.num_cores_input_tensor);
         std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
         std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {

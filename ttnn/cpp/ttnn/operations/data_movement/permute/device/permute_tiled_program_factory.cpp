@@ -182,8 +182,11 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     // we also need the inverse permutation to map back to input tensor
     auto inv_perm = detail::get_inverse_permutation(operation_attributes.dims);
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
-
+    std::vector<uint32_t> reader_runtime_args;
+    reader_runtime_args.reserve(3 + output_shape_view.size() + inv_perm.size() + input_tile_strides.size());
+    reader_runtime_args.emplace_back(src_buffer->address());
+    reader_runtime_args.emplace_back(0);
+    reader_runtime_args.emplace_back(0);
     reader_runtime_args.insert(reader_runtime_args.end(), output_shape_view.begin(), output_shape_view.end());
     reader_runtime_args.insert(reader_runtime_args.end(), inv_perm.begin(), inv_perm.end());
     reader_runtime_args.insert(reader_runtime_args.end(), input_tile_strides.begin(), input_tile_strides.end());

@@ -113,6 +113,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     const auto& all_reader_core_range = global_cb.sender_cores();
     auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
     std::vector<CoreRange> active_reader_core_range_vec;
+    active_reader_core_range_vec.reserve(num_readers);
     for (uint32_t i = 0; i < num_readers; ++i) {
         auto core = reader_core_range_vec[i];
         active_reader_core_range_vec.push_back(CoreRange{core, core});

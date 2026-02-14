@@ -126,6 +126,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     const uint8_t num_hw_cqs, std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
     std::vector<ChipId> device_ids;
+    device_ids.reserve(tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().size());
     for (ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         device_ids.emplace_back(device_id);
     }
@@ -228,7 +229,9 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         // Must open all devices in cluster to use fabric
         if (any_remote_devices) {
             device_ids_to_open.clear();
-            for (int id = 0; id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); ++id) {
+            const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+            device_ids_to_open.reserve(num_devices);
+            for (int id = 0; id < num_devices; ++id) {
                 device_ids_to_open.push_back(id);
             }
         }

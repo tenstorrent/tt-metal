@@ -89,6 +89,7 @@ process_agmm_fusion_program_and_create_override_variables(
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
+    non_idle_cores_vec.reserve(subdevice_cores.ranges().size());
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
         if (!intersection.empty()) {
@@ -253,8 +254,11 @@ process_agmm_fusion_program_and_create_override_variables(
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
+    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
+    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
+    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -547,6 +551,7 @@ process_agmm_fusion_program_and_create_override_variables(
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
         const auto& core = worker_cores_vec[i];
         /* in0 - multicast receiver setup (no ring topology needed) */

@@ -363,7 +363,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
+                    temp.emplace_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
                 }
                 core_coords2D.push_back(temp);
             }
@@ -374,7 +374,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (uint32_t k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
+                    temp.emplace_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
                 }
                 core_coords2D.push_back(temp);
             }
@@ -409,6 +409,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
+    auto num_sender_cores = (num_batches / num_batches_per_core) * (num_groups / num_groups_per_core);
+    mcast_groups.reserve(num_sender_cores);
     int group_index = -1;
     if (is_height_sharding) {
         for (uint32_t i = 0; i < num_cores; ++i) {

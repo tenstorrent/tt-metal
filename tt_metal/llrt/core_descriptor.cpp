@@ -199,6 +199,7 @@ const core_descriptor_t& get_core_descriptor_config(
         (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
 
     std::vector<RelativeCoreCoord> compute_cores;
+    compute_cores.reserve(compute_grid_size.x * compute_grid_size.y);
     for (auto x = 0; x < compute_grid_size.x; x++) {
         for (auto y = 0; y < compute_grid_size.y; y++) {
             const RelativeCoreCoord relative_coord{.x = x, .y = y};

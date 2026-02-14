@@ -124,9 +124,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
+        const auto eth_endpoint_list = dram_view["eth_endpoint"].as<std::vector<int>>();
         std::vector<CoreCoord> eth_dram_cores;
+        eth_dram_cores.reserve(eth_endpoint_list.size());
         std::vector<size_t> eth_endpoints;
-        for (int eth_endpoint : dram_view["eth_endpoint"].as<std::vector<int>>()) {
+        eth_endpoints.reserve(eth_endpoint_list.size());
+        for (int eth_endpoint : eth_endpoint_list) {
             if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
@@ -139,9 +142,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             eth_endpoints.push_back(eth_endpoint);
         }
 
+        const auto worker_endpoint_list = dram_view["worker_endpoint"].as<std::vector<int>>();
         std::vector<CoreCoord> worker_dram_cores;
+        worker_dram_cores.reserve(worker_endpoint_list.size());
         std::vector<size_t> worker_endpoints;
-        for (int worker_endpoint : dram_view["worker_endpoint"].as<std::vector<int>>()) {
+        worker_endpoints.reserve(worker_endpoint_list.size());
+        for (int worker_endpoint : worker_endpoint_list) {
             if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
                 TT_THROW(
                     "DRAM subchannel {} does not exist in the device descriptor, but is specified in "

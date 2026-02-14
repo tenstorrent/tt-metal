@@ -44,6 +44,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     auto boundary_mode = detail::get_boundary_mode(topology);
 
     std::vector<ttnn::MeshCoordinate> neighbors;
+    neighbors.reserve(4);
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 

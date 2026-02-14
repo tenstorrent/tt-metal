@@ -29,8 +29,8 @@ Tensor loss_function(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
-        case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
-        case LossFunction::MSE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
+        case LossFunction::MAE: fused_ops.emplace_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
+        case LossFunction::MSE: fused_ops.emplace_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
     Tensor result = ttnn::subtract(ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);

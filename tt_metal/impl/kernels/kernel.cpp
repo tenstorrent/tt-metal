@@ -275,6 +275,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
 
 std::vector<std::string> Kernel::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
+    file_paths.reserve(this->expected_num_binaries());
     const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -819,6 +820,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 void QuasarDataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(this->dm_cores_.size());
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);

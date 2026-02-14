@@ -220,6 +220,7 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     for (unsigned y = min_y; y <= max_y; y++) {
         std::set<CoreRange> filter_set, tmp, new_crs;
         std::vector<CoreRange> ranges;
+        ranges.reserve(max_x - min_x + 2);
         for (unsigned x = min_x; x <= max_x + 1; x++) {
             if (grid[y][x]) {
                 unsigned x_start = x;
@@ -286,6 +287,7 @@ bool CoreRangeSet::intersects(const CoreRangeSet& other) const {
 
 CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
     std::vector<CoreRange> intersection;
+    intersection.reserve(std::min(this->ranges_.size(), other.ranges().size()));
     for (const auto& local_cr : this->ranges_) {
         for (const auto& other_cr : other.ranges()) {
             if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
@@ -420,12 +422,16 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
     }
 
     std::vector<CoreRange> result_ranges;
+    result_ranges.reserve(this_merged.ranges_.size() * 2);
 
     for (const auto& current_range : this_merged.ranges_) {
-        std::vector<CoreRange> current_remaining = {current_range};
+        std::vector<CoreRange> current_remaining;
+        current_remaining.reserve(1);
+        current_remaining.emplace_back(current_range);
 
         for (const auto& subtract_range : other_merged.ranges_) {
             std::vector<CoreRange> new_remaining;
+            new_remaining.reserve(current_remaining.size() * 4);
 
             for (const auto& remaining : current_remaining) {
                 auto intersection_opt = remaining.intersection(subtract_range);
@@ -437,33 +443,29 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
                 const CoreRange& intersection = intersection_opt.value();
 
                 if (remaining.start_coord.x < intersection.start_coord.x) {
-                    CoreRange left{
-                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y}};
-                    new_remaining.push_back(left);
+                    new_remaining.emplace_back(
+                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y});
                 }
 
                 if (remaining.end_coord.x > intersection.end_coord.x) {
-                    CoreRange right{
-                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord};
-                    new_remaining.push_back(right);
+                    new_remaining.emplace_back(
+                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord);
                 }
 
                 if (remaining.start_coord.y < intersection.start_coord.y) {
-                    CoreRange bottom{
+                    new_remaining.emplace_back(
                         CoreCoord{
                             std::max(remaining.start_coord.x, intersection.start_coord.x), remaining.start_coord.y},
                         CoreCoord{
-                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1}};
-                    new_remaining.push_back(bottom);
+                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1});
                 }
 
                 if (remaining.end_coord.y > intersection.end_coord.y) {
-                    CoreRange top{
+                    new_remaining.emplace_back(
                         CoreCoord{
                             std::max(remaining.start_coord.x, intersection.start_coord.x),
                             intersection.end_coord.y + 1},
-                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y}};
-                    new_remaining.push_back(top);
+                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y});
                 }
             }
             current_remaining = new_remaining;
@@ -624,6 +626,7 @@ CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
     auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
     std::vector<CoreRange> selected_cores;
+    selected_cores.reserve(end_index - start_index + 1);
     for (uint32_t i = start_index; i <= end_index; i++) {
         selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
     }

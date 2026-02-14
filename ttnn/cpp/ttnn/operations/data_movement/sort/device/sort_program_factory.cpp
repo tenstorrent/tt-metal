@@ -407,6 +407,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
     // Lookup tensor data with physical core coordinates
     std::vector<uint32_t> physical_core_lookup_table_data;
+    physical_core_lookup_table_data.reserve(core_range.num_cores() * 2);
     for (const auto& core_range : core_range.ranges()) {
         for (const auto& core_coord : core_range) {
             const auto physical_core = device->worker_core_from_logical_core(core_coord);

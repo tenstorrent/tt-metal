@@ -446,9 +446,9 @@ std::vector<PixelMetadata> generate_tensor_metadata(
 
     for (bool is_pad_flag : pad_metadata) {
         if (is_pad_flag) {
-            tensor_metadata.push_back(PixelMetadata{true, 0, 0});
+            tensor_metadata.emplace_back(PixelMetadata{true, 0, 0});
         } else {
-            tensor_metadata.push_back(PixelMetadata{false, core_id, input_reshard_local_idx});
+            tensor_metadata.emplace_back(PixelMetadata{false, core_id, input_reshard_local_idx});
 
             input_reshard_local_idx++;
             if (input_reshard_local_idx == shard_height) {
@@ -533,7 +533,12 @@ static void serialize_gather_route(const GatherRoute& route, std::vector<uint16_
 
 // config = len [route0 route1 ...]
 static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
+    size_t total_size = 1;  // for routes.size()
+    for (const auto& route : config.routes) {
+        total_size += 3 + 3 * route.transfers.size();  // header + transfers
+    }
     std::vector<uint16_t> output;
+    output.reserve(total_size);
     output.push_back(config.routes.size());
     for (const auto& route : config.routes) {
         TT_FATAL(!route.transfers.empty(), "Expected all routes to have at least one transfer");
@@ -650,7 +655,7 @@ static GatherConfig quantize_transfers_along_block_boundaries(const GatherConfig
                 const uint32_t remaining_in_block = block_size - offset_in_block;
                 const uint32_t transfer_size = (length <= remaining_in_block) ? length : remaining_in_block;
 
-                new_route.transfers.push_back(GatherTransfer{src_offset, dst_offset, transfer_size});
+                new_route.transfers.emplace_back(GatherTransfer{src_offset, dst_offset, transfer_size});
 
                 src_offset += transfer_size;
                 dst_offset += transfer_size;
@@ -784,7 +789,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             transfers.emplace_back(src_offset_id, dst_offset_id, size);
         }
         GatherHeader header{src_core_id, dst_core_id, transfers.size()};
-        gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+        gather_configs[core_id].routes.emplace_back(GatherRoute{header, transfers});
     }
 
     for (int core_id = 0; core_id < remote_config.size(); core_id++) {
@@ -798,7 +803,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 transfers.emplace_back(src_offset_id, dst_offset_id, size);
             }
             GatherHeader header{src_core_id, dst_core_id, transfers.size()};
-            gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
+            gather_configs[core_id].routes.emplace_back(GatherRoute{header, transfers});
         }
     }
 

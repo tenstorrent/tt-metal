@@ -302,6 +302,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
         TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
         const auto& supplied_ids = config.physical_device_ids();
+        fabric_node_ids.reserve(supplied_ids.size());
         for (int supplied_id : supplied_ids) {
             auto fabric_node_id =
                 MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
@@ -525,6 +526,9 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     std::vector<MaybeRemote<IDevice*>> submesh_devices;
     std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
+    const auto submesh_size = submesh_range.shape().mesh_size();
+    submesh_devices.reserve(submesh_size);
+    submesh_fabric_node_ids.reserve(submesh_size);
     for (const auto& coord : submesh_range) {
         if (view_->impl().is_local(coord)) {
             submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->impl().get_device(coord)));
@@ -586,6 +590,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
 
     // Stamp `submesh_shape` along each dimension, `steps` number of times.
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
+    submeshes.reserve(MeshCoordinateRange(MeshShape(steps)).shape().mesh_size());
     for (const auto& step_position : MeshCoordinateRange(MeshShape(steps))) {
         tt::stl::SmallVector<uint32_t> offset_coords;
         for (size_t dim = 0; dim < submesh_shape.dims(); dim++) {
@@ -636,6 +641,7 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
 
 DeviceIds MeshDeviceImpl::get_device_ids() const {
     DeviceIds device_ids;
+    device_ids.reserve(this->num_devices());
     for (auto* device : this->get_devices()) {
         device_ids.push_back(device->id());
     }
