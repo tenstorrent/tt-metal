@@ -80,6 +80,7 @@ def run_unet_model(
     is_ci_v2_env,
     model_location_generator,
     iterations=1,
+    deepcache_N=1,
 ):
     assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
     model_name = (
@@ -109,6 +110,7 @@ def run_unet_model(
         "unet",
         model_config=model_config,
         debug_mode=debug_mode,
+        deepcache_N=deepcache_N,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
@@ -179,6 +181,7 @@ def run_unet_model(
             encoder_hidden_states=ttnn_encoder_tensor,
             time_ids=ttnn_added_cond_kwargs["time_ids"],
             text_embeds=ttnn_added_cond_kwargs["text_embeds"],
+            iteration=_ + 1,
         )
         ttnn.deallocate(ttnn_input_tensor)
         ttnn.deallocate(ttnn_output_tensor)
@@ -225,4 +228,41 @@ def test_unet(
         is_ci_env,
         is_ci_v2_env,
         model_location_generator,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, deepcache_N",
+    [
+        ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 2),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+def test_unet_deepcache(
+    device,
+    input_shape,
+    timestep_shape,
+    encoder_shape,
+    temb_shape,
+    time_ids_shape,
+    debug_mode,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    deepcache_N,
+):
+    run_unet_model(
+        device,
+        input_shape,
+        timestep_shape,
+        encoder_shape,
+        temb_shape,
+        time_ids_shape,
+        debug_mode,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
+        2,
+        deepcache_N,
     )
