@@ -33,6 +33,7 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
+        init_max_args();
     }
 
     void TearDown() override {
@@ -109,6 +110,7 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
+        init_max_args();
     }
 
     void TearDown() override {
@@ -178,6 +180,7 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
         init_max_cbs();
+        init_max_args();
     }
 };
 

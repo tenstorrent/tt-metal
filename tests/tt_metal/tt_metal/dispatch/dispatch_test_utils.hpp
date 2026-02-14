@@ -56,10 +56,11 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
     const uint32_t num_common_rt_args,
     const uint32_t unique_base,
     const uint32_t common_base) {
+    const uint32_t max_runtime_args = tt::tt_metal::get_max_runtime_args(HalProgrammableCoreType::TENSIX);
     TT_FATAL(
-        num_unique_rt_args + num_common_rt_args <= tt::tt_metal::max_runtime_args,
+        num_unique_rt_args + num_common_rt_args <= max_runtime_args,
         "Number of unique runtime args and common runtime args exceeds the maximum limit of {} runtime args",
-        tt::tt_metal::max_runtime_args);
+        max_runtime_args);
 
     std::vector<uint32_t> common_rt_args;
     common_rt_args.reserve(num_common_rt_args);
@@ -80,17 +81,17 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 // Optionally force the max size for one of the vectors.
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
-    uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
-    uint32_t num_rt_args_common = num_rt_args_unique < tt::tt_metal::max_runtime_args
-                                      ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1)
-                                      : 0;
+    uint32_t max_runtime_args = tt::tt_metal::get_max_runtime_args(HalProgrammableCoreType::TENSIX);
+    uint32_t num_rt_args_unique = rand() % (max_runtime_args + 1);
+    uint32_t num_rt_args_common =
+        num_rt_args_unique < max_runtime_args ? rand() % (max_runtime_args - num_rt_args_unique + 1) : 0;
 
     if (force_max_size) {
         if (rand() % 2) {
-            num_rt_args_unique = tt::tt_metal::max_runtime_args;
+            num_rt_args_unique = max_runtime_args;
             num_rt_args_common = 0;
         } else {
-            num_rt_args_common = tt::tt_metal::max_runtime_args;
+            num_rt_args_common = max_runtime_args;
             num_rt_args_unique = 0;
         }
     }

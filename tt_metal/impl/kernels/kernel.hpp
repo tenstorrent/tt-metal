@@ -191,6 +191,7 @@ protected:
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
     const bool watcher_assert_enabled_;
     const uint32_t watcher_count_word_offset_;
+    const uint32_t max_runtime_args_;  // Cached max user runtime args for this kernel's core type
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)
