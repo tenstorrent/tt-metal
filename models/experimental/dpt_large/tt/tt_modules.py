@@ -190,6 +190,65 @@ def _program_config_fuses_activation(program_config) -> bool:
         return True
 
 
+def _ttnn_matmul_with_optional_program_config(
+    *,
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    dtype,
+    memory_config,
+    program_config,
+    op_name: str = "unknown",
+):
+    # Mirror the linear retry logic so perf runs can be strict and observable.
+    try:
+        from .perf_counters import inc_program_config_fallback, strict_program_config_enabled
+    except Exception:  # pragma: no cover
+        inc_program_config_fallback = None
+        strict_program_config_enabled = lambda: False  # type: ignore
+
+    try:
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config, program_config=program_config)
+    except TypeError:
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="kwarg_unsupported")
+        if strict_program_config_enabled():
+            raise
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
+    except Exception:
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="runtime_rejected")
+        if strict_program_config_enabled():
+            raise
+        return ttnn.matmul(a, b, dtype=dtype, memory_config=memory_config)
+
+
+def _ttnn_attention_softmax_with_optional_program_config(
+    *, x: ttnn.Tensor, attention_mask, head_size: int, program_config, op_name: str = "unknown"
+):
+    try:
+        from .perf_counters import inc_program_config_fallback, strict_program_config_enabled
+    except Exception:  # pragma: no cover
+        inc_program_config_fallback = None
+        strict_program_config_enabled = lambda: False  # type: ignore
+
+    try:
+        return ttnn.transformer.attention_softmax_(
+            x, attention_mask=attention_mask, head_size=int(head_size), program_config=program_config
+        )
+    except TypeError:
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="kwarg_unsupported")
+        if strict_program_config_enabled():
+            raise
+        return ttnn.transformer.attention_softmax_(x, attention_mask=attention_mask, head_size=int(head_size))
+    except Exception:
+        if callable(inc_program_config_fallback):
+            inc_program_config_fallback(op=op_name, reason="runtime_rejected")
+        if strict_program_config_enabled():
+            raise
+        return ttnn.transformer.attention_softmax_(x, attention_mask=attention_mask, head_size=int(head_size))
+
+
 def _ttnn_is_sharded(x) -> bool:
     try:
         if hasattr(ttnn, "is_sharded"):
@@ -560,7 +619,7 @@ class TTAttention:
             x4 = ttnn.reshape(x, (B, 1, N, C))
         else:
             x4 = x
-        # Stage-2 hybrid attention: tokens may be block-sharded across the encoder.
+        # Stage-2/3: tokens may be block-sharded across the encoder.
         tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
         cfg = getattr(self, "program_config", None)
         attn_island_memcfg = (
@@ -568,26 +627,17 @@ class TTAttention:
             or getattr(cfg, "attn_island_memcfg", None)
             or ttnn.DRAM_MEMORY_CONFIG
         )
-        hybrid_attn = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
+        input_is_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
+        use_default_attn_programs = bool(getattr(cfg, "use_default_attention_programs", False)) if cfg is not None else False
+        # Prefer explicit attention on sharded operands; fall back to the SDPA island
+        # only when not sharded.
+        explicit_sharded_attn = input_is_sharded
         try:
             if self._wqkv_tt is None or self._bqkv_tt is None:
                 raise RuntimeError("QKV fused weights not available on device")
-            # SDPA rejects sharded operands. Keep the whole attention subgraph
-            # in an interleaved "island" and reshard only once at the end.
-            if hybrid_attn:
-                try:
-                    from .perf_counters import inc_attn_island_interleave
-                except Exception:  # pragma: no cover
-                    inc_attn_island_interleave = None
-                t0 = time.perf_counter()
-                x4 = ttnn.to_memory_config(x4, memory_config=attn_island_memcfg, dtype=ttnn.bfloat16)
-                if callable(inc_attn_island_interleave):
-                    inc_attn_island_interleave((time.perf_counter() - t0) * 1000.0)
             memcfg = getattr(cfg, "qkv_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            if hybrid_attn:
-                memcfg = attn_island_memcfg
             qkv_pc = getattr(cfg, "qkv_program_config", None) if cfg is not None else None
             if qkv_pc is not None and not _ttnn_is_sharded(x4):
                 qkv_pc = None
@@ -602,41 +652,83 @@ class TTAttention:
             )
             # [B, 1, N, 3C] -> [B, N, 3C]
             qkv3 = qkv4 if len(getattr(qkv4, "shape", [])) == 3 else ttnn.reshape(qkv4, (B, N, 3 * C))
-            # Split to heads: returns [B, H, N, D] tensors
-            if hybrid_attn:
-                try:
-                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                        qkv3, num_heads=H, transpose_key=False, memory_config=attn_island_memcfg
-                    )
-                except TypeError:
-                    # Backward compat: older runtimes may not expose memory_config for this op.
-                    q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                        qkv3, num_heads=H, transpose_key=False
-                    )
-            else:
+            # Split to heads: returns [B, H, N, D] (Q,V) and [B, H, D, N] (K) by default.
+            split_memcfg = getattr(cfg, "split_heads_memcfg", None) if cfg is not None else None
+            try:
                 q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(
-                    qkv3, num_heads=H, transpose_key=False
+                    qkv3, num_heads=H, transpose_key=True, memory_config=split_memcfg
                 )
-            scale = 1.0 / math.sqrt(D)
-            sdpa_kwargs = dict(is_causal=False, scale=scale)
-            if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
-                sdpa_kwargs["attn_mask"] = mm_opts["attn_mask"]
-            pc = getattr(self, "program_config", None)
-            if pc is not None:
+            except TypeError:
+                # Backward compat: older runtimes may not expose these kwargs.
+                q_tt, k_tt, v_tt = ttnn.transformer.split_query_key_value_and_split_heads(qkv3, num_heads=H)
+
+            if explicit_sharded_attn:
+                # Explicit attention path supports sharded operands: QK -> fused scale+mask+softmax -> AV.
+                qk_pc = None if use_default_attn_programs else getattr(cfg, "qk_program_config", None)
+                softmax_pc = None if use_default_attn_programs else getattr(cfg, "softmax_program_config", None)
+                av_pc = None if use_default_attn_programs else getattr(cfg, "av_program_config", None)
+
+                # Scores and probs stay height-sharded for softmax.
+                scores_memcfg = split_memcfg or getattr(self, "output_mem", None) or ttnn.L1_MEMORY_CONFIG
+                attn_scores = _ttnn_matmul_with_optional_program_config(
+                    a=q_tt,
+                    b=k_tt,
+                    dtype=ttnn.bfloat16,
+                    memory_config=scores_memcfg,
+                    program_config=qk_pc,
+                    op_name="attn_qk_matmul",
+                )
+                attn_mask = mm_opts.get("attn_mask", None)
+                attn_probs = _ttnn_attention_softmax_with_optional_program_config(
+                    x=attn_scores,
+                    attention_mask=attn_mask,
+                    head_size=int(D),
+                    program_config=softmax_pc,
+                    op_name="attn_softmax",
+                )
+                ctx_tt = _ttnn_matmul_with_optional_program_config(
+                    a=attn_probs,
+                    b=v_tt,
+                    dtype=ttnn.bfloat16,
+                    memory_config=scores_memcfg,
+                    program_config=av_pc,
+                    op_name="attn_av_matmul",
+                )
                 try:
-                    # Allow passing a TTLayerConfig; compute per-seq program config
-                    if hasattr(pc, "sdpa_program_config"):
-                        maybe_pc = pc.sdpa_program_config(N)
-                    else:
-                        maybe_pc = pc
-                    if maybe_pc is not None:
-                        sdpa_kwargs["program_config"] = maybe_pc
+                    if hasattr(ttnn, "deallocate"):
+                        ttnn.deallocate(attn_scores)
+                        ttnn.deallocate(attn_probs)
                 except Exception:
                     pass
-            ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
-            # Merge heads back to [B, N, C]
-            merged = ttnn.transformer.concatenate_heads(ctx_tt)
-            ctx = merged
+
+                try:
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=memcfg)
+                except TypeError:
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt)
+                ctx = merged
+            else:
+                # Legacy SDPA path (interleaved). Keep it for non-sharded / debug.
+                scale = 1.0 / math.sqrt(D)
+                sdpa_kwargs = dict(is_causal=False, scale=scale)
+                if "attn_mask" in mm_opts and mm_opts["attn_mask"] is not None:
+                    sdpa_kwargs["attn_mask"] = mm_opts["attn_mask"]
+                pc = getattr(self, "program_config", None)
+                if pc is not None:
+                    try:
+                        if hasattr(pc, "sdpa_program_config"):
+                            maybe_pc = pc.sdpa_program_config(N)
+                        else:
+                            maybe_pc = pc
+                        if maybe_pc is not None:
+                            sdpa_kwargs["program_config"] = maybe_pc
+                    except Exception:
+                        pass
+                ctx_tt = ttnn.transformer.scaled_dot_product_attention(q_tt, k_tt, v_tt, **sdpa_kwargs)
+                try:
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt, memory_config=memcfg)
+                except TypeError:
+                    merged = ttnn.transformer.concatenate_heads(ctx_tt)
+                ctx = merged
         except Exception as exc:
             if not self.allow_cpu_fallback:
                 raise RuntimeError("TTAttention device path failed and CPU fallback is disabled") from exc
@@ -676,8 +768,6 @@ class TTAttention:
             memcfg = getattr(cfg, "proj_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
-            if hybrid_attn:
-                memcfg = attn_island_memcfg
             proj_pc = getattr(cfg, "proj_program_config", None) if cfg is not None else None
             if proj_pc is not None and not _ttnn_is_sharded(ctx_tt4):
                 proj_pc = None
@@ -690,15 +780,8 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
-            if hybrid_attn:
-                try:
-                    from .perf_counters import inc_attn_island_reshard
-                except Exception:  # pragma: no cover
-                    inc_attn_island_reshard = None
-                t1 = time.perf_counter()
+            if input_is_sharded:
                 out_tt4 = ttnn.to_memory_config(out_tt4, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
-                if callable(inc_attn_island_reshard):
-                    inc_attn_island_reshard((time.perf_counter() - t1) * 1000.0)
             # Keep rank stable for residual adds.
             out = out_tt4
             if len(getattr(out_tt4, "shape", [])) == 3:
@@ -786,7 +869,7 @@ class TTMLP:
             # For encoder-wide sharding bring-up, keep the MLP compute in a
             # simple interleaved island to avoid L1 circular-buffer clashes.
             # Stage 3 will re-enable stable sharded MLP program configs.
-            mlp_interleaved_island = tokens_shard_mc is not None
+            mlp_interleaved_island = tokens_shard_mc is not None and _ttnn_is_sharded(x4)
 
             memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
             if memcfg is None:
@@ -937,35 +1020,57 @@ class TTTransformerBlock:
         )
 
     def __call__(self, x: ttnn.Tensor, **mm_opts) -> ttnn.Tensor:
-        # Stage-2 encoder sharding bring-up: when tokens arrive sharded (L1),
-        # some runtimes can hit static circular-buffer vs L1 allocation clashes
-        # for LayerNorm. Convert the block input to an interleaved "island" and
-        # explicitly free the sharded storage to keep L1 pressure low.
+        # Stage-2 bring-up: LayerNorm can be fragile on sharded tokens (runtime-dependent).
+        # Keep attention and MLP sharded, but run LN on an interleaved DRAM island and
+        # reshard immediately after so attention program configs are usable.
         tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
-        input_was_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x)
-        if input_was_sharded:
-            x_int = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            # `to_memory_config` can return an alias in some runtimes; reallocate
-            # to ensure the interleaved island owns its buffer before freeing L1.
+        input_is_sharded = tokens_shard_mc is not None and _ttnn_is_sharded(x)
+
+        def _to_interleaved_and_free_l1(t):
+            t_int = ttnn.to_memory_config(t, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             try:
                 if hasattr(ttnn, "reallocate"):
-                    x_int = ttnn.reallocate(x_int)
+                    t_int = ttnn.reallocate(t_int)
             except Exception:
                 pass
             try:
                 if hasattr(ttnn, "deallocate"):
-                    ttnn.deallocate(x)
+                    ttnn.deallocate(t)
             except Exception:
                 pass
-            x = x_int
+            return t_int
 
+        def _reshard(t_int):
+            t_sh = ttnn.to_memory_config(t_int, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
+            try:
+                if hasattr(ttnn, "deallocate"):
+                    ttnn.deallocate(t_int)
+            except Exception:
+                pass
+            return t_sh
+
+        if input_is_sharded:
+            # Keep a residual copy in DRAM, free L1, and shard only around attention/MLP.
+            x_res_int = _to_interleaved_and_free_l1(x)
+            h_int = self.ln1(x_res_int)
+            h = _reshard(h_int)
+            h = self.attn(h, **mm_opts)
+            x = _reshard(x_res_int)
+            x = ttnn.add(x, h)
+
+            x_res2_int = _to_interleaved_and_free_l1(x)
+            h2_int = self.ln2(x_res2_int)
+            h2 = _reshard(h2_int)
+            h2 = self.mlp(h2, **mm_opts)
+            x = _reshard(x_res2_int)
+            x = ttnn.add(x, h2)
+            return x
+
+        # Non-sharded path stays simple.
         h = self.ln1(x)
         h = self.attn(h, **mm_opts)
         x = ttnn.add(x, h)
         h = self.ln2(x)
         h = self.mlp(h, **mm_opts)
         x = ttnn.add(x, h)
-
-        if input_was_sharded:
-            x = ttnn.to_memory_config(x, memory_config=tokens_shard_mc, dtype=ttnn.bfloat16)
         return x

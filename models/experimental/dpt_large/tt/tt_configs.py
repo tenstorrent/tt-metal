@@ -392,7 +392,9 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         ff2_program_config=(mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")),
         ln_program_config=prog_cfgs.get("layernorm_before_program_config"),
         ln_compute_config=prog_cfgs.get("ln_compute_config"),
-        use_default_attention_programs=(True if config.device.endswith("n300") else disable_attn_pc),
+        # Stage-2/3 want explicit sharded attention (QK matmul + fused softmax + AV matmul).
+        # Keep a switch so we can force defaults if a runtime regresses.
+        use_default_attention_programs=bool(disable_attn_pc),
         mlp_core_grid=mlp_grid,
     )
 
