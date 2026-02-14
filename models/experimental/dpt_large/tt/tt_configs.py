@@ -190,10 +190,8 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
         dim_t__x = max(1, dim_t // core_grid_x)
         head_num = config.num_attention_heads
         head_size_t = max(1, (config.hidden_size // head_num) // TILE)
-        # TTNN split-heads sharded path (vit.md) shards the flattened (H*seqL)
-        # dimension across the grid *columns* when shard orientation is ROW_MAJOR.
-        # Keep program_config tile counts aligned with that expectation.
-        head_seqL_t__x = max(1, (head_num * seqL_t) // max(1, int(core_grid_x)))
+        # vit.md sharded split-heads flattens (B*H*seqL) across the full core grid.
+        head_seqL_t__x = max(1, (head_num * seqL_t) // max(1, int(core_grid_x) * int(core_grid_y)))
         # Matmul+softmax subblock sizing: for larger seq (e.g., 640 tokens -> 20 tiles),
         # keeping out_subblock_w/subblock_w <= 8 avoids register pressure limits.
         qk_out_subblock_w = seqL_t if seqL_t <= 8 else 1
@@ -299,11 +297,10 @@ def _build_perf_program_configs(config: DPTLargeConfig, core_grid: Tuple[int, in
 def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerConfig:
     # Aggressive encoder settings for Wormhole N300 perf mode
     if config.device.endswith("n300"):
-        # Sharded transformer ops (split-heads/concat-heads) assume ROW_MAJOR block
-        # sharding where the QKV fused width is partitioned across grid columns and
-        # batch (per chip) maps to grid rows. In our perf path (dp=2, batch=2),
-        # per-chip batch is 1, so keep `grid_y=1` to match vit.md's assumptions.
-        grid = (8, 1)
+        # Use a small 2D grid so per-core shards are smaller (reduces L1/CB pressure)
+        # and so attention sharding matches vit.md's (core_grid.x * core_grid.y) divisor.
+        # Keep grid_y=2 so seq tile counts for 384/512 (20/34) divide cleanly.
+        grid = (8, 2)
         attn_grid = grid
         math = "hi-fi2"
     elif config.device.endswith("blackhole"):
