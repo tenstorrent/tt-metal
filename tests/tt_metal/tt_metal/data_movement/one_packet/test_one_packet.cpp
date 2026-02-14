@@ -64,9 +64,16 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     uint32_t master_l1_address = master_l1_info.base_address;
     uint32_t subordinate_l1_address = subordinate_l1_info.base_address;
 
+    // Calculate same-axis: true if src and dst share x or y coordinate
+    bool same_axis = (test_config.master_core_coord.x == test_config.subordinate_core_coord.x) ||
+                     (test_config.master_core_coord.y == test_config.subordinate_core_coord.y);
+
     // Compile-time arguments for kernels
     vector<uint32_t> compile_args = {
-        (uint32_t)test_config.num_packets, (uint32_t)test_config.packet_size_bytes, (uint32_t)test_config.test_id};
+        (uint32_t)test_config.num_packets,
+        (uint32_t)test_config.packet_size_bytes,
+        (uint32_t)test_config.test_id,
+        (uint32_t)same_axis};
 
 
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/";
@@ -196,7 +203,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {0, 1};
+    CoreCoord subordinate_core_coord = {1, 1};
 
     for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
@@ -232,7 +239,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
     uint32_t max_packets = 256;
     // Cores
     CoreCoord master_core_coord = {0, 0};
-    CoreCoord subordinate_core_coord = {0, 1};
+    CoreCoord subordinate_core_coord = {1, 1};
 
     for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
@@ -240,6 +247,78 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
             // Test config
             unit_tests::dm::one_packet::OnePacketConfig test_config = {
                 .test_id = 81,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = false,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+/* ========== Test case for reading varying number of packets and packet sizes (same axis); Test id = 163 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizesSameAxis) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 256;
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 163,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = true,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+/* ========== Test case for writing varying number of packets and packet sizes (same axis); Test id = 164 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizesSameAxis) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Parameters
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packets = 256;
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 164,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_packets = num_packets,

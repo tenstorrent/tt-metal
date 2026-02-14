@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(4);
+    constexpr uint32_t same_axis = get_compile_time_arg_val(5);
 
     uint32_t responder_x_coord = get_arg_val<uint32_t>(0);
     uint32_t responder_y_coord = get_arg_val<uint32_t>(1);
@@ -43,6 +44,7 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Same axis", same_axis);
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
