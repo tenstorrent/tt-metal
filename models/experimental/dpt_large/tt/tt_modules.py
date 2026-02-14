@@ -735,13 +735,22 @@ class TTMLP:
             if tokens_shard_mc is not None and _ttnn_is_sharded(x4):
                 x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             cfg = getattr(self, "program_config", None)
+            # For encoder-wide sharding bring-up, keep the MLP compute in a
+            # simple interleaved island to avoid L1 circular-buffer clashes.
+            # Stage 3 will re-enable stable sharded MLP program configs.
+            mlp_interleaved_island = tokens_shard_mc is not None
+
             memcfg = getattr(cfg, "mlp_memcfg", None) if cfg is not None else None
             if memcfg is None:
                 memcfg = getattr(self, "output_mem", None) or ttnn.DRAM_MEMORY_CONFIG
             ff1_pc = getattr(cfg, "ff1_program_config", None) if cfg is not None else None
             ff2_pc = getattr(cfg, "ff2_program_config", None) if cfg is not None else None
+            if mlp_interleaved_island:
+                memcfg = ttnn.DRAM_MEMORY_CONFIG
+                ff1_pc = None
+                ff2_pc = None
             reshardened = False
-            if cfg is not None and not _ttnn_is_sharded(x4):
+            if (not mlp_interleaved_island) and cfg is not None and not _ttnn_is_sharded(x4):
                 mlp_grid = getattr(cfg, "mlp_core_grid", None)
                 if mlp_grid is not None and hasattr(ttnn, "create_sharded_memory_config"):
                     try:
