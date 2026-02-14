@@ -1639,3 +1639,70 @@ def test_ternary_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, dev
     out_pt = golden_fn(input1_pt, input2_pt, input3_pt)
     out_tt = ttnn_op(input1_tt, input2_tt, input3_tt)
     assert assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
+
+
+def test_ternary_sharded_output_uneven(device):
+    h_dim = 544
+    torch.manual_seed(0)
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [h_dim, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    pt_a = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_b = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_c = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(
+        pt_a, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_b = ttnn.from_torch(
+        pt_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_c = ttnn.from_torch(
+        pt_c, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [96, 384],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch_output = torch.addcmul(pt_a, pt_b, pt_c, value=1.0)
+    result = ttnn.addcmul(tt_a, tt_b, tt_c, value=1.0, memory_config=block_sharded)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(torch_output, result)
+
+
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_ternary_sharded_half_mem_config_interleaved(device, memory_config):
+    torch.manual_seed(0)
+    input1_shape = [1, 1, 1, 395]
+    input2_shape = [395, 395]
+    input3_shape = [395, 395]
+
+    torch_input1 = torch.randn(*input1_shape, dtype=torch.bfloat16)
+    torch_input2 = torch.randn(*input2_shape, dtype=torch.bfloat16)
+    torch_input3 = torch.randn(*input3_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input1 = ttnn.from_torch(torch_input1, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input2 = ttnn.from_torch(torch_input2, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input3 = ttnn.from_torch(torch_input3, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the addcmul operation with the specified memory config
+    torch_output = torch.addcmul(torch_input1, torch_input2, torch_input3)
+    ttnn_result = ttnn.addcmul(ttnn_input1, ttnn_input2, ttnn_input3, memory_config=memory_config)
+    ttnn_result = ttnn.to_torch(ttnn_result)
+
+    assert_with_pcc(torch_output, ttnn_result)
