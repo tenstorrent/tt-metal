@@ -1,0 +1,96 @@
+name: "Validate Test Count"
+
+on:
+  workflow_call:
+
+jobs:
+  check-test-count:
+    runs-on: ubuntu-latest
+    name: "Check Test Count"
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Count and compare tests
+        run: |
+          set -euo pipefail
+
+          # Define directory paths to check test counts
+          declare -A DIRS=(
+            ["eltwise"]="tests/ttnn/unit_tests/operations/eltwise"
+            ["conv"]="tests/ttnn/unit_tests/operations/conv"
+            ["matmul"]="tests/ttnn/unit_tests/operations/matmul"
+            ["pool"]="tests/ttnn/unit_tests/operations/pool"
+            ["fused"]="tests/ttnn/unit_tests/operations/fused"
+            ["transformers"]="tests/ttnn/unit_tests/operations/transformers"
+            ["reduce"]="tests/ttnn/unit_tests/operations/reduce"
+            ["tensor"]="tests/ttnn/unit_tests/tensor"
+            ["debug"]="tests/ttnn/unit_tests/operations/debug"
+            ["base_functionality"]="tests/ttnn/unit_tests/base_functionality"
+            ["benchmarks"]="tests/ttnn/unit_tests/benchmarks"
+          )
+
+          # Function to count test functions including parametrize expansions
+          count_tests() {
+            local dir=$1
+            python3 .github/scripts/utils/count_pytests.py "$dir"
+          }
+
+          # Count tests in PR branch
+          echo "=== PR branch test counts ==="
+          declare -A pr_counts
+          for name in "${!DIRS[@]}"; do
+            path="${DIRS[$name]}"
+            count=$(count_tests "$path")
+            pr_counts[$name]=$count
+            echo "  $name: $count"
+          done
+
+          # Checkout base branch
+          git fetch --depth=1 origin main
+          git checkout origin/main
+
+          # Count tests in base branch
+          echo "=== Base branch test counts ==="
+          declare -A base_counts
+          for name in "${!DIRS[@]}"; do
+            path="${DIRS[$name]}"
+            count=$(count_tests "$path")
+            base_counts[$name]=$count
+            echo "  $name: $count"
+          done
+
+          # Compare and generate report
+          FAILED=0
+
+          echo "## Test Count Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Directory | Base | PR | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          for name in "${!DIRS[@]}"; do
+            path="${DIRS[$name]}"
+            pr_count=${pr_counts[$name]}
+            base_count=${base_counts[$name]}
+
+            if [ "$pr_count" -gt "$base_count" ]; then
+              echo "| $path | $base_count | $pr_count | ❌ New tests added (+$((pr_count - base_count))) |" >> $GITHUB_STEP_SUMMARY
+              echo "::notice::New tests detected in $path/ ($base_count → $pr_count)"
+              FAILED=1
+            else
+              echo "| $path | $base_count | $pr_count | ✅ No new tests |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **This PR adds new tests to ttnn in APC.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "These test directories have a locked test count to maintain stable APC runtime." >> $GITHUB_STEP_SUMMARY
+            echo "Please look into removing existing lower priority tests to add new tests." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **No new tests added - validation passed**" >> $GITHUB_STEP_SUMMARY
+          exit 0
