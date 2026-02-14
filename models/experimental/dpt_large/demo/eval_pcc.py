@@ -11,10 +11,43 @@ from typing import Any
 
 import numpy as np
 
-from models.common.utility_functions import comp_pcc
 from ..tt.config import DPTLargeConfig
 from ..tt.fallback import DPTFallbackPipeline
 from ..tt.perf_counters import PERF_COUNTERS, reset_perf_counters
+
+
+def _to_numpy(x):
+    # Avoid importing models.common.utility_functions (pulls in pytest).
+    # Also avoid hard-depending on torch for PCC computation.
+    if hasattr(x, "detach") and hasattr(x, "cpu"):
+        x = x.detach().cpu()
+    if hasattr(x, "numpy"):
+        x = x.numpy()
+    return np.asarray(x)
+
+
+def comp_pcc(golden, calculated, pcc: float = 0.99):
+    """
+    Minimal Pearson correlation checker for demo scripts.
+    Returns: (passed, pcc_value)
+    """
+    a = _to_numpy(golden).astype(np.float64).ravel()
+    b = _to_numpy(calculated).astype(np.float64).ravel()
+
+    if a.size == 0 or b.size == 0:
+        return False, float("nan")
+    if a.shape != b.shape:
+        return False, float("nan")
+
+    a = a - np.mean(a)
+    b = b - np.mean(b)
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom == 0.0:
+        same = bool(np.allclose(a, b, atol=0.0, rtol=0.0))
+        return same, 1.0 if same else 0.0
+
+    val = float(np.dot(a, b) / denom)
+    return val >= float(pcc), val
 
 
 def _collect_images(args) -> list[str]:
