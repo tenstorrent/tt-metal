@@ -100,6 +100,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/details/storage.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas

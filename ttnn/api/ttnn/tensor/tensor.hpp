@@ -15,12 +15,15 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_attributes.hpp"
+#include "ttnn/tensor/types.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
+
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/device_tensor.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -38,7 +41,7 @@ public:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
+    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> backing_tensor = nullptr;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -70,6 +73,10 @@ public:
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
+
+    // Metal Tensor constructors
+    explicit Tensor(tt::tt_metal::HostTensor host_tensor);
+    explicit Tensor(tt::tt_metal::DeviceTensor device_tensor);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -188,14 +195,7 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-private:
-    // TODO(river):
-    // This will be removed as part of Metal Tensor split lowering (#37692).
-    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
-    // effort.
-    const Storage& storage() const;
 
-public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -236,6 +236,18 @@ public:
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
+    // Returns underlying HostTensor.
+    // Throws if the tensor is not on host.
+    const HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns underlying DeviceTensor.
+    // Throws if the tensor is not on device.
+    const DeviceTensor& device_tensor() const&;
+    const DeviceTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+    // Transfers ownership of the underlying DeviceTensor out.
+    DeviceTensor device_tensor() &&;
+
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
@@ -249,8 +261,10 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    // static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
+    // auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_spec");
+    auto attribute_values() const { return std::forward_as_tuple(tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 

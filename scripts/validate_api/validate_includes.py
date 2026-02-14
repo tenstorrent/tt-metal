@@ -35,6 +35,10 @@ EXPERIMENTAL_TENSOR_FORWARD_HEADERS = {
     "tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp": "ttnn/tensor/memory_config/memory_config.hpp",
     "tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp": "ttnn/distributed/distributed_configs.hpp",
     "tt-metalium/experimental/tensor/topology/tensor_topology.hpp": "ttnn/distributed/tensor_topology.hpp",
+    "tt-metalium/experimental/tensor/details/storage.hpp": "ttnn/tensor/storage.hpp",
+    "tt-metalium/experimental/tensor/details/tensor_impl.hpp": "ttnn/tensor/tensor_impl.hpp",
+    "tt-metalium/experimental/tensor/tensor_apis.hpp": "ttnn/tensor/tensor_utils.hpp",
+    "tt-metalium/experimental/tensor/host_buffer/functions.hpp": "ttnn/tensor/host_buffer/functions.hpp",
 }
 
 # Files excluded from tensor forward header check - these are the forward headers themselves.

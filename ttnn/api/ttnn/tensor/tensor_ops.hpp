@@ -9,6 +9,9 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
 
+#include <tt-metalium/experimental/tensor/device_tensor.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
@@ -22,6 +25,10 @@ class TensorSpec;
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
+
+// TODO: This should be a static factory function of DeviceTensor
+tt::tt_metal::DeviceTensor allocate_tensor_on_device(
+    const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 tt::tt_metal::Tensor to_device(
     const tt::tt_metal::Tensor& input_tensor,
@@ -60,6 +67,13 @@ Tensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
+// TODO: Move this to tt_metal
+HostTensor pad(
+    const HostTensor& input_tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value);
+
 Tensor unpad(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& output_tensor_start,
@@ -67,7 +81,13 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value);
 
+// TODO: Move this to tt_metal
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value);
+
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
+
+// TODO: Move this to tt_metal
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
 Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor reshape(

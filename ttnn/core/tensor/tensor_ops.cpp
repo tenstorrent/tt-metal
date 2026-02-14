@@ -19,9 +19,9 @@
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 
-namespace {
+namespace tt::tt_metal {
 
-tt::tt_metal::Tensor allocate_tensor_on_device(
+tt::tt_metal::DeviceTensor allocate_tensor_on_device(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
@@ -38,11 +38,8 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     }
 
     auto tensor_topology = TensorTopology{device->shape(), placements, coords};
-    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
+    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
-}  // namespace
-
-namespace tt::tt_metal {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
@@ -73,11 +70,14 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = Tensor(allocate_tensor_on_device(tensor_spec, mesh_device));
     output = tt::tt_metal::set_tensor_id(output);
-
     GraphTracker::instance().track_function_end(output);
+    return output;
+}
 
+DeviceTensor create_device_metal_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+    DeviceTensor output = allocate_tensor_on_device(tensor_spec, mesh_device);
     return output;
 }
 }  // namespace tt::tt_metal
@@ -95,14 +95,29 @@ Tensor to_device(
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = tensor_impl::to_device(input_tensor, mesh_device, mem_config, cq_id);
+
+    TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
+    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
+    distributed::MeshCommandQueue& mesh_cq = mesh_device->mesh_command_queue(cq_id_int);
+    auto device_tensor = Tensor(tensor_impl::to_device(mesh_cq, input_tensor.host_tensor(), mem_config));
+
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
+    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
+
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
-    tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
+
+    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
+    distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
+    // Moves the metal device tensor out of the ttnn tensor object.
+    auto target_tensor = std::move(device_tensor).device_tensor();
+    tensor_impl::copy_to_device(mesh_cq, host_tensor.host_tensor(), target_tensor);
+    device_tensor = Tensor(std::move(target_tensor));
+
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
 }
@@ -132,7 +147,15 @@ void copy_to_host(
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
-    tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
+    TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Destination tensor is not on host.");
+
+    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
+    distributed::MeshCommandQueue& mesh_cq = device_tensor.device()->mesh_command_queue(cq_id_int);
+
+    HostTensor target_tensor = host_tensor.host_tensor();
+    tensor_impl::copy_to_host(mesh_cq, device_tensor.device_tensor(), target_tensor, blocking);
+    host_tensor = Tensor(std::move(target_tensor));
     GraphTracker::instance().track_function_end(host_tensor);
 }
 
@@ -143,7 +166,10 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    auto output = tensor_impl::to_host(input_tensor, blocking, cq_id);
+    auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
+    distributed::MeshCommandQueue& mesh_cq = input_tensor.device()->mesh_command_queue(cq_id_int);
+    auto output = Tensor(tensor_impl::to_host(mesh_cq, input_tensor.device_tensor(), blocking));
+
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -153,7 +179,7 @@ Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
     TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
-    Tensor output = tensor_impl::to_layout(input_tensor, target_layout);
+    Tensor output = Tensor(tensor_impl::to_layout(input_tensor.host_tensor(), target_layout));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -164,6 +190,8 @@ Tensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
+
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
@@ -176,10 +204,19 @@ Tensor pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
+    Tensor output =
+        Tensor(tensor_impl::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
+}
+
+HostTensor pad(
+    const HostTensor& input_tensor,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
+    float pad_value) {
+    return tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor unpad(
@@ -189,7 +226,7 @@ Tensor unpad(
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
-    auto output = tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
+    Tensor output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -197,6 +234,13 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
+    Tensor output = Tensor(pad_to_tile(input_tensor.host_tensor(), pad_value));
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
+}
+
+HostTensor pad_to_tile(const HostTensor& input_tensor, float pad_value) {
     uint32_t height = input_tensor.padded_shape()[-2];
     uint32_t width = input_tensor.padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
@@ -215,16 +259,22 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    auto output = input_tensor.pad(
-        tt::tt_metal::Shape(std::move(padded_shape)), tt::tt_metal::Shape{std::move(input_tensor_start)}, pad_value);
+    return tensor_impl::pad(
+        input_tensor,
+        tt::tt_metal::Shape(std::move(padded_shape)),
+        tt::tt_metal::Shape{std::move(input_tensor_start)},
+        pad_value);
+}
+
+Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
+    GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
+    Tensor output = Tensor(unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
-Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
-    GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
-
+HostTensor unpad_from_tile(const HostTensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
         TT_ASSERT(
             input_tensor.logical_shape()[index] == output_tensor_shape[index],
@@ -243,10 +293,7 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
     for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
         output_tensor_end[index] = output_tensor_shape[index];
     }
-    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
 }
 
 // ======================================================================================
@@ -364,7 +411,7 @@ Tensor reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape)
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     GraphTracker::instance().track_function_start("tt::tt_metal::to_dtype", input_tensor, dtype);
-    auto output_tensor = tensor_impl::to_dtype(input_tensor, dtype);
+    Tensor output_tensor = Tensor(tensor_impl::to_dtype(input_tensor.host_tensor(), dtype));
     GraphTracker::instance().track_function_end(output_tensor);
     return output_tensor;
 }
