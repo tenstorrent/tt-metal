@@ -1805,7 +1805,7 @@ class Generator(WarmupForwardMixin):
             position_id = torch.tensor([prefill_len + gen_idx])
             next_token_tensor = next_token.reshape(1, 1)  # B, S
 
-            logits = self.decode_forward(
+            logits = self.decode_forward_llama_vision(
                 position_id,
                 next_token_tensor,
                 prefill_output_xattn_masks,
@@ -1815,6 +1815,10 @@ class Generator(WarmupForwardMixin):
                 [xattn_caches],
                 enable_trace=False,
             )
+
+            if isinstance(logits, tuple):
+                logits = logits[0]
+
             next_token, text = sample(logits)
             yield TokenResult(
                 token=next_token[0].item(),
