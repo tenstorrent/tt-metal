@@ -72,7 +72,4 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 };
 
-
-using Storage = std::variant<HostStorage, DeviceStorage>;
-
 }  // namespace tt::tt_metal
