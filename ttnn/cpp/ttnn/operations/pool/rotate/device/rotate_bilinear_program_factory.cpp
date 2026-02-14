@@ -219,7 +219,6 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             DUMMY_CB_ID,
             0U,
             0U,
-            0U,
             1U,
             1U,
             1U,
@@ -227,7 +226,13 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             1U,
             1U,
             0U,
-        };
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            DUMMY_CB_ID,
+            1U,
+            1U,
+            0U};
 
         return tt::tt_metal::CreateKernel(
             program,
