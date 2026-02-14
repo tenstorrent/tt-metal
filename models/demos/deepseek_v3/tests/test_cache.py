@@ -11,7 +11,9 @@ from models.demos.deepseek_v3.utils.cache import (
     CacheKey,
     CacheManifest,
     InMemoryCacheStorage,
+    OnDiskCacheStorage,
     TensorCache,
+    _safe_name_from_manifest,
     compute_fingerprint,
     compute_func_fingerprint,
     create_manifest,
@@ -294,6 +296,42 @@ def test_cache_storage_get_nonexistent(cache_storage):
     missing_key = _make_cache_key(name="nonexistent")
     with pytest.raises(KeyError):
         cache_storage.get(missing_key)
+
+
+def test_on_disk_cache_storage_set_get(tmp_path, device):
+    tensor = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    cache_key = _make_cache_key(name="weight1")
+    storage = OnDiskCacheStorage(tmp_path, device)
+
+    storage.set(cache_key, tensor)
+    assert storage.has(cache_key)
+
+    safe_name = _safe_name_from_manifest(cache_key.manifest)
+    tensor_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.tensorbin"
+    manifest_path = tmp_path / f"{safe_name}__{cache_key.fingerprint}.manifest.json"
+    assert tensor_path.is_file()
+    assert manifest_path.is_file()
+
+    loaded = storage.get(cache_key)
+    assert torch.allclose(ttnn.to_torch(loaded), ttnn.to_torch(tensor))
+
+    storage_2 = OnDiskCacheStorage(tmp_path, device)
+    assert storage_2.has(cache_key)
+    loaded_2 = storage_2.get(cache_key)
+    assert torch.allclose(ttnn.to_torch(loaded_2), ttnn.to_torch(tensor))
+
+
+def test_on_disk_cache_storage_missing_key(tmp_path, device):
+    storage = OnDiskCacheStorage(tmp_path, device)
+    missing_key = _make_cache_key(name="missing")
+    assert not storage.has(missing_key)
+    with pytest.raises(KeyError):
+        storage.get(missing_key)
 
 
 def test_tensor_cache_cache_miss(tensor_cache, monkeypatch, device):

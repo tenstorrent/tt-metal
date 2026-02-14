@@ -1,7 +1,9 @@
 import inspect
 import json
+import re
 from dataclasses import dataclass
 from hashlib import md5
+from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Sequence
 
 import torch
@@ -121,34 +123,6 @@ def compute_fingerprint(manifest: dict[str, Any]) -> str:
     return md5(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
 
 
-def _format_name(name: str | Sequence[str]) -> str:
-    """Format cache entry name for display."""
-    if isinstance(name, str):
-        return name
-    return ", ".join(sorted(name))
-
-
-def _format_sharding(memory_config: ttnn.MemoryConfig) -> str:
-    """Format sharding info from memory config for display."""
-    parts = [f"is_sharded={memory_config.is_sharded()}"]
-    if memory_config.is_sharded() and memory_config.shard_spec is not None:
-        parts.append(f"shard_spec={memory_config.shard_spec}")
-    parts.append(f"buffer_type={memory_config.buffer_type.__name__}")
-    parts.append(f"memory_layout={memory_config.memory_layout.__name__}")
-    return ", ".join(parts)
-
-
-def _format_mesh_mapper(mesh_mapper: MeshMapper | None) -> str:
-    """Format mesh mapper for display."""
-    if mesh_mapper is None:
-        return "none"
-    d = mesh_mapper_to_dict(mesh_mapper)
-    parts = [f"placements={d['placements']}"]
-    if d["mesh_shape_override"] is not None:
-        parts.append(f"mesh_shape_override={d['mesh_shape_override']}")
-    return ", ".join(parts)
-
-
 class CacheStorage(Protocol):
     def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
         ...
@@ -177,6 +151,50 @@ class InMemoryCacheStorage:
 
     def get(self, key: CacheKey) -> ttnn.Tensor:
         return self.cache[key.fingerprint]
+
+
+def _safe_name_from_manifest(manifest: CacheManifest) -> str:
+    if isinstance(manifest.name, str):
+        raw_names = [manifest.name]
+    else:
+        raw_names = sorted(manifest.name)
+    safe_names = [re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_") for name in raw_names]
+    safe_name = "__".join(n for n in safe_names if n)
+    return safe_name or "tensor"
+
+
+class OnDiskCacheStorage:
+    def __init__(self, cache_root: str | Path, device: ttnn.Device | ttnn.MeshDevice):
+        self.cache_root = Path(cache_root)
+        self.device = device
+
+    def _tensor_path(self, key: CacheKey) -> Path:
+        safe_name = _safe_name_from_manifest(key.manifest)
+        return self.cache_root / f"{safe_name}__{key.fingerprint}.tensorbin"
+
+    def _manifest_path(self, key: CacheKey) -> Path:
+        safe_name = _safe_name_from_manifest(key.manifest)
+        return self.cache_root / f"{safe_name}__{key.fingerprint}.manifest.json"
+
+    def set(self, key: CacheKey, tensor: ttnn.Tensor) -> None:
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        tensor_path = self._tensor_path(key)
+        ttnn.dump_tensor(tensor_path, tensor)
+
+        manifest_path = self._manifest_path(key)
+        manifest_payload = key.manifest.to_dict()
+        manifest_payload["fingerprint"] = key.fingerprint
+        with manifest_path.open("w", encoding="utf-8") as f:
+            json.dump(manifest_payload, f, indent=2, sort_keys=True)
+
+    def has(self, key: CacheKey) -> bool:
+        return self._tensor_path(key).is_file()
+
+    def get(self, key: CacheKey) -> ttnn.Tensor:
+        tensor_path = self._tensor_path(key)
+        if not tensor_path.is_file():
+            raise KeyError(key.fingerprint)
+        return ttnn.load_tensor(tensor_path, device=self.device)
 
 
 def default_converter(
@@ -210,47 +228,6 @@ class TensorCache:
         self.hf_config = hf_config
         self.storage = storage
         self.converter = converter
-        # Fingerprint -> manifest for summary (populated when we set an entry)
-        self._entry_manifests: dict[str, CacheManifest] = {}
-
-    def summary(self) -> None:
-        """Print a summary of the TensorCache to the screen."""
-        num_state_keys = len(self.state_dict)
-        cache = getattr(self.storage, "cache", None)
-        if cache is None:
-            num_entries = 0
-            entries = []
-        else:
-            entries = list(cache.items())
-            num_entries = len(entries)
-
-        lines = [
-            "TensorCache summary",
-            "=" * 50,
-            f"State dict keys: {num_state_keys}",
-            f"Cached tensor entries: {num_entries}",
-        ]
-        if entries:
-            lines.append("-" * 50)
-            for fp, tensor in entries:
-                manifest = self._entry_manifests.get(fp)
-                name_str = _format_name(manifest.name) if manifest else "?"
-                shape = getattr(tensor, "shape", None)
-                shape_str = str(tensor.shape) if shape is not None else "?"
-                mem_cfg = getattr(tensor, "memory_config", None)
-                if callable(mem_cfg):
-                    mem_cfg = mem_cfg()
-                sharding_str = _format_sharding(mem_cfg) if mem_cfg is not None else "?"
-                mesh_str = _format_mesh_mapper(manifest.mesh_mapper) if manifest and manifest.mesh_mapper else "none"
-                lines.append(f"  name: {name_str}")
-                lines.append(
-                    f"    shape={shape_str}, dtype={tensor.dtype}, layout={tensor.layout}, "
-                    f"storage={tensor.storage_type()}"
-                )
-                lines.append(f"    sharding: {sharding_str}")
-                lines.append(f"    mesh_mapper: {mesh_str}")
-                lines.append(f"    fingerprint: {fp[:16]}...")
-        print("\n".join(lines))
 
     def cache_entry_exists_for_key(self, key: CacheKey):
         return self.storage.has(key)
@@ -296,7 +273,6 @@ class TensorCache:
                 mesh_mapper=mesh_mapper,
             )
             tensor = postprocessor(tensor)
-            self._entry_manifests[fingerprint] = manifest
             self.storage.set(key, tensor)
             return tensor
         else:
