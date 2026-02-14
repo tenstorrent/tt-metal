@@ -18,7 +18,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
-    run_module_forward,
 )
 
 
@@ -110,9 +109,28 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass using utility function
+    # TTNN forward pass - handle collective operations at test level
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(MoE, mode, tt_input, run_config)
+
+    # Perform all_gather before forward pass
+    ccl = run_config["ccl"]
+    tt_input_gathered = ttnn.experimental.all_gather_async(
+        tt_input, **ccl.populate_all_gather_runtime_args(run_config["revert_tp"])
+    )
+
+    # Run MoE forward with gathered input
+    if mode == "prefill":
+        tt_output = MoE.forward_prefill(tt_input_gathered, run_config)
+    else:  # decode
+        tt_output = MoE.forward_decode(tt_input_gathered, run_config)
+
+    # Perform reduce_scatter after forward pass
+    tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+        tt_output, **ccl.populate_reduce_scatter_runtime_args(run_config["final_output_reduce_scatter"])
+    )
+
+    # Cleanup gathered input
+    ttnn.deallocate(tt_input_gathered)
 
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
