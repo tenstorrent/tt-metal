@@ -72,16 +72,18 @@ class SubmeshTraceDPExecutor:
                 ttnn.copy_host_to_device_tensor(host_in, pipe._full_trace_input, 1)
                 write_event = ttnn.record_event(dev, 1)
                 ttnn.wait_for_event(0, write_event)
-                t_exec = time.perf_counter()
+                t_submit_start = time.perf_counter()
                 ttnn.execute_trace(dev, pipe._full_trace_id, cq_id=0, blocking=False)
+                t_submit_end = time.perf_counter()
                 completion_event = ttnn.record_event(dev, 0)
-                completions.append((pipe, completion_event, t_exec))
+                completions.append((pipe, dev, completion_event, t_submit_start, t_submit_end))
             else:
                 ttnn.copy_host_to_device_tensor(host_in, pipe._full_trace_input, 0)
-                t_exec = time.perf_counter()
+                t_submit_start = time.perf_counter()
                 ttnn.execute_trace(dev, pipe._full_trace_id, cq_id=0, blocking=False)
+                t_submit_end = time.perf_counter()
                 completion_event = ttnn.record_event(dev, 0)
-                completions.append((pipe, completion_event, t_exec))
+                completions.append((pipe, dev, completion_event, t_submit_start, t_submit_end))
 
         # Ensure both devices have completed the traced step before reading outputs.
         #
@@ -90,28 +92,37 @@ class SubmeshTraceDPExecutor:
         # a host-side barrier. For wall-clock measurements we use
         # `ttnn.synchronize_device` as the host-visible completion point.
         per_worker = []
-        for pipe, ev, t_exec in completions:
-            trace_exec_ms = (time.perf_counter() - t_exec) * 1000.0
+        per_worker_meta = []
+        for pipe, dev, ev, t_submit_start, t_submit_end in completions:
             if self.execution_mode == "trace_2cq":
                 pipe._trace_op_event = ev
+            per_worker_meta.append((pipe, dev, ev, t_submit_start, t_submit_end))
+
+        # Host-visible barrier: wait for work completion on each submesh device.
+        dev_sync_end_ts = {}
+        for pipe in self.tt_pipelines:
+            dev = pipe.backbone.tt_device
+            if dev is not None and hasattr(ttnn, "synchronize_device"):
+                ttnn.synchronize_device(dev)
+                dev_sync_end_ts[id(dev)] = time.perf_counter()
+
+        trace_wall_ms = (time.perf_counter() - trace_wall_start) * 1000.0
+
+        for pipe, dev, ev, t_submit_start, t_submit_end in per_worker_meta:
             entry = {
                 "mode": "tt",
                 "execution_mode": self.execution_mode,
                 "effective_execution_mode": self.execution_mode,
                 "requested_execution_mode": self.execution_mode,
                 "num_images": 1,
-                "trace_exec_ms": trace_exec_ms,
+                # Legacy key was misleading; keep the meaning explicit.
+                "trace_enqueue_ms": (t_submit_end - t_submit_start) * 1000.0,
+                "trace_submit_to_sync_ms": (
+                    (dev_sync_end_ts.get(id(dev)) - t_submit_start) * 1000.0 if dev_sync_end_ts.get(id(dev)) else None
+                ),
             }
             pipe.last_perf = dict(entry)
             per_worker.append(entry)
-
-        # Host-visible barrier: wait for work completion on each submesh device.
-        for pipe in self.tt_pipelines:
-            dev = pipe.backbone.tt_device
-            if dev is not None and hasattr(ttnn, "synchronize_device"):
-                ttnn.synchronize_device(dev)
-
-        trace_wall_ms = (time.perf_counter() - trace_wall_start) * 1000.0
 
         outs = []
         readback_ms = 0.0
