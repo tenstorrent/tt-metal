@@ -154,8 +154,25 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             optional_output_tensor_c->memory_config(),
             attributes.output_mem_config);
     } else {
+        // Allow BLOCK_SHARDED on 1D grids to be converted to HEIGHT_SHARDED or WIDTH_SHARDED
+        bool memory_layout_compatible =
+            output_tensor_spec.memory_config().memory_layout() == attributes.output_mem_config.memory_layout();
+        if (!memory_layout_compatible &&
+            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+            attributes.output_mem_config.shard_spec().has_value()) {
+            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+            if (is_1d_column &&
+                output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+                memory_layout_compatible = true;
+            } else if (
+                is_1d_row && output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+                memory_layout_compatible = true;
+            }
+        }
         TT_FATAL(
-            output_tensor_spec.memory_config().memory_layout() == attributes.output_mem_config.memory_layout(),
+            memory_layout_compatible,
             "Mismatch between computed {} and provided {} mem config memory layout",
             output_tensor_spec.memory_config().memory_layout(),
             attributes.output_mem_config.memory_layout());
@@ -460,9 +477,19 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         }
                     }
                     if (attributes.output_mem_config.is_sharded()) {
+                        // Allow BLOCK_SHARDED on 1-row grids (equivalent to WIDTH_SHARDED)
+                        bool is_width_sharded =
+                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+                        bool is_block_sharded_1d_row = false;
+                        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+                            attributes.output_mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+                            is_block_sharded_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+                        }
                         TT_FATAL(
-                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                            "Error: Output memory layout must be WIDTH_SHARDED. Provided tensor memory layout: {}",
+                            is_width_sharded || is_block_sharded_1d_row,
+                            "Error: Output memory layout must be WIDTH_SHARDED or BLOCK_SHARDED on a 1-row grid. "
+                            "Provided tensor memory layout: {}",
                             attributes.output_mem_config.memory_layout());
                         const auto M = operations::matmul::utilities::get_M_dim(
                             a_shape_padded, in0_tile, program_config.fuse_batch);
@@ -532,9 +559,18 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Error: K must be equal to shard_shape[1] / in0_tile.get_width().");
                     }
                     if (attributes.output_mem_config.is_sharded()) {
+                        // Allow BLOCK_SHARDED on 1-column grids (equivalent to HEIGHT_SHARDED)
+                        bool is_height_sharded =
+                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+                        bool is_block_sharded_1d_column = false;
+                        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+                            attributes.output_mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+                            is_block_sharded_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                        }
                         TT_FATAL(
-                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                            "Error: Output memory layout must be HEIGHT_SHARDED.");
+                            is_height_sharded || is_block_sharded_1d_column,
+                            "Error: Output memory layout must be HEIGHT_SHARDED or BLOCK_SHARDED on a 1-column grid.");
                         const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                         uint32_t per_core_N = program_config.per_core_N;
 
@@ -1090,16 +1126,38 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         "per_core_N must be divisible by override output tile width");
                     auto mem_config = attributes.output_mem_config;
                     if (!program_config.gather_in0) {
-                        uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
-                        uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                        uint32_t num_cores = num_blocks_x * num_blocks_y;
-                        CoreRangeSet all_cores =
-                            num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
-                        tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
-                            all_cores,
-                            {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
-                            ShardOrientation::ROW_MAJOR};
-                        mem_config = mem_config.with_shard_spec(shard_spec);
+                        // Check if BLOCK_SHARDED on 1D grid - if so, use user's shard spec with converted memory layout
+                        auto memory_layout = mem_config.memory_layout();
+                        bool is_block_sharded_1d = false;
+                        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED && mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = mem_config.shard_spec()->grid.bounding_box();
+                            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+                            is_block_sharded_1d = is_1d_column || is_1d_row;
+                        }
+
+                        if (is_block_sharded_1d) {
+                            // Use user's shard spec with converted memory layout
+                            auto user_shard_spec = mem_config.shard_spec().value();
+                            auto grid_bbox = user_shard_spec.grid.bounding_box();
+                            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                            memory_layout =
+                                is_1d_column ? TensorMemoryLayout::HEIGHT_SHARDED : TensorMemoryLayout::WIDTH_SHARDED;
+                            mem_config =
+                                tt::tt_metal::MemoryConfig{memory_layout, mem_config.buffer_type(), user_shard_spec};
+                        } else {
+                            // Compute shard spec from per_core values
+                            uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                            uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                            uint32_t num_cores = num_blocks_x * num_blocks_y;
+                            CoreRangeSet all_cores = num_cores_to_corerangeset(
+                                num_cores, program_config.compute_with_storage_grid_size, true);
+                            tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
+                                all_cores,
+                                {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
+                                ShardOrientation::ROW_MAJOR};
+                            mem_config = mem_config.with_shard_spec(shard_spec);
+                        }
                     }
                     // support for multi-tensor output
                     const ttnn::TensorSpec tensor_spec(
