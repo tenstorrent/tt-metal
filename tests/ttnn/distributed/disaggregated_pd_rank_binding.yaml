@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rank Binding for 2x N300 devices with DIRECT QSFP connectivity
+#
+# System topology (from system-health.log):
+#   Chip 0 (PCIe 1) ↔ Chip 2 (PCIe 3) via QSFP channels 6,7 - DIRECT 2-link connection
+#   Chip 1 (PCIe 0) ↔ Chip 3 (PCIe 2) via QSFP channels 0,1 - DIRECT 2-link connection
+#
+# Using Chip 0 ↔ Chip 2 for direct QSFP transfer (2 ethernet links @ 12.5 Gbps each)
+#
+# Process 0 (rank=0): TT_VISIBLE_DEVICES=1 → PCIe 1 → Chip 0,4 (Board with direct link)
+# Process 1 (rank=1): TT_VISIBLE_DEVICES=3 → PCIe 3 → Chip 2,6 (Board with direct link)
+
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1"  # PCIe 1 → Chip 0,4 (has QSFP to Chip 2)
+      HF_MODEL: "meta-llama/Llama-3.1-8B-Instruct"
+
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "3"  # PCIe 3 → Chip 2,6 (has QSFP to Chip 0)
+      HF_MODEL: "meta-llama/Llama-3.1-8B-Instruct"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/n300_dual_mesh_graph_descriptor.textproto"

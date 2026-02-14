@@ -1,0 +1,1043 @@
+Running main() from gmock_main.cc
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from Cluster
+[ RUN      ] Cluster.ReportIntermeshLinks
+2026-01-26 21:29:06.287 | info     |             UMD | Established firmware bundle version: 19.3.99 (topology_discovery.cpp:368)
+2026-01-26 21:29:06.309 | warning  |             UMD | Board 0x47100000000 has 6 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.309 | warning  |             UMD | Board 0x47131831011 has 26 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.323 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-01-26 21:29:06.379 | info     |             UMD | Established firmware bundle version: 19.3.99 (topology_discovery.cpp:368)
+2026-01-26 21:29:06.401 | warning  |             UMD | Board 0x47100000000 has 6 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.401 | warning  |             UMD | Board 0x47131831011 has 26 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.761 | info     |             UMD | Established firmware bundle version: 19.3.99 (topology_discovery.cpp:368)
+2026-01-26 21:29:06.783 | warning  |             UMD | Board 0x47100000000 has 6 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.783 | warning  |             UMD | Board 0x47131831011 has 26 chips, but expected 32 chips for board type ubb_blackhole. (cluster_descriptor.cpp:1275)
+2026-01-26 21:29:06.788 | info     |             UMD | Harvesting masks for chip 31 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.916 | info     |             UMD | Harvesting masks for chip 30 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.928 | info     |             UMD | Harvesting masks for chip 29 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.939 | info     |             UMD | Harvesting masks for chip 12 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.949 | info     |             UMD | Harvesting masks for chip 11 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.960 | info     |             UMD | Harvesting masks for chip 10 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.971 | info     |             UMD | Harvesting masks for chip 9 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.982 | info     |             UMD | Harvesting masks for chip 8 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:06.993 | info     |             UMD | Harvesting masks for chip 7 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.004 | info     |             UMD | Harvesting masks for chip 6 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.015 | info     |             UMD | Harvesting masks for chip 5 tensix: 0x10 dram: 0x0 eth: 0x110 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.026 | info     |             UMD | Harvesting masks for chip 4 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.037 | info     |             UMD | Harvesting masks for chip 3 tensix: 0x1000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.048 | info     |             UMD | Harvesting masks for chip 2 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.059 | info     |             UMD | Harvesting masks for chip 1 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.070 | info     |             UMD | Harvesting masks for chip 0 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.081 | info     |             UMD | Harvesting masks for chip 13 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.092 | info     |             UMD | Harvesting masks for chip 14 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.103 | info     |             UMD | Harvesting masks for chip 15 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.114 | info     |             UMD | Harvesting masks for chip 16 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.124 | info     |             UMD | Harvesting masks for chip 17 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.135 | info     |             UMD | Harvesting masks for chip 18 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.146 | info     |             UMD | Harvesting masks for chip 19 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.156 | info     |             UMD | Harvesting masks for chip 20 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.167 | info     |             UMD | Harvesting masks for chip 21 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.178 | info     |             UMD | Harvesting masks for chip 22 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.189 | info     |             UMD | Harvesting masks for chip 23 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.200 | info     |             UMD | Harvesting masks for chip 24 tensix: 0x200 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.211 | info     |             UMD | Harvesting masks for chip 25 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.221 | info     |             UMD | Harvesting masks for chip 26 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.231 | info     |             UMD | Harvesting masks for chip 27 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.242 | info     |             UMD | Harvesting masks for chip 28 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0 (cluster.cpp:339)
+2026-01-26 21:29:07.253 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[9, 30, 20, 18, 4, 21, 13, 7, 15, 16, 29, 28, 1, 6, 14, 11, 23, 22, 3, 25, 12, 24, 19, 8, 5, 2, 31, 0, 26, 27, 17, 10] and remote chip ids {} (cluster.cpp:186)
+2026-01-26 21:29:07.253 | info     |             UMD | IOMMU: disabled (cluster.cpp:161)
+2026-01-26 21:29:07.253 | info     |             UMD | KMD version: 2.5.0 (cluster.cpp:164)
+2026-01-26 21:29:07.273 | info     |             UMD | Starting devices in cluster (cluster.cpp:965)
+2026-01-26 21:29:07.274 | info     |             UMD | Mapped hugepage 0x680000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.276 | info     |             UMD | Mapped hugepage 0x540000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.278 | info     |             UMD | Mapped hugepage 0x340000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.280 | info     |             UMD | Mapped hugepage 0x800000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.283 | info     |             UMD | Mapped hugepage 0x580000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.285 | info     |             UMD | Mapped hugepage 0x440000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.287 | info     |             UMD | Mapped hugepage 0x1c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.289 | info     |             UMD | Mapped hugepage 0x780000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.291 | info     |             UMD | Mapped hugepage 0x480000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.293 | info     |             UMD | Mapped hugepage 0x600000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.295 | info     |             UMD | Mapped hugepage 0x840000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.298 | info     |             UMD | Mapped hugepage 0x400000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.300 | info     |             UMD | Mapped hugepage 0x880000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.301 | info     |             UMD | Mapped hugepage 0x8c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.303 | info     |             UMD | Mapped hugepage 0x740000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.305 | info     |             UMD | Mapped hugepage 0x4c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.307 | info     |             UMD | Mapped hugepage 0x940000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.309 | info     |             UMD | Mapped hugepage 0x280000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.311 | info     |             UMD | Mapped hugepage 0x6c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.313 | info     |             UMD | Mapped hugepage 0x5c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.315 | info     |             UMD | Mapped hugepage 0x200000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.317 | info     |             UMD | Mapped hugepage 0x2c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.319 | info     |             UMD | Mapped hugepage 0x7c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.321 | info     |             UMD | Mapped hugepage 0x380000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.323 | info     |             UMD | Mapped hugepage 0x700000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.325 | info     |             UMD | Mapped hugepage 0x240000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.327 | info     |             UMD | Mapped hugepage 0x640000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.329 | info     |             UMD | Mapped hugepage 0x900000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.330 | info     |             UMD | Mapped hugepage 0x500000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.332 | info     |             UMD | Mapped hugepage 0x180000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.334 | info     |             UMD | Mapped hugepage 0x300000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:07.336 | info     |             UMD | Mapped hugepage 0x3c0000000 to NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:207)
+2026-01-26 21:29:12.922 | info     |            Test | Intermesh Link Configuration Report (test_system_health.cpp:218)
+2026-01-26 21:29:12.922 | info     |            Test | =================================== (test_system_health.cpp:219)
+2026-01-26 21:29:12.922 | info     |            Test | Total chips with intermesh links: 21 (test_system_health.cpp:231)
+2026-01-26 21:29:12.922 | info     |            Test | Total intermesh links: 60 (test_system_health.cpp:232)
+2026-01-26 21:29:12.922 | info     |            Test |  (test_system_health.cpp:233)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 3 Tray: 3 N3 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 4 Tray: 3 N2 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 5 Tray: 3 N4 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 6 Tray: 4 N3 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 7 Tray: 1 N5 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 8 Tray: 4 N5 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 9 Tray: 1 N3 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 13 Tray: 1 N2 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 14 Tray: 4 N1 : 6 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 15 Tray: 2 N2 : 4 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 17 Tray: 1 N4 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 19 Tray: 3 N5 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 20 Tray: 1 N1 : 4 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 22 Tray: 2 N5 : 4 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 23 Tray: 2 N1 : 6 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 25 Tray: 2 N6 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 26 Tray: 2 N3 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 28 Tray: 4 N4 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 29 Tray: 3 N1 : 4 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 3 at (x=0,y=3) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 2 at (x=0,y=2) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 30 Tray: 2 N4 : 2 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test | Chip 31 Tray: 4 N2 : 4 inter-mesh ethernet links (test_system_health.cpp:244)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 9 at (x=0,y=9) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 8 at (x=0,y=8) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 1 at (x=0,y=1) (test_system_health.cpp:248)
+2026-01-26 21:29:12.922 | info     |            Test |   Channel 0 at (x=0,y=0) (test_system_health.cpp:248)
+[       OK ] Cluster.ReportIntermeshLinks (6705 ms)
+[ RUN      ] Cluster.ReportSystemHealth
+2026-01-26 21:29:12.926 | info     |            Test | Found 32 chips in cluster:
+Chip: 31 PCIe: 10 Unique ID: f8867960ba94a068 Tray: 4 N2
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 66e65accc615c1a4 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 66e65accc615c1a4 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 14 Tray: 4 N1 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 14 Tray: 4 N1 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 86d9779a3847b9e0 core (x=0,y=8)
+	Retrain count: 223c
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 86d9779a3847b9e0 core (x=0,y=9)
+	Retrain count: 7fe
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 30 PCIe: 17 Unique ID: e3d1f0049fe40ad1 Tray: 2 N4
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 8574200bc809407d core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 8574200bc809407d core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 29 PCIe: 27 Unique ID: df1d72cdf49e3571 Tray: 3 N1
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 97284474432fd1d3 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 97284474432fd1d3 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: 490f12505c78881b core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: 490f12505c78881b core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 12 PCIe: 1 Unique ID: 4b4f5d22707eafaf Tray: 1 N6
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 11 PCIe: 28 Unique ID: 44fc8807611a9912 Tray: 2 N7
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 10 PCIe: 29 Unique ID: 370122a92bfdae76 Tray: 4 N8
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 9 PCIe: 16 Unique ID: 33d8b4fb8a72df2b Tray: 1 N3
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: c73789f46cd3160b core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: c73789f46cd3160b core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 8 PCIe: 15 Unique ID: 32f21fd47d4e4872 Tray: 4 N5
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 14 Tray: 4 N1 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 14 Tray: 4 N1 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: bffd79ac7fe1fc9d core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: bffd79ac7fe1fc9d core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 7 PCIe: 7 Unique ID: 3033746db0f49bcb Tray: 1 N5
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 20 Tray: 1 N1 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 20 Tray: 1 N1 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: 84cbf5281ffd4866 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: 84cbf5281ffd4866 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 6 PCIe: 13 Unique ID: 2bba5655b9c7abae Tray: 4 N3
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: d8bd602304f27204 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: d8bd602304f27204 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 5 PCIe: 21 Unique ID: 225ce9805af85053 Tray: 3 N4
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 4b73204fbea41c87 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 4b73204fbea41c87 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 28 Tray: 4 N4 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 4 PCIe: 4 Unique ID: 1aa6a1f48a623d44 Tray: 3 N2
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 36a2773e8850ce1e core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 36a2773e8850ce1e core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 29 Tray: 3 N1 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 29 Tray: 3 N1 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 3 PCIe: 18 Unique ID: 18786f99f3951e23 Tray: 3 N3
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 473a533e9575aed5 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 473a533e9575aed5 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 2 PCIe: 20 Unique ID: ca00a09eb052241 Tray: 3 N8
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 1 PCIe: 30 Unique ID: a0d79649f610a09 Tray: 4 N7
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 0 PCIe: 9 Unique ID: 24919c44da38dad Tray: 1 N8
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 17 Tray: 1 N4 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 24 Tray: 2 N8 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 13 PCIe: 6 Unique ID: 4c75ac76326a35e1 Tray: 1 N2
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: ee07991f5c11bcf core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: ee07991f5c11bcf core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 20 Tray: 1 N1 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 20 Tray: 1 N1 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 14 PCIe: 14 Unique ID: 4d13cfd69d5db5be Tray: 4 N1
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: c4e006d6e04f26f0 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: c4e006d6e04f26f0 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: a1102fd2b6383cb4 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: a1102fd2b6383cb4 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 8b893298fe608fd7 core (x=0,y=8)
+	Retrain count: 97e
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 8b893298fe608fd7 core (x=0,y=9)
+	Retrain count: ca94
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 15 PCIe: 11 Unique ID: 4ed629094db68780 Tray: 2 N2
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 6441f6a254146749 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 6441f6a254146749 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 23 Tray: 2 N1 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 23 Tray: 2 N1 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 26 Tray: 2 N3 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 17b7f869e992efaf core (x=0,y=8)
+	Retrain count: e26
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 17b7f869e992efaf core (x=0,y=9)
+	Retrain count: eac
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 16 PCIe: 23 Unique ID: 519dafa0832417d9 Tray: 1 N7
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 17 PCIe: 22 Unique ID: 51ad33fdf872b5da Tray: 1 N4
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 6a25810ff97b6992 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 6a25810ff97b6992 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 9 Tray: 1 N3 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 4 Tray: 3 N2 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 19 Tray: 3 N5 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=3)
+	Retrain count: 9
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 12 Tray: 1 N6 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 19 PCIe: 25 Unique ID: 62c7213218300c7e Tray: 3 N5
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 29 Tray: 3 N1 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 29 Tray: 3 N1 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: cd1df029f415169 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: cd1df029f415169 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 20 PCIe: 12 Unique ID: 63383ce5fcc4b79b Tray: 1 N1
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 69ab21395ebaf127 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 69ab21395ebaf127 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: 6833c53018dfcb6b core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: 6833c53018dfcb6b core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 13 Tray: 1 N2 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 7 Tray: 1 N5 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 3 Tray: 3 N3 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=5)
+	Retrain count: 5
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 2 Tray: 3 N8 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 16 Tray: 1 N7 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 22 PCIe: 19 Unique ID: 67e059d408060bad Tray: 2 N5
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 23 Tray: 2 N1 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 23 Tray: 2 N1 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: 18da06017a29d59 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: 18da06017a29d59 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 463b05fc8aff561c core (x=0,y=8)
+	Retrain count: d6e
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 463b05fc8aff561c core (x=0,y=9)
+	Retrain count: b66
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 23 PCIe: 8 Unique ID: 949d1060f598ee86 Tray: 2 N1
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 1e32623003852c72 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 1e32623003852c72 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Unique ID: ddfa129520985b08 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Unique ID: ddfa129520985b08 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: f8bd7202d9f6266d core (x=0,y=8)
+	Retrain count: ce22
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: f8bd7202d9f6266d core (x=0,y=9)
+	Retrain count: 96a
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 24 PCIe: 5 Unique ID: 9f0819f7b038ce4f Tray: 2 N8
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 0 Tray: 1 N8 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 25 PCIe: 2 Unique ID: a0ac40d1da2e9e1d Tray: 2 N6
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 22 Tray: 2 N5 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 27 Tray: 4 N6 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: bc48eb85986cf88c core (x=0,y=8)
+	Retrain count: c992
+ eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: bc48eb85986cf88c core (x=0,y=9)
+	Retrain count: 2caa
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 26 PCIe: 31 Unique ID: bcba187814b1a02e Tray: 2 N3
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: 490b2adf7af41ccc core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: 490b2adf7af41ccc core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 15 Tray: 2 N2 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 30 Tray: 2 N4 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 11 Tray: 2 N7 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 27 PCIe: 0 Unique ID: ca1385fc6bc1ec54 Tray: 4 N6
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Chip 31 Tray: 4 N2 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 8 Tray: 4 N5 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=2)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 1 Tray: 4 N7 core (x=0,y=3)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=6)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 25 Tray: 2 N6 core (x=0,y=7)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+Chip: 28 PCIe: 26 Unique ID: ce9f24d26b6019fe Tray: 4 N4
+ eth channel 0 core (x=0,y=0) link UP (unknown), connected to Unique ID: a9956b440a0d7a6a core (x=0,y=0)
+	Retrain count: 0
+ eth channel 1 core (x=0,y=1) link UP (unknown), connected to Unique ID: a9956b440a0d7a6a core (x=0,y=1)
+	Retrain count: 0
+ eth channel 2 core (x=0,y=2) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 6 Tray: 4 N3 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 4 core (x=0,y=4) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=4)
+	Retrain count: 0
+ eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 5 Tray: 3 N4 core (x=0,y=5)
+	Retrain count: 0
+ eth channel 6 core (x=0,y=6) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=0)
+	Retrain count: 0
+ eth channel 7 core (x=0,y=7) link UP (unknown), connected to Chip 10 Tray: 4 N8 core (x=0,y=1)
+	Retrain count: 0
+ eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown)
+ eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown)
+ eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown)
+ eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown)
+
+ (test_system_health.cpp:354)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 31 PCIe: 10 Unique ID: f8867960ba94a068 Tray: 4 N2 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 86d9779a3847b9e0 core (x=0,y=8)
+	Retrain count: 223c (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 31 PCIe: 10 Unique ID: f8867960ba94a068 Tray: 4 N2 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 86d9779a3847b9e0 core (x=0,y=9)
+	Retrain count: 7fe (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 31 PCIe: 10 Unique ID: f8867960ba94a068 Tray: 4 N2 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 31 PCIe: 10 Unique ID: f8867960ba94a068 Tray: 4 N2 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 30 PCIe: 17 Unique ID: e3d1f0049fe40ad1 Tray: 2 N4 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 30 PCIe: 17 Unique ID: e3d1f0049fe40ad1 Tray: 2 N4 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 30 PCIe: 17 Unique ID: e3d1f0049fe40ad1 Tray: 2 N4 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 30 PCIe: 17 Unique ID: e3d1f0049fe40ad1 Tray: 2 N4 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 29 PCIe: 27 Unique ID: df1d72cdf49e3571 Tray: 3 N1 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 29 PCIe: 27 Unique ID: df1d72cdf49e3571 Tray: 3 N1 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 29 PCIe: 27 Unique ID: df1d72cdf49e3571 Tray: 3 N1 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 29 PCIe: 27 Unique ID: df1d72cdf49e3571 Tray: 3 N1 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 12 PCIe: 1 Unique ID: 4b4f5d22707eafaf Tray: 1 N6 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 12 PCIe: 1 Unique ID: 4b4f5d22707eafaf Tray: 1 N6 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 12 PCIe: 1 Unique ID: 4b4f5d22707eafaf Tray: 1 N6 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 12 PCIe: 1 Unique ID: 4b4f5d22707eafaf Tray: 1 N6 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 11 PCIe: 28 Unique ID: 44fc8807611a9912 Tray: 2 N7 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 11 PCIe: 28 Unique ID: 44fc8807611a9912 Tray: 2 N7 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 11 PCIe: 28 Unique ID: 44fc8807611a9912 Tray: 2 N7 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 11 PCIe: 28 Unique ID: 44fc8807611a9912 Tray: 2 N7 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 10 PCIe: 29 Unique ID: 370122a92bfdae76 Tray: 4 N8 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 10 PCIe: 29 Unique ID: 370122a92bfdae76 Tray: 4 N8 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 10 PCIe: 29 Unique ID: 370122a92bfdae76 Tray: 4 N8 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 10 PCIe: 29 Unique ID: 370122a92bfdae76 Tray: 4 N8 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 9 PCIe: 16 Unique ID: 33d8b4fb8a72df2b Tray: 1 N3 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 9 PCIe: 16 Unique ID: 33d8b4fb8a72df2b Tray: 1 N3 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 9 PCIe: 16 Unique ID: 33d8b4fb8a72df2b Tray: 1 N3 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 9 PCIe: 16 Unique ID: 33d8b4fb8a72df2b Tray: 1 N3 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 8 PCIe: 15 Unique ID: 32f21fd47d4e4872 Tray: 4 N5 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 8 PCIe: 15 Unique ID: 32f21fd47d4e4872 Tray: 4 N5 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 8 PCIe: 15 Unique ID: 32f21fd47d4e4872 Tray: 4 N5 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 8 PCIe: 15 Unique ID: 32f21fd47d4e4872 Tray: 4 N5 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 7 PCIe: 7 Unique ID: 3033746db0f49bcb Tray: 1 N5 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 7 PCIe: 7 Unique ID: 3033746db0f49bcb Tray: 1 N5 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 7 PCIe: 7 Unique ID: 3033746db0f49bcb Tray: 1 N5 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 7 PCIe: 7 Unique ID: 3033746db0f49bcb Tray: 1 N5 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 6 PCIe: 13 Unique ID: 2bba5655b9c7abae Tray: 4 N3 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 6 PCIe: 13 Unique ID: 2bba5655b9c7abae Tray: 4 N3 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 6 PCIe: 13 Unique ID: 2bba5655b9c7abae Tray: 4 N3 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 6 PCIe: 13 Unique ID: 2bba5655b9c7abae Tray: 4 N3 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 5 PCIe: 21 Unique ID: 225ce9805af85053 Tray: 3 N4 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 5 PCIe: 21 Unique ID: 225ce9805af85053 Tray: 3 N4 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 5 PCIe: 21 Unique ID: 225ce9805af85053 Tray: 3 N4 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 5 PCIe: 21 Unique ID: 225ce9805af85053 Tray: 3 N4 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 4 PCIe: 4 Unique ID: 1aa6a1f48a623d44 Tray: 3 N2 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 4 PCIe: 4 Unique ID: 1aa6a1f48a623d44 Tray: 3 N2 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 4 PCIe: 4 Unique ID: 1aa6a1f48a623d44 Tray: 3 N2 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 4 PCIe: 4 Unique ID: 1aa6a1f48a623d44 Tray: 3 N2 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 3 PCIe: 18 Unique ID: 18786f99f3951e23 Tray: 3 N3 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 3 PCIe: 18 Unique ID: 18786f99f3951e23 Tray: 3 N3 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 3 PCIe: 18 Unique ID: 18786f99f3951e23 Tray: 3 N3 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 3 PCIe: 18 Unique ID: 18786f99f3951e23 Tray: 3 N3 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 2 PCIe: 20 Unique ID: ca00a09eb052241 Tray: 3 N8 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 2 PCIe: 20 Unique ID: ca00a09eb052241 Tray: 3 N8 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 2 PCIe: 20 Unique ID: ca00a09eb052241 Tray: 3 N8 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 2 PCIe: 20 Unique ID: ca00a09eb052241 Tray: 3 N8 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 1 PCIe: 30 Unique ID: a0d79649f610a09 Tray: 4 N7 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 1 PCIe: 30 Unique ID: a0d79649f610a09 Tray: 4 N7 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 1 PCIe: 30 Unique ID: a0d79649f610a09 Tray: 4 N7 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 1 PCIe: 30 Unique ID: a0d79649f610a09 Tray: 4 N7 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 0 PCIe: 9 Unique ID: 24919c44da38dad Tray: 1 N8 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 0 PCIe: 9 Unique ID: 24919c44da38dad Tray: 1 N8 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 0 PCIe: 9 Unique ID: 24919c44da38dad Tray: 1 N8 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 0 PCIe: 9 Unique ID: 24919c44da38dad Tray: 1 N8 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 13 PCIe: 6 Unique ID: 4c75ac76326a35e1 Tray: 1 N2 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 13 PCIe: 6 Unique ID: 4c75ac76326a35e1 Tray: 1 N2 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 13 PCIe: 6 Unique ID: 4c75ac76326a35e1 Tray: 1 N2 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 13 PCIe: 6 Unique ID: 4c75ac76326a35e1 Tray: 1 N2 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 14 PCIe: 14 Unique ID: 4d13cfd69d5db5be Tray: 4 N1 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 8b893298fe608fd7 core (x=0,y=8)
+	Retrain count: 97e (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 14 PCIe: 14 Unique ID: 4d13cfd69d5db5be Tray: 4 N1 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 8b893298fe608fd7 core (x=0,y=9)
+	Retrain count: ca94 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 14 PCIe: 14 Unique ID: 4d13cfd69d5db5be Tray: 4 N1 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 14 PCIe: 14 Unique ID: 4d13cfd69d5db5be Tray: 4 N1 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 15 PCIe: 11 Unique ID: 4ed629094db68780 Tray: 2 N2 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 17b7f869e992efaf core (x=0,y=8)
+	Retrain count: e26 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 15 PCIe: 11 Unique ID: 4ed629094db68780 Tray: 2 N2 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 17b7f869e992efaf core (x=0,y=9)
+	Retrain count: eac (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 15 PCIe: 11 Unique ID: 4ed629094db68780 Tray: 2 N2 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 15 PCIe: 11 Unique ID: 4ed629094db68780 Tray: 2 N2 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 16 PCIe: 23 Unique ID: 519dafa0832417d9 Tray: 1 N7 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 16 PCIe: 23 Unique ID: 519dafa0832417d9 Tray: 1 N7 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 16 PCIe: 23 Unique ID: 519dafa0832417d9 Tray: 1 N7 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 16 PCIe: 23 Unique ID: 519dafa0832417d9 Tray: 1 N7 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 17 PCIe: 22 Unique ID: 51ad33fdf872b5da Tray: 1 N4 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 17 PCIe: 22 Unique ID: 51ad33fdf872b5da Tray: 1 N4 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 17 PCIe: 22 Unique ID: 51ad33fdf872b5da Tray: 1 N4 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 17 PCIe: 22 Unique ID: 51ad33fdf872b5da Tray: 1 N4 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6 eth channel 5 core (x=0,y=5) link UP (unknown), connected to Chip 21 Tray: 3 N7 core (x=0,y=3)
+	Retrain count: 9 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 18 PCIe: 3 Unique ID: 5c8a6ed5e16dbc23 Tray: 3 N6 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 19 PCIe: 25 Unique ID: 62c7213218300c7e Tray: 3 N5 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 19 PCIe: 25 Unique ID: 62c7213218300c7e Tray: 3 N5 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 19 PCIe: 25 Unique ID: 62c7213218300c7e Tray: 3 N5 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 19 PCIe: 25 Unique ID: 62c7213218300c7e Tray: 3 N5 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 20 PCIe: 12 Unique ID: 63383ce5fcc4b79b Tray: 1 N1 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 20 PCIe: 12 Unique ID: 63383ce5fcc4b79b Tray: 1 N1 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 20 PCIe: 12 Unique ID: 63383ce5fcc4b79b Tray: 1 N1 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 20 PCIe: 12 Unique ID: 63383ce5fcc4b79b Tray: 1 N1 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7 eth channel 3 core (x=0,y=3) link UP (unknown), connected to Chip 18 Tray: 3 N6 core (x=0,y=5)
+	Retrain count: 5 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 21 PCIe: 24 Unique ID: 64b1203b2bfecb39 Tray: 3 N7 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 22 PCIe: 19 Unique ID: 67e059d408060bad Tray: 2 N5 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: 463b05fc8aff561c core (x=0,y=8)
+	Retrain count: d6e (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 22 PCIe: 19 Unique ID: 67e059d408060bad Tray: 2 N5 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: 463b05fc8aff561c core (x=0,y=9)
+	Retrain count: b66 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 22 PCIe: 19 Unique ID: 67e059d408060bad Tray: 2 N5 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 22 PCIe: 19 Unique ID: 67e059d408060bad Tray: 2 N5 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 23 PCIe: 8 Unique ID: 949d1060f598ee86 Tray: 2 N1 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: f8bd7202d9f6266d core (x=0,y=8)
+	Retrain count: ce22 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 23 PCIe: 8 Unique ID: 949d1060f598ee86 Tray: 2 N1 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: f8bd7202d9f6266d core (x=0,y=9)
+	Retrain count: 96a (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 23 PCIe: 8 Unique ID: 949d1060f598ee86 Tray: 2 N1 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 23 PCIe: 8 Unique ID: 949d1060f598ee86 Tray: 2 N1 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 24 PCIe: 5 Unique ID: 9f0819f7b038ce4f Tray: 2 N8 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 24 PCIe: 5 Unique ID: 9f0819f7b038ce4f Tray: 2 N8 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 24 PCIe: 5 Unique ID: 9f0819f7b038ce4f Tray: 2 N8 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 24 PCIe: 5 Unique ID: 9f0819f7b038ce4f Tray: 2 N8 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 25 PCIe: 2 Unique ID: a0ac40d1da2e9e1d Tray: 2 N6 eth channel 8 core (x=0,y=8) link UP (unknown), connected to Unique ID: bc48eb85986cf88c core (x=0,y=8)
+	Retrain count: c992 (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 25 PCIe: 2 Unique ID: a0ac40d1da2e9e1d Tray: 2 N6 eth channel 9 core (x=0,y=9) link UP (unknown), connected to Unique ID: bc48eb85986cf88c core (x=0,y=9)
+	Retrain count: 2caa (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 25 PCIe: 2 Unique ID: a0ac40d1da2e9e1d Tray: 2 N6 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 25 PCIe: 2 Unique ID: a0ac40d1da2e9e1d Tray: 2 N6 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 26 PCIe: 31 Unique ID: bcba187814b1a02e Tray: 2 N3 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 26 PCIe: 31 Unique ID: bcba187814b1a02e Tray: 2 N3 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 26 PCIe: 31 Unique ID: bcba187814b1a02e Tray: 2 N3 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 26 PCIe: 31 Unique ID: bcba187814b1a02e Tray: 2 N3 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 27 PCIe: 0 Unique ID: ca1385fc6bc1ec54 Tray: 4 N6 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 27 PCIe: 0 Unique ID: ca1385fc6bc1ec54 Tray: 4 N6 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 27 PCIe: 0 Unique ID: ca1385fc6bc1ec54 Tray: 4 N6 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 27 PCIe: 0 Unique ID: ca1385fc6bc1ec54 Tray: 4 N6 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 28 PCIe: 26 Unique ID: ce9f24d26b6019fe Tray: 4 N4 eth channel 8 core (x=0,y=8) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 28 PCIe: 26 Unique ID: ce9f24d26b6019fe Tray: 4 N4 eth channel 9 core (x=0,y=9) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 28 PCIe: 26 Unique ID: ce9f24d26b6019fe Tray: 4 N4 eth channel 10 core (x=0,y=10) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+2026-01-26 21:29:12.926 | warning  |            Test | Chip: 28 PCIe: 26 Unique ID: ce9f24d26b6019fe Tray: 4 N4 eth channel 11 core (x=0,y=11) link DOWN/unconnected (unknown) (test_system_health.cpp:358)
+[       OK ] Cluster.ReportSystemHealth (4 ms)
+[ RUN      ] Cluster.TestMeshFullConnectivity
+[       OK ] Cluster.TestMeshFullConnectivity (0 ms)
+[----------] 3 tests from Cluster (6709 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (6709 ms total)
+[  PASSED  ] 3 tests.
+2026-01-26 21:29:12.927 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:472)
+2026-01-26 21:29:12.927 | info     |             UMD | Closing devices in cluster (cluster.cpp:976)
