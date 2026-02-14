@@ -667,7 +667,7 @@ auto coalesceFabricEvents(
                 // Advance past all fabric event markers (fabric_event, fabric_routing_fields,
                 // local_noc_write_event)
                 i += 3;
-                coalesced_events_by_op[program_execution_uid].emplace_back(std::move(fabric_event_markers));
+                coalesced_events_by_op[program_execution_uid].push_back(fabric_event_markers);
             } else {
                 // If not a fabric event group, simply copy existing event as-is
                 coalesced_events_by_op[program_execution_uid].push_back(markers[i]);
