@@ -44,19 +44,18 @@ constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
-constexpr auto kPrevGradQueryHolderCbIndex = tt::CBIndex::c_8;
-constexpr auto kCurGradQueryHolderCbIndex = tt::CBIndex::c_9;
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_15;
+constexpr auto kGradQueryAccumCbIndex = tt::CBIndex::c_8;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_9;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_10;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_11;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_12;
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_13;
 
 constexpr uint32_t kSingleTileBuffer = 1U;
 constexpr uint32_t kNumOfIntermCBTiles = 2U;
 
-const std::string kFP32DestAccEnKey = "FP32_DEST_ACC_EN";
+const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
+const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 
 }  // namespace
 
@@ -135,6 +134,10 @@ void assign_per_core_runtime_args(
                 num_rows_written               // starting row for this core
             });
 
+        // Compute kernel runtime args - needed for causal mask to know global position
+        auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
+        SetRuntimeArgs(program, compute_kernel, core, {num_rows_written});
+
         num_rows_written += num_rows_per_core;
     }
 }
@@ -192,33 +195,20 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
 
+    const uint32_t block_size = get_block_size(qWt, 4U);
+
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    [[maybe_unused]] auto cb_grad_output = create_circular_buffer(  // CBIndex::c_0
-        program,
-        all_cores,
-        kGradOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_grad_output = create_circular_buffer( // CBIndex::c_0
+        program, all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
-        program,
-        all_cores,
-        kAttnOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_attn_output = create_circular_buffer( // CBIndex::c_1
+        program, all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer(  // CBIndex::c_2
-        program,
-        all_cores,
-        kQueryCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * qWt);
+    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
@@ -227,9 +217,18 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         create_circular_buffer(
             program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
 
-    [[maybe_unused]] auto cb_attn_mask =  // CBIndex::c_5
-        create_circular_buffer(
-            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer);
+    // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
+    // Not needed for AttentionMaskType::None
+    if (args.mask_type != AttentionMaskType::None) {
+        [[maybe_unused]] auto cb_attn_mask =  // CBIndex::c_5
+            create_circular_buffer(
+                program,
+                all_cores,
+                kAttnMaskCbIndex,
+                data_format,
+                bfloat16_single_tile_size_bytes,
+                2 * kSingleTileBuffer);
+    }
 
     [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
         create_circular_buffer(
@@ -249,15 +248,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_prev_grad_query =  // CBIndex::c_9
+    [[maybe_unused]] auto cb_grad_query_accum =  // CBIndex::c_8
         create_circular_buffer(
-            program, all_cores, kPrevGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+            program, all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_cur_grad_query =  // CBIndex::c_10
-        create_circular_buffer(
-            program, all_cores, kCurGradQueryHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
-
-    [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_13
+    [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_9
         create_circular_buffer(
             program,
             all_cores,
@@ -266,7 +261,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_14
+    [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_10
         create_circular_buffer(
             program,
             all_cores,
@@ -275,7 +270,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
+    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_11
         create_circular_buffer(
             program,
             all_cores,
@@ -284,11 +279,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_transpose_wh =  // CBIndex::c_16
-        create_circular_buffer(
-            program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
-
-    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
+    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_12
         create_circular_buffer(
             program,
             all_cores,
@@ -297,7 +288,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_18
+    [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_13
         create_circular_buffer(
             program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
@@ -316,12 +307,22 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto* grad_query_buffer = output.buffer();  // [grad_Q]
 
     // Configure defines
-    std::map<std::string, std::string> defines;
-    defines["REDUCE_OP"] = "PoolType::SUM";
-    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> compute_defines;
 
-    if (args.fp32_dest_acc_en) {
-        defines[kFP32DestAccEnKey] = "1";
+    // Common defines for all kernels
+    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+
+    // Mask type defines
+    if (args.mask_type == AttentionMaskType::Causal) {
+        reader_defines[kCausalMaskDefKey] = "1";
+        writer_defines[kCausalMaskDefKey] = "1";
+        compute_defines[kCausalMaskDefKey] = "1";
+    } else if (args.mask_type == AttentionMaskType::Arbitrary) {
+        reader_defines[kUseAttnMaskDefKey] = "1";
+        compute_defines[kUseAttnMaskDefKey] = "1";
     }
 
     SDPABackwardQKernels kernels;
@@ -341,7 +342,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     tt::tt_metal::TensorAccessorArgs(attn_mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, defines, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
@@ -349,7 +350,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
 
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels
@@ -358,8 +359,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
     auto create_unpack_to_dest_mode = []() {
         std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradQueryHolderCbIndex
-        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradQueryHolderCbIndex
+        mode[tt::CBIndex::c_8] = UnpackToDestMode::UnpackToDestFp32;  // kGradQueryAccumCbIndex
         return mode;
     };
 
@@ -370,7 +370,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,                         // 2: num_seq_len / TILE_H
         scaler,                     // 3: sqrt(Et) - sdpa scaler factor
         minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-        custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
+        custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
+        block_size                  // 6: block size
     };
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,
@@ -378,11 +379,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
-            .defines = defines});
+            .defines = compute_defines});
 
     // Group 2 compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -392,7 +393,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             St,                         // 2: num_seq_len / TILE_H
             scaler,                     // 3: sqrt(Et) - sdpa scaler factor
             minus_one,                  // 4: used to transform mask from 1/0 to 0/-1
-            custom_inf                  // 5: used to transform mask from 0/-1 to 0/-inf
+            custom_inf,                 // 5: used to transform mask from 0/-1 to 0/-inf
+            block_size                  // 6: block size
         };
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
             program,
@@ -400,11 +402,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,
-                .defines = defines});
+                .defines = compute_defines});
     }
 
     // -------------------------------------------------------------------------

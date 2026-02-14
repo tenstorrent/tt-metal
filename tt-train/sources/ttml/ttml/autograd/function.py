@@ -59,7 +59,11 @@ class FunctionContext:
 def _is_ttnn_tensor(obj: Any) -> bool:
     """Check if object is a ttnn tensor (tt::tt_metal::Tensor)."""
     # ttnn tensors have these attributes but not get_requires_grad (which ttml tensors have)
-    return hasattr(obj, "shape") and hasattr(obj, "dtype") and not hasattr(obj, "get_requires_grad")
+    return (
+        hasattr(obj, "shape")
+        and hasattr(obj, "dtype")
+        and not hasattr(obj, "get_requires_grad")
+    )
 
 
 def _wrap_output(output: Any) -> Any:
@@ -218,7 +222,9 @@ class Function:
         # Check if outputs already have nodes from autograd ops
         # If so, the graph is already built and we don't need custom backward
         outputs_have_nodes = all(
-            out is not None and out.get_node() is not None for out in outputs_tuple if hasattr(out, "get_node")
+            out is not None and out.get_node() is not None
+            for out in outputs_tuple
+            if hasattr(out, "get_node")
         )
         if outputs_have_nodes:
             return outputs
@@ -276,7 +282,9 @@ class Function:
                             else:
                                 tensor.add_grad(grad)
                 except Exception as e:
-                    raise RuntimeError(f"Error in backward of {bwd_cls.__name__}: {e}") from e
+                    raise RuntimeError(
+                        f"Error in backward of {bwd_cls.__name__}: {e}"
+                    ) from e
 
             return backward_closure
 
@@ -298,7 +306,9 @@ class Function:
                 # Other outputs get dummy nodes that depend on first output
                 dummy_links = get_links([outputs_tuple[0]])
                 for output in outputs_tuple[1:]:
-                    dummy_node = auto_context.add_backward_node(lambda: None, dummy_links)
+                    dummy_node = auto_context.add_backward_node(
+                        lambda: None, dummy_links
+                    )
                     output.set_node(dummy_node)
 
         return outputs

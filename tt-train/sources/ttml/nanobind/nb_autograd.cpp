@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,6 @@ namespace ttml::nanobind::autograd {
 using namespace ttml::autograd;
 
 void py_module_types(nb::module_& m) {
-    ttml::nanobind::util::export_enum<ttnn::DataType>(m);
     ttml::nanobind::util::export_enum<GradMode>(m);
     ttml::nanobind::util::export_enum<PreferredPrecision>(m);
 
@@ -64,6 +63,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const Tensor&>());
         py_tensor.def(nb::init<Tensor&&>());
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+        py_tensor.def_prop_ro(
+            "tensor",
+            [](const TensorPtr& self) -> TensorPtr { return self; },
+            "Returns self (enables uniform access with Parameter)");
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
@@ -83,6 +86,16 @@ void py_module(nb::module_& m) {
             "Get underlying tensor value");
         py_tensor.def("get_grad", nb::overload_cast<>(&Tensor::get_grad, nb::const_), "Get gradient");
         py_tensor.def("get_grad_rw", nb::overload_cast<>(&Tensor::get_grad), "Get/set gradient");
+        // Return gradient wrapped as TensorPtr for Python use (e.g., gradient clipping)
+        py_tensor.def(
+            "get_grad_tensor",
+            [](const Tensor& self) -> TensorPtr {
+                if (!self.is_grad_initialized()) {
+                    return nullptr;
+                }
+                return create_tensor(self.get_grad());
+            },
+            "Get gradient as a Tensor object (for Python operations like gradient clipping)");
         py_tensor.def("get_requires_grad", &Tensor::get_requires_grad, "Get gradient requirement flag");
         py_tensor.def("get_node", &Tensor::get_node, "Get node");
         py_tensor.def("get_shape", &Tensor::get_shape, "Get shape");
@@ -189,7 +202,6 @@ void py_module(nb::module_& m) {
     {
         auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
         py_autocast_tensor.def(nb::init<>());
-        // py_autocast_tensor.def(nb::init<tt::tt_metal::Tensor&>());
         py_autocast_tensor.def(nb::init<const AutocastTensor&>());
         py_autocast_tensor.def(nb::init<AutocastTensor&&>());
         py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor, nb::arg("tensor"), "Set underlying Tensor");

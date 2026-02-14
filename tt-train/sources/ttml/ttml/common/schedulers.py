@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Learning rate and optimizer parameter schedulers."""
-
 from ttml.common.config import SchedulerConfig
 from typing import Optional
 
@@ -35,7 +34,11 @@ class SpeedrunScheduler:
             return peak + (min_lr - peak) * frac
 
     def beta1_at(self, step: int) -> Optional[float]:
-        if self.cfg.beta1_start is None or self.cfg.beta1_end is None or self.cfg.beta1_warmup_steps <= 0:
+        if (
+            self.cfg.beta1_start is None
+            or self.cfg.beta1_end is None
+            or self.cfg.beta1_warmup_steps <= 0
+        ):
             return None
         s = min(step, self.cfg.beta1_warmup_steps)
         t = s / float(self.cfg.beta1_warmup_steps)

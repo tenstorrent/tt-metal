@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,8 @@ using ttml's C++ operations for computation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Dict
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Literal
 
 import numpy as np
 import ml_dtypes
@@ -20,7 +20,9 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, ModuleList, RunMode, LinearLayer
 
+from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .embedding import Embedding
+from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
 from .gpt_block import GPTBlock
 
 
@@ -43,84 +45,51 @@ def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
+                ml_dtypes.bfloat16
+            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                weight_np, layout=ttnn.Layout.TILE
+            )
             tensor.assign(new_tensor)
         elif "bias" in name:
             # Re-initialize biases with 0
             bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                bias_np, layout=ttnn.Layout.TILE
+            )
             tensor.assign(new_tensor)
 
 
 @dataclass
-class NanoGPTConfig:
-    """Configuration for NanoGPT model.
+class NanoGPTExperimentalConfig:
+    use_composite_layernorm: bool = False  # Use composite vs fused layernorm
 
-    Note: The following C++ features are not yet implemented in Python:
-    - TODO: runner_type (Default/MemoryEfficient) - for memory efficient block execution
-    - TODO: weight_tying (Enabled/Disabled) - ties tok_emb and fc weights
-    - TODO: positional_embedding_type (Trainable/Fixed) - only Trainable is implemented
-    - TODO: experimental.use_composite_layernorm - use composite vs fused layernorm
-    """
+
+@dataclass
+class NanoGPTConfig:
+    """Configuration for NanoGPT model."""
 
     vocab_size: int = 50304  # GPT-2 vocab size
     block_size: int = 1024  # Maximum sequence length
     n_embd: int = 768  # Embedding dimension
     n_layer: int = 12  # Number of transformer blocks
     n_head: int = 12  # Number of attention heads
-    dropout: float = 0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
+    dropout: float = (
+        0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
+    )
     bias: bool = True  # Use bias in linear layers and layer norm
-
-
-class TrainablePositionalEmbedding(AbstractModuleBase):
-    """Trainable positional embedding matching C++ TrainablePositionalEmbedding."""
-
-    def __init__(self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0) -> None:
-        """Initialize trainable positional embedding.
-
-        Args:
-            sequence_length: Maximum sequence length
-            embedding_dim: Dimension of embeddings
-            dropout_prob: Dropout probability
-        """
-        super().__init__()
-
-        self.sequence_length = sequence_length
-        self.dropout_prob = dropout_prob
-
-        weight_shape = (1, 1, sequence_length, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(ml_dtypes.bfloat16)
-        weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
-        self.weight = Parameter(weight_tensor)
-
-    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Forward pass: add positional embeddings and apply dropout.
-
-        Args:
-            x: Input tensor (token embeddings), shape [batch, 1, seq_len, embedding_dim]
-
-        Returns:
-            Output tensor with positional embeddings added
-        """
-        # Simply add the positional weight tensor (matching C++ ops::add(input, m_weight))
-        if len(x.shape()) != 4:
-            raise ValueError(
-                f"TrainablePositionalEmbedding: input tensor must have 4 dimensions. Got rank {len(x.shape())}"
-            )
-        if x.shape()[2] != self.sequence_length:
-            raise ValueError(
-                f"TrainablePositionalEmbedding: input tensor sequence length ({x.shape()[2]}) does not match the expected value ({self.sequence_length})"
-            )
-        out = ttml.ops.binary.add(x, self.weight.tensor)
-        # Note: It's better to just use Dropout module here
-        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
-        return out
-
-    def __call__(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        """Call the forward method."""
-        return self.forward(x)
+    runner_type: RunnerType = RunnerType.Default  # For memory efficient block execution
+    weight_tying: WeightTyingType = (
+        WeightTyingType.Disabled
+    )  # Ties tok_emb and fc weights
+    # Selects positional embedding type:
+    # - trainable positional embedding (trainable)
+    # - sinusoidal positional embedding (fixed)
+    positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
+    experimental: NanoGPTExperimentalConfig = field(
+        default_factory=NanoGPTExperimentalConfig
+    )
 
 
 class NanoGPT(AbstractModuleBase):
@@ -142,28 +111,57 @@ class NanoGPT(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Use get_run_mode() to check, train()/eval() to set
 
-        # TODO: Implement weight_tying - when enabled, tok_emb shares weights with fc
-        # C++ creates fc first, then passes fc->get_weight() to Embedding constructor
-        self.fc = LinearLayer(config.n_embd, config.vocab_size, False)  # False - no bias
+        self.fc = LinearLayer(
+            config.n_embd, config.vocab_size, False
+        )  # False - no bias
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(vocab_size_divisible_by_32, config.n_embd)
-        self.pos_emb = TrainablePositionalEmbedding(config.block_size, config.n_embd, config.dropout)
+
+        if config.weight_tying == ttml.models.WeightTyingType.Enabled:
+            self.tok_emb.weight = self.fc.get_weight()
+
+        if config.positional_embedding_type == "trainable":
+            self.pos_emb = TrainablePositionalEmbedding(
+                config.block_size, config.n_embd, config.dropout
+            )
+        elif config.positional_embedding_type == "fixed":
+            self.pos_emb = PositionalEmbedding(
+                config.block_size, config.n_embd, config.dropout
+            )
+        else:
+            raise ValueError(
+                f"Unsupported positional_embedding_type="
+                f"{config.positional_embedding_type!r}; expected 'trainable' or 'fixed'."
+            )
 
         # Transformer blocks (ModuleList auto-registers all blocks)
         self.blocks = ModuleList(
-            [GPTBlock(config.n_embd, config.n_head, config.dropout, config.bias) for _ in range(config.n_layer)]
+            [
+                GPTBlock(
+                    config.n_embd,
+                    config.n_head,
+                    config.dropout,
+                    config.bias,
+                    config.experimental.use_composite_layernorm,
+                )
+                for _ in range(config.n_layer)
+            ]
         )
 
         # Final layer norm (use ml_dtypes.bfloat16)
         # Layer norm parameters must be in TILE layout
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)
-        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(gamma_f_np, layout=ttnn.Layout.TILE)
+        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(
+            gamma_f_np, layout=ttnn.Layout.TILE
+        )
         self.ln_f_gamma = Parameter(gamma_f_tensor)
 
         if config.bias:
             beta_f_np = np.zeros(ln_f_shape, dtype=ml_dtypes.bfloat16)
-            beta_f_tensor = ttml.autograd.Tensor.from_numpy(beta_f_np, layout=ttnn.Layout.TILE)
+            beta_f_tensor = ttml.autograd.Tensor.from_numpy(
+                beta_f_np, layout=ttnn.Layout.TILE
+            )
             self.ln_f_beta = Parameter(beta_f_tensor)
         else:
             self.ln_f_beta = None
@@ -175,7 +173,9 @@ class NanoGPT(AbstractModuleBase):
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
-    def forward(self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
+    def forward(
+        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
+    ) -> ttml.autograd.Tensor:
         """Forward pass of NanoGPT.
 
         Args:
@@ -189,12 +189,18 @@ class NanoGPT(AbstractModuleBase):
         tok_emb_out = self.tok_emb(idx)
         out = self.pos_emb(tok_emb_out)
 
-        # TODO: Implement runner_type for memory efficient execution
-        # C++ supports RunnerType::MemoryEfficient which uses memory_efficient_runner()
         for block in self.blocks:
-            out = block(out, mask=mask)
+            if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
+                out = memory_efficient_runner(block, out, mask)
+            else:
+                out = block(out, mask)
 
-        out = ttml.ops.layernorm.layernorm(
+        if self.config.experimental.use_composite_layernorm:
+            layernorm_op = ttml.ops.layernorm.composite_layernorm
+        else:
+            layernorm_op = ttml.ops.layernorm.layernorm
+
+        out = layernorm_op(
             out,
             self.ln_f_gamma.tensor,
             self.ln_f_beta.tensor if self.ln_f_beta else None,
@@ -220,8 +226,11 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
 
 __all__ = [
     "Embedding",
+    "PositionalEmbedding",
+    "TrainablePositionalEmbedding",
     "GPTBlock",
     "NanoGPT",
+    "NanoGPTExperimentalConfig",
     "NanoGPTConfig",
     "create_nanogpt",
     "initialize_weights_gpt2",

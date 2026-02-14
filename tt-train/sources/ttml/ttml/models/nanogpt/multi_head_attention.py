@@ -21,7 +21,9 @@ class MultiHeadAttention(AbstractModuleBase):
     - Proper parameter registration for optimizer integration
     """
 
-    def __init__(self, embedding_dim: int, num_heads: int, dropout: float = 0.0) -> None:
+    def __init__(
+        self, embedding_dim: int, num_heads: int, dropout: float = 0.0
+    ) -> None:
         """Initialize multi-head attention layer.
 
         Args:
@@ -31,7 +33,9 @@ class MultiHeadAttention(AbstractModuleBase):
         """
         super().__init__()
 
-        assert embedding_dim % num_heads == 0, "embedding_dim must be divisible by num_heads"
+        assert (
+            embedding_dim % num_heads == 0
+        ), "embedding_dim must be divisible by num_heads"
 
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
@@ -45,7 +49,9 @@ class MultiHeadAttention(AbstractModuleBase):
 
     # train() and eval() are inherited from AbstractModuleBase
 
-    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
+    def forward(
+        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
+    ) -> ttml.autograd.Tensor:
         """Forward pass of multi-head attention.
 
         Args:
@@ -60,10 +66,14 @@ class MultiHeadAttention(AbstractModuleBase):
 
         # Split into heads using ttml's heads_creation
         # Output: query, key, value each have shape (B, H, S, head_dim)
-        query, key, value = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads)
+        query, key, value = ttml.ops.multi_head_utils.heads_creation(
+            qkv, self.num_heads
+        )
 
         # Scaled dot product attention
-        attn_out = ttml.ops.attention.scaled_dot_product_attention(query, key, value, mask)
+        attn_out = ttml.ops.attention.scaled_dot_product_attention(
+            query, key, value, mask
+        )
 
         # Fuse heads back
         attention_out = ttml.ops.multi_head_utils.heads_fusion(attn_out)

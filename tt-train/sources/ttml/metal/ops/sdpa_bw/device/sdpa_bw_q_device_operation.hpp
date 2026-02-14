@@ -19,7 +19,6 @@ struct SDPABackwardQDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -40,10 +39,10 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
-    const std::optional<ttnn::Tensor>& mask,
+    ttml::metal::AttentionMaskType mask_type,
+    const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
-    const bool fp32_dest_acc_en = true,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
 
 }  // namespace ttnn::prim

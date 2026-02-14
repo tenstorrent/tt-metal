@@ -33,6 +33,7 @@
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
+#include "utils/memory_utils.hpp"
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
@@ -54,20 +55,17 @@ ttml::serialization::NamedParameters get_model_parameters(Model &model) {
 }
 
 uint64_t get_number_of_parameters(Model &model, bool tp) {
-    auto *device = &ttml::autograd::ctx().get_device();
-    auto num_devices = static_cast<uint32_t>(device->num_devices());
-
     auto contains = [](const std::string &str, const std::string &substr) {
         return str.find(substr) != std::string::npos;
     };
-
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
         auto tensor = tensor_ptr->get_value();
         auto params_in_tensor = tensor.logical_volume();
-        if (tp && (contains(name, "fc") || contains(name, "linear"))) {
-            num_params += params_in_tensor * num_devices;
+        if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
+            auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
+            num_params += params_in_tensor * tp_size;
         } else {
             num_params += params_in_tensor;
         }
@@ -190,10 +188,6 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
 
-    if (config.enable_ddp && config.enable_tp) {
-        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
-    }
-
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp;
     if (multidevice && !mesh_shape_node) {
@@ -201,8 +195,8 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     }
     if (mesh_shape_node) {
         assert(mesh_shape_node.size() == 2);
-        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
-        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
+        const std::vector<uint32_t> mesh_shape = mesh_shape_node.as<std::vector<uint32_t>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape);
     }
 
     auto device_ids_node = device_node["device_ids"];
@@ -321,6 +315,10 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
+    // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
+    // of model that doesn't fit in the memory of the device.
+    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
@@ -430,6 +428,10 @@ int main(int argc, char **argv) {
     initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
 
+    // Configure parallelization context from device config
+    ttml::autograd::ctx().initialize_parallelism_context(
+        {.enable_ddp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
+
     struct CachedHostData {
         std::vector<uint32_t> data;
         std::vector<uint32_t> targets;
@@ -447,7 +449,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -467,8 +469,12 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (device_config.enable_ddp) {
-                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+                const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+
+                if (pctx.is_ddp_enabled()) {
+                    // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -513,7 +519,10 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(arg.vocab_size, (device_config.enable_tp ? num_devices : 1U) * 32U);
+                const auto coef =
+                    (device_config.enable_tp ? ttml::autograd::ctx().get_parallelism_context().get_tp_size() : 1U) *
+                    32U;
+                arg.vocab_size = (arg.vocab_size + coef - 1) / coef * coef;
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -544,6 +553,9 @@ int main(int argc, char **argv) {
             }
         },
         model_config.transformer_config);
+
+    fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
@@ -628,17 +640,19 @@ int main(int argc, char **argv) {
         }
     }
 
+    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+
     if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
     if (device_config.enable_ddp) {
-        auto num_devices = static_cast<uint32_t>(device->num_devices());
-        if (training_config.batch_size % num_devices != 0) {
+        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_ddp_size();
+        if (training_config.batch_size % dp_size != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
                 training_config.batch_size,
-                num_devices));
+                dp_size));
         }
     }
 
@@ -657,6 +671,11 @@ int main(int argc, char **argv) {
     auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
 
     bool is_everything_compiled = false;
+    auto memory_snapshot = [&is_everything_compiled](const std::string &name) {
+        if (!is_everything_compiled) {
+            ttml::utils::MemoryUsageTracker::snapshot(name);
+        }
+    };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
 
@@ -680,9 +699,13 @@ int main(int argc, char **argv) {
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
+                memory_snapshot("FORWARD_PASS");
                 loss->backward();
+                memory_snapshot("BACKWARD_PASS");
             } else {
+                memory_snapshot("FORWARD_PASS");
                 output->backward();
+                memory_snapshot("BACKWARD_PASS");
             }
 
             ttml::autograd::ctx().reset_graph();
@@ -694,7 +717,7 @@ int main(int argc, char **argv) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
                 if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
-                    ttml::core::distributed::synchronize_parameters(parameters);
+                    ttml::core::distributed::synchronize_gradients(parameters);
                 }
 
                 if (training_config.use_clip_grad_norm) {
@@ -733,6 +756,9 @@ int main(int argc, char **argv) {
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
+                    ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                    ttml::utils::MemoryUsageTracker::print_memory_usage();
+                    ttml::utils::MemoryUsageTracker::clear();
                 }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();

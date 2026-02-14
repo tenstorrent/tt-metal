@@ -69,9 +69,7 @@ def parse_output_file(file_path="output.txt"):
             return None
 
         # Parse the format: "LR: 3e-3, training_loss: 0.97, val_loss: 1.01, step: 120, epoch: 1"
-        pattern = (
-            r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
-        )
+        pattern = r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
 
         all_data = []
         for line in lines:
@@ -139,7 +137,9 @@ def create_loss_plot(history_df, eval_every=None):
     if eval_every is not None and eval_every > 0:
         # Filter to only show validation loss at eval_every intervals
         # This includes step 0 and steps that are multiples of eval_every
-        val_mask = ((history_df["step"] + 1) % eval_every == 0) | (history_df["step"] == 0)
+        val_mask = ((history_df["step"] + 1) % eval_every == 0) | (
+            history_df["step"] == 0
+        )
         val_df = history_df[val_mask]
     else:
         # If eval_every not provided, show all validation points
@@ -191,7 +191,9 @@ def create_lr_plot(history_df):
 
     # Update layout
     fig.update_xaxes(title_text="Step")
-    fig.update_yaxes(title_text="Learning Rate", type="log", exponentformat="e", showexponent="all")
+    fig.update_yaxes(
+        title_text="Learning Rate", type="log", exponentformat="e", showexponent="all"
+    )
 
     fig.update_layout(
         title="Learning Rate over Steps",
@@ -237,7 +239,9 @@ def create_training_yaml(
     # Write YAML with blank lines between top-level sections
     with open(output_path, "w") as f:
         f.write("training_config:\n")
-        training_yaml = yaml.dump(training_config, default_flow_style=False, sort_keys=False)
+        training_yaml = yaml.dump(
+            training_config, default_flow_style=False, sort_keys=False
+        )
         # Indent each line
         for line in training_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
@@ -245,7 +249,9 @@ def create_training_yaml(
         f.write("\n")  # Blank line between sections
 
         f.write("transformer_config:\n")
-        transformer_yaml = yaml.dump(transformer_config, default_flow_style=False, sort_keys=False)
+        transformer_yaml = yaml.dump(
+            transformer_config, default_flow_style=False, sort_keys=False
+        )
         # Indent each line
         for line in transformer_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
@@ -253,7 +259,9 @@ def create_training_yaml(
         f.write("\n")  # Blank line between sections
 
         f.write("scheduler_config:\n")
-        scheduler_yaml = yaml.dump(scheduler_config, default_flow_style=False, sort_keys=False)
+        scheduler_yaml = yaml.dump(
+            scheduler_config, default_flow_style=False, sort_keys=False
+        )
         # Indent each line
         for line in scheduler_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
@@ -263,7 +271,9 @@ def create_training_yaml(
         f.write("device_config:\n")
         # Handle mesh_shape as flow sequence, others as block style
         f.write(f"  enable_ddp: {device_config['enable_ddp']}\n")
-        mesh_shape_flow = yaml.dump(device_config["mesh_shape"], default_flow_style=True).strip()
+        mesh_shape_flow = yaml.dump(
+            device_config["mesh_shape"], default_flow_style=True
+        ).strip()
         f.write(f"  mesh_shape: {mesh_shape_flow}\n")
 
     return output_path
@@ -273,7 +283,9 @@ def start_training(config_dict):
     """Start the training process."""
     try:
         # Get the YAML output directory from config, or use default
-        yaml_output_dir = config_dict.get("yaml_dir", "/home/ubuntu/tt-metal/tt-train/configs")
+        yaml_output_dir = config_dict.get(
+            "yaml_dir", "/home/ubuntu/tt-metal/tt-train/configs"
+        )
 
         # Ensure the directory exists
         os.makedirs(yaml_output_dir, exist_ok=True)
@@ -436,14 +448,22 @@ def main():
                 help="Training batch size per device",
             )
 
-            max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=60, step=100)
+            max_steps = st.number_input(
+                "Max Steps", min_value=10, max_value=100000, value=60, step=100
+            )
 
         with col2:
-            warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
+            warmup_steps = st.number_input(
+                "Warmup Steps", min_value=0, max_value=1000, value=20, step=10
+            )
 
-            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=40, step=10)
+            hold_steps = st.number_input(
+                "Hold Steps", min_value=0, max_value=10000, value=40, step=10
+            )
 
-        eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
+        eval_every = st.number_input(
+            "Eval Every", min_value=10, max_value=1000, value=20, step=10
+        )
         validation_batch_size = st.number_input(
             "Validation Batch Size",
             min_value=1,
@@ -457,7 +477,9 @@ def main():
             "Gradient Accumulation Steps", min_value=1, max_value=128, value=8, step=1
         )
 
-        max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
+        max_seq_length = st.number_input(
+            "Max Sequence Length", min_value=128, max_value=4096, value=512, step=128
+        )
 
         effective_batch_size = (
             batch_size
@@ -466,7 +488,9 @@ def main():
             * device_mesh_shapes[selected_devices][1]
         )
         st.markdown(f"Effective batch size: **{effective_batch_size}**")
-        st.markdown(f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**")
+        st.markdown(
+            f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
+        )
 
         st.divider()
 
@@ -491,7 +515,9 @@ def main():
         col_start, col_stop = st.columns(2)
 
         with col_start:
-            if st.button("Start Training", use_container_width=True, disabled=is_running):
+            if st.button(
+                "Start Training", use_container_width=True, disabled=is_running
+            ):
                 config = {
                     "min_lr": min_lr,
                     "max_lr": max_lr,
@@ -509,7 +535,9 @@ def main():
                 }
                 success, message = start_training(config)
                 if success:
-                    st.session_state.data_collection_paused = False  # Resume data collection when training starts
+                    st.session_state.data_collection_paused = (
+                        False  # Resume data collection when training starts
+                    )
                     st.success(message)
                     st.session_state.last_update = 0  # Force update
                     st.rerun()
@@ -517,7 +545,9 @@ def main():
                     st.error(message)
 
         with col_stop:
-            if st.button("Stop Training", use_container_width=True, disabled=not is_running):
+            if st.button(
+                "Stop Training", use_container_width=True, disabled=not is_running
+            ):
                 success, message = stop_training()
                 if success:
                     st.warning(message)
@@ -527,7 +557,7 @@ def main():
 
         # Show YAML file location if it exists
         if os.path.exists("training_overrides.yaml"):
-            st.caption("Config: training_overrides.yaml")
+            st.caption(f"Config: training_overrides.yaml")
 
         # Show training process info if running
         if is_running and hasattr(st.session_state, "training_pid"):
@@ -537,7 +567,7 @@ def main():
             script_dir = os.path.dirname(os.path.abspath(__file__))
             stdout_log = os.path.join(script_dir, "training_stdout.log")
             if os.path.exists(stdout_log):
-                st.caption("Log: training_stdout.log")
+                st.caption(f"Log: training_stdout.log")
 
         st.divider()
 
@@ -578,7 +608,9 @@ def main():
         # Refresh controls
         st.divider()
         auto_refresh = st.checkbox("Auto-refresh", value=True)
-        refresh_interval = st.slider("Refresh Interval (seconds)", min_value=1, max_value=10, value=5, step=1)
+        refresh_interval = st.slider(
+            "Refresh Interval (seconds)", min_value=1, max_value=10, value=5, step=1
+        )
 
         if st.button("Refresh Now", use_container_width=True):
             st.session_state.last_update = 0  # Force update
@@ -654,12 +686,16 @@ def main():
                         st.code(f.read())
 
     # Main content area
-    tab1, tab2, tab3, tab4 = st.tabs(["Training Progress", "Validation Output", "Training Logs", "About"])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Training Progress", "Validation Output", "Training Logs", "About"]
+    )
 
     with tab1:
         # Show data collection status and control
         if st.session_state.data_collection_paused:
-            st.warning("Data collection is paused. Click 'Resume Data Collection' to start monitoring again.")
+            st.warning(
+                "Data collection is paused. Click 'Resume Data Collection' to start monitoring again."
+            )
             if st.button("Resume Data Collection", type="primary"):
                 st.session_state.data_collection_paused = False
                 st.rerun()
@@ -711,7 +747,9 @@ def main():
             if max_steps > 0:
                 progress = current_data["step"] / max_steps
                 st.progress(min(progress, 1.0))
-                st.caption(f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress * 100:.1f}%)")
+                st.caption(
+                    f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)"
+                )
         else:
             metrics = [
                 ("Current Step", "N/A"),
@@ -724,7 +762,9 @@ def main():
                 with col:
                     st.metric(label, value)
 
-            st.info("Waiting for training data... Make sure `output.txt` is being generated.")
+            st.info(
+                "Waiting for training data... Make sure `output.txt` is being generated."
+            )
 
         st.divider()
 
@@ -761,19 +801,24 @@ def main():
                 # Calculate tokens per second
                 if len(history_df) > 1:
                     # Get time difference between first and last step
-                    time_diff = (history_df["timestamp"].iloc[-1] - history_df["timestamp"].iloc[0]).total_seconds()
+                    time_diff = (
+                        history_df["timestamp"].iloc[-1]
+                        - history_df["timestamp"].iloc[0]
+                    ).total_seconds()
                     step_diff = history_df["step"].iloc[-1] - history_df["step"].iloc[0]
 
                     if time_diff > 0 and step_diff > 0:
                         # Calculate tokens per second
                         # tokens_per_step = batch_size * max_seq_length * gradient_accumulation
-                        tokens_per_step = batch_size * max_seq_length * gradient_accumulation
+                        tokens_per_step = (
+                            batch_size * max_seq_length * gradient_accumulation
+                        )
                         total_tokens = step_diff * tokens_per_step
                         tokens_per_sec = total_tokens / time_diff
 
                         # Format with appropriate units
                         if tokens_per_sec >= 1000:
-                            st.metric("Rate", f"{tokens_per_sec / 1000:.2f}k tokens/s")
+                            st.metric("Rate", f"{tokens_per_sec/1000:.2f}k tokens/s")
                         else:
                             st.metric("Rate", f"{tokens_per_sec:.2f} tokens/s")
                     else:
@@ -809,8 +854,13 @@ def main():
             # Parse and display validation content
             validation_content = parse_validation_file(validation_file)
 
-            if validation_content and validation_content != "No validation data available yet.":
-                st.text_area("Validation Results", validation_content, height=500, disabled=True)
+            if (
+                validation_content
+                and validation_content != "No validation data available yet."
+            ):
+                st.text_area(
+                    "Validation Results", validation_content, height=500, disabled=True
+                )
 
                 # Download validation output
                 st.download_button(
@@ -820,7 +870,9 @@ def main():
                     mime="text/plain",
                 )
             else:
-                st.info("Waiting for validation data... Make sure `validation.txt` is being generated.")
+                st.info(
+                    "Waiting for validation data... Make sure `validation.txt` is being generated."
+                )
 
     with tab3:
         st.header("Training Logs")
@@ -869,7 +921,9 @@ def main():
                 with open(stderr_log, "r") as f:
                     stderr_content = f.read()
                     if stderr_content:
-                        st.text_area("Error Log", stderr_content, height=200, disabled=True)
+                        st.text_area(
+                            "Error Log", stderr_content, height=200, disabled=True
+                        )
 
                         # Download button
                         st.download_button(
@@ -898,7 +952,9 @@ def main():
         if refresh_smi:
             try:
                 # Run tt-smi -s command
-                result = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=10)
+                result = subprocess.run(
+                    ["tt-smi", "-s"], capture_output=True, text=True, timeout=10
+                )
 
                 if result.returncode == 0:
                     smi_output = result.stdout
@@ -923,9 +979,7 @@ def main():
                                 st.session_state.tt_smi_error = "No board_info or telemetry data found in tt-smi output"
                         except json.JSONDecodeError as e:
                             st.session_state.tt_smi_data = None
-                            st.session_state.tt_smi_error = (
-                                f"Failed to parse tt-smi output as JSON: {e}\n\nRaw Output:\n{smi_output}"
-                            )
+                            st.session_state.tt_smi_error = f"Failed to parse tt-smi output as JSON: {e}\n\nRaw Output:\n{smi_output}"
                     else:
                         st.session_state.tt_smi_data = None
                         st.session_state.tt_smi_error = "tt-smi produced no output"
@@ -933,22 +987,30 @@ def main():
                     # Store stderr if there are warnings
                     if result.stderr:
                         if st.session_state.tt_smi_error:
-                            st.session_state.tt_smi_error += f"\n\nWarnings:\n{result.stderr}"
+                            st.session_state.tt_smi_error += (
+                                f"\n\nWarnings:\n{result.stderr}"
+                            )
                         else:
-                            st.session_state.tt_smi_error = f"Warnings:\n{result.stderr}"
+                            st.session_state.tt_smi_error = (
+                                f"Warnings:\n{result.stderr}"
+                            )
                 else:
                     st.session_state.tt_smi_data = None
-                    st.session_state.tt_smi_error = f"tt-smi command failed with return code {result.returncode}"
+                    st.session_state.tt_smi_error = (
+                        f"tt-smi command failed with return code {result.returncode}"
+                    )
                     if result.stderr:
-                        st.session_state.tt_smi_error += f"\n\nError Output:\n{result.stderr}"
+                        st.session_state.tt_smi_error += (
+                            f"\n\nError Output:\n{result.stderr}"
+                        )
             except subprocess.TimeoutExpired:
                 st.session_state.tt_smi_data = None
-                st.session_state.tt_smi_error = "tt-smi command timed out after 10 seconds"
+                st.session_state.tt_smi_error = (
+                    "tt-smi command timed out after 10 seconds"
+                )
             except FileNotFoundError:
                 st.session_state.tt_smi_data = None
-                st.session_state.tt_smi_error = (
-                    "tt-smi command not found. Make sure Tenstorrent tools are installed and in PATH."
-                )
+                st.session_state.tt_smi_error = "tt-smi command not found. Make sure Tenstorrent tools are installed and in PATH."
             except Exception as e:
                 st.session_state.tt_smi_data = None
                 st.session_state.tt_smi_error = f"Error running tt-smi: {str(e)}"
@@ -958,12 +1020,20 @@ def main():
             formatted_json = json.dumps(st.session_state.tt_smi_data, indent=2)
             st.code(formatted_json, language="json")
         elif st.session_state.tt_smi_error:
-            if "Failed to parse" in st.session_state.tt_smi_error or "Raw Output" in st.session_state.tt_smi_error:
+            if (
+                "Failed to parse" in st.session_state.tt_smi_error
+                or "Raw Output" in st.session_state.tt_smi_error
+            ):
                 parts = st.session_state.tt_smi_error.split("Raw Output:")
                 st.error(parts[0])
                 if len(parts) > 1:
-                    st.text_area("Raw Output", parts[1].strip(), height=300, disabled=True)
-            elif "Warnings:" in st.session_state.tt_smi_error or "Error Output:" in st.session_state.tt_smi_error:
+                    st.text_area(
+                        "Raw Output", parts[1].strip(), height=300, disabled=True
+                    )
+            elif (
+                "Warnings:" in st.session_state.tt_smi_error
+                or "Error Output:" in st.session_state.tt_smi_error
+            ):
                 parts = st.session_state.tt_smi_error.split("\n\n")
                 st.error(parts[0])
                 if len(parts) > 1:
@@ -972,7 +1042,10 @@ def main():
             else:
                 if "not found" in st.session_state.tt_smi_error:
                     st.warning(st.session_state.tt_smi_error)
-                elif "No board_info" in st.session_state.tt_smi_error or "no output" in st.session_state.tt_smi_error:
+                elif (
+                    "No board_info" in st.session_state.tt_smi_error
+                    or "no output" in st.session_state.tt_smi_error
+                ):
                     st.info(st.session_state.tt_smi_error)
                 else:
                     st.error(st.session_state.tt_smi_error)

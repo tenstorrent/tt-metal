@@ -13,7 +13,8 @@ import argparse
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.pre_tokenizers import Whitespace, ByteLevel
+from tokenizers.normalizers import Sequence, NFD, Lowercase
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 

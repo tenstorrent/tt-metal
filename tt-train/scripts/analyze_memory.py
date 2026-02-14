@@ -159,7 +159,9 @@ def create_peak_memory_visualization(
     # Calculate common y-axis limit (max of all peaks and device memory)
     max_y = 0
     for name, breakdown in summaries_data:
-        max_y = max(max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0))
+        max_y = max(
+            max_y, breakdown.get("total", 0.0), breakdown.get("device_memory", 0.0)
+        )
     common_y_limit = max_y * 1.1
 
     for idx, (name, breakdown) in enumerate(summaries_data):
@@ -301,9 +303,9 @@ def analyze_memory_summary(
     Args:
         use_actual_sizes: If True, use measured values from logs for model/optimizer in visualization
     """
-    print(f"\n{'=' * 80}")
+    print(f"\n{'='*80}")
     print(f"Section: {name}")
-    print(f"{'=' * 80}")
+    print(f"{'='*80}")
 
     if num_params:
         print(f"Number of parameters: {num_params:,}")
@@ -313,7 +315,7 @@ def analyze_memory_summary(
         model_actual_mb = metrics["MODEL_CREATION"]["segment_change"]
         model_expected_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
 
-        print("\n--- Model Size ---")
+        print(f"\n--- Model Size ---")
         print(f"  Actual (from logs):   {model_actual_mb:,.2f} MB")
         print(f"  Expected (input):     {model_expected_mb:,.2f} MB")
         if model_expected_mb > 0:
@@ -325,7 +327,7 @@ def analyze_memory_summary(
         optimizer_actual_mb = metrics["OPTIMIZER_CREATION"]["segment_change"]
         optimizer_expected_mb = bytes_to_mb(optimizer_size_bytes)
 
-        print("\n--- Optimizer State ---")
+        print(f"\n--- Optimizer State ---")
         print(f"  Actual (from logs):   {optimizer_actual_mb:,.2f} MB")
         print(f"  Expected (input):     {optimizer_expected_mb:,.2f} MB")
         diff_pct = calculate_percentage_diff(optimizer_actual_mb, optimizer_expected_mb)
@@ -334,7 +336,7 @@ def analyze_memory_summary(
     # Activations size (FORWARD_PASS Segment Change)
     if "FORWARD_PASS" in metrics:
         activations_mb = metrics["FORWARD_PASS"]["segment_change"]
-        print("\n--- Activations Size ---")
+        print(f"\n--- Activations Size ---")
         print(f"  Activations:          {activations_mb:,.2f} MB")
 
     # Gradients size (calculated from logs)
@@ -343,13 +345,15 @@ def analyze_memory_summary(
         optimizer_cumulative = metrics["OPTIMIZER_CREATION"]["cumulative_current"]
         gradients_actual_mb = backward_cumulative - optimizer_cumulative
 
-        print("\n--- Gradients Size ---")
+        print(f"\n--- Gradients Size ---")
         print(f"  Actual (from logs):   {gradients_actual_mb:,.2f} MB")
 
         if gradients_size_bytes is not None:
             gradients_expected_mb = bytes_to_mb(gradients_size_bytes)
             print(f"  Expected (input):     {gradients_expected_mb:,.2f} MB")
-            diff_pct = calculate_percentage_diff(gradients_actual_mb, gradients_expected_mb)
+            diff_pct = calculate_percentage_diff(
+                gradients_actual_mb, gradients_expected_mb
+            )
             print(f"  Difference:           {diff_pct:+.2f}%")
 
     # Peak DRAM usage
@@ -359,7 +363,7 @@ def analyze_memory_summary(
         device_memory_mb = bytes_to_mb(device_memory_bytes)
         usage_percentage = (peak_dram_mb / device_memory_mb) * 100.0
 
-        print("\n--- Peak DRAM Usage ---")
+        print(f"\n--- Peak DRAM Usage ---")
         print(f"  Peak DRAM:            {peak_dram_mb:,.2f} MB")
         print(f"  Device Memory:        {device_memory_mb:,.2f} MB")
         print(f"  Usage:                {usage_percentage:.2f}%")
@@ -368,14 +372,18 @@ def analyze_memory_summary(
         if use_actual_sizes:
             # Use actual measured values from logs
             model_mb = metrics.get("MODEL_CREATION", {}).get("segment_change", 0.0)
-            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get("segment_change", 0.0)
+            optimizer_mb = metrics.get("OPTIMIZER_CREATION", {}).get(
+                "segment_change", 0.0
+            )
         else:
             # Use theoretical values
             model_mb = bytes_to_mb(model_size_bytes) if model_size_bytes else 0.0
             optimizer_mb = bytes_to_mb(optimizer_size_bytes)
 
         activations_mb = metrics.get("FORWARD_PASS", {}).get("segment_change", 0.0)
-        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get("segment_peak", 0.0)
+        gradients_overhead_mb = metrics.get("BACKWARD_PASS", {}).get(
+            "segment_peak", 0.0
+        )
 
         # Calculate "other" as the difference
         accounted_mb = model_mb + optimizer_mb + activations_mb + gradients_overhead_mb
@@ -443,7 +451,9 @@ def main():
         help="Use actual measured values from logs for model/optimizer sizes in visualization instead of theoretical values",
     )
 
-    parser.add_argument("--title", type=str, help="Optional title for the visualization")
+    parser.add_argument(
+        "--title", type=str, help="Optional title for the visualization"
+    )
 
     parser.add_argument(
         "--output",
@@ -482,13 +492,21 @@ def main():
                 break
 
     if model_size_bytes is None:
-        raise ValueError("Error: Model size not provided and could not be extracted from logs")
+        raise ValueError(
+            "Error: Model size not provided and could not be extracted from logs"
+        )
 
     # Determine optimizer size (default: 2 * model_size, bf16)
-    optimizer_size_bytes = args.optimizer_size if args.optimizer_size is not None else (2 * model_size_bytes)
+    optimizer_size_bytes = (
+        args.optimizer_size
+        if args.optimizer_size is not None
+        else (2 * model_size_bytes)
+    )
 
     # Gradients size (default: same as model_size for bf16, will be compared with logs)
-    gradients_size_bytes = args.gradients_size if args.gradients_size is not None else model_size_bytes
+    gradients_size_bytes = (
+        args.gradients_size if args.gradients_size is not None else model_size_bytes
+    )
 
     # Analyze each summary
     visualization_data = []
@@ -506,9 +524,9 @@ def main():
         if breakdown:
             visualization_data.append((name, breakdown))
 
-    print(f"\n{'=' * 80}")
+    print(f"\n{'='*80}")
     print("Analysis complete")
-    print(f"{'=' * 80}\n")
+    print(f"{'='*80}\n")
 
     # Create visualization if requested
     if args.visualize_peak:
@@ -518,7 +536,9 @@ def main():
                 file=sys.stderr,
             )
         elif visualization_data:
-            create_peak_memory_visualization(visualization_data, title=args.title, output_file=args.output)
+            create_peak_memory_visualization(
+                visualization_data, title=args.title, output_file=args.output
+            )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 
 #include "llama_block.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "modules/grouped_query_attention.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/rope_op.hpp"
@@ -76,7 +77,25 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
     auto x = (*m_mlp_norm)(h);
     x = (*m_mlp)(x);
     x = ops::add(x, residual);
-    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "llama_block");
+
+    return x;
+}
+
+autograd::TensorPtr LlamaBlock::operator()(
+    const autograd::TensorPtr& input,
+    const autograd::TensorPtr& mask,
+    std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
+    const uint32_t layer_idx,
+    const uint32_t new_tokens) {
+    auto residual = input;
+    auto h = (*m_attention_norm)(input);
+    h = (*m_attention)(h, mask, kv_cache, layer_idx, new_tokens);
+    h = ops::add(h, residual);
+
+    residual = h;
+    auto x = (*m_mlp_norm)(h);
+    x = (*m_mlp)(x);
+    x = ops::add(x, residual);
 
     return x;
 }

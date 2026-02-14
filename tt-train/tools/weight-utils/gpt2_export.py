@@ -14,6 +14,7 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer
 import msgpack
 import msgpack_numpy  # required for serializing numpy arrays
 import os
+import json
 import shutil
 
 # Patch msgpack to support numpy arrays.
