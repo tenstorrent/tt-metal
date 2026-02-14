@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -12,19 +13,28 @@ from models.experimental.petr.reference.vovnetcp import (
     eSEModule,
     _OSA_stage,
 )
-from models.experimental.petr.tt.ttnn_vovnetcp import (
+from models.experimental.petr.tt.tt_vovnetcp import (
     ttnn_hsigmoid,
-    ttnn_esemodule,
-    ttnn_osa_stage,
+    ttnn_eSEModule,
+    ttnn_OSA_stage,
     ttnn_VoVNetCP,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
-from models.experimental.petr.tt.common import (
+from models.experimental.petr.tt.model_preprocessing import (
     create_custom_preprocessor_vovnetcp,
     stem_parameters_preprocess,
 )
+
+from ttnn.model_preprocessing import infer_ttnn_module_args
+
+
+model_config = {
+    "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
+    "WEIGHTS_DTYPE": ttnn.bfloat16,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat16,
+}
 
 
 @pytest.mark.parametrize(
@@ -77,9 +87,12 @@ def test_vovnetcp_esemodule(device, n, c, h, w):
     )
 
     torch_output = torch_model(torch_input_tensor)
-    ttnn_model = ttnn_esemodule(parameters)
+    ttnn_module_args = infer_ttnn_module_args(
+        model=torch_model, run_model=lambda model: model(torch_input_tensor), device=device
+    )
+    ttnn_model = ttnn_eSEModule(parameters["fc"], model_config, ttnn_module_args["fc"], device)
 
-    ttnn_output = ttnn_model(device=device, x=ttnn_input_tensor)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
 
@@ -113,8 +126,22 @@ def test_vovnetcp_osa_stage(
     )
 
     torch_output = torch_model(torch_input_tensor)
-    ttnn_model = ttnn_osa_stage(
-        parameters, in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num, SE=True, depthwise=False
+    ttnn_module_args = infer_ttnn_module_args(
+        model=torch_model, run_model=lambda model: model(torch_input_tensor), device=device
+    )
+    ttnn_model = ttnn_OSA_stage(
+        parameters,
+        in_ch,
+        stage_ch,
+        concat_ch,
+        block_per_stage,
+        layer_per_block,
+        stage_num,
+        SE=True,
+        depthwise=False,
+        model_config=model_config,
+        conv_args=ttnn_module_args,
+        device=device,
     )
     ttnn_output = ttnn_model(device=device, x=ttnn_input_tensor)
 
@@ -191,5 +218,3 @@ def test_vovnetcp(
     logger.info(f"Stage 5 output PCC: {msg1}")
     assert_with_pcc(output[0], ttnn_out0_torch, pcc=0.99)
     assert_with_pcc(output[1], ttnn_out1_torch, pcc=0.99)
-    assert passed0, f"Stage 4 PCC failed: {msg0}"
-    assert passed1, f"Stage 5 PCC failed: {msg1}"
