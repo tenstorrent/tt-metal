@@ -289,7 +289,7 @@ class TTNNSelfAttention(TTNNModule):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -356,7 +356,7 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -398,7 +398,7 @@ class TTNNWhisperAttention(TTNNModule):
             exp_approx_mode=False,
         )
         self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -601,7 +601,7 @@ class LlamaAttention(TTNNModule):
             exp_approx_mode=False,
         )
         self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
