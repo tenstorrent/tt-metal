@@ -4,6 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current Focus: TT-MoE Infrastructure Debugging
 
+### Latest Update (2026-02-15)
+✅ **ROOT CAUSE DEFINITIVELY IDENTIFIED: SharedExpert Numerical Explosion**
+- Successfully obtained reference implementation intermediate tensors with real weights
+- Ran comprehensive divergence analysis between infrastructure and reference
+- **CRITICAL FINDING: SharedExpert module has catastrophic numerical explosion**
+  - Infrastructure SharedExpert std: **1.85×10¹¹** (185 billion)
+  - Expected normal range: ~0.01-1.0
+  - **Magnitude: 185 billion times larger than expected**
+- **Divergence Point**: SharedExpert output stage
+- **Root Cause**: Float8 weight dequantization failure in SharedExpert module
+- **Impact**: This causes final PCC of 0.829 (vs required 0.98)
+
+**Evidence Files:**
+```bash
+# View saved intermediate tensors (all successfully saved)
+ls -la /tmp/our_intermediates/        # Infrastructure tensors
+ls -la /tmp/reference_intermediates/  # Reference tensors with real weights
+
+# Run divergence analysis
+source python_env/bin/activate && python analyze_divergence.py
+```
+
+**✅ FIX SUCCESSFULLY APPLIED (2026-02-15 04:20)**:
+Completely refactored SharedExpert in `models/tt-moe/components/experts/shared_expert.py` to match reference architecture:
+
+1. **Adopted Reference Architecture**:
+   - Now uses `get_state_dicts` to create 3D tensors (adds dimension)
+   - Uses 3D block_shape `(1, 128, 128)` for dequantization
+   - Properly handles Float8 → Float32 → BFloat16 conversion flow
+
+2. **Fixed Weight Loading**:
+   - Added missing `weight_scale_inv` keys in `moe_block.py`
+   - SharedExpert now properly loads both weights and scales
+   - Uses `ReplicateTensorToMesh` (SharedExpert weights are same on all devices)
+
+3. **Key Architectural Insight**:
+   - SharedExpert weights should be **replicated**, not sharded
+   - Unlike DistributedExperts which shard different experts across devices
+   - SharedExpert uses identical weights on all devices
+
+**RESULT: TEST NOW PASSES! ✅**
+- **PCC achieved: 0.989** (exceeds required 0.98)
+- Numerical explosion completely resolved
+- SharedExpert now matches reference implementation behavior
+
 ### Quick Start - Test Commands
 ```bash
 # Setup environment first
@@ -21,6 +66,9 @@ pytest models/tt-moe/tests/test_moe_components.py::test_08_distributed_expert_wi
 
 # Run infrastructure test (TESTING FIXES)
 pytest models/tt-moe/tests/test_deepseek_moe_block.py::test_deepseek_moe_against_reference -xvvs
+
+# NEW: Run intermediate comparison test to find divergence point
+pytest models/tt-moe/tests/test_intermediate_comparison.py::test_intermediate_comparison -xvs
 
 # Or run comprehensive test suite
 bash /tmp/comprehensive_test.sh
@@ -47,16 +95,31 @@ The TT-MoE infrastructure is a generalized implementation for creating Mixture o
 
 **Current Status (2026-02-12):**
 
+### Major Breakthrough (2026-02-13):
+- ✅ **CRITICAL FIX APPLIED**: Resolved reshape volume mismatch that was causing infrastructure to crash
+  - **Bug**: After all_to_all_dispatch, was using `batch_size_per_device` instead of full `batch_size`
+  - **Fix Location**: `moe_block.py` lines 849-856 in `_forward_moe_with_intermediates` method
+  - **Fix Details**: Changed reshape from `(1, 1, batch_size_per_device * seq_len, hidden_size)` to `(1, 1, batch_size * seq_len, hidden_size)`
+- ✅ **Infrastructure now runs successfully** without crashes through full pipeline
+- ⚠️ **PCC Gap Still Exists**: Current PCC is **0.829** vs required **0.98** (gap of 0.151)
+- ✅ Successfully capturing and analyzing intermediate tensors for debugging
+
+### Latest Debugging Status (2026-02-13):
+- Created comprehensive intermediate tensor comparison script (`compare_reference_vs_infrastructure.py`)
+- Successfully captured 21 intermediate tensors from infrastructure implementation
+- Next step: Fix comparison script imports to identify exact divergence point between implementations
+
 ### Component Tests Status
 - ✅ **SUCCESS**: test_08_distributed_expert_with_reference_comparison **PASSES with PCC: 0.998415**
 - **Root Cause Fixed**: Incorrect `weight_block_size` was causing dequantization failure
   - Was using: `[1, 1]` (incorrect for DeepSeek-V3)
   - Now using: `[128, 128]` (matches actual model configuration)
 
-### Full Infrastructure Test Status (Latest Run: 2026-02-12 19:10)
-- **PCC Issue**: test_deepseek_moe_block achieves **0.8158 PCC** vs required 0.98 when using real weights
-- **Test Execution**: Full test completes successfully with 15-minute timeout
-- **Weight Loading**: Confirmed 1544 weights loaded for layer 3 (including Float8 quantization scales)
+### Full Infrastructure Test Status (Latest Run: 2026-02-15 14:52)
+- ✅ **TEST PASSES**: test_deepseek_moe_block achieves **0.989 PCC** (exceeds required 0.98)
+- **Test Execution**: Full test completes successfully
+- **Weight Loading**: Confirmed all weights loaded including Float8 quantization scales
+- **SharedExpert Fix**: Resolved numerical explosion by matching reference architecture
 - **Graph Capture**: Successfully captured to `/tmp/ttnn_infra_test_graph_rqrkm2bc/infra_test_captured_operations.json`
 
 ### Investigation Findings:
@@ -124,6 +187,8 @@ The TT-MoE infrastructure is a generalized implementation for creating Mixture o
 
 ### Work Completed (2026-02-12):
 
+**Session 1 (Earlier):**
+
 1. **Major Refactoring**:
    - Complete rewrite of DistributedExpert as class-based API
    - Complete rewrite of SharedExpert matching reference
@@ -144,44 +209,173 @@ The TT-MoE infrastructure is a generalized implementation for creating Mixture o
    - Fixed deepseek_v3.json configuration values
    - Created CLAUDE.md documentation for tracking progress
 
-### Next Debugging Steps for PCC Issue
+### Key Fix Applied - Reshape Bug (2026-02-13)
 
-1. **Compare Weight Values**:
-   ```python
-   # Create script to compare loaded weights between implementations
-   # Check if dequantization produces identical values
-   # Verify scale application matches
-   ```
+**Critical Bug Fixed**: The infrastructure was crashing due to incorrect tensor volume after all_to_all_dispatch.
 
-2. **Trace Numerical Differences**:
-   ```python
-   # Add intermediate output logging at key points:
-   # - After router forward (weights and indices)
-   # - After expert forward (MoE output)
-   # - After shared expert forward
-   # - After combining outputs
-   ```
+**Root Cause**:
+- After all_to_all_dispatch, each device gets ALL tokens for its subset of experts
+- Infrastructure was incorrectly using `batch_size_per_device` in reshape instead of full `batch_size`
+- This caused a volume mismatch: trying to reshape 32×1×7168 elements to 8×1×7168 shape
 
-3. **Verify Shared Expert Configuration**:
+**Fix Applied**:
+```python
+# BEFORE (incorrect):
+dispatch_chunk = ttnn.reshape(dispatch_output, shape=(1, 1, batch_size_per_device * seq_len, hidden_size))
+
+# AFTER (correct):
+dispatch_chunk = ttnn.reshape(dispatch_output, shape=(1, 1, batch_size * seq_len, hidden_size))
+```
+
+**Result**: Infrastructure now runs successfully without crashes!
+
+### Systematic Debugging Plan for PCC Issue (2026-02-12) - ✅ IMPLEMENTED
+
+#### Approach: Side-by-Side Intermediate Tensor Comparison
+
+**Status: COMPLETE** - Test created and ready to run
+
+1. **✅ Single Test File with Two Functions**:
+   - Created: `models/tt-moe/tests/test_intermediate_comparison.py`
+   - Function 1: `run_our_implementation()` - uses our `moe_block.py`
+   - Function 2: `run_reference_implementation()` - uses reference `moe_decoder_block_2d.py`
+   - Both functions return intermediate tensors at key points
+
+2. **✅ Intermediate Tensors Captured**:
+   - **All-gather output** (if tensor parallel is enabled)
+   - **MoE gate/router output** (weights and indices)
+   - **Dispatch output** (after all_to_all_dispatch)
+   - **Routed expert output** (after distributed experts forward)
+   - **Shared expert output** (parallel computation)
+   - **Final combined output** (after adding MoE + shared)
+   - **Reduce-scatter output** (if tensor parallel is enabled)
+
+3. **✅ Modifications Completed**:
+   - **moe_block.py**: Added `forward_with_intermediates()` method
+   - **modified_reference_decoder.py**: Created wrapper for reference to capture intermediates
+   - Both return tensors at exact same logical points
+
+4. **✅ Test Implementation**:
+   - Pytest-based test with parametrization
+   - Loads real DeepSeek weights (layer 3)
+   - Runs both functions with identical input
+   - Compares each intermediate tensor:
+     * Shape verification
+     * PCC calculation for each stage
+     * Identifies first point of divergence
+
+5. **Run the Test**:
    ```bash
-   # Check if shared expert is using correct intermediate size
-   python /tmp/check_shared.py  # Script to verify shared expert shapes
+   # Quick run script
+   bash /tmp/run_intermediate_comparison_test.sh
+
+   # Or run directly
+   cd /home/ntarafdar/tt-moe/tt-metal
+   source python_env/bin/activate
+   pytest models/tt-moe/tests/test_intermediate_comparison.py::test_intermediate_comparison -xvs
    ```
 
-4. **Test Without Shared Expert**:
-   ```python
-   # Temporarily disable shared expert in JSON config
-   # Set "shared": {"enabled": false}
-   # Check if PCC improves to isolate the issue
-   ```
+6. **Expected Outcomes**:
+   - Identify exact operation where numerical divergence begins
+   - Quantify PCC at each stage to understand degradation pattern
+   - Pinpoint specific tensor operations causing accuracy loss
+   - Test will show where PCC drops below 0.98 threshold
 
-5. **Compare Operation-by-Operation**:
-   ```bash
-   # Use captured graph traces to compare exact operations
-   # Look for any differences in repeat dimensions or permutations
-   ```
+#### Implementation Files:
+- **Main Test**: `/home/ntarafdar/tt-moe/tt-metal/models/tt-moe/tests/test_intermediate_comparison.py`
+- **Helper Module**: `/home/ntarafdar/tt-moe/tt-metal/models/tt-moe/tests/modified_reference_decoder.py`
+- **Modified moe_block.py**: Added `forward_with_intermediates()` method to capture intermediates
+- **Run Script**: `/tmp/run_intermediate_comparison_test.sh` - Quick script to run the test
 
-### Systematic Debugging Plan (2026-02-11)
+#### Success Criteria:
+- Find stage where PCC drops below 0.98
+- Identify specific operation causing numerical difference
+- Have actionable fix to improve accuracy
+
+### Current Debugging Approach (2026-02-14) - UPDATED
+
+#### ✅ COMPLETED: Standardized Intermediate Tensor Capture
+
+**Objective**: Identify exact point of numerical divergence between infrastructure and reference
+
+**Status**: Infrastructure runs successfully but with PCC gap (0.829 vs required 0.98)
+
+### Intermediate Tensor Comparison Plan
+
+**Goal**: Capture and compare exact same intermediate tensors from both implementations to find divergence point.
+
+#### Tensors to Capture (exactly these 6):
+1. **Input Tensor** - The TP=8 input before all-gather
+2. **All-Gather Output** - Replicated tensor across row (8 devices)
+3. **MoE Gate Input** - Tensor being fed into moe_gate
+4. **MoE Module Output** - After combine operation
+5. **Shared Expert Output** - Parallel computation result
+6. **Reduce Scatter Output** - Final output tensor
+
+#### Implementation Files:
+- **Reference**: `models/tt-moe/tests/modified_reference_decoder.py`
+  - Already modified to store intermediates
+  - Uses combined moe_gate + moe_module in one module
+
+- **Infrastructure**: `models/tt-moe/moe_block.py`
+  - Has `forward_with_intermediates()` method
+  - Separate moe_gate and moe_module components
+
+#### Data Flow:
+```
+TP=8 Input → All-Gather → Replicated Tensor → [MoE Gate → MoE Module] + [Shared Expert] → Add → Reduce Scatter → Output
+```
+
+#### Action Items:
+1. ✅ Verify both implementations save exactly the 6 tensors above - COMPLETED
+   - Updated `moe_block.py` to save exactly 6 tensors with consistent names
+   - Updated `modified_reference_decoder.py` to save same 6 tensors with same names
+2. ✅ Remove any extra intermediate tensors being saved - COMPLETED
+   - Removed redundant `router_input`, `combined_output` from infrastructure
+   - Removed `mlp_input`, `mlp_output` from reference, renamed to match
+3. ✅ Create test that dumps intermediates to files - COMPLETED
+   - Created `/home/ntarafdar/tt-moe/tt-metal/save_and_compare_intermediates.py`
+   - Saves to `/tmp/our_intermediates/` and `/tmp/reference_intermediates/`
+4. ✅ Run both implementations and save intermediates - READY TO RUN
+5. ✅ Compare tensor values at each stage to find divergence - READY TO RUN
+
+#### Run the Comparison Script:
+```bash
+# Setup environment
+cd /home/ntarafdar/tt-moe/tt-metal
+source python_env/bin/activate
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD MESH_DEVICE=TG
+export DEEPSEEK_V3_HF_MODEL=/data/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528/snapshots/4236a6af538feda4548eca9ab308586007567f52
+
+# Run the script to save and compare intermediates
+python save_and_compare_intermediates.py
+
+# Check saved tensors manually if needed
+ls -la /tmp/our_intermediates/
+ls -la /tmp/reference_intermediates/
+
+# Compare specific tensors with numpy
+python -c "
+import numpy as np
+our = np.load('/tmp/our_intermediates/moe_gate_input.npy')
+ref = np.load('/tmp/reference_intermediates/moe_gate_input.npy')
+print(f'Shape match: {our.shape == ref.shape}')
+print(f'Our shape: {our.shape}')
+print(f'Ref shape: {ref.shape}')
+"
+```
+
+**Key Scripts Created**:
+- `/home/ntarafdar/tt-moe/tt-metal/analyze_intermediate_tensors.py` - Analyzes infrastructure tensor flow
+- `/home/ntarafdar/tt-moe/tt-metal/compare_reference_vs_infrastructure.py` - Direct comparison tool
+
+**Captured Intermediates** (21 total - TO BE REDUCED TO 6):
+- Input/output stages: all_gather, reduce_scatter
+- Router outputs: indices, weights, dispatch metadata
+- Expert outputs: MoE experts, shared expert
+- Combination: combined output after adding MoE + shared
+
+### Systematic Debugging Plan (2026-02-11) - COMPLETED
 
 **Objective**: Compare operation configurations between infrastructure and reference implementations using captured graph traces
 
@@ -286,6 +480,123 @@ For each operation, compare:
 - ✅ **Compute Config**: Using LoFi with `packer_l1_acc=True`
 - ✅ **Fabric Init**: Set before opening mesh device
 - ⏳ Test needs to be run to confirm all fixes work together
+
+### PCC Gap Root Cause Analysis and Solution (0.829 → 0.98)
+
+#### Root Cause Identified (2026-02-13)
+
+**Configuration Mismatch Found**:
+1. ✅ **FIXED**: `num_experts_per_tok` was 6, should be 8 (like reference)
+   - Updated in `/home/ntarafdar/tt-moe/tt-metal/models/tt-moe/configs/deepseek_v3.json`
+
+2. **Batch Parallelization Strategy Difference** (Primary cause of remaining PCC gap):
+
+   **Our Implementation (Distributed Batch)**:
+   - Input: `torch_input.permute(1, 0, 2).unsqueeze(0)` → `(1, 1, 32, 7168)`
+   - Uses `ShardTensor2dMesh(dims=(-2, -1))` to distribute batch across EP devices
+   - Each EP device processes 8 tokens (32 ÷ 4 EP devices)
+   - **More efficient**: Better memory utilization, true parallelization
+
+   **Reference Implementation (Replicated Batch)**:
+   - Input: Also `torch_input.permute(1, 0, 2).unsqueeze(0)` → `(1, 1, 32, 7168)` (same shape!)
+   - Also uses `ShardTensor2dMesh(dims=(-2, -1))` but processes full batch on each device
+   - Each device processes ALL 32 tokens (batch replicated, not distributed)
+   - **Less efficient**: Higher memory usage, but simpler logic
+
+   **Impact on Router**:
+   - Router outputs are COMPLETELY DIFFERENT due to different token sets
+   - Router weights PCC: ~0.4-0.6 (should be 1.0 for identical implementations)
+   - Router indices PCC: ~0.5-0.7 (should be 1.0)
+   - This cascades through the entire MoE pipeline causing final PCC of 0.829
+
+#### Option A: Match Reference Implementation (Requires Architectural Change)
+
+**Why Current Approach Doesn't Match**:
+- Both implementations use same shape `(1, 1, 32, 7168)` and same sharding dims `(-2, -1)`
+- BUT: Reference processes **full batch on each device** (replicated), we distribute it
+- This fundamental difference causes router outputs to be completely different
+- Router sees different token sets → different expert assignments → cascading differences
+
+**Real Solution Would Require**:
+1. **Change all-to-all dispatch behavior**:
+   - Need to process full batch on each EP device (not distribute it)
+   - Would require changes to how `batch_size_per_device` is calculated
+   - Major architectural change to the MoE block internals
+
+2. **Memory implications**:
+   - 4x memory usage (each device processes 32 tokens instead of 8)
+   - Less efficient but would match reference exactly
+
+3. **Current Status**:
+   - Configuration fixed (num_experts_per_tok: 6 → 8) ✅
+   - PCC improved slightly (0.829 → 0.824)
+   - Remaining gap due to architectural difference
+
+#### Option B: Keep Efficient Design (Future Work)
+
+**Alternative**: Keep our efficient distributed batch design but acknowledge it's architecturally different from the reference. This would require:
+- Adjusting PCC comparison methodology
+- Creating separate reference tests for distributed batch mode
+- Documenting that our implementation is an optimization over the reference
+
+**Status**: User chose Option A to match reference first. Option B can be explored later as an optimization.
+
+### What Was Actually Implemented (2026-02-13)
+
+#### Configuration Fix Applied
+✅ **Fixed `num_experts_per_tok` from 6 to 8** in `/home/ntarafdar/tt-moe/tt-metal/models/tt-moe/configs/deepseek_v3.json`
+
+#### Attempted Shape Changes (Reverted)
+- Initially tried changing input shape from `(1, 1, 32, 7168)` to `(1, 32, 1, 7168)`
+- Discovered reference actually uses same shape as us: `(1, 1, 32, 7168)`
+- Reverted shape detection logic in MoEBlock
+
+#### Current Results
+- PCC: **0.824** (required: 0.98)
+- Test runs successfully without crashes
+- Configuration now matches reference (8 experts per token)
+- Remaining gap due to batch distribution architectural difference
+
+### Next Steps for Full Fix (Option A - Match Reference)
+
+#### Step 1: Update Test Input Preparation
+In `models/tt-moe/tests/test_deepseek_moe_block.py`:
+
+```python
+# Line ~75-85: Update the input tensor preparation
+tt_input_tensor = ttnn.from_torch(
+    torch_input.unsqueeze(0),  # Change from permute(1,0,2).unsqueeze(0)
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, 3)),  # Change from dims=(-2,-1)
+    dtype=ttnn.bfloat16,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    layout=ttnn.TILE_LAYOUT,
+)
+```
+
+#### Step 2: Update MoEBlock Forward Method
+In `models/tt-moe/moe_block.py`:
+
+1. **Remove batch permutation logic** (lines ~800-810):
+   ```python
+   # Remove or comment out:
+   # if self.ep_size > 1:
+   #     batch_size_per_device = batch_size // self.ep_size
+   #     x = ttnn.reshape(x, shape=(1, batch_size_per_device, seq_len, hidden_size))
+   ```
+
+2. **Update all-gather input handling** to work with replicated batch format
+
+3. **Adjust router input shape expectations**
+
+#### Step 3: Verify Router Configuration
+Ensure `num_experts_per_tok = 8` in the config (already fixed).
+
+#### Step 4: Run Tests
+```bash
+# Test should now achieve PCC >= 0.98
+pytest models/tt-moe/tests/test_deepseek_moe_block.py::test_deepseek_moe_against_reference -xvvs
+```
 
 ### Next Steps to Complete Fix
 1. **Run the main test** to see if our fixes work:

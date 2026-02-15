@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Shared expert implementation for MoE - direct port of models/demos/deepseek_v3/tt/mlp/shared_expert.py
-
-This is a self-contained implementation with all utilities copied locally.
-The SharedExpert uses moe_intermediate_size for its hidden dimension.
+Refactored SharedExpert implementation that exactly matches the reference architecture.
+This version uses 3D tensors and weight sharding like the reference implementation.
 """
 
 from pathlib import Path
@@ -16,14 +14,22 @@ import torch
 import ttnn
 
 # ============================================================================
-# Utility Functions (copied from models/demos/deepseek_v3/utils/config_helpers.py)
+# Utility Functions (from models/demos/deepseek_v3/utils/config_helpers.py)
 # ============================================================================
 
 
 def even_int_div(a: int, b: int) -> int:
     """Integer division that raises an error if b does not divide a without a remainder."""
-    assert a % b == 0
+    assert a % b == 0, f"{a} is not divisible by {b}"
     return a // b
+
+
+def find_largest_divisor(n: int, max_val: int = 8) -> int:
+    """Find the largest divisor of n that is <= max_val."""
+    for divisor in range(min(n, max_val), 0, -1):
+        if n % divisor == 0:
+            return divisor
+    return 1
 
 
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
@@ -35,27 +41,43 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     for i, block_dim in enumerate(block_shape):
         inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
 
-    # Convert to float32 for multiplication
-    tensor_float = tensor.float()
-    scale_float = inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
-    result = tensor_float * scale_float
-
-    # Clamp values to prevent overflow when converting to bfloat16
-    result = torch.clamp(result, min=-3.38e38, max=3.38e38)
-
+    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
     del inv_scale
-    return result.to(torch.bfloat16)  # Return as bfloat16
+    return tensor  # Return as float32
 
 
-def find_largest_divisor(n: int, max_val: int = 8) -> int:
-    """Find the largest divisor of n that is <= max_val."""
-    for divisor in range(min(n, max_val), 0, -1):
-        if n % divisor == 0:
-            return divisor
-    return 1
+def get_state_dicts(
+    dicts: Sequence[Optional[Dict[str, torch.Tensor]]],
+    key: str,
+    shape: Optional[Sequence[int]] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """Get a weight from state dicts and stack them to add a dimension."""
+    if not dicts:
+        return torch.empty(0)
+
+    # Get first non-None dict to determine shape/dtype
+    first_dict = next((d for d in dicts if d is not None), None)
+    assert first_dict is not None and key in first_dict
+
+    expected_shape = shape if shape is not None else first_dict[key].shape
+    expected_dtype = dtype if dtype is not None else first_dict[key].dtype
+
+    # Create tensors list
+    tensors = []
+    for d in dicts:
+        if d is None:
+            tensors.append(torch.zeros(expected_shape, dtype=expected_dtype))
+        else:
+            assert key in d, f"Key {key} not found in state dict"
+            assert d[key].shape == expected_shape
+            tensors.append(d[key])
+
+    # Stack along dim 0 to create 3D tensor
+    return torch.stack(tensors, dim=0)
 
 
-# Compute kernel configuration (copied from config_helpers.py)
+# Compute kernel configuration
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
@@ -65,25 +87,25 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 # Constants from reference
 SEQ_LEN_CHUNK_SIZE = 16384
-USERS_PER_ROW = 32
-
 
 # ============================================================================
-# SharedExpert Class (Direct port following MLP -> MLPDequant -> SharedExpert hierarchy)
+# SharedExpert Class (Matching reference architecture)
 # ============================================================================
 
 
 class SharedExpert:
     """
-    Shared Expert layer for Mixture-of-Experts (MoE) models.
-
-    This is a direct port of models/demos/deepseek_v3/tt/mlp/shared_expert.py
-    The only difference from regular MLP is using moe_intermediate_size instead of intermediate_size.
+    Shared Expert layer for MoE - refactored to match reference implementation exactly.
+    Uses 3D tensors and weight sharding like the reference.
     """
+
+    # Weight types (from MLPDequant)
+    WEIGHT_TORCH_DTYPE = torch.float8_e4m3fn
+    WEIGHT_SCALE_INV_TORCH_DTYPE = torch.float32
 
     @classmethod
     def _get_model_dims_from_cfg(cls, hf_config: Any) -> Tuple[int, int]:
-        """Get the dimensions - uses moe_intermediate_size for shared expert."""
+        """Get dimensions - uses moe_intermediate_size for shared expert."""
         dim = hf_config.hidden_size
         hidden_dim = hf_config.moe_intermediate_size  # Key difference from regular MLP
         return dim, hidden_dim
@@ -98,95 +120,6 @@ class SharedExpert:
             return dim, hidden_dim
 
     @classmethod
-    def decode_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
-        """Generate decode configuration for this module."""
-        # Extract dimensions
-        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
-
-        # Get mesh dimensions
-        _, mesh_width = mesh_device.shape
-
-        # Memory configurations based on mode
-        input_memory_config = ttnn.L1_MEMORY_CONFIG
-        output_memory_config = ttnn.L1_MEMORY_CONFIG
-
-        # Create config dictionary
-        config = {
-            "mesh_device": mesh_device,
-            "input_memory_config": input_memory_config,
-            "output_memory_config": output_memory_config,
-            "dim": dim,
-            "hidden_dim": hidden_dim,
-            "mesh_width": mesh_width,
-        }
-
-        # Add linear configs with proper structure (like MLP)
-        for name in ["w1", "w2", "w3"]:
-            config[name] = {
-                "memory_config": output_memory_config,
-                "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
-            }
-
-        # Add mul config for activation
-        config["mul"] = {
-            "memory_config": output_memory_config,
-            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
-        }
-
-        return config
-
-    @classmethod
-    def prefill_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
-        """Generate prefill configuration for this module."""
-        # Extract dimensions
-        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
-
-        # Get mesh dimensions
-        _, mesh_width = mesh_device.shape
-
-        # Memory configurations
-        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-        # Core grid for matmuls
-        matmul_core_grid_size = ttnn.CoreCoord(
-            mesh_device.core_grid.x,
-            mesh_device.core_grid.y,
-        )
-
-        # Create config dictionary
-        config = {
-            "mesh_device": mesh_device,
-            "input_memory_config": input_memory_config,
-            "output_memory_config": output_memory_config,
-            "dim": dim,
-            "hidden_dim": hidden_dim,
-            "mesh_width": mesh_width,
-            "max_rows": SEQ_LEN_CHUNK_SIZE,
-            "matmul_core_grid_size": matmul_core_grid_size,
-        }
-
-        # Add linear configs
-        for name in ["w1", "w2", "w3"]:
-            config[name] = {
-                "memory_config": output_memory_config,
-                "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
-            }
-
-        # Add mul config
-        config["mul"] = {
-            "memory_config": output_memory_config,
-            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
-        }
-
-        return config
-
-    @classmethod
-    def create_state(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
-        """Create state (empty for shared expert)."""
-        return {}
-
-    @classmethod
     def convert_weights(
         cls,
         hf_config: Any,
@@ -195,61 +128,180 @@ class SharedExpert:
         mesh_device: ttnn.MeshDevice,
     ) -> Dict:
         """
-        Convert and prepare weights for the shared expert.
-
-        This follows the MLPDequant pattern of dequantizing weights during conversion.
+        Convert weights matching the reference implementation exactly.
+        Uses get_state_dicts to create 3D tensors and shards them across devices.
         """
-        # Support both HF config objects and plain dicts
-        if hasattr(hf_config, "moe_intermediate_size"):
-            use_quantized = hasattr(hf_config, "quantization_config")
-            weight_block_size = (
-                hf_config.quantization_config.get("weight_block_size", [1, 1]) if use_quantized else [1, 1]
-            )
+        # Get weight block size for quantization
+        if hasattr(hf_config, "quantization_config"):
+            weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
         else:
-            use_quantized = hf_config.get("use_quantized_weights", False)
-            weight_block_size = hf_config.get("weight_block_size", [1, 1])
-
-        (state_dict,) = state_dicts
-        assert state_dict is not None
+            weight_block_height = weight_block_width = 128  # Default
 
         weight_config = {}
 
-        for hf_name, ttnn_name in [
-            ("gate_proj", "w1"),
-            ("down_proj", "w2"),
-            ("up_proj", "w3"),
+        for hf_name, models_name, is_w2 in [
+            ("gate_proj", "w1", False),
+            ("down_proj", "w2", True),
+            ("up_proj", "w3", False),
         ]:
-            weight_key = f"{hf_name}.weight"
-            if weight_key in state_dict:
-                weight = state_dict[weight_key]
+            in_features, out_features = cls.get_weight_shape(hf_config, is_w2)
 
-                # Check for quantization scale
-                scale_key = f"{hf_name}.weight_scale_inv"
-                if use_quantized and scale_key in state_dict:
-                    scale_inv = state_dict[scale_key]
-                    # Dequantize the weight
-                    weight = dequantize(weight, scale_inv, weight_block_size)
+            # Use get_state_dicts to create 3D tensors (adds dimension 0)
+            quantized_weight = get_state_dicts(
+                state_dicts,
+                f"{hf_name}.weight",
+                shape=(out_features, in_features),
+                dtype=cls.WEIGHT_TORCH_DTYPE,
+            )
 
-                # Transpose for matmul: [out_features, in_features] -> [1, 1, in_features, out_features]
-                weight = weight.unsqueeze(0).unsqueeze(0).transpose(-1, -2)
+            scale_inv = get_state_dicts(
+                state_dicts,
+                f"{hf_name}.weight_scale_inv",
+                shape=(
+                    ttnn.core.divup(out_features, weight_block_height),
+                    ttnn.core.divup(in_features, weight_block_width),
+                ),
+                dtype=cls.WEIGHT_SCALE_INV_TORCH_DTYPE,
+            )
 
-                # Convert to bfloat16 for TTNN
-                weight = weight.to(torch.bfloat16)
+            # Dequantize with 3D block shape (like reference)
+            metaweight_block_size = (1, weight_block_height, weight_block_width)
+            dequantized_weight = dequantize(quantized_weight, scale_inv, metaweight_block_size)
 
-                # Create TTNN tensor - replicate across all devices
-                weight_tensor = ttnn.from_torch(
-                    weight,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+            # Convert to metaweight format
+            weight_tensor = cls.convert_metaweight(
+                output_path / f"{models_name}.input_tensor_b",
+                dequantized_weight,
+                mesh_device,
+                is_w2=is_w2,
+            )
 
-                # Store the weight tensor in the config
-                weight_config[ttnn_name] = {"input_tensor_b": weight_tensor}
+            weight_config[models_name] = {"input_tensor_b": weight_tensor}
 
         return weight_config
+
+    @classmethod
+    def convert_metaweight(
+        cls,
+        path: Path,
+        torch_metaweight_tensor: torch.Tensor,
+        mesh_device: ttnn.MeshDevice,
+        is_w2: bool,
+    ) -> ttnn.Tensor:
+        """
+        Convert metaweight tensor to TTNN format.
+        For SharedExpert, we replicate weights across all devices (not shard).
+        """
+        # The input is [1, out_features, in_features] from get_state_dicts
+        # Just squeeze the first dimension and transpose for matmul
+        torch_metaweight_tensor = torch_metaweight_tensor.squeeze(0)  # Remove shard dimension
+
+        # Transpose for matmul: [out_features, in_features] -> [in_features, out_features]
+        torch_metaweight_tensor = torch_metaweight_tensor.transpose(0, 1)
+
+        # Add batch dimensions for TTNN: [in_features, out_features] -> [1, 1, in_features, out_features]
+        torch_metaweight_tensor = torch_metaweight_tensor.unsqueeze(0).unsqueeze(0)
+
+        # Convert to bfloat16
+        torch_metaweight_tensor = torch_metaweight_tensor.to(torch.bfloat16)
+
+        # Create TTNN tensor - replicate across all devices (SharedExpert uses same weights everywhere)
+        weight_tensor = ttnn.from_torch(
+            torch_metaweight_tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return weight_tensor
+
+    @classmethod
+    def decode_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
+        """Generate decode configuration for this module."""
+        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
+        _, mesh_width = mesh_device.shape
+
+        config = {
+            "mesh_device": mesh_device,
+            "input_memory_config": ttnn.L1_MEMORY_CONFIG,
+            "output_memory_config": ttnn.L1_MEMORY_CONFIG,
+            "dim": dim,
+            "hidden_dim": hidden_dim,
+            "mesh_width": mesh_width,
+        }
+
+        # Add linear configs
+        for name in ["w1", "w2", "w3"]:
+            config[name] = {
+                "memory_config": ttnn.L1_MEMORY_CONFIG,
+                "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
+            }
+
+        # Add mul config for activation
+        config["mul"] = {
+            "memory_config": ttnn.L1_MEMORY_CONFIG,
+            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
+        }
+
+        return config
+
+    @classmethod
+    def prefill_model_config(cls, hf_config: Any, mesh_device: ttnn.MeshDevice) -> Dict:
+        """Generate prefill configuration for this module."""
+        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
+        _, mesh_width = mesh_device.shape
+
+        matmul_core_grid_size = ttnn.CoreCoord(
+            mesh_device.core_grid.x,
+            mesh_device.core_grid.y,
+        )
+
+        config = {
+            "mesh_device": mesh_device,
+            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "dim": dim,
+            "hidden_dim": hidden_dim,
+            "mesh_width": mesh_width,
+            "max_rows": SEQ_LEN_CHUNK_SIZE,
+            "matmul_core_grid_size": matmul_core_grid_size,
+        }
+
+        for name in ["w1", "w2", "w3"]:
+            config[name] = {
+                "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
+            }
+
+        config["mul"] = {
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
+        }
+
+        return config
+
+    @classmethod
+    def create_state(cls, hf_config: Any, mesh_device: ttnn.MeshDevice, ccl: Any = None) -> Dict:
+        """Create state (empty for shared expert)."""
+        return {}
+
+    @classmethod
+    def _silu_workaround(cls, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Workaround for the silu PCC issue in ttnn."""
+        x1 = ttnn.neg(x)
+        x2 = ttnn.ones_like(x)
+        x3 = ttnn.exp(x1)
+        ttnn.deallocate(x1)
+        x4 = ttnn.add(x3, 1)
+        ttnn.deallocate(x3)
+        x5 = ttnn.div(x2, x4)
+        ttnn.deallocate(x2)
+        ttnn.deallocate(x4)
+        x6 = ttnn.mul(x, x5)
+        ttnn.deallocate(x5)
+        return x6
 
     @classmethod
     def _get_prefill_pc(
@@ -280,125 +332,81 @@ class SharedExpert:
         )
 
     @classmethod
-    def _silu_workaround(cls, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Workaround for the silu PCC issue in ttnn."""
-        # -x
-        x1 = ttnn.neg(x)
-
-        # 1
-        x2 = ttnn.ones_like(x)
-
-        # exp(-x)
-        x3 = ttnn.exp(x1)
-        ttnn.deallocate(x1)
-
-        # 1 + exp(-x)
-        x4 = ttnn.add(x3, 1)
-        ttnn.deallocate(x3)
-
-        # 1 / (1 + exp(-x))
-        x5 = ttnn.div(x2, x4)
-        ttnn.deallocate(x2)
-        ttnn.deallocate(x4)
-
-        # x * (1 / (1 + exp(-x)))
-        x6 = ttnn.mul(x, x5)
-        ttnn.deallocate(x5)
-
-        return x6
-
-    @classmethod
-    def _forward(cls, x: ttnn.Tensor, cfg: Dict, mode: str) -> ttnn.Tensor:
-        """
-        Forward pass through shared expert.
-
-        Args:
-            x: Input tensor
-            cfg: Configuration dictionary with weights and configs
-            mode: "decode" or "prefill"
-
-        Returns:
-            Expert output
-        """
-        # Verify input memory config
-        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
-
-        if mode == "prefill":
-            num_layers, _, seq_len, _ = x.shape
-            original_seq_len = seq_len
-
-            # Chunk the input if needed
-            pad_rows = 0
-            max_rows = cfg.get("max_rows", SEQ_LEN_CHUNK_SIZE)
-            if seq_len > max_rows:
-                if seq_len % max_rows != 0:
-                    pad_rows = max_rows - (seq_len % max_rows)
-                    x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
-                    ttnn.deallocate(x)
-                    x = x_padded
-                    seq_len += pad_rows
-                x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, max_rows), max_rows, -1])
-                seq_len = max_rows
-
-            # Get program configs
-            pc_args = {
-                "seq_len": seq_len,
-                "dim": cfg["dim"],
-                "hidden_dim": cfg["hidden_dim"],
-                "mesh_width": cfg["mesh_width"],
-                "core_grid_size": cfg["matmul_core_grid_size"],
-            }
-
-            # Gate and up projections
-            w1_out = ttnn.linear(x, program_config=cls._get_prefill_pc(is_w2=False, **pc_args), **cfg["w1"])
-            w3_out = ttnn.linear(x, program_config=cls._get_prefill_pc(is_w2=False, **pc_args), **cfg["w3"])
-            ttnn.deallocate(x)
-
-            # Apply activation and multiply (SwiGLU)
-            activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
-            ttnn.deallocate(w1_out)
-            ttnn.deallocate(w3_out)
-
-            # Down projection
-            output = ttnn.linear(activated, program_config=cls._get_prefill_pc(is_w2=True, **pc_args), **cfg["w2"])
-            ttnn.deallocate(activated)
-
-            # De-chunk if needed
-            _, num_chunks, _, output_dim = output.shape
-            if num_chunks > 1:
-                output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
-                if pad_rows > 0:
-                    output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
-
-        else:  # decode mode
-            # Gate and up projections
-            w1_out = ttnn.linear(x, **cfg["w1"])
-            w3_out = ttnn.linear(x, **cfg["w3"])
-
-            # Apply silu workaround
-            w1_out_activated = cls._silu_workaround(w1_out)
-            ttnn.deallocate(w1_out)
-
-            # Apply activation and multiply
-            activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-            ttnn.deallocate(w1_out_activated)
-            ttnn.deallocate(w3_out)
-
-            # Down projection
-            output = ttnn.linear(activated, **cfg["w2"])
-            ttnn.deallocate(activated)
-
-        # Verify output memory config
-        assert output.memory_config() == cfg["output_memory_config"]
-
-        return output
-
-    @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """Forward pass in decode mode."""
-        return cls._forward(x, cfg, "decode")
+        assert x.memory_config() == cfg["input_memory_config"]
+
+        # Gate and up projections
+        w1_out = ttnn.linear(x, **cfg["w1"])
+        w3_out = ttnn.linear(x, **cfg["w3"])
+
+        # Apply silu workaround
+        w1_out_activated = cls._silu_workaround(w1_out)
+        ttnn.deallocate(w1_out)
+
+        # Multiply
+        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out_activated)
+        ttnn.deallocate(w3_out)
+
+        # Down projection
+        output = ttnn.linear(activated, **cfg["w2"])
+        ttnn.deallocate(activated)
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """Forward pass in prefill mode."""
-        return cls._forward(x, cfg, "prefill")
+        assert x.memory_config() == cfg["input_memory_config"]
+
+        # Handle chunking if needed
+        num_layers, _, seq_len, _ = x.shape
+        original_seq_len = seq_len
+        pad_rows = 0
+        max_rows = cfg.get("max_rows", SEQ_LEN_CHUNK_SIZE)
+
+        if seq_len > max_rows:
+            if seq_len % max_rows != 0:
+                pad_rows = max_rows - (seq_len % max_rows)
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
+            x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, max_rows), max_rows, -1])
+            seq_len = max_rows
+
+        # Get program configs
+        pc_args = {
+            "seq_len": seq_len,
+            "dim": cfg["dim"],
+            "hidden_dim": cfg["hidden_dim"],
+            "mesh_width": cfg["mesh_width"],
+            "core_grid_size": cfg["matmul_core_grid_size"],
+        }
+
+        # Gate and up projections
+        w1_out = ttnn.linear(x, program_config=cls._get_prefill_pc(is_w2=False, **pc_args), **cfg["w1"])
+        w3_out = ttnn.linear(x, program_config=cls._get_prefill_pc(is_w2=False, **pc_args), **cfg["w3"])
+        ttnn.deallocate(x)
+
+        # Apply activation and multiply
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+
+        # Down projection
+        output = ttnn.linear(activated, program_config=cls._get_prefill_pc(is_w2=True, **pc_args), **cfg["w2"])
+        ttnn.deallocate(activated)
+
+        # De-chunk if needed
+        if pad_rows > 0 or original_seq_len > max_rows:
+            _, num_chunks, _, output_dim = output.shape
+            if num_chunks > 1:
+                output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
