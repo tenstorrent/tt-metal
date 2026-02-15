@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_decode_device_operation.hpp"
+#include "ttnn/common/vector_init.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -32,10 +33,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor_args.v.has_value(), "Must have 3 input tensors and mask");
     }
 
-    std::vector<Tensor> input_tensors;
-    input_tensors.reserve(3);
-    input_tensors.emplace_back(tensor_args.q);
-    input_tensors.emplace_back(tensor_args.k);
+    auto input_tensors = vector_init<Tensor, 3>(tensor_args.q, tensor_args.k);
     if (tensor_args.v.has_value()) {
         input_tensors.emplace_back(tensor_args.v.value());
     }
