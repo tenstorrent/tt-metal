@@ -124,9 +124,11 @@ const std::string& MPIDistributedException::error_string() const noexcept { retu
 /* -------------------------- MPIRequest ---------------------------------- */
 
 MPIRequest::~MPIRequest() {
-    if (!done_ && req_ != MPI_REQUEST_NULL && !was_mpi_finalized()) {
+    // Check req_ first as it may be set to MPI_REQUEST_NULL by concurrent operations
+    if (req_ != MPI_REQUEST_NULL && !done_ && !was_mpi_finalized()) {
         // Free the request to avoid leaking MPI resources
         // MPI_Request_free marks the request for deallocation once the operation completes
+        // and sets req_ to MPI_REQUEST_NULL
         MPI_Request_free(&req_);
     }
 }
