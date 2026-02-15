@@ -187,7 +187,8 @@ class HostInterface:
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.intermed_cb_index,
-                        data_format=ttnn.uint32,
+                        # Setup CB data format for consistency. Value gets ignored in kernel.
+                        data_format=self.embedding_tensor.dtype if self.embedding_tensor else ttnn.uint32,
                         page_size=self.d2h_page_size,
                     )
                 ],

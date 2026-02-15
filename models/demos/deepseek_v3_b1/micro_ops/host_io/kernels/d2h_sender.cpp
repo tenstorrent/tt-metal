@@ -4,7 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include <pcie_noc_utils.h>
+#include "pcie_noc_utils.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {

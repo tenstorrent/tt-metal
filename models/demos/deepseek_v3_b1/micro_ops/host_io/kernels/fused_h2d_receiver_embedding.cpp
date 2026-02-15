@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include <pcie_noc_utils.h>
+#include "pcie_noc_utils.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -69,8 +69,11 @@ void kernel_main() {
             noc_async_read_barrier();
         }
 
+        // TODO: Add and assert that token id is within vocab size
         volatile tt_l1_ptr uint32_t* token_id_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+        // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
+        // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
