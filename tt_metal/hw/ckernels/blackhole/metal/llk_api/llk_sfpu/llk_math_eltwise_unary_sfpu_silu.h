@@ -7,18 +7,29 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel_sfpu_silu.h"
+#include "vconst_verifier.h"
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_silu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>(sfpu::silu_init<APPROXIMATE>);
+template <bool APPROXIMATE, typename vConstVerifier = vconst_verifier::disable>
+inline auto llk_math_eltwise_unary_sfpu_silu_init() {
+    return llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>(sfpu::silu_init<APPROXIMATE, vConstVerifier>);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+template <
+    bool APPROXIMATE,
+    bool is_fp32_dest_acc_en,
+    int ITERATIONS = 8,
+    typename vConstVerifier = vconst_verifier::disable>
+inline auto llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    return _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_silu<is_fp32_dest_acc_en, ITERATIONS, vConstVerifier>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, typename vConstVerifier>
+inline auto llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    return llk_math_eltwise_unary_sfpu_silu<APPROXIMATE, is_fp32_dest_acc_en, 8, vConstVerifier>(
+        dst_index, vector_mode);
 }
 
 }  // namespace ckernel

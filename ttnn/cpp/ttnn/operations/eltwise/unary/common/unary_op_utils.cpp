@@ -512,10 +512,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 "clamp_tile_init();",
                 fmt::format(
-                    "clamp_tile({}, {}, {});",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    "clamp_tile({}, {}, {});", idst, std::bit_cast<uint32_t>(param0), std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::HARDTANH: {
             float param1 = params[1];
@@ -714,7 +711,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::ATAN: return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
         case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::TAN: return {"tan_tile_init();", fmt::format("tan_tile({});", idst)};
-        case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
+        case UnaryOpType::SILU:
+            return {
+                "auto silu_tile_regs = silu_tile_init<vconst_verifier::no_used_regs>();",
+                fmt::format("silu_tile<decltype(silu_tile_regs)>({});", idst)};
         case UnaryOpType::FLOOR:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");

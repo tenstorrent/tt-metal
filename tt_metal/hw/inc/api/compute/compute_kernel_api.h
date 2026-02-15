@@ -13,6 +13,7 @@
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "internal/risc_attribs.h"
+#include "vconst_verifier.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -463,9 +464,19 @@ ALWI void expm1_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
+template <typename vConstVerifier = vconst_verifier::disable>
+ALWI void silu_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE, vConstVerifier>(idst)));
+}
 
-ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
+template <typename vConstVerifier = vconst_verifier::disable>
+ALWI auto silu_tile_init() {
+#ifdef TRISC_MATH
+    return MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX, vConstVerifier>()));
+#else
+    return vConstVerifier();
+#endif
+}
 
 // topK local sort
 // clang-format off

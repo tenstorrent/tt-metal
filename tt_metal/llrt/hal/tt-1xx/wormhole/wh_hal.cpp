@@ -109,6 +109,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-1xx/wormhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
+        includes.push_back("tt_metal/third_party/tt_llk/common/inc");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
