@@ -65,6 +65,7 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     TT_ASSERT(
         this->initialized_all_gather && this->initialized_fused_op, "RingSDPAFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(out_rt_args.size() + 6);
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->forward_writes_expected));

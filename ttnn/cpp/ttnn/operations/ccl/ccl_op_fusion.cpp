@@ -51,6 +51,9 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     uint32_t all_gather_direction) {
     TT_FATAL(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(
+        out_rt_args.size() + 6 + 2 * this->all_gather_worker_cores_noc.size() +
+        2 * this->fused_op_receiver_cores_noc.size());
     out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
     out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
@@ -115,6 +118,9 @@ void StridedAllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     uint32_t all_gather_direction) {
     TT_FATAL(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(
+        out_rt_args.size() + 6 + 2 * this->all_gather_worker_cores_noc.size() +
+        2 * this->fused_op_receiver_cores_noc.size());
     out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
     out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
@@ -313,6 +319,9 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx) {
     TT_FATAL(initialized_fused_op && initialized_reduce_scatter, "MatmulFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(
+        out_rt_args.size() + 6 + 2 * this->matmul_worker_cores_noc.size() +
+        2 * this->fused_op_receiver_cores_noc.size());
     out_rt_args.push_back(static_cast<uint32_t>(this->matmul_worker_cores_noc.size()));
     uint32_t curr_worker_index = 0;
     bool core_found = false;
@@ -351,6 +360,7 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
 void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset) {
     TT_FATAL(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(out_rt_args.size() + 9);
     out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
@@ -402,6 +412,7 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     CoreCoord current_core,
     tt::tt_metal::NOC writer_noc,
     const tt::tt_metal::IDevice* device) const {
+    out_rt_args.reserve(out_rt_args.size() + 11);
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.x));
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.y));
     out_rt_args.push_back(static_cast<uint32_t>(this->matmul_privilaged_semaphore));
