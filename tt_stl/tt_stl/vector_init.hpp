@@ -7,19 +7,11 @@
 #include <vector>
 #include <type_traits>
 
-struct vector_size {
-    size_t n;
-};
+#include <tt_stl/strong_type.hpp>
 
-template <typename T, typename... Vs>
-std::vector<T> vector_init(const vector_size n, Vs&&... init_values)
-    requires requires { std::disjunction_v<std::is_same<T, Vs>...>; }
-{
-    std::vector<T> vec;
-    vec.reserve(std::max(sizeof...(Vs), n.n));
-    (vec.emplace_back(std::forward<Vs>(init_values)), ...);
-    return vec;
-}
+namespace ttsl {
+
+using vector_size = StrongType<size_t, struct VectorSizeTag>;
 
 template <typename T, size_t N, typename... Vs>
 std::vector<T> vector_init(Vs&&... init_values)
@@ -38,3 +30,13 @@ template <typename T, typename... Vs>
 std::vector<T> vector_init(Vs&&... init_values) {
     return vector_init<T, sizeof...(Vs), Vs...>(std::forward<Vs>(init_values)...);
 }
+
+template <typename T, typename... Vs>
+std::vector<T> vector_init(const vector_size reserve_count, Vs&&... init_values) {
+    std::vector<T> vec;
+    vec.reserve(*reserve_count);
+    (vec.emplace_back(std::forward<Vs>(init_values)), ...);
+    return vec;
+}
+
+}  // namespace ttsl

@@ -5,7 +5,7 @@
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
-#include "ttnn/common/vector_init.hpp"
+#include <tt_stl/vector_init.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -925,7 +925,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             num_reduce_tiles_per_block_h = Kt - last_core_width_index * block_wt;
         }
 
-        auto compute_args = vector_init<uint32_t, 6>(num_reduce_tiles_per_block_h);
+        auto compute_args = ttsl::vector_init<uint32_t, 6>(num_reduce_tiles_per_block_h);
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             compute_args.push_back(1);
@@ -956,8 +956,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             if (reader_noc == NOC::NOC_1) {
                 std::swap(mcast_start, mcast_end);
             }
-            auto mcast_sender_args = vector_init<uint32_t>(
-                vector_size{6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size()},
+            auto mcast_sender_args = ttsl::vector_init<uint32_t>(
+                ttsl::vector_size{6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size()},
                 mcast_start.x,
                 mcast_start.y,
                 mcast_end.x,
@@ -988,7 +988,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             tt::tt_metal::SetRuntimeArgs(
                 program, reader_mcast_receiver_kernels_id_all_to_all, core, mcast_receiver_args);
         } else {
-            auto mcast_receiver_args = vector_init<uint32_t>(
+            auto mcast_receiver_args = ttsl::vector_init<uint32_t>(
                 all_to_all_worker_tile_offset_size_bytes, 0u, 0u, 0u, in0_mcast_noc_x[0], in0_mcast_noc_y[0]);
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
         }

@@ -8,7 +8,7 @@
 #include <string>
 #include <optional>
 
-#include "ttnn/common/vector_init.hpp"
+#include <tt_stl/vector_init.hpp>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -986,7 +986,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
             } else {  // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
-                auto mcast_receiver_args = vector_init<uint32_t>(
+                auto mcast_receiver_args = ttsl::vector_init<uint32_t>(
                     device->worker_core_from_logical_core(group.front()).x,
                     device->worker_core_from_logical_core(group.front()).y);
                 tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
@@ -999,7 +999,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
     for (auto core : core_coords) {
-        auto writer_mcast_sender_args = vector_init<uint32_t>(
+        auto writer_mcast_sender_args = ttsl::vector_init<uint32_t>(
             packed_cinv_value,
             packed_winv_value,
             e.u,

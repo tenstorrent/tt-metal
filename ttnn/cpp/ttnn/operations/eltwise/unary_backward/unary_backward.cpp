@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <ttnn/common/vector_init.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
@@ -507,7 +507,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    auto result = vector_init<std::optional<Tensor>>(std::nullopt);
+    auto result = ttsl::vector_init<std::optional<Tensor>>(std::nullopt);
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     result[0] = ttnn::neg(grad, output_mem_config, input_grad);
     return result;
@@ -532,7 +532,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto result = vector_init<std::optional<Tensor>>(std::nullopt);
+    auto result = ttsl::vector_init<std::optional<Tensor>>(std::nullopt);
     result[0] = input_grad.has_value()
                     ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad)
                     : ttnn::zeros_like(grad);
@@ -653,7 +653,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAtan::invoke(
     grad_tensor.reserve(1);
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+    auto ops_chain = ttsl::vector_init<EltwiseUnaryWithParam>(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RECIP});
@@ -888,7 +888,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    auto result = vector_init<std::optional<Tensor>>(std::nullopt);
+    auto result = ttsl::vector_init<std::optional<Tensor>>(std::nullopt);
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     bool approximate_mode = false;
@@ -972,7 +972,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAtanh::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+    auto ops_chain = ttsl::vector_init<EltwiseUnaryWithParam>(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::NEG},
@@ -1014,7 +1014,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAsin::invoke(
     grad_tensor.reserve(1);
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+    auto ops_chain = ttsl::vector_init<EltwiseUnaryWithParam>(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::NEG},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
@@ -1055,7 +1055,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAsinh::invoke(
     grad_tensor.reserve(1);
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+    auto ops_chain = ttsl::vector_init<EltwiseUnaryWithParam>(
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RSQRT});
@@ -1186,7 +1186,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftsign::invoke(
     grad_tensor.reserve(1);
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    auto ops_chain = vector_init<EltwiseUnaryWithParam>(
+    auto ops_chain = ttsl::vector_init<EltwiseUnaryWithParam>(
         EltwiseUnaryWithParam{UnaryOpType::ABS},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},

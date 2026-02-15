@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/reduction/topk/topk.hpp"
 
-#include "ttnn/common/vector_init.hpp"
+#include <tt_stl/vector_init.hpp>
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -283,7 +283,7 @@ std::vector<Tensor> topk(
         output_tensors);
 
     // Package results into vector format expected by post-processing
-    auto output_tensor_vec = vector_init<Tensor>(std::move(output_value_tensor), std::move(output_index_tensor));
+    auto output_tensor_vec = ttsl::vector_init<Tensor>(std::move(output_value_tensor), std::move(output_index_tensor));
 
     // Apply post-processing transformations to restore original format
     return operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
