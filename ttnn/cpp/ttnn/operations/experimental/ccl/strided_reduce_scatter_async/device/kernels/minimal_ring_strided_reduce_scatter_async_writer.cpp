@@ -314,7 +314,7 @@ void kernel_main() {
 
                                 uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
                                 while (tiles_remaining_in_step > 0) {
-                                    uint32_t tiles_to_put_in_current_packet =
+                                    const uint32_t tiles_to_put_in_current_packet =
                                         (i < (ring_size - 1))
                                             ? std::min(tiles_remaining_in_step, num_tiles_to_write_per_packet)
                                             : 1;
