@@ -129,8 +129,10 @@ MPIRequest::~MPIRequest() {
     }
     // Cancel and free the incomplete request
     // Not using MPI_CHECK here to avoid throwing in destructor
-    MPI_Cancel(&req_);
-    MPI_Request_free(&req_);
+    // Errors are ignored because we cannot throw from a destructor
+    // and the request will be freed regardless
+    [[maybe_unused]] int err1 = MPI_Cancel(&req_);
+    [[maybe_unused]] int err2 = MPI_Request_free(&req_);
 }
 
 Status MPIRequest::wait() {
