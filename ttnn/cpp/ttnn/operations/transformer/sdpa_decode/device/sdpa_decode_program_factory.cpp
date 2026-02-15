@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <tt_stl/vector_init.hpp>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -963,7 +964,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
 
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args = {
+        auto reader_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{15 + output_core_physical_xs.size() + output_core_physical_ys.size()},
             q_addr,
             k_addr,
             v_addr,
@@ -978,12 +980,15 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             cur_batch,
             core_num_in_reduce,
             core_num_in_output,
-            cur_pos};
+            cur_pos);
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
         // writer runtime args
-        std::vector<uint32_t> writer_rt_args = {
+        auto writer_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{
+                10 + reduce_core_physical_xs.size() + reduce_core_physical_ys.size() + output_core_physical_xs.size() +
+                output_core_physical_ys.size()},
             out_addr,
             worker_id_for_reduce,
             worker_id_for_output,
@@ -993,7 +998,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
             cur_batch,
             core_num_in_reduce,
             core_num_in_output,
-            cur_pos};
+            cur_pos);
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
         writer_rt_args.insert(writer_rt_args.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());

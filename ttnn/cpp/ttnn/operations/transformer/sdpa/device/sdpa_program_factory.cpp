@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <cmath>
+#include <tt_stl/vector_init.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -919,26 +920,25 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
 
-        std::vector<uint32_t> reader_args;
-        reader_args.reserve(is_causal ? 17 : 29);
-        reader_args.push_back(q_addr);
-        reader_args.push_back(k_addr);
-        reader_args.push_back(v_addr);
-        reader_args.push_back(mask_addr);
-        reader_args.push_back(is_chunked ? page_table.value().buffer()->address() : 0);
-        reader_args.push_back(attention_sink_addr);
-        reader_args.push_back(
-            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0);
-        reader_args.push_back(i);
-        reader_args.push_back(local_batch_start);
-        reader_args.push_back(local_batch_end);
-        reader_args.push_back(local_nh_start);
-        reader_args.push_back(local_nh_end);
-        reader_args.push_back(local_q_start);
-        reader_args.push_back(local_q_end);
-        reader_args.push_back(num_phases);
-        reader_args.push_back(chunked_q_chunk_offset);
-        reader_args.push_back(read_offset);
+        auto reader_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{is_causal ? 17u : 29u},
+            q_addr,
+            k_addr,
+            v_addr,
+            mask_addr,
+            is_chunked ? page_table.value().buffer()->address() : 0,
+            attention_sink_addr,
+            flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
+            i,
+            local_batch_start,
+            local_batch_end,
+            local_nh_start,
+            local_nh_end,
+            local_q_start,
+            local_q_end,
+            num_phases,
+            chunked_q_chunk_offset,
+            read_offset);
 
         // Add chain metadata for non-causal case
         if (!is_causal) {

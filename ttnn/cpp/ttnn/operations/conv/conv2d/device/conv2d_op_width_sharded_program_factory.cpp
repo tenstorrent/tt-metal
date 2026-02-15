@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
@@ -612,11 +613,11 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
         uint32_t core_x = core_index % full_core_grid.x;
         uint32_t core_y = core_index / full_core_grid.x;
-        std::vector<uint32_t> rt_args = {
+        auto rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{3 + act_mcast_noc_x.size() + act_mcast_noc_y.size()},
             core_x,
             core_y,
-            full_core_grid.x,  // num_cores_x
-        };
+            full_core_grid.x);  // num_cores_x
 
         // Mcast X Lookup table
         rt_args.insert(rt_args.end(), act_mcast_noc_x.begin(), act_mcast_noc_x.end());
