@@ -311,7 +311,9 @@ class MoEBlock:
             hidden_size = self.config["experts"]["distributed"]["hidden_size"]
             repeat_dims = (hidden_size, 1, 1, 1)
         else:
-            repeat_dims = weight_repeat_config.get("repeat_dims", (1, 1, 1, 1))
+            # If config exists but no repeat_dims, use proper default based on hidden size
+            hidden_size = self.config["experts"]["distributed"]["hidden_size"]
+            repeat_dims = weight_repeat_config.get("repeat_dims", (hidden_size, 1, 1, 1))
 
         # Convert to ROW_MAJOR for repeat
         weights_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)

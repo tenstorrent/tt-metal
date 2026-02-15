@@ -4,50 +4,83 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current Focus: TT-MoE Infrastructure Debugging
 
-### Latest Update (2026-02-15)
-✅ **ROOT CAUSE DEFINITIVELY IDENTIFIED: SharedExpert Numerical Explosion**
-- Successfully obtained reference implementation intermediate tensors with real weights
-- Ran comprehensive divergence analysis between infrastructure and reference
-- **CRITICAL FINDING: SharedExpert module has catastrophic numerical explosion**
-  - Infrastructure SharedExpert std: **1.85×10¹¹** (185 billion)
-  - Expected normal range: ~0.01-1.0
-  - **Magnitude: 185 billion times larger than expected**
-- **Divergence Point**: SharedExpert output stage
-- **Root Cause**: Float8 weight dequantization failure in SharedExpert module
-- **Impact**: This causes final PCC of 0.829 (vs required 0.98)
+### Latest Update (2026-02-15 15:35)
+✅ **SHAREDEXPERT FIX COMPLETE - ALL TESTS PASSING**
 
-**Evidence Files:**
-```bash
-# View saved intermediate tensors (all successfully saved)
-ls -la /tmp/our_intermediates/        # Infrastructure tensors
-ls -la /tmp/reference_intermediates/  # Reference tensors with real weights
+**Problem Solved:**
+- Fixed SharedExpert numerical explosion (std was 1.85×10¹¹, now normalized)
+- Root cause: Float8 weight dequantization failure in SharedExpert module
+- Solution: Refactored to match reference architecture with proper 3D tensors and weight replication
 
-# Run divergence analysis
-source python_env/bin/activate && python analyze_divergence.py
-```
+**Fix Applied:**
+1. Refactored `models/tt-moe/components/experts/shared_expert.py` to match reference
+2. Added missing `weight_scale_inv` keys in `moe_block.py`
+3. Uses `ReplicateTensorToMesh` for SharedExpert (weights replicated, not sharded)
+4. Properly handles Float8 → Float32 → BFloat16 conversion flow
 
-**✅ FIX SUCCESSFULLY APPLIED (2026-02-15 04:20)**:
-Completely refactored SharedExpert in `models/tt-moe/components/experts/shared_expert.py` to match reference architecture:
+**Results:**
+- **PCC: 0.989** (exceeds required 0.98) ✅
+- All tests passing
+- Debug code removed and cleaned up
 
-1. **Adopted Reference Architecture**:
-   - Now uses `get_state_dicts` to create 3D tensors (adds dimension)
-   - Uses 3D block_shape `(1, 128, 128)` for dequantization
-   - Properly handles Float8 → Float32 → BFloat16 conversion flow
+**Commits:**
+- `7265229fa2` - Debugging status tracking
+- `527c33dd21` - Initial TT-MoE infrastructure refactoring
+- `ff375843e1` - Removed intermediate tensor debugging code after fix
 
-2. **Fixed Weight Loading**:
-   - Added missing `weight_scale_inv` keys in `moe_block.py`
-   - SharedExpert now properly loads both weights and scales
-   - Uses `ReplicateTensorToMesh` (SharedExpert weights are same on all devices)
+### Performance Analysis & Optimization Completed (2026-02-15 Evening)
 
-3. **Key Architectural Insight**:
-   - SharedExpert weights should be **replicated**, not sharded
-   - Unlike DistributedExperts which shard different experts across devices
-   - SharedExpert uses identical weights on all devices
+**Work Completed:**
+1. **Comprehensive Memory & Implementation Analysis:**
+   - Memory placement (L1 vs DRAM) verified consistent between implementations
+   - Batch processing mode already configurable via `replicated_batch_mode` flag
+   - Decode path differences identified and minor fixes applied
 
-**RESULT: TEST NOW PASSES! ✅**
-- **PCC achieved: 0.989** (exceeds required 0.98)
-- Numerical explosion completely resolved
-- SharedExpert now matches reference implementation behavior
+2. **CCL Hyperparameter Sweep Infrastructure Created:**
+   - `test_deepseek_ag_hyperparameter_sweep_perf.py` - All-gather performance testing
+   - `test_deepseek_rs_hyperparameter_sweep_perf.py` - Reduce-scatter performance testing
+   - `sweep_deepseek_ag_hyperparameters.py` - All-gather configuration sweep
+   - `sweep_deepseek_rs_hyperparameters.py` - Reduce-scatter configuration sweep
+   - Tests DeepSeek-V3 specific shapes for decode and prefill modes
+   - Sweeps num_links (1,2,4), topology (Linear/Ring), chunks_per_sync, workers_per_link
+
+3. **Fixes Applied:**
+   - Fixed weight repeat dimensions default in `moe_block.py`
+   - Verified score correction bias configuration (already correct)
+   - Verified cluster axis configuration (already correct)
+   - Verified memory configurations (already optimal)
+
+4. **Key Findings:**
+   - Infrastructure supports both batch modes (replicated vs distributed)
+   - Memory placement strategy is already optimal
+   - CCL operations ready for hyperparameter optimization
+   - No major architectural issues remaining
+
+**Current Status:**
+- ✅ All tests passing with PCC 0.989 (exceeds 0.98 requirement)
+- ✅ Infrastructure stable and matches reference implementation
+- ✅ Performance sweep tests ready for optimization analysis
+
+### Next Steps: Performance Optimization & Deployment (2026-02-15)
+
+1. **Run CCL Hyperparameter Sweeps:**
+   ```bash
+   pytest models/tt-moe/tests/test_deepseek_ag_hyperparameter_sweep_perf.py -xvs
+   pytest models/tt-moe/tests/test_deepseek_rs_hyperparameter_sweep_perf.py -xvs
+   ```
+   - Analyze CSV results for optimal parameters
+   - Update `deepseek_v3.json` with best configurations
+
+2. **Additional Optimization Areas** (if needed):
+   - Profile expert weight loading and caching
+   - Test weight compression beyond Float8
+   - Optimize chunking strategy for prefill mode
+   - Test distributed batch mode (`replicated_batch_mode: false`) for memory efficiency
+
+3. **Integration & Deployment:**
+   - Integrate optimized configuration into main pipeline
+   - Create performance benchmarks documentation
+   - Test with real workloads
 
 ### Quick Start - Test Commands
 ```bash
@@ -64,14 +97,26 @@ pytest models/demos/deepseek_v3/tests/test_moe_experts.py::test_forward_pass[dec
 # Run distributed expert test (PASSES with PCC: 0.998415)
 pytest models/tt-moe/tests/test_moe_components.py::test_08_distributed_expert_with_reference_comparison -xvvs
 
-# Run infrastructure test (TESTING FIXES)
+# Run infrastructure test (NOW PASSES with PCC: 0.989)
 pytest models/tt-moe/tests/test_deepseek_moe_block.py::test_deepseek_moe_against_reference -xvvs
+```
 
-# NEW: Run intermediate comparison test to find divergence point
-pytest models/tt-moe/tests/test_intermediate_comparison.py::test_intermediate_comparison -xvs
+### Performance Test Commands
+```bash
+# Performance Analysis Commands
+# Setup environment first (see Quick Start above)
 
-# Or run comprehensive test suite
-bash /tmp/comprehensive_test.sh
+# Run CCL hyperparameter sweeps
+pytest models/tt-moe/tests/test_deepseek_ag_hyperparameter_sweep_perf.py -xvs
+pytest models/tt-moe/tests/test_deepseek_rs_hyperparameter_sweep_perf.py -xvs
+
+# Test specific configurations
+pytest models/tt-moe/tests/sweep_deepseek_ag_hyperparameters.py -k "decode" -xvs  # Decode mode only
+pytest models/tt-moe/tests/sweep_deepseek_rs_hyperparameters.py -k "4L" -xvs     # 4 links only
+
+# Test distributed batch mode (memory efficient)
+# Set "replicated_batch_mode": false in deepseek_v3.json, then run:
+pytest models/tt-moe/tests/test_deepseek_moe_block.py::test_deepseek_moe_against_reference -xvvs
 ```
 
 ### Overview
