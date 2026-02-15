@@ -284,16 +284,24 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     moe_runtime: Any | None = None,
     profile: dict[str, float] | None = None,
     use_decode_rope: bool = False,
+    positions_main_tt: ttnn.Tensor | None = None,
+    positions_draft_tt: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """Run one decode step for a single decoder layer and update its KVPE cache.
 
     Inputs:
     - x_embed_tok: [1, 1, B, hidden] tiled, batch is in dim=2 (seq axis)
     - tt_positions: TT int32 [B] row-major, absolute positions for each batch slot
+      (used for RoPE and attention; all lanes have real positions)
     - page_table_tt: [B, max_num_blocks_per_req] int32 row-major on device
     - kvpe_cache: [num_blocks, 1, block_size, kvpe_dim] on device
     - cos_batch/sin_batch/trans_matrix: RoPE tensors for the per-user positions
     - w: weights object with RMSNorms and projection weights (duck-typed)
+    - positions_main_tt: optional TT int32 [B] with draft lanes = -1.
+    - positions_draft_tt: optional TT int32 [B] with main lanes = -1.
+      When both positions_main_tt and positions_draft_tt are provided,
+      paged_update_cache is called twice with alternating -1 masks to serialize
+      writes for aliased page_table entries (batch-expansion spec decode).
 
     Returns:
     - x_out: [1, 1, B, hidden] tiled
@@ -414,6 +422,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     explicit_prog_cfg = _env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG")
     skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
     concat_heads = _env_bool("GLM4_MOE_LITE_CONCAT_HEADS")
+    skip_typecast = _env_bool("GLM4_MOE_LITE_SKIP_TYPECAST")
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
     fuse_mlp_moe_reduce = _env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE")
 
@@ -728,7 +737,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
         # RoPE op requires BF16.
-        if kv_rope.dtype != ttnn.bfloat16:
+        if not skip_typecast and kv_rope.dtype != ttnn.bfloat16:
             kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
         if use_decode_rope:
             kv_rope = _rope_decode(kv_rope, heads=1)
@@ -768,20 +777,32 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             except Exception:
                 mesh_coords = None
 
-        if mesh_coords is None:
+        # Serial paged_update_cache for batch-expansion spec decode:
+        # When positions_draft_tt is provided, two sequential calls with
+        # alternating -1 masks serialize writes from aliased page_table
+        # entries (main lane and its draft verification lane share pages).
+        _puc_kwargs = dict(page_table=page_table_tt)
+        if mesh_coords is not None:
+            _puc_kwargs["mesh_coords"] = mesh_coords
+
+        if positions_main_tt is not None and positions_draft_tt is not None:
+            # Call 1: update main lanes (draft lanes masked to -1)
             ttnn.experimental.paged_update_cache(
-                kvpe_cache,
-                kvpe_new_sharded,
-                update_idxs_tensor=tt_positions,
-                page_table=page_table_tt,
+                kvpe_cache, kvpe_new_sharded,
+                update_idxs_tensor=positions_main_tt,
+                **_puc_kwargs,
+            )
+            # Call 2: update draft lanes (main lanes masked to -1)
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache, kvpe_new_sharded,
+                update_idxs_tensor=positions_draft_tt,
+                **_puc_kwargs,
             )
         else:
             ttnn.experimental.paged_update_cache(
-                kvpe_cache,
-                kvpe_new_sharded,
+                kvpe_cache, kvpe_new_sharded,
                 update_idxs_tensor=tt_positions,
-                page_table=page_table_tt,
-                mesh_coords=mesh_coords,
+                **_puc_kwargs,
             )
         if os.environ.get("GLM4_MOE_LITE_SYNC_AFTER_KV_UPDATE", "").strip() == "1":
             # Debug-only: enforce a barrier between KV cache update and subsequent
@@ -843,7 +864,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     else:
         q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,B,kv_lora_rank]
 
-    if q_rope.dtype != ttnn.bfloat16:
+    if not skip_typecast and q_rope.dtype != ttnn.bfloat16:
         q_rope = ttnn.typecast(q_rope, dtype=ttnn.bfloat16)
     if use_decode_rope:
         q_rope = _rope_decode(q_rope, heads=int(hparams.num_attention_heads))
