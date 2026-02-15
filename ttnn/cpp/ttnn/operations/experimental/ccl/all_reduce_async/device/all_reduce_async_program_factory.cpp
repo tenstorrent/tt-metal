@@ -13,6 +13,7 @@
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
@@ -432,7 +433,8 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
             .compile_args = reader_compile_args});
 
     // Writer
-    std::vector<uint32_t> writer_compile_args = {
+    auto writer_compile_args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{8 + forward_args.size() + backward_args.size()},
         device_index,                     // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -440,8 +442,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         num_pages_per_packet,             // packet_size_in_pages
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-    };
+        num_targets_backward);            // num_targets_backward_direction
     writer_compile_args.insert(writer_compile_args.end(), forward_args.begin(), forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), backward_args.begin(), backward_args.end());
     log_trace(tt::LogOp, "Writer Compile Args:");

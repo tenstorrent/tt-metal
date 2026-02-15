@@ -5,6 +5,7 @@
 #include "all_gather_async_llama_sharded_program_factory.hpp"
 
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
+#include <tt_stl/vector_init.hpp>
 
 namespace ttnn {
 
@@ -157,7 +158,8 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
+    writer_kernel_config.compile_args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{10 + forward_args.size() + backward_args.size()},
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -167,9 +169,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
         ring_size,                        // ring_size
-        barrier_semaphore.has_value() &&  // use_barrier_sem
-            !using_persistent_buffers,
-    };
+        static_cast<uint32_t>(barrier_semaphore.has_value() && !using_persistent_buffers));  // use_barrier_sem
     writer_kernel_config.compile_args.insert(
         writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
     writer_kernel_config.compile_args.insert(

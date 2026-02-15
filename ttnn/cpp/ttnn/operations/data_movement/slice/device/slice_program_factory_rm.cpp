@@ -11,6 +11,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -71,17 +72,18 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
-    std::vector<uint32_t> common_reader_kernel_args = {
+    auto common_reader_kernel_args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{10 + num_unpadded_sticks_per_dim.size() + num_padded_sticks_per_dim.size()},
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
         padded_row_size_bytes,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
         misalignment,
-        0,
-        0,
-        0,
-        0};
+        0u,
+        0u,
+        0u,
+        0u);
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
     common_reader_kernel_args.insert(
