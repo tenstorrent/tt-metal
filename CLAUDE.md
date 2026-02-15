@@ -81,14 +81,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Status:** Planning phase complete, ready for implementation
 
-### GPT-OSS Integration Completed (2026-02-15 17:30)
+### GPT-OSS Integration Status (2026-02-15 19:00)
 
-**Implementation Complete:**
+**Partial Implementation Complete:**
 - ✅ Created `gpt_oss.json` configuration file
-- ✅ Implemented `TopKRouter` component for GPT-OSS routing
+- ✅ Implemented `TopKRouter` component for GPT-OSS routing (verified correct)
 - ✅ Updated `moe_block.py` to support multiple router types
-- ✅ Created comprehensive test suite in `test_gpt_oss_moe_block.py`
-- ✅ Configuration loading test passes successfully
+- ✅ Created test suite in `test_gpt_oss_moe_block.py`
+- ✅ Configuration loading test passes
+- ✅ GPT-OSS-120B weights organized at `/data/MLPerf/huggingface/hub/models--openai--gpt-oss-120b/`
+
+**🔴 CRITICAL ISSUE FOUND:**
+- ❌ **Missing ThroughputExperts Implementation** - GPT-OSS requires fundamentally different expert architecture
+- Current implementation uses DeepSeek's `DistributedExpert` which lacks:
+  - Sparse matmul operations (`ttnn.sparse_matmul`)
+  - MoE expert token remap (`ttnn.moe_expert_token_remap`)
+  - Proper SwiGLU with clamping: `(up + 1) * (gate * sigmoid(gate * alpha))`
+  - All-reduce operation after combine
+- Without ThroughputExperts, GPT-OSS **cannot function correctly**
 
 **Files Created/Modified:**
 - `models/tt-moe/configs/gpt_oss.json` - GPT-OSS configuration

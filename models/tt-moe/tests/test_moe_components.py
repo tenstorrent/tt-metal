@@ -392,15 +392,15 @@ def test_06_distributed_expert_with_reference_comparison(mesh_device):
     with open(config_path, "r") as f:
         config_json = json.load(f)["moe_block"]
 
-    # Extract distributed expert config
-    distributed_config = config_json["experts"]["distributed"]
+    # Extract model parameters from simplified config
+    model_params = config_json["model_params"]
 
     # Configuration based on DeepSeek-V3 from JSON file
     class MockConfig:
-        n_routed_experts = distributed_config["n_routed_experts"]
-        hidden_size = distributed_config["hidden_size"]
-        moe_intermediate_size = distributed_config["intermediate_size"]
-        quantization_config = {"weight_block_size": distributed_config["weight_block_size"]}
+        n_routed_experts = model_params["num_experts"]
+        hidden_size = model_params["hidden_size"]
+        moe_intermediate_size = model_params["intermediate_size"]
+        quantization_config = {"weight_block_size": [128, 128]}  # Default for DeepSeek-V3
         hidden_act = "silu"  # Maps to swiglu in the config
 
     hf_config = MockConfig()

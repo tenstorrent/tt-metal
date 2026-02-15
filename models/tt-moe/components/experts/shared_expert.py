@@ -107,7 +107,11 @@ class SharedExpert:
     def _get_model_dims_from_cfg(cls, hf_config: Any) -> Tuple[int, int]:
         """Get dimensions - uses moe_intermediate_size for shared expert."""
         dim = hf_config.hidden_size
-        hidden_dim = hf_config.moe_intermediate_size  # Key difference from regular MLP
+        # Check for both possible attribute names
+        if hasattr(hf_config, "moe_intermediate_size"):
+            hidden_dim = hf_config.moe_intermediate_size  # Key difference from regular MLP
+        else:
+            hidden_dim = hf_config.intermediate_size  # Fallback for simplified config
         return dim, hidden_dim
 
     @classmethod
