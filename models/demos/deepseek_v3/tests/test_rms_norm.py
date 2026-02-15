@@ -103,7 +103,7 @@ def test_forward_pass(
         cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
     cache = TensorCache(state_dict_for_cache, hf_config.to_dict(), cache_storage)
     context = WeightSpecContext(resolver=lambda key: state_dict_for_cache[key])
-    weight_spec = RMSNormClass.create_weight_spec(hf_config, mesh_device.shape, context.with_prefix(prefix))
+    weight_spec = RMSNormClass.create_weight_spec(hf_config, mesh_device, context.with_prefix(prefix))
     weight_config_inner = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)
 
     if RMSNormClass is DistributedRMSNorm:

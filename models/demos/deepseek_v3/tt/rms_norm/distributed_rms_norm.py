@@ -64,10 +64,10 @@ class DistributedRMSNorm(RMSNormBase):
 
     @classmethod
     def create_weight_spec(
-        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
     ) -> ModuleWeightSpec:
         """Weight spec for cache-based loading. Returns flat {"weight": ...}; wrap with rms_norm_post_all_gather in run_config."""
-        num_shards = mesh_shape[0]
+        num_shards = mesh_device.shape[0]
 
         def preprocessor(t: torch.Tensor) -> torch.Tensor:
             assert len(t.shape) == 1, "Weight expected to be a 1D tensor"

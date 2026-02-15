@@ -81,7 +81,7 @@ class LMHead1D(AbstractModule):
     def create_weight_spec(
         cls,
         hf_config: PretrainedConfig,
-        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        mesh_device: ttnn.MeshDevice,
         context: WeightSpecContext,
     ) -> ModuleWeightSpec:
         return {

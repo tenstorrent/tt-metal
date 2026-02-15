@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 
@@ -35,9 +37,16 @@ def sample_hf_config():
     return {"factor": 2, "hidden_size": 128}
 
 
+@dataclass(frozen=True)
+class _FakeMeshDevice:
+    shape: tuple[int, int]
+
+
 class SimpleModule:
     @classmethod
-    def create_weight_spec(cls, hf_config, mesh_shape: (int, int), context: WeightSpecContext) -> ModuleWeightSpec:
+    def create_weight_spec(
+        cls, hf_config, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
+    ) -> ModuleWeightSpec:
         return {
             "weight0": WeightSpec(
                 name="weight0",
@@ -58,7 +67,9 @@ class SimpleModule:
 
 class SimpleEmbeddingModule:
     @classmethod
-    def create_weight_spec(cls, hf_config, mesh_shape: (int, int), context: WeightSpecContext) -> ModuleWeightSpec:
+    def create_weight_spec(
+        cls, hf_config, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
+    ) -> ModuleWeightSpec:
         return {
             "weight": WeightSpec(
                 name="weight",
@@ -72,13 +83,15 @@ class SimpleEmbeddingModule:
 
 class SimpleModel:
     @classmethod
-    def create_weight_spec(cls, hf_config, mesh_shape: (int, int), context: WeightSpecContext) -> ModuleWeightSpec:
+    def create_weight_spec(
+        cls, hf_config, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
+    ) -> ModuleWeightSpec:
         return {
             "embedding": SimpleEmbeddingModule.create_weight_spec(
-                hf_config, mesh_shape, context.with_prefix("embedding")
+                hf_config, mesh_device, context.with_prefix("embedding")
             ),
-            "layers.0": SimpleModule.create_weight_spec(hf_config, mesh_shape, context.with_prefix("layers.0")),
-            "layers.1": SimpleModule.create_weight_spec(hf_config, mesh_shape, context.with_prefix("layers.1")),
+            "layers.0": SimpleModule.create_weight_spec(hf_config, mesh_device, context.with_prefix("layers.0")),
+            "layers.1": SimpleModule.create_weight_spec(hf_config, mesh_device, context.with_prefix("layers.1")),
             "lmhead": WeightSpec(
                 name="lmhead",
                 dtype=ttnn.bfloat16,
@@ -99,19 +112,21 @@ def test_weight_spec_context_resolves_prefixed_names(sample_state_dict):
 
 
 def test_cache_integration(sample_hf_config, sample_state_dict, device):
-    mesh_shape = (8, 8)
+    mesh_device = _FakeMeshDevice(shape=(8, 8))
 
     cache_storage = InMemoryCacheStorage()
     cache = TensorCache(sample_state_dict, sample_hf_config, cache_storage)
 
     context = WeightSpecContext(resolver=lambda key: sample_state_dict[key])
     single_layer_weight_spec = SimpleModule.create_weight_spec(
-        sample_hf_config, mesh_shape, context.with_prefix("model.layers.0")
+        sample_hf_config, mesh_device, context.with_prefix("model.layers.0")
     )
     embedding_layer_weight_spec = SimpleEmbeddingModule.create_weight_spec(
-        sample_hf_config, mesh_shape, context.with_prefix("model.embedding")
+        sample_hf_config, mesh_device, context.with_prefix("model.embedding")
     )
-    whole_model_weight_spec = SimpleModel.create_weight_spec(sample_hf_config, mesh_shape, context.with_prefix("model"))
+    whole_model_weight_spec = SimpleModel.create_weight_spec(
+        sample_hf_config, mesh_device, context.with_prefix("model")
+    )
 
     single_layer_weight_config = create_weight_config_from_weight_spec(
         single_layer_weight_spec, "model.layers.0", cache, device=device
@@ -149,19 +164,21 @@ def test_cache_integration(sample_hf_config, sample_state_dict, device):
 
 
 def test_cache_integration_on_disk(sample_hf_config, sample_state_dict, device, tmp_path):
-    mesh_shape = (8, 8)
+    mesh_device = _FakeMeshDevice(shape=(8, 8))
 
     cache_storage = OnDiskCacheStorage(tmp_path, device)
     cache = TensorCache(sample_state_dict, sample_hf_config, cache_storage)
 
     context = WeightSpecContext(resolver=lambda key: sample_state_dict[key])
     single_layer_weight_spec = SimpleModule.create_weight_spec(
-        sample_hf_config, mesh_shape, context.with_prefix("model.layers.0")
+        sample_hf_config, mesh_device, context.with_prefix("model.layers.0")
     )
     embedding_layer_weight_spec = SimpleEmbeddingModule.create_weight_spec(
-        sample_hf_config, mesh_shape, context.with_prefix("model.embedding")
+        sample_hf_config, mesh_device, context.with_prefix("model.embedding")
     )
-    whole_model_weight_spec = SimpleModel.create_weight_spec(sample_hf_config, mesh_shape, context.with_prefix("model"))
+    whole_model_weight_spec = SimpleModel.create_weight_spec(
+        sample_hf_config, mesh_device, context.with_prefix("model")
+    )
 
     single_layer_weight_config = create_weight_config_from_weight_spec(
         single_layer_weight_spec, "model.layers.0", cache, device=device
@@ -195,7 +212,7 @@ def test_cache_integration_on_disk(sample_hf_config, sample_state_dict, device, 
 def test_create_weight_spec_for_real_modules(state_dict, hf_config, device):
     prefix = "model.layers.0.self_attn.kv_a_layernorm"
     weight_key = f"{prefix}.weight"
-    mesh_shape = (4, 8)
+    mesh_device = _FakeMeshDevice(shape=(4, 8))
 
     # Ensure the real state dict contains the expected RMSNorm weight
     assert (
@@ -209,7 +226,7 @@ def test_create_weight_spec_for_real_modules(state_dict, hf_config, device):
 
     # Get the weight spec for the RMSNorm module
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
-    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
+    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_device, context.with_prefix(prefix))
     weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=device)
 
     assert set(weight_spec.keys()) == {"weight"}, f"Expected weight_spec keys {{'weight'}}, got {weight_spec.keys()}"
@@ -229,7 +246,7 @@ def test_create_weight_spec_for_real_modules(state_dict, hf_config, device):
 def test_create_weight_spec_for_real_modules_on_disk(state_dict, hf_config, device, tmp_path):
     prefix = "model.layers.0.self_attn.kv_a_layernorm"
     weight_key = f"{prefix}.weight"
-    mesh_shape = (4, 8)
+    mesh_device = _FakeMeshDevice(shape=(4, 8))
 
     assert (
         weight_key in state_dict
@@ -241,7 +258,7 @@ def test_create_weight_spec_for_real_modules_on_disk(state_dict, hf_config, devi
     cache = TensorCache(state_dict, hf_config.to_dict(), cache_storage)
 
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
-    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
+    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_device, context.with_prefix(prefix))
     weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=device)
 
     weight_config_2 = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=device)
@@ -251,7 +268,6 @@ def test_create_weight_spec_for_real_modules_on_disk(state_dict, hf_config, devi
 def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, mesh_device):
     prefix = "model.layers.0.self_attn.kv_a_layernorm"
     weight_key = f"{prefix}.weight"
-    mesh_shape = (4, 8)
 
     # Ensure the real state dict contains the expected RMSNorm weight
     assert (
@@ -265,7 +281,7 @@ def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, 
 
     # Get the weight spec for the RMSNorm module (spec includes shard_dims; mesh mapper is derived per-tensor via get_mesh_mapper)
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
-    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
+    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_device, context.with_prefix(prefix))
     weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)
 
     assert set(weight_spec.keys()) == {"weight"}, f"Expected weight_spec keys {{'weight'}}, got {weight_spec.keys()}"
@@ -287,7 +303,6 @@ def test_create_weight_spec_for_real_modules_with_device(state_dict, hf_config, 
 def test_create_weight_spec_for_real_modules_with_device_on_disk(state_dict, hf_config, mesh_device, tmp_path):
     prefix = "model.layers.0.self_attn.kv_a_layernorm"
     weight_key = f"{prefix}.weight"
-    mesh_shape = (4, 8)
 
     assert (
         weight_key in state_dict
@@ -299,7 +314,7 @@ def test_create_weight_spec_for_real_modules_with_device_on_disk(state_dict, hf_
     cache = TensorCache(state_dict, hf_config.to_dict(), cache_storage)
 
     context = WeightSpecContext(resolver=lambda key: state_dict[key])
-    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_shape, context.with_prefix(prefix))
+    weight_spec = RMSNorm.create_weight_spec(hf_config, mesh_device, context.with_prefix(prefix))
     weight_config = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)
 
     weight_config_2 = create_weight_config_from_weight_spec(weight_spec, prefix, cache, device=mesh_device)

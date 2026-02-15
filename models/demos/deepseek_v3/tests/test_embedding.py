@@ -99,7 +99,7 @@ def test_embedding_forward_pass(
     cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
     cache = TensorCache(state_dict_for_cache, hf_config.to_dict(), cache_storage)
     context = WeightSpecContext(resolver=lambda key: state_dict_for_cache[key])
-    weight_spec = EmbeddingClass.create_weight_spec(hf_config, mesh_device.shape, context.with_prefix(module_path))
+    weight_spec = EmbeddingClass.create_weight_spec(hf_config, mesh_device, context.with_prefix(module_path))
     weight_config_inner = create_weight_config_from_weight_spec(weight_spec, module_path, cache, device=mesh_device)
     weight_config = {"embedding": weight_config_inner}
     model_config = get_model_config(EmbeddingClass, mode, hf_config, mesh_device)

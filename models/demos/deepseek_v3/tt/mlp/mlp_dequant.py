@@ -68,10 +68,10 @@ class MLPDequant(MLP):
     def create_weight_spec(
         cls,
         hf_config: PretrainedConfig,
-        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        mesh_device: ttnn.MeshDevice,
         context: WeightSpecContext,
     ) -> ModuleWeightSpec:
-        base_spec = super().create_weight_spec(hf_config, mesh_device_or_shape, context)
+        base_spec = super().create_weight_spec(hf_config, mesh_device, context)
         block_size = hf_config.quantization_config["weight_block_size"]
 
         def wrap_preprocessor(weight_name: str, weight_spec: WeightSpec) -> WeightSpec:

@@ -83,16 +83,17 @@ class Embedding1D(AbstractModule):
 
     @classmethod
     def create_weight_spec(
-        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
     ) -> ModuleWeightSpec:
-        num_devices = mesh_shape[0] * mesh_shape[1]
+        mesh_rows, mesh_cols = mesh_device.shape
+        num_devices = mesh_rows * mesh_cols
 
         def preprocessor(t):
             assert t.shape[-1] == hf_config.hidden_size, "Embedding size does not match the hf_config hidden size"
             return t.reshape(
                 hf_config.vocab_size,
-                mesh_shape[1],
-                mesh_shape[0],
+                mesh_cols,
+                mesh_rows,
                 even_int_div(hf_config.hidden_size, num_devices),
             )
 

@@ -18,9 +18,9 @@ class Embedding2D(Embedding1D):
 
     @classmethod
     def create_weight_spec(
-        cls, hf_config: PretrainedConfig, mesh_shape: tuple[int, int], context: WeightSpecContext
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
     ) -> ModuleWeightSpec:
-        return super().create_weight_spec(hf_config, mesh_shape, context)
+        return super().create_weight_spec(hf_config, mesh_device, context)
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelPrefillConfig:

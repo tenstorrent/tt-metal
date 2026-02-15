@@ -94,13 +94,9 @@ class MLP(AbstractModule):
     def create_weight_spec(
         cls,
         hf_config: PretrainedConfig,
-        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        mesh_device: ttnn.MeshDevice,
         context: WeightSpecContext,
     ) -> ModuleWeightSpec:
-        if not hasattr(mesh_device_or_shape, "dram_grid_size") or not hasattr(mesh_device_or_shape, "shape"):
-            raise ValueError("MLP.create_weight_spec requires a mesh_device to compute sharded memory config")
-        mesh_device = mesh_device_or_shape
-
         dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
         mesh_rows, mesh_cols = mesh_device.shape
 

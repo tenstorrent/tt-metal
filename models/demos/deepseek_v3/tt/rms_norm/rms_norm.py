@@ -52,11 +52,13 @@ class RMSNorm(RMSNormBase):
 
     @classmethod
     def create_weight_spec(
-        cls, hf_config: PretrainedConfig, mesh_shape: (int, int), context: WeightSpecContext
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, context: WeightSpecContext
     ) -> ModuleWeightSpec:
+        mesh_rows, _ = mesh_device.shape
+
         def preprocessor(t: torch.Tensor) -> torch.Tensor:
             assert len(t.shape) == 1, "Weight expected to be a 1D tensor"
-            return t.reshape((1, 1, -1, ttnn.TILE_SIZE)).repeat(mesh_shape[0], 1, 1, 1)
+            return t.reshape((1, 1, -1, ttnn.TILE_SIZE)).repeat(mesh_rows, 1, 1, 1)
 
         return {
             "weight": WeightSpec(
