@@ -65,7 +65,7 @@ jobs:
 
       - name: Download Falcon 7B weights from LFC
         shell: bash
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
@@ -82,7 +82,7 @@ jobs:
           sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
-        timeout-minutes: 60
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
@@ -143,4 +143,4 @@ jobs:
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache && export HF_MODEL=meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
+            -c "export HF_MODEL=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-70B-Instruct && pytest --timeout=1800 --disable-warnings -q -s models/tt_transformers/demo/simple_text_demo.py -k 'not performance-ci-stress-1'"
