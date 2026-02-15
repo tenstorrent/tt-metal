@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <tt_stl/vector_init.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -681,8 +682,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     // Compute compile time args (all-to-all)
     bool float32_reduction = ctx.fp32_dest_acc_en && !ctx.legacy_reduction;
-    args.compute_all_to_all = {
-        0,
+    args.compute_all_to_all = ttsl::vector_init<uint32_t, 19>(
+        0u,
         (uint32_t)ctx.has_gamma,
         (uint32_t)ctx.has_beta,
         workers.num_blocks_first_stage,
@@ -690,16 +691,16 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         ctx.block_wt,
         ctx.subblock_wt,
         num_subblocks_w,
-        1,  // is_all_to_all_worker
+        1u,  // is_all_to_all_worker
         ctx.block_ht * ctx.block_wt,
         (uint32_t)ctx.fp32_dest_acc_en,
         (uint32_t)float32_reduction,
         (uint32_t)ctx.legacy_rsqrt,
-        workers.num_blocks_second_stage};
+        workers.num_blocks_second_stage);
 
     // Compute compile time args (not all-to-all)
-    args.compute_not_all_to_all = {
-        0,
+    args.compute_not_all_to_all = ttsl::vector_init<uint32_t, 19>(
+        0u,
         (uint32_t)ctx.has_gamma,
         (uint32_t)ctx.has_beta,
         workers.num_blocks_first_stage,
@@ -707,12 +708,12 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         ctx.block_wt,
         ctx.subblock_wt,
         num_subblocks_w,
-        0,  // is_all_to_all_worker
+        0u,  // is_all_to_all_worker
         ctx.block_ht * ctx.block_wt,
         (uint32_t)ctx.fp32_dest_acc_en,
         (uint32_t)float32_reduction,
         (uint32_t)ctx.legacy_rsqrt,
-        workers.num_blocks_second_stage};
+        workers.num_blocks_second_stage);
 
     // Welford-specific compute args
     if (ctx.use_welford) {
@@ -1156,7 +1157,7 @@ bool CoreIndices::is_all_to_all(const RuntimeArgsContext& ctx) const {
 
 std::vector<uint32_t> build_compute_args(
     const CoreIndices& idx, const RuntimeArgsContext& ctx, bool& is_all_to_all_out) {
-    std::vector<uint32_t> args{idx.num_reduce_tiles_per_block_h};
+    auto args = ttsl::vector_init<uint32_t, 5>(idx.num_reduce_tiles_per_block_h);
     is_all_to_all_out = idx.is_all_to_all(ctx);
 
     if (is_all_to_all_out) {
@@ -1212,11 +1213,12 @@ std::vector<uint32_t> build_reader_sender_args(
         std::swap(mcast_start, mcast_end);
     }
 
-    std::vector<uint32_t> args;
-    args.push_back(mcast_start.x);
-    args.push_back(mcast_start.y);
-    args.push_back(mcast_end.x);
-    args.push_back(mcast_end.y);
+    auto args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{4 + 2 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size()},
+        mcast_start.x,
+        mcast_start.y,
+        mcast_end.x,
+        mcast_end.y);
 
     if (ctx.grid.mcast_1d) {
         args.push_back(core.x - ctx.core_ranges.start_core.x);
@@ -1241,20 +1243,17 @@ std::vector<uint32_t> build_reader_sender_args(
 
 std::vector<uint32_t> build_reader_receiver_all_to_all_args(
     const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
-    std::vector<uint32_t> args;
-
-    bool is_last_all_to_all_worker;
-    if (ctx.grid.use_two_stage_reduce) {
-        is_last_all_to_all_worker = idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1;
-    } else {
-        is_last_all_to_all_worker = idx.width_index == ctx.workers.num_cores_all_to_all - 1;
-    }
-    args.push_back(is_last_all_to_all_worker);
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-
-    bool is_second_stage_reader =
+    const bool is_last_all_to_all_worker =
+        ctx.grid.use_two_stage_reduce ? idx.width_index_two_stage == ctx.workers.num_cores_all_to_all_first_stage - 1
+                                      : idx.width_index == ctx.workers.num_cores_all_to_all - 1;
+    const bool is_second_stage_reader =
         ctx.grid.use_two_stage_reduce && idx.width_index < ctx.workers.num_cores_all_to_all_first_stage;
-    args.push_back((uint32_t)is_second_stage_reader);
+
+    auto args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{3 + 2 + ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size()},
+        static_cast<uint32_t>(is_last_all_to_all_worker),
+        idx.all_to_all_worker_tile_offset_bytes,
+        static_cast<uint32_t>(is_second_stage_reader));
 
     if (ctx.grid.mcast_1d) {
         args.push_back(core.x - ctx.core_ranges.start_core.x);
@@ -1278,12 +1277,12 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
 }
 
 std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
-    std::vector<uint32_t> args;
-    args.push_back(false);  // is_last_all_to_all_worker
-    args.push_back(idx.all_to_all_worker_tile_offset_bytes);
-    args.push_back(0);  // is_second_stage_reader
-    args.push_back(0);
-    args.push_back(0);
+    auto args = ttsl::vector_init<uint32_t, 7>(
+        0u,  // is_last_all_to_all_worker
+        idx.all_to_all_worker_tile_offset_bytes,
+        0u,  // is_second_stage_reader
+        0u,
+        0u);
 
     if (ctx.grid.mcast_1d) {
         args.push_back(ctx.mcast_noc_x[0]);
@@ -1342,23 +1341,19 @@ std::vector<uint32_t> build_writer_args(
     const RuntimeArgsContext& ctx,
     const std::vector<uint32_t>& write_back_args,
     bool is_all_to_all) {
-    std::vector<uint32_t> args;
-
-    if (is_all_to_all) {
-        if (ctx.grid.use_two_stage_reduce && idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage) {
-            args.push_back(ctx.packed_cinv_value_one);
-        } else {
-            args.push_back(ctx.packed_cinv_value);
-        }
-    } else {
-        args.push_back(ctx.packed_cinv_value);
-    }
-    args.push_back(ctx.packed_winv_value);
-    args.push_back(ctx.eps_u);
-    args.push_back(ctx.gamma_dram_addr);
-    args.push_back(ctx.beta_dram_addr);
-    args.push_back(idx.gamma_tile_start_id);
-    args.push_back(idx.beta_tile_start_id);
+    const auto cinv = (is_all_to_all && ctx.grid.use_two_stage_reduce &&
+                       idx.width_index >= ctx.workers.num_cores_all_to_all_first_stage)
+                          ? ctx.packed_cinv_value_one
+                          : ctx.packed_cinv_value;
+    auto args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{7 + write_back_args.size()},
+        cinv,
+        ctx.packed_winv_value,
+        ctx.eps_u,
+        ctx.gamma_dram_addr,
+        ctx.beta_dram_addr,
+        idx.gamma_tile_start_id,
+        idx.beta_tile_start_id);
     args.insert(args.end(), write_back_args.begin(), write_back_args.end());
     return args;
 }
