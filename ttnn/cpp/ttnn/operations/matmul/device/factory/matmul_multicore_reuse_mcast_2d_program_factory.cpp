@@ -479,6 +479,20 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_sender_semaphore_id);
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_receiver_semaphore_id);
+    // super_sync: core that collects incs and multicasts response (must be in grid)
+    auto start_core_noc_coord =
+        device->worker_core_from_logical_core(CoreCoord{(std::size_t)start_core_x, (std::size_t)start_core_y});
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.x);  // super_sync_core_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.y);  // super_sync_core_y
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.x);  // mcast_start_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.y);  // mcast_start_y
+    auto end_core_noc_coord = device->worker_core_from_logical_core(
+        CoreCoord{(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)end_core_noc_coord.x);  // mcast_end_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)end_core_noc_coord.y);  // mcast_end_y
+    // super_sync_core does not inc itself; noc_semaphore_set_multicast excludes source
+    in1_sender_writer_compile_time_args.push_back(
+        (std::uint32_t)(num_cores_c * num_cores_r - 1));  // num_cores_super_sync
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -549,6 +563,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)super_sync_sender_semaphore_id);
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)super_sync_receiver_semaphore_id);
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.x);  // super_sync_core_x
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.y);  // super_sync_core_y
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -590,6 +606,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         device->arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), cores.size(), mm_kernel_defines, throttle_level);
+    // get env var and convert to bool
+    const bool mm_super_sync_enabled = std::stoi(std::getenv("TT_MM_SUPER_SYNC_ENABLED")) == 1;
+    if (mm_super_sync_enabled) {
+        mm_kernel_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        mm_kernel_in1_sender_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        mm_kernel_in1_receiver_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        log_info(tt::LogOp, "Super sync enabled for matmul");
+    }
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -1043,6 +1067,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         auto top_core_physical = device->worker_core_from_logical_core(top_core);
         auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
         auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto core_physical = device->worker_core_from_logical_core(core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -1153,8 +1178,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             if (in0_idx == 0) {
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
-                    (std::uint32_t)core.x,
-                    (std::uint32_t)core.y,
+                    (std::uint32_t)core_physical.x,
+                    (std::uint32_t)core_physical.y,
                     // in1 tensor args
                     (std::uint32_t)in1_buffer->address(),
                     (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
@@ -1294,8 +1319,8 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 // in1 receiver
             } else {
                 std::vector<uint32_t> mm_in1_receiver_writer_args = {
-                    (std::uint32_t)core.x,
-                    (std::uint32_t)core.y,
+                    (std::uint32_t)core_physical.x,
+                    (std::uint32_t)core_physical.y,
                     // READER
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x

@@ -8,19 +8,30 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/debug/dprint.h"
+#include "ckernel.h"
 
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
     const uint32_t core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t super_sync_core_x = 12;
-    const uint32_t super_sync_core_y = 0;
+    constexpr uint32_t super_sync_core_x = get_compile_time_arg_val(34);
+    constexpr uint32_t super_sync_core_y = get_compile_time_arg_val(35);
     const bool is_super_sync_core = (bool)(core_x == super_sync_core_x && core_y == super_sync_core_y);
 
     // DPRINT << "is_super_sync_core: " << (uint32_t)is_super_sync_core << ENDL();
     // DPRINT << "core_x: " << core_x << ENDL();
     // DPRINT << "core_y: " << core_y << ENDL();
+    // print x and y distance from super sync core as well as x and y coordiates of this core
+    // DPRINT << "x coordinate of this core: " << (uint32_t)core_x << ENDL();
+    // DPRINT << "y coordinate of this core: " << (uint32_t)core_y << ENDL();
+    // DPRINT << "x distance from super sync core: " << (uint32_t)(core_x - super_sync_core_x) << ENDL();
+    // DPRINT << "y distance from super sync core: " << (uint32_t)(core_y - super_sync_core_y) << ENDL();
+
+    // based on the distance from the super sync core, calculate the number of cycles to wait
+    // the farther away, the less cycles to wait (200 - distance * 1)
+    const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
+    const uint32_t cycles_to_wait = 220 - distance_from_super_sync_core * 9;
 
     // in1 tensor args
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -138,17 +149,21 @@ void kernel_main() {
     // local L1 semaphore address
     volatile tt_l1_ptr uint32_t* super_sync_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(super_sync_receiver_semaphore_addr);
-    // NOC address of the super sync semaphore
-    const uint64_t super_sync_receiver_semaphore_noc_addr =
-        get_noc_multicast_addr(0, 0, 12, 9, super_sync_receiver_semaphore_addr);
+    // NOC multicast address to all cores in the grid (from factory)
+    constexpr uint32_t super_sync_mcast_start_x = get_compile_time_arg_val(36);
+    constexpr uint32_t super_sync_mcast_start_y = get_compile_time_arg_val(37);
+    constexpr uint32_t super_sync_mcast_end_x = get_compile_time_arg_val(38);
+    constexpr uint32_t super_sync_mcast_end_y = get_compile_time_arg_val(39);
+    constexpr uint32_t num_cores_super_sync = get_compile_time_arg_val(40);
+    const uint64_t super_sync_receiver_semaphore_noc_addr = get_noc_multicast_addr(
+        super_sync_mcast_start_x,
+        super_sync_mcast_start_y,
+        super_sync_mcast_end_x,
+        super_sync_mcast_end_y,
+        super_sync_receiver_semaphore_addr);
     if (is_super_sync_core) {
         *(super_sync_receiver_semaphore_addr_ptr) = VALID;
     }
-
-    DPRINT << "super_sync_sender_semaphore_addr: " << super_sync_sender_semaphore_addr << ENDL();
-    DPRINT << "super_sync_sender_semaphore_noc_addr: " << super_sync_sender_semaphore_noc_addr << ENDL();
-    DPRINT << "super_sync_receiver_semaphore_addr: " << super_sync_receiver_semaphore_addr << ENDL();
-    DPRINT << "super_sync_receiver_semaphore_noc_addr: " << super_sync_receiver_semaphore_noc_addr << ENDL();
 
     MatmulOpReceiver fused_op_receiver;
     OpSignaler op_signaler;
@@ -163,7 +178,7 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
-    constexpr auto in1_args = TensorAccessorArgs<34>();
+    constexpr auto in1_args = TensorAccessorArgs<41>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
@@ -458,32 +473,22 @@ void kernel_main() {
                             in1_mcast_receiver_semaphore_noc_addr,
                             in1_mcast_num_cores);
 
+#ifdef MM_SUPER_SYNC_ENABLED
                         if (is_super_sync_core) {
-                            const uint32_t num_cores_super_sync = 129;
-                            DPRINT << "A0 " << ENDL();
-                            noc_semaphore_wait<true>(super_sync_sender_semaphore_addr_ptr, num_cores_super_sync);
-                            DPRINT << "A1" << ENDL();
+                            noc_semaphore_wait(super_sync_sender_semaphore_addr_ptr, num_cores_super_sync);
                             noc_semaphore_set(super_sync_sender_semaphore_addr_ptr, 0);
-                            DPRINT << "A2" << ENDL();
                             noc_semaphore_set_multicast(
                                 super_sync_receiver_semaphore_addr,
                                 super_sync_receiver_semaphore_noc_addr,
                                 num_cores_super_sync);
-                            DPRINT << "A3" << ENDL();
+                            ckernel::wait(600);
                         } else {
-                            DPRINT << "B0" << ENDL();
                             noc_semaphore_set(super_sync_receiver_semaphore_addr_ptr, INVALID);
-                            DPRINT << "B1" << ENDL();
                             noc_semaphore_inc(super_sync_sender_semaphore_noc_addr, 1);
-                            DPRINT << "B2" << ENDL();
-                            while (1) {
-                                if (*super_sync_sender_semaphore_addr_ptr > 0) {
-                                    DPRINT << "FOUND THE CORE: " << *super_sync_sender_semaphore_addr_ptr << ENDL();
-                                }
-                            }
                             noc_semaphore_wait(super_sync_receiver_semaphore_addr_ptr, VALID);
-                            DPRINT << "B3" << ENDL();
+                            ckernel::wait(cycles_to_wait);
                         }
+#endif  // MM_SUPER_SYNC_ENABLED
 
 #endif  // SKIP_MCAST
 

@@ -8,15 +8,26 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/debug/dprint.h"
+#include "ckernel.h"
 
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
     const uint32_t core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t super_sync_core_x = 12;
-    const uint32_t super_sync_core_y = 0;
+    constexpr uint32_t super_sync_core_x = get_compile_time_arg_val(21);
+    constexpr uint32_t super_sync_core_y = get_compile_time_arg_val(22);
     const bool is_super_sync_core = (bool)(core_x == super_sync_core_x && core_y == super_sync_core_y);
+
+    // DPRINT << "x coordinate of this core: " << (uint32_t)core_x << ENDL();
+    // DPRINT << "y coordinate of this core: " << (uint32_t)core_y << ENDL();
+    // DPRINT << "x distance from super sync core: " << (uint32_t)(core_x - super_sync_core_x) << ENDL();
+    // DPRINT << "y distance from super sync core: " << (uint32_t)(core_y - super_sync_core_y) << ENDL();
+
+    // based on the distance from the super sync core, calculate the number of cycles to wait
+    // the farther away, the less cycles to wait (200 - distance * 1)
+    const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
+    const uint32_t cycles_to_wait = 220 - distance_from_super_sync_core * 9;
 
     // DPRINT << "is_super_sync_core: " << (uint32_t)is_super_sync_core << ENDL();
     // DPRINT << "core_x: " << core_x << ENDL();
@@ -100,11 +111,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* super_sync_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(super_sync_receiver_semaphore_addr);
 
-    DPRINT << "super_sync_sender_semaphore_addr: " << super_sync_sender_semaphore_addr << ENDL();
-    DPRINT << "super_sync_sender_semaphore_noc_addr: " << super_sync_sender_semaphore_noc_addr << ENDL();
-    DPRINT << "super_sync_receiver_semaphore_addr: " << super_sync_receiver_semaphore_addr << ENDL();
-
-    constexpr auto out_args = TensorAccessorArgs<21>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
@@ -148,18 +155,13 @@ void kernel_main() {
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
 
-                    DPRINT << "C0" << ENDL();
+#ifdef MM_SUPER_SYNC_ENABLED
                     noc_semaphore_set(super_sync_receiver_semaphore_addr_ptr, INVALID);
-                    DPRINT << "C1" << ENDL();
                     noc_semaphore_inc(super_sync_sender_semaphore_noc_addr, 1);
-                    DPRINT << "C2 " << ENDL();
-                    while (1) {
-                        if (*super_sync_sender_semaphore_addr_ptr > 0) {
-                            DPRINT << "FOUND THE CORE: " << *super_sync_sender_semaphore_addr_ptr << ENDL();
-                        }
-                    }
                     noc_semaphore_wait(super_sync_receiver_semaphore_addr_ptr, VALID);
-                    DPRINT << "C3" << ENDL();
+                    ckernel::wait(cycles_to_wait);
+#endif  // MM_SUPER_SYNC_ENABLED
+
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
                 }
 

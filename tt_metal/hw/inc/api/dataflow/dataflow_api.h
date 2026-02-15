@@ -30,7 +30,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
-#include "api/debug/dprint.h"
 
 #if !defined(KERNEL_BUILD)
 // This file uses noc_mode, which isn't defined in the firmware build.
@@ -1929,9 +1928,6 @@ FORCE_INLINE void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
-        if constexpr (print) {
-            DPRINT << "semaphore value: " << (*sem_addr) << " target value: " << val << ENDL();
-        }
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
 }
