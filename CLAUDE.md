@@ -61,26 +61,77 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ Infrastructure stable and matches reference implementation
 - ✅ Performance sweep tests ready for optimization analysis
 
-### Next Steps: Performance Optimization & Deployment (2026-02-15)
+### Current Task: GPT-OSS Integration Planning (2026-02-15 Evening)
 
-1. **Run CCL Hyperparameter Sweeps:**
+**Objective:** Extend TT-MoE infrastructure to support GPT-OSS models through JSON configuration
+
+**Plan Summary:**
+1. Create `gpt_oss.json` configuration file for GPT-OSS parameters
+2. Implement TopKRouter support (GPT-OSS uses different router than DeepSeek)
+3. Adapt existing infrastructure to handle GPT-OSS differences:
+   - No shared experts (unlike DeepSeek-V3)
+   - Different dimensions (128 experts, 4 per token, 2048 hidden, 360 intermediate)
+   - Ring topology for all-to-all operations
+4. Create comprehensive tests to validate against GPT-OSS reference
+
+**Key Files to Create:**
+- `models/tt-moe/configs/gpt_oss.json` - Configuration
+- `models/tt-moe/components/routers/topk_router.py` - Router implementation
+- `models/tt-moe/tests/test_gpt_oss_moe_block.py` - Tests
+
+**Status:** Planning phase complete, ready for implementation
+
+### GPT-OSS Integration Completed (2026-02-15 17:30)
+
+**Implementation Complete:**
+- ✅ Created `gpt_oss.json` configuration file
+- ✅ Implemented `TopKRouter` component for GPT-OSS routing
+- ✅ Updated `moe_block.py` to support multiple router types
+- ✅ Created comprehensive test suite in `test_gpt_oss_moe_block.py`
+- ✅ Configuration loading test passes successfully
+
+**Files Created/Modified:**
+- `models/tt-moe/configs/gpt_oss.json` - GPT-OSS configuration
+- `models/tt-moe/components/routers/topk_router.py` - TopK router implementation
+- `models/tt-moe/tests/test_gpt_oss_moe_block.py` - Test suite
+- `models/tt-moe/moe_block.py` - Updated to support TopKRouter
+- `models/tt-moe/GPT_OSS_IMPLEMENTATION.md` - Documentation
+
+**Key Features:**
+- Supports 128 experts (4 per device on 32-device Galaxy)
+- TopK routing with 4 experts per token
+- Ring topology for all-to-all operations
+- No shared experts (GPT-OSS specific)
+- Throughput experts mode for performance
+
+**Testing:**
+```bash
+# Test configuration loading (works without hardware)
+pytest models/tt-moe/tests/test_gpt_oss_moe_block.py::test_gpt_oss_config_loading -xvs
+
+# Run full test suite (requires hardware)
+bash /tmp/test_gpt_oss_integration.sh
+```
+
+### Next Steps: Performance Optimization & Multi-Model Support
+
+1. **Validate GPT-OSS with Real Weights**:
+   - Test with actual GPT-OSS model weights
+   - Ensure PCC >= 0.98 against reference implementation
+   - Profile performance vs native GPT-OSS
+
+2. **Run CCL Hyperparameter Sweeps** (for both DeepSeek and GPT-OSS):
    ```bash
    pytest models/tt-moe/tests/test_deepseek_ag_hyperparameter_sweep_perf.py -xvs
    pytest models/tt-moe/tests/test_deepseek_rs_hyperparameter_sweep_perf.py -xvs
    ```
    - Analyze CSV results for optimal parameters
-   - Update `deepseek_v3.json` with best configurations
-
-2. **Additional Optimization Areas** (if needed):
-   - Profile expert weight loading and caching
-   - Test weight compression beyond Float8
-   - Optimize chunking strategy for prefill mode
-   - Test distributed batch mode (`replicated_batch_mode: false`) for memory efficiency
+   - Update configurations with best settings
 
 3. **Integration & Deployment:**
-   - Integrate optimized configuration into main pipeline
-   - Create performance benchmarks documentation
-   - Test with real workloads
+   - Support multiple models through JSON configurations
+   - Create unified test suite for all supported architectures
+   - Document configuration format for new models
 
 ### Quick Start - Test Commands
 ```bash
