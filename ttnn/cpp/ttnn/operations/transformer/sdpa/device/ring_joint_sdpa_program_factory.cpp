@@ -16,6 +16,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt_stl/vector_init.hpp>
 
 using namespace tt::tt_metal;
 
@@ -774,7 +775,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
-        std::vector<uint32_t> reader_args = {
+        auto reader_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{22 + 6},
             q_addr,
             k_addr,
             v_addr,
@@ -784,8 +786,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             joint_k_addr,
             joint_v_addr,
             global_q_start,
-            global_q_end,
-        };
+            global_q_end);
         // Append chain runtime args for store-and-forward
         const auto& chain = core_chain_info.at(i);
 
@@ -827,21 +828,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
         // Writer args
-        std::vector<uint32_t> writer_args = {
-            out_addr,
-            joint_out_addr,
-            lse_addr,
-            global_q_start,
-            global_q_end,
-        };
+        auto writer_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{5 + 6}, out_addr, joint_out_addr, lse_addr, global_q_start, global_q_end);
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
-        std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
-        };
+        auto compute_args = ttsl::vector_init<uint32_t>(ttsl::vector_size{2 + 6}, global_q_start, global_q_end);
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
@@ -854,14 +847,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
+    auto all_gather_input_tensors = ttsl::vector_init<Tensor>(ttsl::vector_size{2}, input_tensor_k, input_tensor_v);
+    auto all_gather_output_tensors =
+        ttsl::vector_init<Tensor>(ttsl::vector_size{2}, gathered_input_tensor_k, gathered_input_tensor_v);
     auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
