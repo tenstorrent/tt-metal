@@ -56,6 +56,9 @@ class _DecodeTraceSamplingState:
     page_table_tt: ttnn.Tensor | None = None
     rope_sharded_mem_config: Any | None = None
     rot_idxs_padded_batch: int = 0
+    # Batch-expansion serial cache update: two position tensors with alternating -1 masks
+    positions_main_tt: ttnn.Tensor | None = None   # [B] int32 - draft lanes = -1
+    positions_draft_tt: ttnn.Tensor | None = None  # [B] int32 - main lanes = -1
     # Persistent outputs
     logits_tt: ttnn.Tensor | None = None
     top1_values_tt: ttnn.Tensor | None = None
@@ -202,6 +205,8 @@ class Glm4MoeLiteDenseOnlyTT:
     num_layers_to_run: int
     enable_moe: bool
     moe_runtime: Any | None
+    # ---- Batch-expansion spec decode ----
+    batch_expand: bool = False
     # ---- MTP (Multi-Token Prediction) state ----
     mtp_enabled: bool = False
     mtp_enorm: Any | None = None
@@ -215,6 +220,8 @@ class Glm4MoeLiteDenseOnlyTT:
     # At runtime, decode pads to the nearest bucket instead of MAX_NUM_SEQS,
     # giving small batches more cores/seq and lower ITL.
     _decode_trace_states: dict[int, _DecodeTraceSamplingState] = field(init=False, default_factory=dict)
+    # Per-step batch-expansion metadata (set during decode, consumed by trace input copy)
+    _batch_expand_num_main: int = 0
 
     @classmethod
     def create(
@@ -422,6 +429,7 @@ class Glm4MoeLiteDenseOnlyTT:
             num_layers_to_run=num_layers_to_run,
             enable_moe=enable_moe,
             moe_runtime=moe_runtime,
+            batch_expand=os.environ.get("GLM4_MOE_LITE_BATCH_EXPAND", "").strip() == "1",
             mtp_enabled=mtp_enabled,
             mtp_enorm=mtp_enorm,
             mtp_hnorm=mtp_hnorm,
@@ -959,8 +967,16 @@ class Glm4MoeLiteDenseOnlyTT:
         kv_cache: list[ttnn.Tensor],  # per-layer KVPE cache tensors
         sampling_params: Any | None = None,
         enable_trace: bool = False,
+        num_main_lanes: int = 0,  # >0 when batch-expansion spec decode is active
     ) -> Any:
         """Run a decode step, updating KV cache.
+
+        Args:
+            num_main_lanes: When >0, the first `num_main_lanes` active slots are
+                main request lanes and slots [num_main_lanes..2*num_main_lanes-1]
+                are draft verification lanes sharing the same page_table rows.
+                paged_update_cache will be called twice per layer with alternating
+                -1 masks to serialize writes to aliased pages.
 
         Returns:
         - logits on host as torch float32 [active, 1, vocab] when sampling_params is None
@@ -979,6 +995,8 @@ class Glm4MoeLiteDenseOnlyTT:
         active = int((start_pos >= 0).sum().item())
         if active <= 0:
             return torch.zeros((0, 1, int(self.hparams.vocab_size)), dtype=torch.float32)
+        # Store batch-expansion metadata for trace input copy
+        self._batch_expand_num_main = num_main_lanes
         if enable_trace:
             if sampling_params is not None:
                 # Greedy on-device sampling path (trace captures local top-1).
@@ -1176,6 +1194,30 @@ class Glm4MoeLiteDenseOnlyTT:
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
 
+        # Batch-expansion serial cache update: construct masked position tensors
+        # so paged_update_cache serializes writes from aliased page_table entries.
+        positions_main_tt = None
+        positions_draft_tt = None
+        if self.batch_expand and num_main_lanes > 0:
+            n = num_main_lanes
+            pos_main = positions.clone()
+            pos_draft = positions.clone()
+            # Main tensor: mask draft lanes (n..2n-1) to -1
+            pos_main[n:2*n] = -1
+            # Draft tensor: mask main lanes (0..n-1) to -1
+            pos_draft[:n] = -1
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None
+            positions_main_tt = ttnn.from_torch(
+                pos_main, device=self.device, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            positions_draft_tt = ttnn.from_torch(
+                pos_draft, device=self.device, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
         # Run decoder stack.
         for layer_idx in range(self.num_layers_to_run):
             w = self._ensure_layer_weights(layer_idx)
@@ -1200,6 +1242,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 moe_runtime=self.moe_runtime,
                 profile=layer_profile,
                 use_decode_rope=use_decode_rope,
+                positions_main_tt=positions_main_tt,
+                positions_draft_tt=positions_draft_tt,
             )
             if layer_profile is not None:
                 for key, value in layer_profile.items():
@@ -1408,6 +1452,10 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.deallocate(cos_batch, force=False)
         ttnn.deallocate(sin_batch, force=False)
         ttnn.deallocate(page_table_tt, force=False)
+        if positions_main_tt is not None:
+            ttnn.deallocate(positions_main_tt, force=False)
+        if positions_draft_tt is not None:
+            ttnn.deallocate(positions_draft_tt, force=False)
         if mtp_hidden is not None:
             ttnn.deallocate(mtp_hidden, force=False)
         if profile_on:
@@ -1667,6 +1715,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 state.tokens_tt, state.positions_tt, state.rot_idxs_tt,
                 state.cos_batch_tt, state.sin_batch_tt, state.trans_matrix_tt,
                 state.page_table_tt,
+                # Batch-expansion serial cache update
+                state.positions_main_tt, state.positions_draft_tt,
                 # MTP persistent inputs
                 state.mtp_tokens_tt, state.mtp_positions_tt, state.mtp_rot_idxs_tt,
                 state.mtp_cos_batch_tt, state.mtp_sin_batch_tt, state.mtp_trans_matrix_tt,
@@ -1760,6 +1810,23 @@ class Glm4MoeLiteDenseOnlyTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
+        # Batch-expansion serial cache update: allocate persistent position
+        # tensors with alternating -1 masks.
+        if self.batch_expand:
+            state.positions_main_tt = ttnn.from_torch(
+                torch.zeros((batch,), dtype=torch.int32),
+                device=self.device, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            state.positions_draft_tt = ttnn.from_torch(
+                torch.zeros((batch,), dtype=torch.int32),
+                device=self.device, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
         # MTP hidden state: no pre-allocation needed.  ttnn.clone inside
         # _decode_step_tt_logits allocates its own output buffer during trace
         # capture, and that buffer is reused on each trace replay.
@@ -1931,6 +1998,26 @@ class Glm4MoeLiteDenseOnlyTT:
             mesh_mapper=mapper,
         )
         ttnn.copy_host_to_device_tensor(host_pt, state.page_table_tt)
+
+        # Batch-expansion serial cache update: copy masked position tensors
+        if self.batch_expand and state.positions_main_tt is not None and self._batch_expand_num_main > 0:
+            n = self._batch_expand_num_main
+            pos_main = start_pos.to(torch.int32).clone()
+            pos_draft = start_pos.to(torch.int32).clone()
+            pos_main[n:2*n] = -1  # mask draft lanes
+            pos_draft[:n] = -1    # mask main lanes
+            host_pos_main = ttnn.from_torch(
+                pos_main, device=None, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            ttnn.copy_host_to_device_tensor(host_pos_main, state.positions_main_tt)
+            host_pos_draft = ttnn.from_torch(
+                pos_draft, device=None, dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            ttnn.copy_host_to_device_tensor(host_pos_draft, state.positions_draft_tt)
 
     def _copy_mtp_trace_inputs(
         self,
@@ -2233,6 +2320,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 moe_runtime=self.moe_runtime,
                 profile=None,
                 use_decode_rope=True,
+                positions_main_tt=state.positions_main_tt,
+                positions_draft_tt=state.positions_draft_tt,
             )
             ttnn.deallocate(x, force=False)
             x = x_next

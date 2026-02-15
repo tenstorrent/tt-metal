@@ -434,6 +434,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             kv_cache=kv_cache,
             sampling_params=sampling_params,
             enable_trace=enable_trace,
+            num_main_lanes=int(kwargs.get("num_main_lanes", 0)),
         )
         if os.environ.get("GLM4_MOE_LITE_SYNC_DEVICE", "").strip() == "1":
             # Debug-only: force full device sync at the end of decode to rule out
