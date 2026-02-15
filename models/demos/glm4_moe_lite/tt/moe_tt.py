@@ -294,7 +294,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         dispatch_cluster_axis=dispatch_cluster_axis,
         reduce_cluster_axis=reduce_cluster_axis,
         num_links=1,
-        topology=ttnn.Topology.Ring,
+        topology=ttnn.Topology.Linear,
         output_concat_dim=2,
         output_shard_dim=2,
         sparsity_block_size=sparsity_block_size,
@@ -608,7 +608,7 @@ def moe_dense_experts_forward_decode_tt(
             out_full = ttnn.all_reduce(
                 out_local,
                 num_links=1,
-                topology=ttnn.Topology.Ring,
+                topology=ttnn.Topology.Linear,
                 memory_config=memory_config,
             )
             ttnn.deallocate(out_local, force=False)
@@ -853,7 +853,7 @@ def moe_dense_experts_forward_prefill_tt(
         out_full = ttnn.all_reduce(
             out_local,
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Linear,
             memory_config=memory_config,
         )
         ttnn.deallocate(out_local, force=False)
@@ -1160,7 +1160,7 @@ def moe_packed_experts_forward_prefill_tt(
         out_full = ttnn.all_reduce(
             out_accum,
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            topology=ttnn.Topology.Linear,
             memory_config=memory_config,
         )
         ttnn.deallocate(out_accum, force=False)

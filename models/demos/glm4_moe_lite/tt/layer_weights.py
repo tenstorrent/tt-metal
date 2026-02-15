@@ -142,11 +142,20 @@ def _env_sharded_mlp() -> bool:
     return os.environ.get("GLM4_MOE_LITE_SHARDED_MLP", "").strip() == "1"
 
 
+
 def _maybe_dram_shard_linear_weight(weight: ttnn.Tensor, device, force: bool = False) -> ttnn.Tensor:
     """Convert a [1,1,K,N] linear weight to DRAM-sharded format for decode perf.
 
     DRAM-sharded storage distributes the weight's N dimension across all DRAM banks,
     giving full DRAM bandwidth utilization for M=1 decode matmuls.
+
+    NOTE: We round-trip through host (from_device → to) instead of using
+    ttnn.to_memory_config because the interleaved_to_sharded kernel dispatches
+    to the shard grid's CoreRangeSet as TENSIX logical coordinates.  DRAM cores
+    use coordinates 0..11 on Wormhole which exceeds the harvested TENSIX grid
+    (8×8), causing a "No core coordinate found" crash.  The host round-trip
+    uses Tensor.to(device, memory_config) which writes data directly to DRAM
+    banks, bypassing the kernel dispatch entirely.
     """
     if not force and not _env_dram_sharded_weights():
         return weight
@@ -155,7 +164,12 @@ def _maybe_dram_shard_linear_weight(weight: ttnn.Tensor, device, force: bool = F
     K = int(weight.shape[2])
     N = int(weight.shape[3])
     dram_mc = dram_sharded_weight_config(K, N, device.dram_grid_size())
-    return ttnn.to_memory_config(weight, dram_mc)
+
+    # Move to host, then back to device with DRAM-sharded layout.
+    # from_device preserves multi-device structure (one host shard per device).
+    host_weight = ttnn.from_device(weight)
+    ttnn.deallocate(weight, force=True)
+    return host_weight.to(device, dram_mc)
 
 
 def _linear_weight_tt(

@@ -380,7 +380,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             )
 
             # Bring output back to interleaved for downstream ops.
-            t = ttnn.to_memory_config(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            t = ttnn.to_memory_config(t, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
 
             if pad_h:
                 t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
@@ -506,7 +506,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             num_links=1,
             topology=ttnn.Topology.Linear,
             cluster_axis=tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(out, force=False)
         return out_reduced
@@ -578,7 +578,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 compute_kernel_config=_ds_ckc,
             )
             ttnn.deallocate(a_sharded, force=False)
-            result_dram = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
+            result_dram = ttnn.to_memory_config(result, decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(result, force=False)
             return result_dram
 
@@ -647,8 +647,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             )
             ttnn.deallocate(x_ff, force=False)
 
-            # 6. Move final result to DRAM (needed for all_reduce / residual add).
-            result_dram = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
+            # 6. Move final result back (L1 if DECODE_L1_ACT, else DRAM).
+            result_dram = ttnn.to_memory_config(result, decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(result, force=False)
             return result_dram
 
@@ -665,7 +665,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 ttnn.deallocate(a_tp, force=False)
                 out_reduced = ttnn.all_reduce(
                     out, num_links=1, topology=ttnn.Topology.Linear,
-                    cluster_axis=tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cluster_axis=tp_axis, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
                 )
                 ttnn.deallocate(out, force=False)
                 return out_reduced
@@ -1067,10 +1067,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         # before slicing/permuting. This is not the fastest path, but it keeps
         # the downstream code unchanged while we validate correctness.
         if skip_defensive_clones:
-            attn_latent = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_latent = ttnn.to_memory_config(attn_latent, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
         else:
-            attn_latent_view = ttnn.to_memory_config(attn_latent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            attn_latent_dram = ttnn.clone(attn_latent_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_latent_view = ttnn.to_memory_config(attn_latent, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+            attn_latent_dram = ttnn.clone(attn_latent_view, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_latent, force=False)
             attn_latent = attn_latent_dram
 
@@ -1125,7 +1125,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     attn_out = _attn_linear(v, w.w_o)  # [1,1,B,hidden]
     ttnn.deallocate(v, force=False)
 
-    x_attn_out = residual + attn_out
+    x_attn_out = ttnn.add(residual, attn_out, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(attn_out, force=False)
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
@@ -1145,7 +1145,17 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if not use_moe:
         t0 = time.perf_counter() if profile is not None else 0.0
         if dram_sharded_mlp:
-            mlp_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+            # DRAM-sharded MLP requires activation dim-2 == _DS_BATCH (32).
+            # Pad to _DS_BATCH for smaller batch buckets during warmup.
+            _dense_tokens = int(x.shape[2])
+            if _dense_tokens == _DS_BATCH:
+                mlp_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+            else:
+                _dense_pad = _DS_BATCH - _dense_tokens
+                x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, _dense_pad), (0, 0)], 0.0)
+                mlp_out_padded = _dram_sharded_mlp(x_padded, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+                ttnn.deallocate(x_padded, force=False)
+                mlp_out = mlp_out_padded[:, :, :_dense_tokens, :]
             ttnn.deallocate(x, force=False)
         else:
             gate = _mlp_linear(x, w.w_mlp_gate)
@@ -1162,7 +1172,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 num_links=1,
                 topology=ttnn.Topology.Linear,
                 cluster_axis=tp_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_reduced
@@ -1222,9 +1232,19 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # add the local partial results first, then do ONE all_reduce on the sum.
     _skip_shared_reduce = fuse_mlp_moe_reduce and tp_enabled
     t0 = time.perf_counter() if profile is not None else 0.0
-    _use_dram_mlp = dram_sharded_mlp and int(x.shape[2]) == _DS_BATCH
-    if _use_dram_mlp:
-        shared_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+    if dram_sharded_mlp:
+        # DRAM-sharded MLP requires activation dim-2 == _DS_BATCH (32).
+        # During warmup for smaller batch buckets (1,4,8,16), pad to _DS_BATCH,
+        # run the DRAM-sharded path, then slice back to the original size.
+        _shared_tokens = int(x.shape[2])
+        if _shared_tokens == _DS_BATCH:
+            shared_out = _dram_sharded_mlp(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+        else:
+            _shared_pad = _DS_BATCH - _shared_tokens
+            x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, _shared_pad), (0, 0)], 0.0)
+            shared_out_padded = _dram_sharded_mlp(x_padded, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down)
+            ttnn.deallocate(x_padded, force=False)
+            shared_out = shared_out_padded[:, :, :_shared_tokens, :]
     else:
         gate_shared = _mlp_linear(x, w.w_mlp_gate)
         up_shared = _mlp_linear(x, w.w_mlp_up)
@@ -1239,7 +1259,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             num_links=1,
             topology=ttnn.Topology.Linear,
             cluster_axis=tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(shared_out, force=False)
         shared_out = shared_out_reduced
@@ -1322,7 +1342,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             num_links=1,
             topology=ttnn.Topology.Linear,
             cluster_axis=tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(mlp_out, force=False)
         mlp_out = mlp_out_reduced
@@ -1339,7 +1359,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_sliced
 
-    x_mlp_out = residual + mlp_out
+    x_mlp_out = ttnn.add(residual, mlp_out, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(mlp_out, force=False)
     ttnn.deallocate(residual, force=False)
     _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
@@ -1424,6 +1444,29 @@ def run_decoder_layer_prefill_update_cache_tt(
         if mlp_compute_kernel_config is None:
             return ttnn.linear(a, b)
         return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
+
+    _interleaved_cache: dict[int, ttnn.Tensor] = {}
+
+    def _ensure_interleaved(weight: ttnn.Tensor) -> ttnn.Tensor:
+        """If weight is DRAM WIDTH_SHARDED, convert to DRAM interleaved via host round-trip.
+
+        DRAM-sharded weights are optimized for decode (m=32) matmuls but incompatible
+        with regular ttnn.linear used in prefill.  The host round-trip avoids the
+        sharded_to_interleaved kernel which has the same DRAM→TENSIX coordinate bug.
+        Returns the original tensor unchanged if already interleaved.
+        Caches results keyed by tensor id to avoid repeated host round-trips.
+        """
+        mc = weight.memory_config()
+        if mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            return weight
+        tid = id(weight)
+        cached = _interleaved_cache.get(tid)
+        if cached is not None:
+            return cached
+        host_weight = ttnn.from_device(weight)
+        interleaved = host_weight.to(device, ttnn.DRAM_MEMORY_CONFIG)
+        _interleaved_cache[tid] = interleaved
+        return interleaved
 
     tp_axis = _tp_cluster_axis(device)
     tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
@@ -1689,15 +1732,20 @@ def run_decoder_layer_prefill_update_cache_tt(
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
     if not use_moe:
         t0 = time.perf_counter() if profile is not None else 0.0
-        gate = _mlp_linear(x, w.w_mlp_gate)
-        up = _mlp_linear(x, w.w_mlp_up)
+        # DRAM-sharded weights are incompatible with regular ttnn.linear (prefill).
+        # Convert to interleaved via host round-trip if needed.
+        _gate_w = _ensure_interleaved(w.w_mlp_gate)
+        _up_w = _ensure_interleaved(w.w_mlp_up)
+        _down_w = _ensure_interleaved(w.w_mlp_down)
+        gate = _mlp_linear(x, _gate_w)
+        up = _mlp_linear(x, _up_w)
         ttnn.deallocate(x, force=False)
 
         x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
 
-        mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
+        mlp_out = _mlp_linear(x_ff, _down_w)
         ttnn.deallocate(x_ff, force=False)
         if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
@@ -1743,13 +1791,17 @@ def run_decoder_layer_prefill_update_cache_tt(
                 x = x_padded
 
         # Shared expert (dense MLP).
+        # DRAM-sharded weights are incompatible with regular ttnn.linear (prefill).
+        _gate_w = _ensure_interleaved(w.w_mlp_gate)
+        _up_w = _ensure_interleaved(w.w_mlp_up)
+        _down_w = _ensure_interleaved(w.w_mlp_down)
         t0 = time.perf_counter() if profile is not None else 0.0
-        gate_shared = _mlp_linear(x, w.w_mlp_gate)
-        up_shared = _mlp_linear(x, w.w_mlp_up)
+        gate_shared = _mlp_linear(x, _gate_w)
+        up_shared = _mlp_linear(x, _up_w)
         x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
-        shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
+        shared_out = _mlp_linear(x_ff_shared, _down_w)
         ttnn.deallocate(x_ff_shared, force=False)
         if tp_enabled:
             shared_out_reduced = ttnn.all_reduce(
