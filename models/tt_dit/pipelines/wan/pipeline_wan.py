@@ -443,7 +443,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
 
-        # use the mask to zero out the padding tokens. As a result, the comment below still holds, and had been copied for completeness.
+        # use the mask to zero out the padding tokens. As a result, the comment below still holds, and has been copied from initial implementaton for completeness.
         # # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
         # # TODO: investigate
         prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
