@@ -931,3 +931,95 @@ def test_strided_reduce_scatter_async(
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
         num_workers_per_link=num_workers_per_link,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    # Shape [4,1,512,2048] dim=3 with ring_size=8 gives:
+    #   input_Ht = 16 tiles, slice_Wt = 8 tiles
+    #
+    # Constraints:
+    #   slice_Ht (16) % mm_cores_y == 0
+    #   (slice_Ht / mm_cores_y) % mm_block_ht == 0
+    #   slice_Wt (8) % mm_N_block_wt == 0
+    #
+    # Derived values:
+    #   M_blocks_per_core = (16 / mm_cores_y) / mm_block_ht
+    #   N_blocks_per_slice = 8 / mm_N_block_wt
+    #   chunk_width_in_tiles = chunk_width_in_mm_blocks * mm_block_wt
+    #   chunks_per_N_block = ceil(mm_N_block_wt / chunk_width_in_tiles)
+    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_block_wt, chunk_width_in_mm_blocks",
+    [
+        # Finest granularity: M=16, N=8, chunk=1 tile each
+        (1, 1, 1, 1, 1),
+        # Coarsest: single M-block, single N-block, single chunk covers all
+        (1, 16, 8, 8, 1),
+        # Max cores (8), finest M-block, single N-block, many tiny chunks
+        (8, 2, 1, 8, 1),
+        # Max cores, finest M-block, wide chunks covering entire N-block
+        (8, 1, 4, 8, 2),
+        # Multiple N-blocks (4), chunk exactly fills each N-block
+        (4, 2, 2, 2, 1),
+        # Two N-blocks, many chunks per N-block (4 chunks of width 1)
+        (2, 4, 1, 4, 1),
+        # Single N-block, max chunks (8 chunks of 1 tile)
+        (4, 4, 1, 8, 1),
+        # Large chunk_width_in_mm_blocks (8), single chunk covers N-block
+        (1, 8, 1, 8, 8),
+        # Partial last chunk: chunk_w=6, N_block=8, chunks_per=2 (last chunk effective_w=2)
+        (2, 8, 2, 8, 3),
+        # Non-power-of-2 block width: chunk_w=3, N_block=8, chunks_per=3 (last chunk effective_w=2)
+        (1, 4, 3, 8, 1),
+    ],
+    ids=[
+        "finest_granularity",
+        "coarsest_single_block",
+        "max_cores_tiny_chunks",
+        "max_cores_wide_chunks",
+        "four_N_blocks",
+        "two_N_blocks_many_chunks",
+        "single_N_block_max_chunks",
+        "large_chunk_width_in_mm_blocks",
+        "partial_last_chunk",
+        "non_power_of_2_block_wt",
+    ],
+)
+def test_strided_reduce_scatter_blocking_sweep(
+    mesh_device,
+    mm_cores_y,
+    mm_block_ht,
+    mm_block_wt,
+    mm_N_block_wt,
+    chunk_width_in_mm_blocks,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        [4, 1, 512, 2048],
+        3,  # dim
+        1,  # num_links
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        rs_topology=ttnn.Topology.Ring,
+        enable_trace=False,
+        num_iters=1,
+        small_random_ints=True,
+        use_barrier=True,
+        use_persistent_buffers=True,
+        use_strided=True,
+        verify_output_shape=True,
+        verify_output_pcc=True,
+        mm_cores_y=mm_cores_y,
+        mm_block_ht=mm_block_ht,
+        mm_block_wt=mm_block_wt,
+        mm_N_block_wt=mm_N_block_wt,
+        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+    )
