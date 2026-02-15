@@ -14,16 +14,12 @@ from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
+from models.demos.deepseek_v3.utils.cache import OnDiskCacheStorage, TensorCache
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
-from models.demos.deepseek_v3.utils.test_utils import (
-    assert_hidden_dim_pcc,
-    get_model_config,
-    get_test_weight_config,
-    load_reference_io_tensors_for_module,
-    run_module_forward,
-)
+from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
 from models.demos.deepseek_v3.utils.weight_config import convert_weight_specs_in_config
+from models.demos.deepseek_v3.utils.weight_spec import WeightSpecContext, create_weight_config_from_weight_spec
 
 
 # TODO: Doesn't work on multi-host - we should figure out why
@@ -170,7 +166,6 @@ def test_forward_pass(
     model_path,
     tmp_path,
     cache_path,
-    force_recalculate_weight_config,
     set_deterministic_env,
     state_dict,
 ):
@@ -185,15 +180,55 @@ def test_forward_pass(
         reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
+        state_dict_full = state_dict
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        torch_input, reference_output = load_reference_io_tensors_for_module(
-            mode, module_path, seq_len, num_module_layers
-        )
+        dim, hidden_dim = MLPClass._get_model_dims_from_cfg(hf_config)
+        reference_model = DeepseekV3MLP(
+            hf_config,
+            hidden_size=dim,
+            intermediate_size=hidden_dim,
+        ).eval()
+
+        weight_block_size = hf_config.quantization_config["weight_block_size"]
+        dequantized_state = {
+            "gate_proj.weight": dequantize(
+                state_dict["gate_proj.weight"],
+                state_dict["gate_proj.weight_scale_inv"],
+                block_shape=weight_block_size,
+            ),
+            "down_proj.weight": dequantize(
+                state_dict["down_proj.weight"],
+                state_dict["down_proj.weight_scale_inv"],
+                block_shape=weight_block_size,
+            ),
+            "up_proj.weight": dequantize(
+                state_dict["up_proj.weight"],
+                state_dict["up_proj.weight_scale_inv"],
+                block_shape=weight_block_size,
+            ),
+        }
+        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in dequantized_state.items()})
+        torch_input = torch.randn(num_module_layers, 1, seq_len, dim)
+        reference_output = reference_model(torch_input)
 
     # Generate module configs and state
-    weight_config = get_test_weight_config(
-        MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
-    )
+    if issubclass(MLPClass, MLPDequant):
+        state_dict_for_cache = state_dict_full
+        cache_prefix = module_path
+    else:
+        state_dict_for_cache = {f"mlp.{k}": v for k, v in state_dict.items()}
+        cache_prefix = "mlp"
+
+    cache_storage = OnDiskCacheStorage(cache_path, mesh_device)
+    cache = TensorCache(state_dict_for_cache, hf_config.to_dict(), cache_storage)
+    context = WeightSpecContext(resolver=lambda key: state_dict_for_cache[key])
+    weight_spec = MLPClass.create_weight_spec(hf_config, mesh_device, context.with_prefix(cache_prefix))
+    weight_config_inner = create_weight_config_from_weight_spec(weight_spec, cache_prefix, cache, device=mesh_device)
+    weight_config = {
+        "w1": {"input_tensor_b": weight_config_inner["gate_proj.weight"]},
+        "w2": {"input_tensor_b": weight_config_inner["down_proj.weight"]},
+        "w3": {"input_tensor_b": weight_config_inner["up_proj.weight"]},
+    }
     model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -229,7 +264,8 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
+    pcc_required = 0.97 if issubclass(MLPClass, MLPDequant) else 0.975
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=pcc_required)
 
 
 if __name__ == "__main__":

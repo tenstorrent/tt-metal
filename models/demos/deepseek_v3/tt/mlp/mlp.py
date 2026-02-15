@@ -40,7 +40,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class MLP(AbstractModule):
@@ -88,6 +88,61 @@ class MLP(AbstractModule):
                 ("up_proj", "w3", False),
             ]
             for in_features, out_features in [cls.get_weight_shape(hf_config, is_w2)]
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        context: WeightSpecContext,
+    ) -> ModuleWeightSpec:
+        if not hasattr(mesh_device_or_shape, "dram_grid_size") or not hasattr(mesh_device_or_shape, "shape"):
+            raise ValueError("MLP.create_weight_spec requires a mesh_device to compute sharded memory config")
+        mesh_device = mesh_device_or_shape
+
+        dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
+        mesh_rows, mesh_cols = mesh_device.shape
+
+        def make_preprocessor() -> Any:
+            def preprocessor(t: torch.Tensor) -> torch.Tensor:
+                if t.ndim == 3:
+                    stacked = t
+                else:
+                    stacked = t.unsqueeze(0).repeat(mesh_rows, 1, 1)
+                return stacked.transpose(2, 1)
+
+            return preprocessor
+
+        def make_weight_spec(is_w2: bool) -> WeightSpec:
+            if is_w2:
+                mesh_sharded_dim = 1
+                k = even_int_div(hidden_dim, mesh_cols)
+                n = dim
+            else:
+                mesh_sharded_dim = 2
+                k = dim
+                n = even_int_div(hidden_dim, mesh_cols)
+
+            memory_config = dram_sharded_weight_config(
+                k,
+                n,
+                mesh_device.dram_grid_size(),
+            )
+
+            return WeightSpec(
+                shard_dims=(0, mesh_sharded_dim),
+                remove_dims=(True, False),
+                dtype=cls.WEIGHT_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=memory_config,
+                preprocessor=make_preprocessor(),
+            )
+
+        return {
+            "gate_proj.weight": make_weight_spec(is_w2=False),
+            "down_proj.weight": make_weight_spec(is_w2=True),
+            "up_proj.weight": make_weight_spec(is_w2=False),
         }
 
     @final

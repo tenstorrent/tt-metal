@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from pathlib import Path
 from typing import final
 
@@ -11,7 +12,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, get_state_dicts
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
-from models.demos.deepseek_v3.utils.weight_spec import WeightSpec
+from models.demos.deepseek_v3.utils.weight_spec import ModuleWeightSpec, WeightSpec, WeightSpecContext
 
 
 class MLPDequant(MLP):
@@ -61,6 +62,31 @@ class MLPDequant(MLP):
                 ("up_proj", "w3", False),
             ]
             for in_features, out_features in [cls.get_weight_shape(hf_config, is_w2)]
+        }
+
+    @classmethod
+    def create_weight_spec(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device_or_shape: ttnn.MeshDevice | tuple[int, int],
+        context: WeightSpecContext,
+    ) -> ModuleWeightSpec:
+        base_spec = super().create_weight_spec(hf_config, mesh_device_or_shape, context)
+        block_size = hf_config.quantization_config["weight_block_size"]
+
+        def wrap_preprocessor(weight_name: str, weight_spec: WeightSpec) -> WeightSpec:
+            scale_inv = context.get_reference_tensor(f"{weight_name}_scale_inv")
+
+            def preprocessor(t: torch.Tensor) -> torch.Tensor:
+                dequantized = dequantize(t, scale_inv, block_size)
+                return weight_spec.preprocessor(dequantized)
+
+            return replace(weight_spec, preprocessor=preprocessor)
+
+        return {
+            "gate_proj.weight": wrap_preprocessor("gate_proj.weight", base_spec["gate_proj.weight"]),
+            "down_proj.weight": wrap_preprocessor("down_proj.weight", base_spec["down_proj.weight"]),
+            "up_proj.weight": wrap_preprocessor("up_proj.weight", base_spec["up_proj.weight"]),
         }
 
     @final

@@ -572,6 +572,24 @@ def sub_state_dicts(
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
 
+def normalize_saved_weight_path(path: Path) -> Path:
+    """Normalize a tensor cache path to be relative to the mesh directory.
+
+    SavedWeight paths should be stored relative to the "mesh_<rows>x<cols>" directory
+    for portability. This helper strips any leading path components up to and including
+    the mesh directory when present.
+    """
+    parts = path.parts
+    mesh_idx = next((idx for idx, part in enumerate(parts) if part.startswith("mesh_")), None)
+    if mesh_idx is None:
+        if path.is_absolute():
+            raise ValueError(f"Expected 'mesh_' in path: {path}")
+        return path
+    if mesh_idx + 1 >= len(parts):
+        raise ValueError(f"Invalid path structure after 'mesh_': {path}")
+    return Path(*parts[mesh_idx + 1 :])
+
+
 def shard_and_save(
     path: Path,
     tensor: torch.Tensor,
@@ -654,18 +672,8 @@ def shard_and_save(
     ttnn.dump_tensor(path, ttnn_tensor)
     ttnn.deallocate(ttnn_tensor)
 
-    # Always convert absolute paths to relative paths for portability
-    # This ensures SavedWeight objects always have relative paths
-    if path.is_absolute():
-        path_str = str(path)
-        mesh_idx = path_str.find("mesh_")
-        if mesh_idx == -1:
-            raise ValueError(f"Expected 'mesh_' in path: {path}")
-        # Skip past "mesh_<rows>x<cols>/" to get relative path
-        parts = path_str[mesh_idx:].split("/", 1)
-        if len(parts) < 2:
-            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
-        path = Path(parts[1])
+    # Always convert paths to relative paths for portability
+    path = normalize_saved_weight_path(path)
 
     return SavedWeight(path, memory_config)
 
