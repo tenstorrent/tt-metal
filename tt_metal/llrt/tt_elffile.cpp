@@ -49,14 +49,6 @@ std::string format(std::string m, Args&&...) {
 #error "Host must be little endian"
 #endif
 
-#ifndef PT_RISCV_ATTRIBUTES
-// Missing from my elf.h
-#define PT_RISCV_ATTRIBUTES (PT_LOPROC + 3)
-enum {
-    Tag_RISCV_arch = 5,
-};
-#endif
-
 // We have to translate these two instructions
 static constexpr uint32_t insn_opc_auipc = 0x00000017;
 static constexpr uint32_t insn_opc_lui = 0x00000037;

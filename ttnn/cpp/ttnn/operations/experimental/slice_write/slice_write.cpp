@@ -14,9 +14,9 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 
-ttnn::Tensor SliceWriteOperation::invoke(
+ttnn::Tensor slice_write(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
     const ttnn::SmallVector<uint32_t>& begins,
@@ -130,4 +130,4 @@ ttnn::Tensor SliceWriteOperation::invoke(
     return output_tensor;
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

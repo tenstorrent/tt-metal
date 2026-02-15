@@ -14,6 +14,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 

@@ -7,27 +7,25 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/untilize.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // Compile time arguments
 
     // Input dimensions in tiles
@@ -575,4 +573,3 @@ void MAIN {
     // Free up cb_q_in after Q chunks
     cb_pop_front(cb_q_in, q_chunk_tiles);
 }
-}  // namespace NAMESPACE

@@ -96,6 +96,18 @@ void update_packed_large_write(
         }
     }
 }
+
+// Update Common::DeviceData for packed large unicast write
+void update_packed_large_unicast_write(
+    const std::vector<uint32_t>& payload,
+    Common::DeviceData& device_data,
+    const CoreCoord& worker_core,
+    uint32_t l1_alignment) {
+    for (const uint32_t datum : payload) {
+        device_data.push_one(worker_core, 0, datum);
+    }
+    device_data.pad(worker_core, 0, l1_alignment);
+}
 }  // namespace DeviceDataUpdater
 
 // Host-side helpers used by tests to emit the same CQ commands
@@ -128,6 +140,41 @@ HostMemDeviceCommand build_packed_large_write_command(
 
     // Add write packed large command with data inlined
     cmd.add_dispatch_write_packed_large(
+        CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN,
+        static_cast<uint16_t>(l1_alignment),
+        sub_cmds.size(),
+        sub_cmds,
+        data_spans,
+        nullptr);
+
+    return cmd;
+}
+
+//  Builds a multi-transaction packed-large unicast command
+//  payload spans map 1:1 with the sub-command list
+HostMemDeviceCommand build_packed_large_unicast_write_command(
+    const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
+    const std::vector<std::vector<uint32_t>>& payloads,
+    uint32_t cumulative_payload_bytes,
+    uint32_t l1_alignment) {
+    // Calculate the command size
+    DeviceCommandCalculator cmd_calc;
+    cmd_calc.add_dispatch_write_packed_large_unicast(sub_cmds.size(), cumulative_payload_bytes);
+    const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
+
+    // Create the HostMemDeviceCommand with pre-calculated size
+    HostMemDeviceCommand cmd(command_size_bytes);
+
+    // Build data spans pointing to the generated payloads
+    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    data_spans.reserve(payloads.size());
+
+    for (const auto& payload : payloads) {
+        data_spans.emplace_back(reinterpret_cast<const uint8_t*>(payload.data()), payload.size() * sizeof(uint32_t));
+    }
+
+    // Add write packed large unicast command with data inlined
+    cmd.add_dispatch_write_packed_large_unicast(
         CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN,
         static_cast<uint16_t>(l1_alignment),
         sub_cmds.size(),
@@ -406,16 +453,17 @@ public:
 
         // Relevel once before generating commands
         device_data.relevel(tt::CoreType::WORKER);
+        constexpr uint32_t payload_unit = sizeof(uint32_t);
 
         // Generate random-sized packed write commands until transfer_size_bytes_ is consumed
         // Each command is constrained by:
         // 1. Command entry size <= max_fetch_bytes_ : the whole packet must within prefetcher buffer limits
         // 2. Payload <= dispatch_cb_page_size_bytes : when 'no_stride' mode is used (data replication),
         // the payload + header + sub-commands must fit within the dispatch buffer page size
-        while (remaining_bytes > 0) {
+        while (remaining_bytes > payload_unit) {
             // Generate random transfer size
-            uint32_t xfer_size_bytes =
-                payload_generator_->get_random_size(dispatch_buffer_page_size_, 1, remaining_bytes);
+            uint32_t xfer_size_bytes = payload_generator_->get_random_size(
+                dispatch_buffer_page_size_ / payload_unit, payload_unit, remaining_bytes);
 
             // Random no_stride flag
             bool no_stride = payload_generator_->get_rand_bool();
@@ -424,10 +472,16 @@ public:
             if (no_stride) {
                 const uint32_t max_allowed = dispatch_buffer_page_size_ - sizeof(CQDispatchCmd) - sub_cmds_bytes;
                 if (xfer_size_bytes > max_allowed) {
-                    log_warning(tt::LogTest, "Clamping packed_write cmd w/ no_stride to fit dispatch page");
+                    log_warning(
+                        tt::LogTest,
+                        "Clamping packed_write cmd w/ no_stride to fit dispatch page, max allowed: {}, "
+                        "xfer_size_bytes: {}",
+                        max_allowed,
+                        xfer_size_bytes);
                     xfer_size_bytes = max_allowed;
                 }
             }
+            uint32_t prev_xfer_size_bytes = xfer_size_bytes;
 
             // Clamp to fit within max_fetch_bytes_
             xfer_size_bytes = clamp_to_max_fetch(
@@ -439,6 +493,11 @@ public:
 
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(fw, xfer_size_bytes);
+            TT_FATAL(
+                !payload.empty(),
+                "Generated payload size is 0, xfer_size_bytes: {}, prev_xfer_size_bytes: {}",
+                xfer_size_bytes,
+                prev_xfer_size_bytes);
 
             // Update expected device_data for all cores
             Common::DeviceDataUpdater::update_packed_write(payload, device_data, worker_cores, l1_alignment);
@@ -610,6 +669,149 @@ protected:
         }
 
         log_info(tt::LogTest, "Generated {} packed-large commands total", commands_per_iteration.size());
+
+        return commands_per_iteration;
+    }
+};
+
+class DispatchPackedWriteLargeUnicastTestFixture : public DispatchPackedWriteTestFixture {
+    static constexpr uint32_t max_pages_per_transaction = 4;
+
+    struct TransactionBatch {
+        std::vector<uint32_t> sizes;
+        uint32_t total_payload_bytes;
+    };
+
+    // Helper function to generate random-sized transactions
+    TransactionBatch generate_packed_large_unicast_transactions(
+        uint32_t& remaining_bytes, uint32_t max_transactions, uint32_t l1_alignment) {
+        std::vector<uint32_t> transaction_sizes;
+        transaction_sizes.reserve(max_transactions);
+
+        uint32_t cumulative_payload_bytes = 0;
+
+        for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
+            uint32_t max_allowed = dispatch_buffer_page_size_ * max_pages_per_transaction / l1_alignment;
+            uint32_t xfer_size_bytes =
+                payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, remaining_bytes);
+
+            // Verify adding this transaction won't exceed max_fetch_bytes_
+            DeviceCommandCalculator cmd_calc;
+            cmd_calc.add_dispatch_write_packed_large_unicast(
+                transaction_sizes.size() + 1, cumulative_payload_bytes + xfer_size_bytes);
+            const uint32_t projected_cmd_size = cmd_calc.write_offset_bytes();
+
+            if (projected_cmd_size > max_fetch_bytes_) {
+                log_info(
+                    tt::LogTest,
+                    "Command would exceed max_fetch_bytes ({} > {}), finalizing with {} transactions",
+                    projected_cmd_size,
+                    max_fetch_bytes_,
+                    transaction_sizes.size());
+                break;
+            }
+
+            transaction_sizes.push_back(xfer_size_bytes);
+            cumulative_payload_bytes += xfer_size_bytes;
+            remaining_bytes -= xfer_size_bytes;
+        }
+
+        return TransactionBatch{transaction_sizes, cumulative_payload_bytes};
+    }
+
+    void build_sub_cmd(
+        std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
+        uint32_t xfer_size_bytes,
+        uint32_t addr,
+        const CoreCoord& worker_coord,
+        bool is_discard) {
+        CQDispatchWritePackedLargeUnicastSubCmd sub_cmd{};
+
+        if (is_discard) {
+            // Use sentinel value to discard data
+            sub_cmd.noc_xy_addr = 0;  // Unused for discard
+            sub_cmd.addr = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD;
+        } else {
+            // Normal unicast write
+            const CoreCoord virtual_coord = device_->virtual_core_from_logical_core(worker_coord, CoreType::WORKER);
+            sub_cmd.noc_xy_addr = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_coord);
+            sub_cmd.addr = addr;
+        }
+        sub_cmd.length = xfer_size_bytes;
+
+        sub_cmds.push_back(sub_cmd);
+    }
+
+protected:
+    // Builds multi-transaction packed-large unicast commands
+    std::vector<HostMemDeviceCommand> generate_packed_large_unicast_write_commands(
+        const std::vector<CoreCoord>& worker_cores, uint32_t l1_alignment, Common::DeviceData& device_data) {
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        uint32_t remaining_bytes = get_transfer_size_bytes();
+
+        // This loop generates random-sized packed-large unicast commands until remaining_bytes is exhausted
+        while (remaining_bytes > 0) {
+            // Random number of transactions per command (1-16)
+            const int max_transactions =
+                payload_generator_->get_rand<int>(1, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+
+            std::vector<CQDispatchWritePackedLargeUnicastSubCmd> sub_cmds;
+            std::vector<std::vector<uint32_t>> payloads;
+
+            TransactionBatch transaction_batch =
+                generate_packed_large_unicast_transactions(remaining_bytes, max_transactions, l1_alignment);
+
+            if (transaction_batch.sizes.empty()) {
+                break;
+            }
+
+            sub_cmds.reserve(transaction_batch.sizes.size());
+            payloads.reserve(transaction_batch.sizes.size());
+
+            for (const uint32_t xfer_size_bytes : transaction_batch.sizes) {
+                // Randomly select a worker core for this transaction
+                const CoreCoord& worker_core =
+                    worker_cores[payload_generator_->get_rand<size_t>(0, worker_cores.size() - 1)];
+
+                // Randomly decide if this transaction should be discarded (20% chance)
+                bool is_discard = payload_generator_->get_rand<int>(0, 4) == 0;
+
+                uint32_t addr = 0;
+                if (!is_discard) {
+                    addr = device_data.get_result_data_addr(worker_core);
+                }
+
+                // Build sub-command
+                build_sub_cmd(sub_cmds, xfer_size_bytes, addr, worker_core, is_discard);
+
+                // Generate payload
+                std::vector<uint32_t> payload =
+                    payload_generator_->generate_payload_with_core(worker_core, xfer_size_bytes);
+
+                // Update expected data model only for non-discarded writes
+                if (!is_discard) {
+                    DeviceDataUpdater::update_packed_large_unicast_write(
+                        payload, device_data, worker_core, l1_alignment);
+                }
+
+                payloads.push_back(std::move(payload));
+            }
+
+            // Create the HostMemDeviceCommand
+            HostMemDeviceCommand cmd = CommandBuilder::build_packed_large_unicast_write_command(
+                sub_cmds, payloads, transaction_batch.total_payload_bytes, l1_alignment);
+
+            log_info(
+                tt::LogTest,
+                "Generated packed-large unicast command {} with {} transactions, {} bytes",
+                commands_per_iteration.size(),
+                sub_cmds.size(),
+                transaction_batch.total_payload_bytes);
+
+            commands_per_iteration.push_back(std::move(cmd));
+        }
+
+        log_info(tt::LogTest, "Generated {} packed-large unicast commands total", commands_per_iteration.size());
 
         return commands_per_iteration;
     }
@@ -816,6 +1018,50 @@ TEST_P(DispatchPackedWriteLargeTestFixture, WriteLargePackedMulticast) {
     execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
 }
 
+// Large Packed Write Unicast - Multiple Commands with Random Transactions
+TEST_P(DispatchPackedWriteLargeUnicastTestFixture, WriteLargePackedUnicast) {
+    log_info(
+        tt::LogTest,
+        "DispatchPackedWriteLargeUnicastTestFixture - WriteLargePackedUnicast (Fast Dispatch) - Test Start");
+
+    // Test parameters
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+    const uint32_t total_target_bytes = get_transfer_size_bytes();
+
+    log_info(tt::LogTest, "Max transfer: {} bytes, Iterations: {}", total_target_bytes, num_iterations);
+
+    // Setup worker cores - pick multiple cores for unicast
+    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreRange worker_range = {first_worker, last_worker};
+
+    // Get memory base addresses
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+
+    // Setup Common::DeviceData for validation
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
+
+    // Get alignment requirements
+    const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    // Build list of worker cores
+    std::vector<CoreCoord> worker_cores;
+    for (uint32_t y = worker_range.start_coord.y; y <= worker_range.end_coord.y; ++y) {
+        for (uint32_t x = worker_range.start_coord.x; x <= worker_range.end_coord.x; ++x) {
+            worker_cores.push_back({x, y});
+        }
+    }
+
+    // PHASE 1: Generate packed-large unicast write commands metadata
+    auto commands_per_iteration = generate_packed_large_unicast_write_commands(worker_cores, l1_alignment, device_data);
+
+    // PHASE 2, 3, 4: Execute and Validate
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     DispatcherTests,
     DispatchLinearWriteTestFixture,
@@ -877,6 +1123,19 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     DispatcherTests,
     DispatchPackedWriteLargeTestFixture,
+    ::testing::Values(
+        // Testcase: 40960 bytes
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
+        // Testcase: 409600 bytes
+        PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS}),
+    [](const testing::TestParamInfo<PackedWriteParams>& info) {
+        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    DispatcherTests,
+    DispatchPackedWriteLargeUnicastTestFixture,
     ::testing::Values(
         // Testcase: 40960 bytes
         PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},

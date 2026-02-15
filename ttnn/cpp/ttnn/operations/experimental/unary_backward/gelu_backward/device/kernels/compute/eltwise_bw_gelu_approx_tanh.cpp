@@ -3,24 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/binary_bitwise_sfpu.h"
-#include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/binary_bitwise_sfpu.h"
+#include "api/compute/binary_shift.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/fill.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
@@ -70,7 +69,7 @@ void MAIN {
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
             tanh_tile_init();
             tanh_tile(1);
-            copy_dest_values(4, 1);  // save tanh to tile[7]
+            copy_dest_values(1, 4);  // save tanh to tile[4]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
             fill_tile(3, 1.0f);
@@ -82,7 +81,7 @@ void MAIN {
             square_tile(4);
             fill_tile(3, 1.0f);
             sub_binary_tile(3, 4, 3);
-            copy_dest_values(4, 3);
+            copy_dest_values(3, 4);
 
             // tile[2] = (1 + 0.134145 * x**2)
             fill_tile(3, kKappa * 3.0f);
@@ -97,7 +96,7 @@ void MAIN {
             mul_binary_tile(2, 3, 2);
 
             // tile[2] = x * pdf tern
-            copy_dest_values(3, 8);
+            copy_dest_values(8, 3);
             mul_binary_tile(2, 3, 2);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)
@@ -116,4 +115,3 @@ void MAIN {
         cb_push_back(cb_grad_in, per_core_block_size);
     }
 }
-}  // namespace NAMESPACE

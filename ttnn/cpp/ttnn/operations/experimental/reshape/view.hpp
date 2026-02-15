@@ -5,23 +5,17 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include <optional>
 
-namespace ttnn {
-namespace operations::experimental::reshape {
+namespace ttnn::experimental {
 
-struct ViewOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
-};
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+ttnn::Tensor view(
+    const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
 
-}  // namespace operations::experimental::reshape
+// Overloads for nanobind (SmallVector has a registered type caster; Span does not)
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int32_t>& shape_vector);
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, int32_t N, int32_t C, int32_t H, int32_t W);
 
-namespace experimental {
-constexpr auto view =
-    ttnn::register_operation<"ttnn::experimental::view", ttnn::operations::experimental::reshape::ViewOperation>();
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

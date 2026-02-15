@@ -407,18 +407,15 @@ def test_shape_remainder(device, shapes):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_remainder_ttnn(input_shapes, scalar, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
-    output_tensor = ttnn.remainder(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
-    golden_tensor = golden_function(in_data1, scalar, device=device)
+def test_remainder_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
+        output_tensor = ttnn.remainder(input_tensor1, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.remainder)
+        golden_tensor = golden_function(in_data1, scalar, device=device)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -471,19 +468,16 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_fmod_ttnn(input_shapes, scalar, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
+def test_fmod_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
 
-    output_tensor = ttnn.fmod(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.fmod)
-    golden_tensor = golden_function(in_data1, scalar, device=device)
+        output_tensor = ttnn.fmod(input_tensor1, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.fmod)
+        golden_tensor = golden_function(in_data1, scalar, device=device)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -650,18 +644,15 @@ def test_binary_gti_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_gti_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.gt_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.gt_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_gti_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.gt_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.gt_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -691,18 +682,15 @@ def test_binary_gei_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_gei_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.ge_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.ge_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_gei_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.ge_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.ge_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -732,18 +720,15 @@ def test_binary_lti_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_lti_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.lt_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.lt_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_lti_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.lt_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.lt_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -773,18 +758,15 @@ def test_binary_lei_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_lei_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.le_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.le_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_lei_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.le_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.le_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -814,18 +796,15 @@ def test_binary_eqi_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_eqi_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.eq_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.eq_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_eqi_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.eq_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.eq_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -855,18 +834,15 @@ def test_binary_nei_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
-)
-def test_nei_ttnn(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    ttnn.ne_(input_tensor, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.ne_)
-    golden_tensor = golden_function(in_data, scalar)
+def test_nei_ttnn(input_shapes, device):
+    for scalar in [random.randint(-100, 100) + 0.5 for _ in range(5)]:
+        in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+        ttnn.ne_(input_tensor, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.ne_)
+        golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_equal([input_tensor], [golden_tensor])
-    assert comp_pass
+        comp_pass = compare_equal([input_tensor], [golden_tensor])
+        assert comp_pass, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -913,7 +889,7 @@ def test_binary_prelu_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {-0.25, -2.7, 0.45, 6.4},
+    (-2.7, -0.25, 0.45, 6.4),
 )
 def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
     in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
@@ -1022,22 +998,19 @@ def test_binary_right_shift(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(0, 31)},
-)
-def test_unary_left_shift(input_shapes, device, scalar):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+def test_unary_left_shift(input_shapes, device):
+    for scalar in [random.randint(0, 31) for _ in range(5)]:
+        torch.manual_seed(213919)
+        in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+        input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.bitwise_left_shift(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.bitwise_left_shift)
-    golden_tensor = golden_function(in_data1, scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = ttnn.bitwise_left_shift(input_tensor1, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.bitwise_left_shift)
+        golden_tensor = golden_function(in_data1, scalar)
+        output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+        pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+        assert pcc >= 0.99, f"Failed for scalar={scalar}"
 
 
 @pytest.mark.parametrize(
@@ -1049,19 +1022,16 @@ def test_unary_left_shift(input_shapes, device, scalar):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "scalar",
-    {random.randint(0, 31)},
-)
-def test_unary_right_shift(input_shapes, device, scalar):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+def test_unary_right_shift(input_shapes, device):
+    for scalar in [random.randint(0, 31) for _ in range(5)]:
+        torch.manual_seed(213919)
+        in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+        input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.bitwise_right_shift(input_tensor1, scalar)
-    golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
-    golden_tensor = golden_function(in_data1, scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
+        output_tensor = ttnn.bitwise_right_shift(input_tensor1, scalar)
+        golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+        golden_tensor = golden_function(in_data1, scalar)
+        output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+        pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+        assert pcc >= 0.99, f"Failed for scalar={scalar}"

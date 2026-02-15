@@ -576,3 +576,45 @@ Tests:
         patterns:
           - destination:
               device: [0, 1]
+
+
+
+  - name: "CoreSweepOneToAll"
+    fabric_setup:
+      topology: Mesh
+
+    benchmark_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, 1]
+
+        patterns:
+          - destination:
+              device: [0, 0]
+              core: all
+
+  - name: "CoreSweepAllToOne"
+    fabric_setup:
+      topology: Mesh
+
+    latency_test_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, 1]
+        core: all
+        patterns:
+          - destination:
+              device: [0, 0]
+              core: [0, 5]

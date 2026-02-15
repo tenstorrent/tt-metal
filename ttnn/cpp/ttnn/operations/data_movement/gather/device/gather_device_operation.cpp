@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-constexpr uint32_t WT_THRESHOLD = 60;
+constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
@@ -22,16 +22,11 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
     const uint32_t Wt_input = input_tensor_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
 
-    if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
+    if (Wt_input > GATHER_WT_THRESHOLD || Wt_index > GATHER_WT_THRESHOLD) {
         // Use GatherProgramFactorySingleRowMultiCore for larger Wt
         return GatherProgramFactorySingleRowMultiCore{};
     }
     return GatherProgramFactorySingleRowSingleCore{};
-}
-
-void GatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void GatherDeviceOperation::validate_on_program_cache_miss(

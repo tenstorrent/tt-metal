@@ -266,6 +266,17 @@ def compute_ttnn_distributed_norm(
             use_welford=use_welford,
         )
 
+    # Create reciprocal tensor for Welford algorithm if needed
+    recip_tensor = None
+    if use_welford and norm_type == "layer_norm":
+        # Width per device is hidden_dim / num_mesh_devices (input is sharded across devices on dim -1)
+        width_per_device = hidden_dim // num_mesh_devices
+        grid = mesh_device.compute_with_storage_grid_size()
+        core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        )
+        recip_tensor = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
+
     # Step 1: Compute local statistics
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
@@ -273,6 +284,7 @@ def compute_ttnn_distributed_norm(
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             program_config=program_config,
+            recip_tensor=recip_tensor,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(

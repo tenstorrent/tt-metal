@@ -18,11 +18,6 @@ StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_f
     return StridedAllGatherAsyncProgramFactory{};
 }
 
-void StridedAllGatherAsync::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 void StridedAllGatherAsync::validate_on_program_cache_miss(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensors_args*/) {}
 

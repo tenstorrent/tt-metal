@@ -1,7 +1,7 @@
 add_library(ttnn_op_sliding_window ${LIB_TYPE})
 add_library(TTNN::Ops::SlidingWindow ALIAS ttnn_op_sliding_window)
 
-target_precompile_headers(ttnn_op_sliding_window REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_sliding_window REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 set_target_properties(
     ttnn_op_sliding_window
@@ -18,7 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES sliding_window.hpp op_slicing/op_slicing.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -32,12 +32,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_sliding_window
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_sliding_window PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
@@ -47,4 +42,4 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/sliding_window
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_op_sliding_window LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_sliding_window FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

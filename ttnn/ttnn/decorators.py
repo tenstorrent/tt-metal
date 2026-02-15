@@ -5,6 +5,7 @@
 import dataclasses
 import glob
 import os
+
 import pathlib
 import shutil
 import sys
@@ -23,6 +24,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn.operation_tracer
 
 
 def compare_tensors_using_pcc(
@@ -498,7 +500,8 @@ class Operation:
         return hash(self.python_fully_qualified_name)
 
     def __post_init__(self):
-        function = self.function
+        # Wrap function for parameter tracing (if tracing enabled)
+        function = ttnn.operation_tracer.wrap_function_for_tracing(self.function, self.python_fully_qualified_name)
 
         self.preprocess_golden_function_inputs = (
             self.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs

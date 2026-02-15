@@ -33,6 +33,9 @@ void kernel_main() {
     std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
     std::uint32_t eth_src_overflow_addr = get_arg_val<uint32_t>(11);
     std::uint32_t eth_dest_overflow_addr = get_arg_val<uint32_t>(12);
+    bool use_multicast_semaphore_inc = static_cast<bool>(get_arg_val<uint32_t>(13));
+    std::uint32_t mcast_dst_end_x = get_arg_val<uint32_t>(14);
+    std::uint32_t mcast_dst_end_y = get_arg_val<uint32_t>(15);
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -71,6 +74,16 @@ void kernel_main() {
 #if defined(COMPILE_FOR_ERISC)
         internal_::eth_send_packet(0, eth_src_overflow_addr, eth_dest_overflow_addr, 4);
 #endif
+    }
+
+    if (use_multicast_semaphore_inc) {
+        // Use invalid multicast range to trigger the watcher assertion
+        // dst_noc_x/y is start, mcast_dst_end_x/y is end
+        uint64_t dst_multicast_noc_addr =
+            get_noc_multicast_addr(dst_noc_x, dst_noc_y, mcast_dst_end_x, mcast_dst_end_y, buffer_dst_addr);
+        noc_semaphore_inc_multicast(dst_multicast_noc_addr, 1, 1);
+        noc_async_atomic_barrier();
+        return;  // Don't do normal operations
     }
 
     // NOC src address
