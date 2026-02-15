@@ -4,12 +4,10 @@
 
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "device/llama_reduce_scatter_create_heads_device_op.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental::ccl {
-namespace detail {}  // namespace detail
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCreateHeads::invoke(
     const ttnn::Tensor& input_tensor,
