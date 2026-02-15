@@ -4,6 +4,7 @@
 
 #include <string>
 #include <vector>
+#include <tt_stl/vector_init.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_backward_device_operation.hpp"
@@ -180,12 +181,12 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.reserve(4 + output_grad_dim.size() + input_grad_dim.size() + need_bcast_dim.size());
-        reader_rt_args.push_back(output_grad.buffer()->address());
-        reader_rt_args.push_back(num_tiles_per_core);
-        reader_rt_args.push_back(tile_offset);
-        reader_rt_args.push_back(num_dim);
+        auto reader_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{4 + output_grad_dim.size() + input_grad_dim.size() + need_bcast_dim.size()},
+            output_grad.buffer()->address(),
+            num_tiles_per_core,
+            tile_offset,
+            num_dim);
         reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());

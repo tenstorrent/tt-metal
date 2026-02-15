@@ -27,6 +27,7 @@
 #include <vector>
 #include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/vector_init.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
@@ -87,12 +88,11 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
     // Get all 4 possible corners ASIC positions
-    std::vector<AsicPosition> corner_asic_positions;
-    corner_asic_positions.reserve(4);
-    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
-    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
-    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
-    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
+    auto corner_asic_positions = ttsl::vector_init<AsicPosition>(
+        AsicPosition{1, 1},   // Top left corner
+        AsicPosition{2, 1},   // Top right corner
+        AsicPosition{3, 1},   // Bottom left corner
+        AsicPosition{4, 1});  // Bottom right corner
 
     std::vector<FabricNodeId> corner_fabric_node_ids;
     corner_fabric_node_ids.reserve(4 * mesh_graph.get_all_mesh_ids().size());

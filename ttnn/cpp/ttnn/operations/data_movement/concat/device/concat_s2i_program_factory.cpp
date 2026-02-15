@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <tt_stl/vector_init.hpp>
 
 namespace ttnn::prim {
 
@@ -72,13 +73,13 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
 
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.reserve(num_input_tensors * 2);
-        std::vector<uint32_t> writer_runtime_args;
-        writer_runtime_args.reserve(5 + num_input_tensors);
-        writer_runtime_args.emplace_back(output.buffer()->address());
-        writer_runtime_args.emplace_back(core_id);
-        writer_runtime_args.emplace_back(curr_num_output_rows);
-        writer_runtime_args.emplace_back(num_input_tensors * input_shard_spec.shape[0]);
-        writer_runtime_args.emplace_back(input_shard_spec.shape[0]);
+        auto writer_runtime_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{5 + num_input_tensors},
+            output.buffer()->address(),
+            core_id,
+            curr_num_output_rows,
+            num_input_tensors * input_shard_spec.shape[0],
+            input_shard_spec.shape[0]);
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             reader_runtime_args.push_back(input_id);
             reader_runtime_args.push_back(input_shard_spec.shape[0]);

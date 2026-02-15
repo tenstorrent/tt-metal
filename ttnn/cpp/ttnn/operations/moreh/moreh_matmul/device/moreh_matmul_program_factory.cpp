@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <tt_stl/vector_init.hpp>
 
 #include "moreh_matmul_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -424,31 +425,29 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         uint32_t num_output_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-            std::vector<uint32_t> compute_rt_args;
-            compute_rt_args.reserve(1 + output_stride.size());
-            compute_rt_args.push_back(num_tiles_written);
+            auto compute_rt_args =
+                ttsl::vector_init<uint32_t>(ttsl::vector_size{1 + output_stride.size()}, num_tiles_written);
             compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, compute_rt_args);
         } else if (core_group_2.contains(core)) {
             TT_FATAL(compute_kernel_2_id.has_value(), "Core not in specified core ranges");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-            std::vector<uint32_t> compute_rt_args;
-            compute_rt_args.reserve(1 + output_stride.size());
-            compute_rt_args.push_back(num_tiles_written);
+            auto compute_rt_args =
+                ttsl::vector_init<uint32_t>(ttsl::vector_size{1 + output_stride.size()}, num_tiles_written);
             compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id.value(), core, compute_rt_args);
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.reserve(
-            4 + input_stride.size() + other_stride.size() + output_stride.size() + input_not_bcast.size() +
-            other_not_bcast.size() + (bias.has_value() ? 1 : 0));
-        reader_rt_args.push_back(input.buffer()->address());
-        reader_rt_args.push_back(other.buffer()->address());
-        reader_rt_args.push_back(num_tiles_written);
-        reader_rt_args.push_back(num_output_tiles_per_core);
+        auto reader_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{
+                4 + input_stride.size() + other_stride.size() + output_stride.size() + input_not_bcast.size() +
+                other_not_bcast.size() + (bias.has_value() ? 1 : 0)},
+            input.buffer()->address(),
+            other.buffer()->address(),
+            num_tiles_written,
+            num_output_tiles_per_core);
 
         // TODO: move some to compile args
         reader_rt_args.insert(reader_rt_args.end(), input_stride.begin(), input_stride.end());

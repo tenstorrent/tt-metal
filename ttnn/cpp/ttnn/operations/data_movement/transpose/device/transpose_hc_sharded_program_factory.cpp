@@ -4,6 +4,7 @@
 #include "transpose_hc_sharded_program_factory.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -55,13 +56,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         }
         uint32_t num_sticks_per_core = shard_height;
 
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(5 + shard_grid_x_map.size() + shard_grid_y_map.size());
-        reader_runtime_args.emplace_back(num_sticks_per_core);
-        reader_runtime_args.emplace_back(curr_sticks_read);
-        reader_runtime_args.emplace_back(curr_c);
-        reader_runtime_args.emplace_back(curr_h);
-        reader_runtime_args.emplace_back(curr_n);
+        auto reader_runtime_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{5 + shard_grid_x_map.size() + shard_grid_y_map.size()},
+            num_sticks_per_core,
+            curr_sticks_read,
+            curr_c,
+            curr_h,
+            curr_n);
         reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_x_map.begin(), shard_grid_x_map.end());
         reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_y_map.begin(), shard_grid_y_map.end());
 

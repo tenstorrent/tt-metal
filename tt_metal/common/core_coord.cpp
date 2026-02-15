@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <core_coord.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
@@ -425,9 +426,7 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
     result_ranges.reserve(this_merged.ranges_.size() * 2);
 
     for (const auto& current_range : this_merged.ranges_) {
-        std::vector<CoreRange> current_remaining;
-        current_remaining.reserve(1);
-        current_remaining.emplace_back(current_range);
+        auto current_remaining = ttsl::vector_init<CoreRange>(current_range);
 
         for (const auto& subtract_range : other_merged.ranges_) {
             std::vector<CoreRange> new_remaining;

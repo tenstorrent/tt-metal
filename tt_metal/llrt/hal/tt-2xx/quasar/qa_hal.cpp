@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
+#include <tt_stl/vector_init.hpp>
 
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
@@ -220,20 +221,18 @@ public:
     }
 
     std::vector<std::string> includes(const Params& params) const override {
-        std::vector<std::string> includes;
-        includes.reserve(13);
-
-        // Common includes for all core types
-        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/common");
-        includes.emplace_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
-        includes.emplace_back("tt_metal/hw/inc/internal");
-        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx");
-        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
-        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
-        includes.emplace_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
-        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
-        includes.emplace_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
+        // Common includes for all core types, reserve 13 for max conditional additions
+        auto includes = ttsl::vector_init<std::string, 13>(
+            "tt_metal/hw/ckernels/quasar/metal/common",
+            "tt_metal/hw/ckernels/quasar/metal/llk_io",
+            "tt_metal/hw/inc/internal",
+            "tt_metal/hw/inc/internal/tt-2xx",
+            "tt_metal/hw/inc/internal/tt-2xx/quasar",
+            "tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines",
+            "tt_metal/hw/inc/internal/tt-2xx/quasar/noc",
+            "tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc",
+            "tt_metal/third_party/tt_llk/tt_llk_quasar/",
+            "tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
