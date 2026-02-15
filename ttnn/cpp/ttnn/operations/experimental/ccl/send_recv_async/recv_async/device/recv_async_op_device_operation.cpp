@@ -17,11 +17,6 @@ RecvAsyncDeviceOperation::program_factory_t RecvAsyncDeviceOperation::select_pro
     return RecvAsyncMeshWorkloadFactory{};
 }
 
-void RecvAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;

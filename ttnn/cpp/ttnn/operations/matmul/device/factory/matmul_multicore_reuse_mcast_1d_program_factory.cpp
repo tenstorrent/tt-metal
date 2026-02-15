@@ -105,7 +105,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool bias_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset;
 
     // currently only support transpose of the full tile
@@ -183,7 +184,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    CoreCoord start_core = {0, 0};
+    CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
     uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = compute_with_storage_grid_size.x;
@@ -201,11 +202,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset(start_core, in0_sender_num_cores, compute_with_storage_grid_size, row_major);
     CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset(start_core, num_cores_with_work, compute_with_storage_grid_size, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -250,10 +251,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            in0_mcast_noc_x.push_back(
+                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            in0_mcast_noc_y.push_back(
+                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -1038,7 +1041,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
     bool output_is_sharded,
-    bool untilize_out) {
+    bool untilize_out,
+    CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -1123,7 +1127,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    CoreCoord start_core = {0, 0};
+    CoreCoord start_core = sub_device_start_core;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
@@ -2255,28 +2259,80 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
 
     /* Runtime args */
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
+    // Mapping from worker core y-coordinate (and column group) to DRAM bank IDs.
+    // The DRAM banks are split into two column groups (left and right halves of the chip).
+    // On Wormhole: hardcoded mapping; banks 0-3 left column (x <= 3), banks 4-11 right column.
+    // On Blackhole: dynamically derived from optimal DRAM bank API; banks split at x <= 6.
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_first_col;
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_second_col;
+    uint32_t first_col_max_x = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
+    uint32_t num_receiver_cores_per_dram = ring_size / in1_buffer->shard_spec().grid().num_cores();
     if (in1_is_dram_sharded) {
         if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
-            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
-            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
-            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
+            worker_y_to_dram_bank_first_col[0] = 1;
+            worker_y_to_dram_bank_first_col[4] = 2;
+            worker_y_to_dram_bank_first_col[5] = 3;
+            worker_y_to_dram_bank_first_col[9] = 0;
 
-            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
-            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
-            worker_coord_y_to_dram_bank_second_col_mapping[2] = 9;
-            worker_coord_y_to_dram_bank_second_col_mapping[4] = 10;
-            worker_coord_y_to_dram_bank_second_col_mapping[5] = 11;
-            worker_coord_y_to_dram_bank_second_col_mapping[6] = 8;
-            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
-            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
-
-        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
+            worker_y_to_dram_bank_second_col[0] = 4;
+            worker_y_to_dram_bank_second_col[1] = 6;
+            worker_y_to_dram_bank_second_col[2] = 9;
+            worker_y_to_dram_bank_second_col[4] = 10;
+            worker_y_to_dram_bank_second_col[5] = 11;
+            worker_y_to_dram_bank_second_col[6] = 8;
+            worker_y_to_dram_bank_second_col[7] = 7;
+            worker_y_to_dram_bank_second_col[9] = 5;
         } else {
-            TT_THROW("ring gather MM currently not supporting this device arch");
+            // Dynamically derive mapping from optimal DRAM bank API
+            auto optimal_dram_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
+            uint32_t num_banks = optimal_dram_workers.size();
+            uint32_t banks_in_first_col = num_banks / 2;
+
+            std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
+            std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+
+            for (uint32_t bank = 0; bank < num_banks; ++bank) {
+                const auto& core = optimal_dram_workers[bank];
+                if (bank < banks_in_first_col) {
+                    first_col_anchors.push_back({core.y, bank});
+                } else {
+                    second_col_anchors.push_back({core.y, bank});
+                }
+            }
+
+            // Sort anchors by y-coordinate for nearest-neighbor lookup
+            auto sort_by_y = [](const auto& a, const auto& b) { return a.first < b.first; };
+            std::sort(first_col_anchors.begin(), first_col_anchors.end(), sort_by_y);
+            std::sort(second_col_anchors.begin(), second_col_anchors.end(), sort_by_y);
+
+            // Helper to find nearest bank for a given y-coordinate
+            auto find_nearest_bank = [](uint32_t y,
+                                        const std::vector<std::pair<uint32_t, uint32_t>>& anchors) -> uint32_t {
+                if (anchors.empty()) {
+                    return 0;  // Fallback
+                }
+                uint32_t best_bank = anchors[0].second;
+                uint32_t best_dist = std::abs((int)y - (int)anchors[0].first);
+                for (const auto& [anchor_y, bank] : anchors) {
+                    uint32_t dist = std::abs((int)y - (int)anchor_y);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best_bank = bank;
+                    }
+                }
+                return best_bank;
+            };
+
+            // Build complete maps for all possible y-coordinates (0 to max worker y)
+            auto compute_grid = device->compute_with_storage_grid_size();
+            for (uint32_t y = 0; y < compute_grid.y; ++y) {
+                if (!first_col_anchors.empty()) {
+                    worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
+                }
+                if (!second_col_anchors.empty()) {
+                    worker_y_to_dram_bank_second_col[y] = find_nearest_bank(y, second_col_anchors);
+                }
+            }
         }
     }
 
@@ -2319,15 +2375,54 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             i,                      // ring_idx
         };
         if (in1_is_dram_sharded) {
-            if (core.x <= 3) {
-                bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
+            // Look up bank_id based on core.y and which column group core.x belongs to
+            if (core.x <= first_col_max_x) {
+                auto it = worker_y_to_dram_bank_first_col.find(core.y);
+                if (it == worker_y_to_dram_bank_first_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
+                        core.x,
+                        core.y,
+                        core.y);
+                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
+                        log_info(tt::LogOp, "  y={}", y);
+                    }
+                }
+                bank_id = it->second;
             } else {
-                bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
+                auto it = worker_y_to_dram_bank_second_col.find(core.y);
+                if (it == worker_y_to_dram_bank_second_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
+                        core.x,
+                        core.y,
+                        core.y);
+                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
+                        log_info(tt::LogOp, "  y={}", y);
+                    }
+                }
+                bank_id = it->second;
             }
+
             uint32_t dram_read_offset = 0;
-            if (core.x % 2 == 0) {
-                dram_read_offset = 1;
+            /* TODO: This is a temporary solution to handle the dram read offset for the wormhole b0. */
+            /* TODO: The dram read offset is x coordinate dependent for wormhole because all usage on wormhole assumes
+             * input core range is column major, whereas blackhole usage is row major*/
+            /* TODO: The correct behaviour is that first core next to dram bank always has offset 0 and then offset
+             * increases by 1 for each core in the same row*/
+            /* TODO: This logic should be removed once all usage of ring matmul asserts that the input core ranges are
+             * arranged in row major order*/
+            if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+                if (core.x % 2 == 0) {
+                    dram_read_offset = 1;
+                }
+            } else {
+                // For iterating through ring matmul cores in row major order
+                dram_read_offset = i % num_receiver_cores_per_dram;
             }
+
             bank_ids.push_back(bank_id);
             uint32_t vc = 0;
             for (uint32_t j = 0; j < i; ++j) {
@@ -2834,6 +2929,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Sub-device start core
+    ////////////////////////////////////////////////////////////////////////////
+    CoreCoord sub_device_start_core = {0, 0};
+    if (sub_device_id.has_value()) {
+        auto sub_device_cores =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
             program,
@@ -2877,7 +2984,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             bias.has_value() ? bias->memory_config().is_sharded() : false,
             output.memory_config().is_sharded(),
             untilize_out,
-            fused_op_signaler);
+            fused_op_signaler,
+            sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
         program,
@@ -2918,7 +3026,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         output_data_format,
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
-        untilize_out);
+        untilize_out,
+        sub_device_start_core);
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast1DProgramFactory::create(

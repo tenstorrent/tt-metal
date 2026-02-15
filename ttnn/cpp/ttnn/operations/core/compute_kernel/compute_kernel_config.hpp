@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include <variant>
 #include <tuple>
 #include <optional>
 #include <umd/device/types/arch.hpp>
@@ -14,13 +13,8 @@
 
 namespace ttnn {
 
-struct GrayskullComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::LoFi;
-    bool math_approx_mode = true;
-    bool dst_full_sync_en = false;
-};
-
-struct WormholeComputeKernelConfig {
+// Unified compute kernel configuration for all supported architectures.
+struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::LoFi;
     bool math_approx_mode = true;
     bool fp32_dest_acc_en = false;
@@ -30,9 +24,10 @@ struct WormholeComputeKernelConfig {
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
 };
 
-using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
-
-using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig>;
+// Type aliases for backward compatibility
+using DeviceComputeKernelConfig = ComputeKernelConfig;
+using WormholeComputeKernelConfig = ComputeKernelConfig;
+using BlackholeComputeKernelConfig = ComputeKernelConfig;
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH arch,
@@ -48,7 +43,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
-tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 

@@ -190,7 +190,7 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
         return std::nullopt;
     }
     const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_ASSERT(!pcie_cores.empty());
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
@@ -264,6 +264,8 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     }
 }
 
+bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty(); }
+
 void* PinnedMemoryImpl::lock() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
@@ -308,6 +310,8 @@ bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device
 bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usable_from_noc(device_id); }
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
+
+bool PinnedMemory::lock_may_block() const { return pImpl->lock_may_block(); }
 
 void* PinnedMemory::lock() { return pImpl->lock(); }
 

@@ -14,7 +14,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import preco
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
@@ -157,7 +157,7 @@ def test_attention_inference(
         current_pos=None,
         rot_mats=rot_mats,
         user_id=0,
-        mode="prefill",
+        mode=Mode.PREFILL,
         page_table=page_table_tt,
     )
     tt_out = ttnn.to_torch(

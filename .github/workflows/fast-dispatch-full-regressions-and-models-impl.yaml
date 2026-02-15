@@ -351,6 +351,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/aggregate-ops-report
+          sparse-checkout-cone-mode: false
 
       - name: Download all Tracy profiler reports
         uses: actions/download-artifact@v4

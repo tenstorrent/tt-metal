@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -217,7 +218,6 @@ class DeepseekMinimalAllReduce:
 
                 dst_num_hops = 1
                 num_connections = 1
-                using_persistent_buffers = 1 if persistent_output_tensor is not None else 0
                 has_residual = 1 if residual_tensor_mesh is not None else 0
 
                 # === NAMED COMPILE TIME ARGS ===
@@ -243,7 +243,6 @@ class DeepseekMinimalAllReduce:
                     ("remote_receiver_noc_y", remote_receiver_noc_y),
                     ("dst_num_hops", dst_num_hops),
                     ("num_connections", num_connections),
-                    ("using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 # Receiver kernel: NCRISC (reader) + TRISC (compute)
@@ -257,7 +256,6 @@ class DeepseekMinimalAllReduce:
                     ("num_standard_tiles", num_standard_tiles),
                     ("cb_residual", compute_cb_residual),
                     ("has_residual", has_residual),
-                    ("using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 receiver_trisc_ct_args = [
@@ -270,21 +268,21 @@ class DeepseekMinimalAllReduce:
                     ("num_tiles", num_standard_tiles),
                 ]
 
-                # === RUNTIME ARGS ===
-                sender_reader_rt_args = ttnn.RuntimeArgs()
-                sender_reader_rt_args[sender_core.x][sender_core.y] = [
-                    input_tensor_device.buffer_address(),
+                # === COMMON RUNTIME ARGS ===
+                # Sender NCRISC common runtime args (arg 0)
+                sender_ncrisc_common_rt_args = [
+                    input_tensor_device.buffer_address(),  # tensor_address
                 ]
 
-                sender_writer_rt_args = ttnn.RuntimeArgs()
-                sender_writer_rt_args[sender_core.x][sender_core.y] = [
-                    intermediate_tensor_device.buffer_address(),  # Destination address on remote device
-                    sender_semaphore_addr,
+                # Sender BRISC common runtime args (args 0-1)
+                sender_brisc_common_rt_args = [
+                    intermediate_tensor_device.buffer_address(),  # receiver_base_address
+                    sender_semaphore_addr,  # receive_semaphore_addr
                 ]
 
-                receiver_reader_rt_args = ttnn.RuntimeArgs()
-                receiver_reader_rt_args[receiver_core.x][receiver_core.y] = [
-                    receiver_semaphore_addr,
+                # Receiver NCRISC common runtime args (arg 0)
+                receiver_ncrisc_common_rt_args = [
+                    receiver_semaphore_addr,  # sender_semaphore_addr
                 ]
 
                 # === CB DESCRIPTORS ===
@@ -395,8 +393,6 @@ class DeepseekMinimalAllReduce:
                     ncrisc_named_compile_time_args=sender_ncrisc_ct_args + receiver_ncrisc_ct_args,
                     brisc_named_compile_time_args=sender_brisc_ct_args,
                     trisc_named_compile_time_args=receiver_trisc_ct_args,
-                    ncrisc_common_runtime_args=[],
-                    trisc_common_runtime_args=[],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
@@ -410,6 +406,12 @@ class DeepseekMinimalAllReduce:
                             other_value=0,
                         ),
                     ],
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        # Sender core: NCRISC and BRISC need per-core runtime args for fabric
+                        # Receiver core: NCRISC needs per-core runtime args for fabric
+                        ncrisc_args=[(sender_core, []), (receiver_core, [])],
+                        brisc_args=[(sender_core, [])],
+                    ),
                 )
 
                 # Get kernel descriptors - generates separate kernels for sender and receiver groups
@@ -419,6 +421,15 @@ class DeepseekMinimalAllReduce:
                 sender_group = kernel_result.get_group_by_arg("is_sender", 1)
                 receiver_group = kernel_result.get_group_by_arg("is_sender", 0)
 
+                # Set common runtime args for each kernel group
+                kernel_result.kernels[
+                    sender_group.ncrisc_kernel_index
+                ].common_runtime_args = sender_ncrisc_common_rt_args
+                kernel_result.kernels[sender_group.brisc_kernel_index].common_runtime_args = sender_brisc_common_rt_args
+                kernel_result.kernels[
+                    receiver_group.ncrisc_kernel_index
+                ].common_runtime_args = receiver_ncrisc_common_rt_args
+
                 # === PROGRAM DESCRIPTOR ===
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
@@ -426,16 +437,26 @@ class DeepseekMinimalAllReduce:
                     cbs=cb_list,
                 )
 
-                # Set runtime args for kernels using group indices
-                program.kernels[sender_group.ncrisc_kernel_index].runtime_args = sender_reader_rt_args
-                program.kernels[sender_group.brisc_kernel_index].runtime_args = sender_writer_rt_args
-                program.kernels[receiver_group.ncrisc_kernel_index].runtime_args = receiver_reader_rt_args
-
-                # Add fabric connection for sender writer
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                 neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
 
+                # Sender NCRISC fabric connection (reader needs fabric for signaling)
+                sender_reader_kernel_idx = sender_group.ncrisc_kernel_index
+                sender_reader_rt_args_ref = program.kernels[sender_reader_kernel_idx].runtime_args[sender_core.x][
+                    sender_core.y
+                ]
+                sender_reader_fabric_args = ttnn.setup_routing_plane_connection(
+                    fabric_node_id,
+                    [neighbor_fabric_node_id],
+                    [sender_link],
+                    program,
+                    sender_reader_kernel_idx,
+                    sender_core,
+                )
+                sender_reader_rt_args_ref.extend(sender_reader_fabric_args)
+
+                # Sender BRISC fabric connection (writer sends data via fabric)
                 sender_writer_kernel_idx = sender_group.brisc_kernel_index
                 sender_writer_rt_args_ref = program.kernels[sender_writer_kernel_idx].runtime_args[sender_core.x][
                     sender_core.y
@@ -450,7 +471,6 @@ class DeepseekMinimalAllReduce:
                 )
                 sender_writer_rt_args_ref.extend(sender_fabric_args)
 
-                # Add fabric connection for receiver reader
                 receiver_reader_kernel_idx = receiver_group.ncrisc_kernel_index
                 receiver_reader_rt_args_ref = program.kernels[receiver_reader_kernel_idx].runtime_args[receiver_core.x][
                     receiver_core.y

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {

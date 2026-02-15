@@ -8,7 +8,7 @@ on:
         type: choice
         options:
           - wormhole_b0
-          # - blackhole
+          - blackhole
         default: wormhole_b0
       platform:
         required: false

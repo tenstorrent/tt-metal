@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.3.3"
+        default: "v1.3.4"
       job-timeout:
         required: false
         type: number
@@ -146,27 +146,76 @@ jobs:
               echo "Warning: Example directory not found: $example_path"
             fi
           done
-  ttnn-pytests:
+  # ---------------------------------------------------------------------------
+  # Define TTSim-compatible TTNN tests from shared config
+  # ---------------------------------------------------------------------------
+  define-ttsim-ttnn-tests:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.job-timeout }}
-    name: "TTNN Pytests - ${{ matrix.arch }}"
+    env:
+      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
+    outputs:
+      ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
+    steps:
+      # Note: This checkout is needed because this is a separate job that runs before ttnn-pytests.
+      # Each job runs in a fresh environment, so we can't reuse the checkout from ttnn-pytests.
+      # We use sparse checkout to efficiently fetch only the test definitions YAML file.
+      - name: Checkout repository for test definitions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ env.TTNN_TESTS_YAML }}
+          sparse-checkout-cone-mode: false
+
+      - name: Compute TTSim-compatible tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+
+          # Read test definitions from shared YAML file and filter for ttsim-compatible tests
+          echo "[info] Reading test definitions from $TTNN_TESTS_YAML"
+          ttsim_tests=$(yq -o=json '.tests | [.[] | select(.ttsim == true)]' "$TTNN_TESTS_YAML")
+          echo "[info] TTSim-compatible tests:"
+          echo "$ttsim_tests" | jq
+
+          # Check that we have a valid test list
+          echo "$ttsim_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+          echo "ttnn-tests=$(echo $ttsim_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # TTNN Pytests on TTSim (uses shared test definitions)
+  # ---------------------------------------------------------------------------
+  ttnn-pytests:
+    needs: define-ttsim-ttnn-tests
+    if: ${{ inputs.run-ttsim-integration-tests }}
+    runs-on: ubuntu-latest
+    env:
+      TTSIM_SKIP_LIST_YAML: tests/pipeline_reorg/ttsim-skip-list.yaml
+    timeout-minutes: ${{ matrix.test-group.timeout || inputs.job-timeout }}
+    name: "TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch.name }}"
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: wormhole_b0
+        arch:
+          - name: wormhole_b0
             build_suffix: release_wh
             soc_desc: wormhole_b0_80_arch.yaml
-          - arch: blackhole
+          - name: blackhole
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
+        test-group: ${{ fromJSON(needs.define-ttsim-ttnn-tests.outputs.ttnn-tests) }}
+        exclude:
+          # Conv tests are all skipped on Blackhole - skip the job entirely
+          - arch:
+              name: blackhole
+            test-group:
+              name: "ttnn conv group"
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
       env:
-        ARCH_NAME: ${{ matrix.arch }}
+        ARCH_NAME: ${{ matrix.arch.name }}
         TT_METAL_SIMULATOR_HOME: /work/sim
         TT_METAL_SIMULATOR: /work/sim/libttsim.so
         TT_METAL_SLOW_DISPATCH_MODE: 1
@@ -192,7 +241,7 @@ jobs:
       - name: Compute ttsim asset name
         id: ttsim-asset
         run: |
-          asset_suffix="${{ matrix.build_suffix }}"
+          asset_suffix="${{ matrix.arch.build_suffix }}"
           asset_suffix="${asset_suffix#release_}"
           echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
 
@@ -209,92 +258,27 @@ jobs:
           set -euo pipefail
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${{ steps.ttsim-asset.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
-          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/tt_metal/soc_descriptors/${{ matrix.arch.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
-      - name: Run TTNN Pytests
-        timeout-minutes: 5
+      - name: Install pytest-xdist for parallel execution
+        run: uv pip install pytest-xdist
+
+      # Note: The skip list YAML is available from the full checkout above (line 227-230).
+      # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
+      - name: Build skip list arguments
+        id: skip-list
         run: |
-          pytest \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/ \
-            tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
-            tests/nightly/tg/ccl/test_all_reduce_async.py \
-            tests/nightly/tg/ccl/test_all_to_all_combine_6U.py \
-            tests/nightly/t3000/ccl/test_all_to_all_combine.py \
-            tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py \
-            tests/nightly/t3000/ccl/test_all_to_all_dispatch.py \
-            tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
-            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
-            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_perf_nightly_TG.py \
-            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_6U.py \
-            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py \
-            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_create_heads_async_TG.py \
-            tests/nightly/tg/ccl/test_mesh_partition_6U.py \
-            tests/nightly/t3000/ccl/test_mesh_partition.py \
-            tests/ttnn/unit_tests/operations/ccl/test_minimals.py \
-            tests/nightly/t3000/ccl/test_moe_ccl_end_to_end.py\
-            tests/nightly/t3000/ccl/test_new_all_broadcast.py \
-            tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py \
-            tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
-            tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
-            tests/nightly/t3000/ccl/test_send_recv_async.py \
-            tests/nightly/t3000/ccl/test_moe_expert_token_remap.py \
-            tests/nightly/t3000/ccl/test_apply_device_delay.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_abs.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_assign.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_clip.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_concat.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_floor.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_frac.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_i0.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_max.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_min.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_neg.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_relu.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_round.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_sign.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_square.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/test_complex_tensor.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_logical_and_.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_inplace.py \
-            tests/ttnn/nightly/unit_tests/operations/eltwise/test_mul_bcast.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_signbit.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
-            tests/ttnn/unit_tests/operations/point_to_point/test_moe_p2p.py \
-            tests/nightly/t3000/ccl/test_point_to_point.py \
-            tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py \
-            tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py \
-            tests/ttnn/unit_tests/operations/debug/test_examples.py \
-            tests/ttnn/unit_tests/operations/data_movement/test_full.py \
-            tests/ttnn/unit_tests/operations/data_movement/test_full_like.py \
-            tests/ttnn/unit_tests/operations/debug/test_generic_op.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py \
-            tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_full.py \
-            tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py \
-            tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py \
-            tests/ttnn/unit_tests/operations/eltwise/test_polyval.py \
-            tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py \
-            tests/ttnn/unit_tests/operations/data_movement/test_reallocate.py
+          ARCH="${{ matrix.arch.name }}"
+          SKIP_ARGS=$(yq -r ".${ARCH}[]" "$TTSIM_SKIP_LIST_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+          echo "[info] Loaded skip list for arch: $ARCH from $TTSIM_SKIP_LIST_YAML"
+          echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
+          echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
+        run: |
+          # Run pytest with parallel execution and skip list
+          ${{ matrix.test-group.cmd }} ${{ steps.skip-list.outputs.skip_args }}
+
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-small-stable

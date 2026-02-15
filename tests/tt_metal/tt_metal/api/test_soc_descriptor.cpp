@@ -61,8 +61,6 @@ namespace tt::tt_metal {
 TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
-    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     std::vector<int> devices_to_open;
     for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
         devices_to_open.push_back(device_id);

@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/logsigmoid.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/logsigmoid.h"
+#include "api/compute/eltwise_unary/negative.h"
 
 void kernel_main() {
     // Compile-time arguments

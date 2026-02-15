@@ -17,7 +17,6 @@
 
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -38,7 +37,7 @@ struct KernelCacheStatus {
 
 void ClearKernelCache(const std::string& kernel_root_path) {
     std::filesystem::remove_all(kernel_root_path);
-    detail::HashLookup::inst().clear();
+    jit_build_cache_clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
@@ -336,12 +335,9 @@ TEST_F(MeshDispatchFixture, CompileProgramWithModifiedProgram) {
         compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel fp32_dest_acc_en - expect cache miss for compute kernel
-    // Grayskull does not support fp32 accumulation
-    if (dev->arch() != ARCH::GRAYSKULL) {
-        attributes.fp32_dest_acc_en = true;
-        kernel_name_to_hash =
-            compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
-    }
+    attributes.fp32_dest_acc_en = true;
+    kernel_name_to_hash =
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel math_approx_mode - expect cache miss for compute kernel
     attributes.math_approx_mode = true;
