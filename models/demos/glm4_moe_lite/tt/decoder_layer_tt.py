@@ -413,6 +413,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # output N dimension across more cores without requiring any weight resharding.
     explicit_prog_cfg = _env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG")
     skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
+    concat_heads = _env_bool("GLM4_MOE_LITE_CONCAT_HEADS")
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
     fuse_mlp_moe_reduce = _env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE")
 
@@ -1092,9 +1093,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         except Exception:
             pass
 
-    v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
-    v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
-    v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
+    if concat_heads:
+        v = ttnn.transformer.concatenate_heads(v)  # [1, H, B, v_head_dim] -> [1, B, H*v_head_dim]
+        v = ttnn.reshape(v, (1, 1, batch, int(hparams.num_attention_heads * hparams.v_head_dim)))
+    else:
+        v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
+        v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
+        v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
 
     attn_out = _attn_linear(v, w.w_o)  # [1,1,B,hidden]
     ttnn.deallocate(v, force=False)

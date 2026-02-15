@@ -451,8 +451,7 @@ def run_layer0_prefill_tt(
     up = ttnn.linear(x, w.w_mlp_up)
     ttnn.deallocate(x)
 
-    gate = ttnn.silu(gate)
-    x_ff = gate * up
+    x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate)
     ttnn.deallocate(up)
 
@@ -645,8 +644,7 @@ def run_layer0_decode_one_step_unpaged_tt(
     gate = ttnn.linear(x, w.w_mlp_gate)
     up = ttnn.linear(x, w.w_mlp_up)
     ttnn.deallocate(x)
-    gate = ttnn.silu(gate)
-    x_ff = gate * up
+    x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate)
     ttnn.deallocate(up)
     mlp_out = ttnn.linear(x_ff, w.w_mlp_down)
@@ -1356,8 +1354,7 @@ def run_layer0_decode_one_step_tt(
     gate = ttnn.linear(x, w.w_mlp_gate)
     up = ttnn.linear(x, w.w_mlp_up)
     ttnn.deallocate(x)
-    gate = ttnn.silu(gate)
-    x_ff = gate * up
+    x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate)
     ttnn.deallocate(up)
     mlp_out = ttnn.linear(x_ff, w.w_mlp_down)
@@ -1659,8 +1656,7 @@ def run_layer0_decode_one_step_update_cache_tt(
     gate = ttnn.linear(x, w.w_mlp_gate)
     up = ttnn.linear(x, w.w_mlp_up)
     ttnn.deallocate(x)
-    gate = ttnn.silu(gate)
-    x_ff = gate * up
+    x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(gate)
     ttnn.deallocate(up)
     mlp_out = ttnn.linear(x_ff, w.w_mlp_down)
