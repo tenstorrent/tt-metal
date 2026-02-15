@@ -606,20 +606,17 @@ create_program_dram_sharded(
 
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
-        std::vector<uint32_t> mm_in0_sender_args;
-
         // mcast sender - 1, mcast sender + compute core - 2
-        uint32_t worker_core_type;
-        if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
-            worker_core_type = 2;
-        } else {
-            worker_core_type = 1;
-        }
+        const uint32_t worker_core_type =
+            (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end())
+                ? 2u
+                : 1u;
 
-        mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
-        mm_in0_sender_args.push_back((std::uint32_t)sender_id);
-        mm_in0_sender_args.push_back(
-            (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
+        auto mm_in0_sender_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size()},
+            worker_core_type,
+            static_cast<uint32_t>(sender_id),
+            static_cast<uint32_t>((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_sender_args.insert(
@@ -653,10 +650,8 @@ create_program_dram_sharded(
             std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) ==
                 mcast_receiver_coords.end()) {
             // in0 receivers rt args
-            std::vector<uint32_t> mm_in0_idle_args;
             // idle core - 0
-            uint32_t worker_core_type = 0;
-            mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
+            auto mm_in0_idle_args = ttsl::vector_init<uint32_t>(0u);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_idle_args);
         }

@@ -191,6 +191,7 @@ void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
     TT_FATAL(initialized_reduce_scatter && initialized_fused_op, "ReduceScatterFusedOpSignaler not initialized fully.");
+    out_rt_args.reserve(out_rt_args.size() + 1);
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
 }
 
@@ -404,6 +405,7 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
 }
 
 void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const {
+    out_rt_args.reserve(out_rt_args.size() + 1);
     out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
 }
 
@@ -524,6 +526,7 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles) {
     TT_FATAL(initialized_all_gather && initialized_fused_op, "MinimalMatmulFusedOpSignaler not initialized fully.");
 
+    out_rt_args.reserve(out_rt_args.size() + 12);
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(k_num_blocks));
     out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
