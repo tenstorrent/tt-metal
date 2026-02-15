@@ -14,7 +14,7 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_d
     "batch_size, test, expected_perf",
     [
         [16, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-16-device_params0", 10610.0],
-        [32, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-32-device_params0", 14815.0],
+        [32, "True-DataType.BFLOAT8_B-DataType.BFLOAT8_B-MathFidelity.LoFi-32-device_params0", 15480.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

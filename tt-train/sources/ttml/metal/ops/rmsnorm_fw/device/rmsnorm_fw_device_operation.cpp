@@ -16,11 +16,6 @@ RMSNormForwardDeviceOperation::program_factory_t RMSNormForwardDeviceOperation::
     return RMSNormForwardProgramFactory{};
 }
 
-void RMSNormForwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {

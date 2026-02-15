@@ -149,6 +149,7 @@ def tt_all_reduce(
     use_composite=False,
     chunks_per_sync=10,
     num_workers_per_link=2,
+    subdevice_id=None,
 ):
     """
     Perform an all-reduce operation across devices in a mesh.
@@ -208,6 +209,7 @@ def tt_all_reduce(
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -237,6 +239,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
         if sharded:
@@ -268,6 +271,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
@@ -283,6 +287,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
     # Reshape the reduced tensor to the original shape
@@ -302,6 +307,7 @@ def tt_all_gather(
     sharded=False,
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
+    subdevice_id=None,
 ):
     """
     Perform an all-gather operation across devices in a mesh.
@@ -353,6 +359,7 @@ def tt_all_gather(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
     else:
         gathered = ttnn.experimental.all_gather_async(
@@ -368,6 +375,7 @@ def tt_all_gather(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
     input_tensor.deallocate(True)
     return gathered

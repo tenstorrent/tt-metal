@@ -33,13 +33,13 @@ void kernel_main() {
 
             fill_tile_init();
             #if defined(INP_INT32) || defined(INP_UINT32)
-                fill_tile_int(1, packed_scalar1);
-                fill_tile_int(2, packed_scalar2);
-            #endif
-            #if defined(INP_FLOAT) || defined(INP_FLOAT32)
-                fill_tile(1, *true_value);
-                fill_tile(2, *false_value);
-            #endif
+            fill_tile_int<DataFormat::Int32>(1, packed_scalar1);
+            fill_tile_int<DataFormat::Int32>(2, packed_scalar2);
+#endif
+#if defined(INP_FLOAT) || defined(INP_FLOAT32)
+            fill_tile(1, *true_value);
+            fill_tile(2, *false_value);
+#endif
             SFPU_OP_CHAIN_0
             tile_regs_commit();
 

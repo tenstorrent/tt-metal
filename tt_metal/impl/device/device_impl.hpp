@@ -135,7 +135,6 @@ public:
 
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     // Puts device into reset
     bool close() override;
 

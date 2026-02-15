@@ -245,8 +245,7 @@ class DownProj:
         mcast_data_receiver_semaphore_id = 1
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
-        mcast2_data_sender_semaphore_id = 4
-        mcast2_data_receiver_semaphore_id = 5
+        mcast2_data_receiver_semaphore_id = 4
 
         # ====================================================================
         # Buffer addresses
@@ -322,7 +321,7 @@ class DownProj:
             ("mcast_dst_cb", mcast_dst_cb),
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
             # Mcast2 sender
-            ("mcast2_data_sender_semaphore", mcast2_data_sender_semaphore_id),
+            ("mcast2_data_sender_semaphore", mcast_data_sender_semaphore_id),
             ("mcast2_data_receiver_semaphore", mcast2_data_receiver_semaphore_id),
             ("mcast2_data_size_bytes", residual_add_mcast_data_size_bytes),
             ("mcast2_src_cb", residual_add_mcast_src_cb),
@@ -452,7 +451,6 @@ class DownProj:
             ttnn.SemaphoreDescriptor(
                 id=gather_noc1_receiver_semaphore_id, core_ranges=full_device_grid, initial_value=0
             ),
-            ttnn.SemaphoreDescriptor(id=mcast2_data_sender_semaphore_id, core_ranges=full_device_grid, initial_value=0),
             ttnn.SemaphoreDescriptor(
                 id=mcast2_data_receiver_semaphore_id, core_ranges=full_device_grid, initial_value=0
             ),

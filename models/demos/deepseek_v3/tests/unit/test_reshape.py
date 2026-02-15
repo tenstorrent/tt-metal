@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import is_watcher_enabled
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -33,6 +34,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_reshape(mesh_device, in_shape, out_shape, layout, mem_config, dtype, enable_trace):
+    if is_watcher_enabled():
+        pytest.skip("Test fails with watcher enabled. See issue #37096")
     torch_input = random_torch_tensor(dtype, in_shape)
     torch_output = torch_input.reshape(out_shape)
 

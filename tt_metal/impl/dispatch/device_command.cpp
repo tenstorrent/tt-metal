@@ -296,6 +296,41 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed_h(
+    uint32_t noc_xy_addr,
+    uint32_t total_length,
+    const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+    uint16_t num_sub_cmds,
+    uint32_t offset_idx) {
+    static_assert(sizeof(CQPrefetchRelayLinearPackedSubCmd) % sizeof(uint32_t) == 0);
+
+    uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_relay_linear_packed_h_cmd = [&](CQPrefetchCmd* relay_linear_packed_h_cmd) {
+        relay_linear_packed_h_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H;
+        relay_linear_packed_h_cmd->relay_linear_packed.noc_xy_addr = noc_xy_addr;
+        relay_linear_packed_h_cmd->relay_linear_packed.total_length = total_length;
+        relay_linear_packed_h_cmd->relay_linear_packed.stride = increment_sizeB;
+        relay_linear_packed_h_cmd->relay_linear_packed.count = num_sub_cmds;
+        relay_linear_packed_h_cmd->relay_linear_packed.pad = 0;
+    };
+    CQPrefetchCmd* relay_linear_packed_h_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_linear_packed_h_cmd{};
+        initialize_relay_linear_packed_h_cmd(&relay_linear_packed_h_cmd);
+        this->memcpy(relay_linear_packed_h_cmd_dst, &relay_linear_packed_h_cmd, sizeof(CQPrefetchCmd));
+    } else {
+        initialize_relay_linear_packed_h_cmd(relay_linear_packed_h_cmd_dst);
+    }
+
+    this->memcpy(
+        reinterpret_cast<char*>(relay_linear_packed_h_cmd_dst) + sizeof(CQPrefetchCmd),
+        &sub_cmds[offset_idx],
+        sub_cmds_sizeB);
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_paged_to_ringbuffer(
     const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
@@ -561,6 +596,45 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
         // follow right after the command, so defer alignment to after it.
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_write_paged_with_custom_inline_size(
+    bool flush_prefetch,
+    uint8_t is_dram,
+    uint16_t start_page,
+    uint32_t base_addr,
+    uint32_t page_size,
+    uint32_t pages,
+    uint32_t inline_data_sizeB,
+    const void* data) {
+    // When using custom inline size, always account for inline data in payload (e.g., alignment prefix bytes)
+    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + inline_data_sizeB;
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+    auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
+        write_cmd->write_paged.is_dram = is_dram;
+        write_cmd->write_paged.start_page = start_page;
+        write_cmd->write_paged.base_addr = base_addr;
+        write_cmd->write_paged.page_size = page_size;
+        write_cmd->write_paged.pages = pages;
+    };
+    CQDispatchCmd* write_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd{};
+        initialize_write_cmd(&write_cmd);
+        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_write_cmd(write_cmd_dst);
+    }
+
+    TT_ASSERT(data != nullptr);
+    this->add_data(data, inline_data_sizeB, inline_data_sizeB);
+    // Increment wr offset to aligned address only if data is inline. Out-of-line data will
+    // follow right after the command, so defer alignment to after it.
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 
 template <bool hugepage_write>

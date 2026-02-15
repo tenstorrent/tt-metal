@@ -92,11 +92,6 @@ struct ReduceToRootOp {
         validate(operation_attributes, tensor_args);
     };
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        validate(operation_attributes, tensor_args);
-    };
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

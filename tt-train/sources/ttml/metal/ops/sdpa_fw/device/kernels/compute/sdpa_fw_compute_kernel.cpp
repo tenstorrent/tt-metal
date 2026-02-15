@@ -29,8 +29,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
 #include "sdpa_compute_utils.hpp"
-namespace NAMESPACE {
-
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
 constexpr uint32_t qWt = get_compile_time_arg_val(2);                // num tile in inner dim in query(d/TILE_W)
@@ -58,9 +56,7 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-const uint32_t onetile = 1U;
-
-void MAIN {
+void kernel_main() {
     // Runtime args - needed for causal mask to know global position within sequence
     const uint32_t start_row = get_arg_val<uint32_t>(0);
 
@@ -245,5 +241,3 @@ void MAIN {
     cb_pop_front(cb_attn_mask, onetile);
 #endif
 }
-
-}  // namespace NAMESPACE

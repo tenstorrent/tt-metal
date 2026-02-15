@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -83,8 +84,10 @@ class DeepseekGenerator:
         override_num_layers: int | None = None,
         single_layer: str | None = None,
         enable_trace: bool = False,
+        enable_mem_profile: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
+        force_recalculate: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -148,8 +151,10 @@ class DeepseekGenerator:
         self._trace_output: ttnn.Tensor | None = None
         self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self.enable_trace = enable_trace
+        self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
+        self.force_recalculate = force_recalculate
         logger.info(f"Enable trace: {self.enable_trace}")
 
         # Initialize rope_setup once
@@ -158,6 +163,10 @@ class DeepseekGenerator:
         )
 
         self._prepare_weight_configs(cache_dir)
+
+    def _dump_meminfo(self, header: str) -> None:
+        if self.enable_mem_profile:
+            dump_ttnn_meminfo(self.mesh_device, header=header)
 
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
@@ -186,7 +195,7 @@ class DeepseekGenerator:
             hf_config=self.hf_config,
             weight_cache_path=weight_cache_path,
             mesh_device=self.mesh_device,
-            force_recalculate=False,
+            force_recalculate=self.force_recalculate,
             random_weights=self.random_weights,
             model_path=self.model_path,
             single_layer=self.single_layer,
@@ -194,6 +203,7 @@ class DeepseekGenerator:
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
         logger.info("Creating model states...")
+        self._dump_meminfo("Before creating model states...")
         self.model_state = RowBatchedModel.create_state(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
@@ -201,18 +211,24 @@ class DeepseekGenerator:
             ccl=self.ccl,
             kv_cache_override=kv_cache_override,
         )
+        self._dump_meminfo("After creating model states...")
         logger.info("Creating model shared states...")
+        self._dump_meminfo("Before creating model shared states...")
         self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
+        self._dump_meminfo("After creating model shared states...")
 
     def _prepare_run_configs(self, mode: str, kv_cache_override: KvCacheConfig | None = None) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
+            self._dump_meminfo("Before creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("After creating model prefill config...")
             self._prepare_model_states(kv_cache_override=kv_cache_override)
+            self._dump_meminfo("Before creating model run config for prefill...")
             self.model_run_config_prefill = create_run_config(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -220,6 +236,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for prefill...")
         elif mode == "decode":
             logger.info("Creating model decode config...")
             assert (
@@ -231,6 +248,7 @@ class DeepseekGenerator:
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("Before creating model run config for decode...")
             self.model_run_config_decode = create_run_config(
                 self.model_decode_cfg,
                 self.model_weight_config,
@@ -238,6 +256,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for decode...")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
 

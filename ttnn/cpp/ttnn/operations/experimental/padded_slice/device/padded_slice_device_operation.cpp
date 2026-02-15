@@ -22,11 +22,6 @@ PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select
     TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
 }
 
-void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;

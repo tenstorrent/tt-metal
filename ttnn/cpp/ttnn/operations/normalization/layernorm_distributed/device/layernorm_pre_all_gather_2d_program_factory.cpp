@@ -46,10 +46,12 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 
 // 2D Program Factory Implementation
 LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
-    const LayerNormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output) {
+    const LayerNormPreAllGatherParams& operation_attributes,
+    const LayerNormPreAllGatherInputs& tensor_args,
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    const auto& a = tensor_args;
+    const auto& a = tensor_args.input;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];

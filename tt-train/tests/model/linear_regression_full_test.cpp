@@ -27,8 +27,6 @@ protected:
 };
 
 TEST_F(LinearRegressionFullTest, TestLinearRegressionFull) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 128;

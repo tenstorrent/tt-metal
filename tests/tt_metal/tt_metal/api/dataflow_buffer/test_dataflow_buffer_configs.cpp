@@ -28,7 +28,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
-#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 

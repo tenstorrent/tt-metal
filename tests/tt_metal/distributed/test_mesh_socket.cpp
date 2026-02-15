@@ -1639,7 +1639,7 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
                     reducer_fabric_node_id, forwarding_direction);
 
                 auto forwarding_links = get_forwarding_link_indices_in_direction(
-                    reducer_fabric_node_id, dst_fabric_node_id, forwarding_direction);
+                    control_plane, reducer_fabric_node_id, dst_fabric_node_id, forwarding_direction);
                 // Cannot use the last link which might already have a fabric router on it or used by dispatch
                 // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
                 if (!forwarding_links.empty()) {

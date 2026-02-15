@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 
 import math
 
@@ -227,6 +228,10 @@ class DistributedLayerNorm(Module):
     Implements LayerNorm on an activation sharded on the reduction dimension.
     """
 
+    # Shared dictionary to store reciprocal tensors
+    # Key: width_per_device, Value: recip_tensor
+    _recip_tensors = {}
+
     def __init__(
         self,
         embedding_dim,
@@ -273,6 +278,22 @@ class DistributedLayerNorm(Module):
             else None
         )
 
+        # Create or reuse reciprocal tensor for Welford algorithm used in dit_layernorm_pre_allgather
+        # Width per device is embedding_dim / mesh_width
+        width_per_device = embedding_dim // self.mesh_width
+
+        # Check if we already have a recip_tensor for this width_per_device
+        if width_per_device not in self._recip_tensors:
+            grid = mesh_device.compute_with_storage_grid_size()
+            core_range_set = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            )
+            self._recip_tensors[width_per_device] = ttnn.create_layer_norm_reciprocals(
+                mesh_device, core_range_set, width_per_device
+            )
+
+        self.recip_tensor = self._recip_tensors[width_per_device]
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
@@ -312,6 +333,7 @@ class DistributedLayerNorm(Module):
 
         stats = ttnn.experimental.dit_layernorm_pre_allgather(
             x,
+            self.recip_tensor,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
         )
 
@@ -339,7 +361,6 @@ Set mesh_axis to None to disable data parallelism.
 """
 
 
-# TODO: Add helper to assert torch reference
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
@@ -347,14 +368,14 @@ class GroupNorm(Module):
 
     def __init__(
         self,
-        num_channels=None,
-        num_groups=None,
-        eps=None,
-        mesh_device=None,
-        mesh_axis=None,
-        core_grid=None,
-        torch_ref=None,
-    ):
+        num_channels: int,
+        num_groups: int,
+        *,
+        eps: float = 1e-5,
+        mesh_device: ttnn.MeshDevice,
+        mesh_axis: int | None = None,
+        core_grid: ttnn.CoreGrid | None = None,
+    ) -> None:
         super().__init__()
 
         """
@@ -366,14 +387,13 @@ class GroupNorm(Module):
             mesh_axis: The mesh axis to use for sharding.
             core_grid: The core grid to use.
             num_out_blocks: The number of output blocks to use.
-            torch_ref: The torch reference layer.
         """
-        self.eps = eps or torch_ref.eps
+        self.eps = eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.num_devices = tuple(mesh_device.shape)[mesh_axis] if mesh_axis is not None else 1
-        self.num_channels = (num_channels or torch_ref.num_channels) // self.num_devices
-        self.num_groups = (num_groups or torch_ref.num_groups) // self.num_devices
+        self.num_channels = num_channels // self.num_devices
+        self.num_groups = num_groups // self.num_devices
         self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
             self.mesh_device.core_grid, self.num_channels, self.num_groups
@@ -409,18 +429,26 @@ class GroupNorm(Module):
         )
         self.mask = Parameter(total_shape=mask_shape, device=self.mesh_device)
 
-        if torch_ref is not None:
-            self.load_torch_state_dict(torch_ref.state_dict())
-
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, core_grid=None):
-        layer = cls(
+    def from_torch(
+        cls,
+        torch_ref: torch.nn.GroupNorm,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        mesh_axis: int | None = None,
+        core_grid: ttnn.CoreGrid | None = None,
+    ) -> GroupNorm:
+        module = cls(
+            num_channels=torch_ref.num_channels,
+            num_groups=torch_ref.num_groups,
+            eps=torch_ref.eps,
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             core_grid=core_grid,
-            torch_ref=torch_ref,
         )
-        return layer
+
+        module.load_torch_state_dict(torch_ref.state_dict())
+        return module
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:

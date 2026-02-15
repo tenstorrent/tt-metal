@@ -223,8 +223,8 @@ def test_lerp_overload_ttnn(input_shapes, value, device):
     golden_fn = ttnn.get_golden_function(ttnn.lerp)
     golden_tensor = golden_fn(in_data1, in_data2, value)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -244,8 +244,8 @@ def test_lerp_ttnn(input_shapes, device):
     golden_fn = ttnn.get_golden_function(ttnn.lerp)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_torch = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert_with_ulp(golden_tensor, output_torch, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(

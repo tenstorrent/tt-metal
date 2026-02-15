@@ -1173,9 +1173,9 @@ class TtModelArgs:
             )
 
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                compute_with_storage_grid_size=(8, 6),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                    self.start_core, 48, self.sub_core_grids, row_wise=True
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,

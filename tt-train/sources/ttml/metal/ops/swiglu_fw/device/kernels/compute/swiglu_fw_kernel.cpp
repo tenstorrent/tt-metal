@@ -12,7 +12,6 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-namespace NAMESPACE {
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -163,7 +162,7 @@ inline void mul_MxW2_accumulate_Y(uint32_t k_block_size, uint32_t c_block_size, 
 //         Y_partial[r, c] += sum_k( M[r, k] * W2[k, c] )
 //     store Y_partial[r,c] → Y[r,c]
 // ============================================================================
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
     for (uint32_t r = 0; r < num_rows_per_core; ++r) {
@@ -196,5 +195,3 @@ inline void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

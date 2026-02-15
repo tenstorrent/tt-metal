@@ -14,8 +14,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-namespace NAMESPACE {
-
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
@@ -491,7 +489,7 @@ inline void copy_rstd_to_output() {
     }
 }
 
-inline void MAIN {
+void kernel_main() {
     // Wait for constant inputs
     cb_wait_front(cb_scaler_idx, onetile);
     cb_wait_front(cb_eps_idx, onetile);
@@ -549,5 +547,3 @@ inline void MAIN {
         cb_pop_front(cb_mask_w_idx, onetile);
     }
 }
-
-}  // namespace NAMESPACE
