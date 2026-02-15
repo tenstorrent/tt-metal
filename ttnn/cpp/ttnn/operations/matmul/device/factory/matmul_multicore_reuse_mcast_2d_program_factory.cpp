@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
+#include <tt_stl/vector_init.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -1060,24 +1061,27 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
         // in0 sender
         if (in0_block_sharded) {
-            uint32_t in0_mcast_receiver_grid_same_coord;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
-                mm_in0_sender_args.push_back(core.y);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_end);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
+                const auto in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                mm_in0_sender_args = ttsl::vector_init<uint32_t>(
+                    ttsl::vector_size{6 + in0_mcast_noc_y.size()},
+                    core.y,
+                    in0_mcast_receiver_grid_same_coord,
+                    in0_mcast_receiver_grid_diff_coord_start,
+                    in0_mcast_receiver_grid_same_coord,
+                    in0_mcast_receiver_grid_diff_coord_end,
+                    in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
-                mm_in0_sender_args.push_back(core.x);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_end);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
+                const auto in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                mm_in0_sender_args = ttsl::vector_init<uint32_t>(
+                    ttsl::vector_size{6 + in0_mcast_noc_x.size()},
+                    core.x,
+                    in0_mcast_receiver_grid_diff_coord_start,
+                    in0_mcast_receiver_grid_same_coord,
+                    in0_mcast_receiver_grid_diff_coord_end,
+                    in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
             }

@@ -7,6 +7,7 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 
 namespace ttnn {
 
@@ -542,26 +543,28 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
 
     // Create Writer kernels
-    std::vector<uint32_t> sender_writer_compile_args = {
-        ring_size,                        // ring_size
-        ring_index,                       // my_chip_id
-        sender_cb_index,                  // cb_output_id
-        num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
-        page_size,                        // page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
-        static_cast<uint32_t>(topology),  // topology
-        normalized_dim,                   // gather_dim
-        batch_head_size,                  // input_batch_head_count (product of the first two dims)
-        input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
-        input_tensor_C,                   // input_tensor_C
-        output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
-        output_tensor_C,                  // output_tensor_C
-        fuse_op,                          // fuse_op
-        reverse_order,                    // reverse
-    };
+    auto sender_writer_compile_args = ttsl::vector_init<uint32_t>(
+        ttsl::vector_size{
+            18 + unicast_forward_args.size() + barrier_mcast_forward_args.size() + unicast_backward_args.size() +
+            barrier_mcast_backward_args.size()},
+        ring_size,                              // ring_size
+        ring_index,                             // my_chip_id
+        sender_cb_index,                        // cb_output_id
+        num_tiles_to_write_per_packet,          // num_tiles_to_write_per_packet
+        page_size,                              // page_size
+        num_targets_forward,                    // num_targets_forward_direction
+        num_targets_backward,                   // num_targets_backward_direction
+        static_cast<uint32_t>(topology),        // topology
+        normalized_dim,                         // gather_dim
+        batch_head_size,                        // input_batch_head_count (product of the first two dims)
+        input_tensor_Wt,                        // input_tensor_Wt
+        input_tensor_Ht,                        // input_tensor_Ht
+        input_tensor_C,                         // input_tensor_C
+        output_tensor_Wt,                       // output_tensor_Wt
+        output_tensor_Ht,                       // output_tensor_Ht
+        output_tensor_C,                        // output_tensor_C
+        static_cast<uint32_t>(fuse_op),         // fuse_op
+        static_cast<uint32_t>(reverse_order));  // reverse
 
     if (num_mux_cores_per_direction_per_link) {
         ccl::fabric_mux_connection_ct_args(

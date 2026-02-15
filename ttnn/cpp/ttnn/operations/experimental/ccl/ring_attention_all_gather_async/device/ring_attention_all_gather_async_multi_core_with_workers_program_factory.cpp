@@ -5,6 +5,7 @@
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include <algorithm>
+#include <tt_stl/vector_init.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -410,18 +411,18 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
         const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
 
-        std::vector<uint32_t> reader_forward_rt_args;
-        reader_forward_rt_args.reserve(10 + num_inputs * 2);
-        reader_forward_rt_args.emplace_back(input_tensor_Wt);
-        reader_forward_rt_args.emplace_back(input_tensor_Ht);
-        reader_forward_rt_args.emplace_back(output_tensor_Wt);
-        reader_forward_rt_args.emplace_back(output_tensor_Ht);
-        reader_forward_rt_args.emplace_back(dim);
-        reader_forward_rt_args.emplace_back(batch_head_size);
-        reader_forward_rt_args.emplace_back(input_tile_id_start);
-        reader_forward_rt_args.emplace_back(input_tile_id_end);
-        reader_forward_rt_args.emplace_back(ring_size);
-        reader_forward_rt_args.emplace_back(semaphore.at(1).address());
+        auto reader_forward_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{10 + num_inputs * 2},
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            output_tensor_Ht,
+            dim,
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            ring_size,
+            semaphore.at(1).address());
         reader_sender_rt_offset = reader_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
@@ -438,18 +439,18 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             {sender_worker_cores[(link * 2) + 1]},
             reader_forward_rt_args);
 
-        std::vector<uint32_t> reader_backward_rt_args;
-        reader_backward_rt_args.reserve(10 + num_inputs * 2);
-        reader_backward_rt_args.emplace_back(input_tensor_Wt);
-        reader_backward_rt_args.emplace_back(input_tensor_Ht);
-        reader_backward_rt_args.emplace_back(output_tensor_Wt);
-        reader_backward_rt_args.emplace_back(output_tensor_Ht);
-        reader_backward_rt_args.emplace_back(dim);
-        reader_backward_rt_args.emplace_back(batch_head_size);
-        reader_backward_rt_args.emplace_back(input_tile_id_start);
-        reader_backward_rt_args.emplace_back(input_tile_id_end);
-        reader_backward_rt_args.emplace_back(ring_size);
-        reader_backward_rt_args.emplace_back(semaphore.at(0).address());
+        auto reader_backward_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{10 + num_inputs * 2},
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            output_tensor_Ht,
+            dim,
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            ring_size,
+            semaphore.at(0).address());
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
         }
@@ -468,20 +469,20 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2]);
 
         // Writer
-        std::vector<uint32_t> writer_forward_rt_args;
-        writer_forward_rt_args.reserve(12 + num_inputs + 2);
-        writer_forward_rt_args.emplace_back(input_tensor_Wt);
-        writer_forward_rt_args.emplace_back(input_tensor_Ht);
-        writer_forward_rt_args.emplace_back(output_tensor_Wt);
-        writer_forward_rt_args.emplace_back(output_tensor_Ht);
-        writer_forward_rt_args.emplace_back(dim);
-        writer_forward_rt_args.emplace_back(batch_head_size);
-        writer_forward_rt_args.emplace_back(input_tile_id_start);
-        writer_forward_rt_args.emplace_back(input_tile_id_end);
-        writer_forward_rt_args.emplace_back(sender_forward_worker_core.x);
-        writer_forward_rt_args.emplace_back(sender_forward_worker_core.y);
-        writer_forward_rt_args.emplace_back(ring_size);
-        writer_forward_rt_args.emplace_back(semaphore.at(1).address());
+        auto writer_forward_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{12 + num_inputs + 2},
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            output_tensor_Ht,
+            dim,
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            sender_forward_worker_core.x,
+            sender_forward_worker_core.y,
+            ring_size,
+            semaphore.at(1).address());
         writer_sender_rt_offset = writer_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
@@ -509,20 +510,20 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             sender_worker_cores[(link * 2) + 1],
             writer_forward_rt_args);
 
-        std::vector<uint32_t> writer_backward_rt_args;
-        writer_backward_rt_args.reserve(12 + num_inputs + 2);
-        writer_backward_rt_args.emplace_back(input_tensor_Wt);
-        writer_backward_rt_args.emplace_back(input_tensor_Ht);
-        writer_backward_rt_args.emplace_back(output_tensor_Wt);
-        writer_backward_rt_args.emplace_back(output_tensor_Ht);
-        writer_backward_rt_args.emplace_back(dim);
-        writer_backward_rt_args.emplace_back(batch_head_size);
-        writer_backward_rt_args.emplace_back(input_tile_id_start);
-        writer_backward_rt_args.emplace_back(input_tile_id_end);
-        writer_backward_rt_args.emplace_back(sender_backward_worker_core.x);
-        writer_backward_rt_args.emplace_back(sender_backward_worker_core.y);
-        writer_backward_rt_args.emplace_back(ring_size);
-        writer_backward_rt_args.emplace_back(semaphore.at(0).address());
+        auto writer_backward_rt_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{12 + num_inputs + 2},
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            output_tensor_Ht,
+            dim,
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            sender_backward_worker_core.x,
+            sender_backward_worker_core.y,
+            ring_size,
+            semaphore.at(0).address());
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }

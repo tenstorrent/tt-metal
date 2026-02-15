@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/vector_init.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -846,13 +847,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mm_in0_sender_args.push_back(i);
-            mm_in0_sender_args.push_back(start_core_noc.x);
-            mm_in0_sender_args.push_back(start_core_noc.y);
-            mm_in0_sender_args.push_back(end_core_noc.x);
-            mm_in0_sender_args.push_back(end_core_noc.y);
+            auto mm_in0_sender_args = ttsl::vector_init<uint32_t>(
+                ttsl::vector_size{5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size()},
+                i,
+                start_core_noc.x,
+                start_core_noc.y,
+                end_core_noc.x,
+                end_core_noc.y);
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 

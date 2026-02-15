@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
@@ -633,12 +634,11 @@ create_program_dram_sharded(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         // in0 receivers rt args
-        std::vector<uint32_t> mm_in0_receiver_args;
-        // mcast receiver - 3
-        uint32_t worker_core_type = 3;
-        mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
-        mm_in0_receiver_args.push_back((std::uint32_t)0);
-        mm_in0_receiver_args.push_back((std::uint32_t)0);  // in0_last_ktile_w
+        auto mm_in0_receiver_args = ttsl::vector_init<uint32_t>(
+            ttsl::vector_size{3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size()},
+            3u,
+            0u,
+            0u);  // worker_core_type=3, sender_id=0, in0_last_ktile_w=0
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_receiver_args.insert(
