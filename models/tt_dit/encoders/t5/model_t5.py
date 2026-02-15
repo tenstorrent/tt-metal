@@ -149,6 +149,8 @@ class T5Stack(Module):
         position_bias = None
         if attention_mask is not None:
             attention_mask = (attention_mask - 1.0) * float("inf")
+            # rehape attention mask to b x 1 x 1 x seq_len to make compatible with relative position bias
+            attention_mask = ttnn.reshape(attention_mask, (attention_mask.shape[0], 1, 1, -1))
 
         for layer in self.layers:
             # Precompute position bias to preserve previous behaviour.If not set for this layer, use the previous layer's position bias.
