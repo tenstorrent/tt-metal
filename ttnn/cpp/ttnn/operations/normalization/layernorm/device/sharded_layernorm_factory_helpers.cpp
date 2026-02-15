@@ -1301,12 +1301,14 @@ std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndice
 
 std::vector<uint32_t> build_write_back_args(
     const RuntimeArgsContext& ctx, uint32_t& current_storage_core, uint32_t& current_storage_core_offset) {
-    std::vector<uint32_t> args;
     if (!ctx.is_post_all_gather) {
-        return args;
+        return {};
     }
 
-    args.push_back(current_storage_core_offset * ctx.out_single_tile_size);
+    auto args = ttsl::vector_init<uint32_t>(
+        0u,  // num_segments, to be filled later
+        current_storage_core_offset * ctx.out_single_tile_size);
+
     uint32_t num_segments = 0;
     uint32_t worker_offset = 0;
 
@@ -1316,6 +1318,7 @@ std::vector<uint32_t> build_write_back_args(
         uint32_t tiles_to_write = std::min(tiles_left, tiles_available);
 
         num_segments += 1;
+        args.reserve(args.size() + 3);
         args.push_back(tiles_to_write * ctx.out_single_tile_size);
         args.push_back(ctx.storage_core_noc_x[current_storage_core]);
         args.push_back(ctx.storage_core_noc_y[current_storage_core]);
@@ -1332,7 +1335,7 @@ std::vector<uint32_t> build_write_back_args(
                 ctx.num_storage_cores);
         }
     }
-    args.insert(args.begin(), num_segments);
+    args[0] = num_segments;
     return args;
 }
 
