@@ -877,7 +877,7 @@ class FlashMLADecode:
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1,
                     noc=ttnn.NOC.NOC_0,
-                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
                 ),
             ),
             # Writer kernel (use NOC_1 to avoid conflict with reader on NOC_0)
@@ -890,7 +890,7 @@ class FlashMLADecode:
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0,
                     noc=ttnn.NOC.NOC_1,
-                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                    noc_mode=ttnn.NOC_MODE.DM_DEDICATED_NOC,
                 ),
             ),
             # Compute kernel

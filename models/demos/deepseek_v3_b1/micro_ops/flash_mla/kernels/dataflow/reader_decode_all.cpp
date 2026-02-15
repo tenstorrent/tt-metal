@@ -113,10 +113,12 @@ void kernel_main() {
 
     // Set up NCRISC<->BRISC sync semaphore
     const uint32_t ncrisc_brisc_sync_l1_addr = get_semaphore(ncrisc_brisc_sync_semaphore_id);
-    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
+    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_curr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr);
-    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 4);
+    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 8);
 
     // Set up receiver_ready semaphore for double-buffer synchronization
     // Receivers signal sender when they've reserved CB space (ensuring consistent addresses)
@@ -130,6 +132,13 @@ void kernel_main() {
     // Single KV head, single batch - no outer loop needed
     // kv_batch = 0 (Bkv = 1)
     constexpr uint32_t kv_batch = 0;
+
+    if (is_mcast_sender) {
+        // Program noc registers from first chunk
+        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk_start;
+        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+        noc_async_read_one_packet_set_state<true>(k_src_noc_addr, k_page_size, vc);
+    }
 
     // Strided iteration: core N processes chunks N, N+stride, N+2*stride, ...
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += num_cores_per_head) {
@@ -149,9 +158,7 @@ void kernel_main() {
                 const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
                 uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
 
-                noc_async_read_one_packet_set_state<true>(k_src_noc_addr, k_page_size, vc);
-
-                constexpr uint32_t NUM_TRIDS = 2;
+                constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;
                 uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
                 uint32_t src_offset = 0;
                 uint32_t dst_addr = k_write_ptr;
@@ -161,6 +168,7 @@ void kernel_main() {
                 uint32_t pages_issued = 0;
                 uint32_t pages_completed = 0;
 
+                noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
                 for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < k_num_pages; ++i) {
                     noc_async_read_set_trid(curr_trid);
                     noc_async_read_one_packet_with_state_with_trid(src_base_addr, src_offset, dst_addr, curr_trid);
@@ -172,7 +180,7 @@ void kernel_main() {
 
                 while (pages_completed < k_num_pages) {
                     noc_async_read_barrier_with_trid(wait_trid);
-                    *ncrisc_brisc_sync_ptr += 1;
+                    *ncrisc_brisc_sync_curr_ptr += 1;
                     pages_completed++;
 
                     if (pages_issued < k_num_pages) {
@@ -187,7 +195,7 @@ void kernel_main() {
                     wait_trid = (wait_trid % NUM_TRIDS) + 1;
                 }
 
-                noc_semaphore_wait(ncrisc_brisc_sync_ptr, 0);
+                std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
             } else {
                 // Step 2: Receiver signals sender that CB is reserved (address is ready)
                 DeviceZoneScopedN("mcast-receiver-signal-ready");

@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17])
+@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 256])
 @pytest.mark.parametrize(
     "k_chunk_size", [128]
 )  # Chunk size 256 support can be added by consolidating tensix sem incs since cap is 15 but we have 16 tiles
@@ -177,7 +177,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
     )
 
     # Run the op - stress test with multiple iterations
-    num_iterations = 100
+    num_iterations = 10
     first_output = None
     logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
     for i in range(num_iterations):

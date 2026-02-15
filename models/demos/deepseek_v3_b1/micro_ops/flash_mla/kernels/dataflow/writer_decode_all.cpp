@@ -10,7 +10,6 @@
 // Compute semaphore increment and shift based on bits_per_step
 // step_semaphore_inc[step] = 1 << (step * bits_per_step)
 // step_semaphore_shift[step] = step * bits_per_step
-// FORCE_INLINE ensures these are inlined even when called with runtime 'step'
 template <uint32_t bits_per_step>
 FORCE_INLINE constexpr uint32_t step_semaphore_inc(uint32_t step) {
     return 1U << (step * bits_per_step);
@@ -93,10 +92,12 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mcast_semaphore_addr);
         const uint32_t ncrisc_brisc_sync_addr = get_semaphore(ncrisc_brisc_sync_semaphore_id);
-        volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
+        volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_curr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr);
-        volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+        volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 4);
+        volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_addr + 8);
 
         // Receiver ready semaphore: wait for all receivers to reserve CB before multicast
         // This ensures consistent write addresses across cores for double-buffer safety
@@ -111,36 +112,43 @@ void kernel_main() {
 
         noc_semaphore_set(mcast_semaphore_ptr, 1);
 
+        static_assert(k_page_size <= NOC_MAX_BURST_SIZE, "k_page_size must be less than NOC_MAX_BURST_SIZE");
+
         // Single head, strided iteration over chunks
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += num_cores_per_head) {
             DeviceZoneScopedN("mcast-sender-multicast");
 
             // Wait for NCRISC to have first page ready
-            noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, 1);
+            noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
             invalidate_l1_cache();
-            uint32_t k_write_ptr = *k_write_ptr_shared;
+            uint32_t page_addr = *k_write_ptr_shared;
+
+            uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
 
             // Wait for all receivers to have reserved their CB space before multicast
             // This allows DRAM reads to overlap with receiver CB reservation
             noc_semaphore_wait(receiver_ready_semaphore_ptr, num_mcast_dests);
             noc_semaphore_set(receiver_ready_semaphore_ptr, 0);  // Reset for next iteration
 
+            // TODO: Use Stateful Mcast APIs
             // Page-level pipelining (KV cache is always sharded)
-            uint32_t page_addr = k_write_ptr;
-            uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
-            noc_async_write_multicast(page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
+            noc_async_write_multicast<k_page_size>(
+                page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
 
             for (uint32_t page = 1; page < k_num_pages; ++page) {
-                noc_semaphore_wait_min(ncrisc_brisc_sync_ptr, page + 1);
-                page_addr = k_write_ptr + page * k_page_size;
+                page_addr += k_page_size;
                 mcast_dest_addr = mcast_noc_addr | page_addr;
-                noc_async_write_multicast(page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
+                noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, page + 1);
+                noc_async_write_multicast<k_page_size>(
+                    page_addr, mcast_dest_addr, k_page_size, num_mcast_dests, false, MCAST_NOC);
             }
 
             noc_semaphore_set_multicast(mcast_semaphore_addr, mcast_sem_addr, num_mcast_dests, false, MCAST_NOC);
-            noc_async_writes_flushed();
-            *ncrisc_brisc_sync_ptr = 0;
+            noc_async_writes_flushed(MCAST_NOC);
+            *ncrisc_brisc_sync_curr_ptr = 0;
+            std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
         }
+        noc_async_write_barrier(MCAST_NOC);
     }
 
     // =========================================================================
@@ -183,12 +191,12 @@ void kernel_main() {
                 uint64_t output_write_addr = output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
 
                 // Write m/s (packed in single tile)
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, false, /*posted=*/true>(
+                noc_async_write<ms_write_size, false, /*posted=*/true>(
                     get_read_ptr(cb_out_ms), output_write_addr, ms_write_size);
 
                 output_write_addr = output_write_coord | (cb_out_in_base_addr + step * o_write_size);
                 // Write O
-                noc_async_write<NOC_MAX_BURST_SIZE + 1, false, /*posted=*/true>(
+                noc_async_write<o_write_size, false, /*posted=*/true>(
                     get_read_ptr(cb_out_o), output_write_addr, o_write_size);
 
                 uint64_t partner_semaphore_addr = output_write_coord | reducer_semaphore_addr;
@@ -197,6 +205,7 @@ void kernel_main() {
                 noc_async_posted_writes_flushed();
                 cb_pop_front(cb_out_ms, 1);
                 cb_pop_front(cb_out_o, out_chunk_tiles);
+                // Atomic barrier sure guarantee writes are completed
                 noc_async_atomic_barrier();
                 return;
 
@@ -220,6 +229,4 @@ void kernel_main() {
             }
         }
     }
-
-    noc_async_write_barrier();
 }
