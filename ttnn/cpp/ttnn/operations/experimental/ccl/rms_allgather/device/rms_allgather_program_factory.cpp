@@ -925,7 +925,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             num_reduce_tiles_per_block_h = Kt - last_core_width_index * block_wt;
         }
 
-        std::vector<uint32_t> compute_args{num_reduce_tiles_per_block_h};
+        auto compute_args = vector_init<uint32_t, 6>(num_reduce_tiles_per_block_h);
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             compute_args.push_back(1);
@@ -956,13 +956,14 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             if (reader_noc == NOC::NOC_1) {
                 std::swap(mcast_start, mcast_end);
             }
-            std::vector<uint32_t> mcast_sender_args;
-            mcast_sender_args.push_back(mcast_start.x);
-            mcast_sender_args.push_back(mcast_start.y);
-            mcast_sender_args.push_back(mcast_end.x);
-            mcast_sender_args.push_back(mcast_end.y);
-            mcast_sender_args.push_back(core.x - start_core.x);
-            mcast_sender_args.push_back(core.y - start_core.y);
+            auto mcast_sender_args = vector_init<uint32_t>(
+                vector_size{6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size()},
+                mcast_start.x,
+                mcast_start.y,
+                mcast_end.x,
+                mcast_end.y,
+                core.x - start_core.x,
+                core.y - start_core.y);
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
@@ -970,6 +971,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
+            mcast_receiver_args.reserve(4 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
             bool is_second_stage_reader;
             if (use_two_stage_reduce and width_index < 1) {

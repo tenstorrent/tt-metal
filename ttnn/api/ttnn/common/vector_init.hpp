@@ -7,6 +7,20 @@
 #include <vector>
 #include <type_traits>
 
+struct vector_size {
+    size_t n;
+};
+
+template <typename T, typename... Vs>
+std::vector<T> vector_init(const vector_size n, Vs&&... init_values)
+    requires requires { std::disjunction_v<std::is_same<T, Vs>...>; }
+{
+    std::vector<T> vec;
+    vec.reserve(std::max(sizeof...(Vs), n.n));
+    (vec.emplace_back(std::forward<Vs>(init_values)), ...);
+    return vec;
+}
+
 template <typename T, size_t N, typename... Vs>
 std::vector<T> vector_init(Vs&&... init_values)
     requires requires {
