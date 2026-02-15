@@ -192,7 +192,7 @@ void kernel_main() {
                             effective_chunk_width_in_tiles);
 
                         while (tiles_to_read > 0) {
-                            uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
+                            const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
                             cb_reserve_back(cb_in0, tile_granularity);
@@ -219,9 +219,9 @@ void kernel_main() {
                                     slice_Wt,
                                     input_tensor_Wt);
                                 DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
-                                uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                const uint32_t input_tile_id = global_tile_idx + batch_offset;
 
-                                uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                                const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
                                 l1_write_addr += page_size;
                                 if (do_reduce) {

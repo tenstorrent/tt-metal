@@ -304,7 +304,7 @@ void kernel_main() {
                             DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
 
                             while (tiles_to_read > 0) {
-                                uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
+                                const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
 
                                 DPRINT << "Waiting for tiles in the output buffer" << ENDL();

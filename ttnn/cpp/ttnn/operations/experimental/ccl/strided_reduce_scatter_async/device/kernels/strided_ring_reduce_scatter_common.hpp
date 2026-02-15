@@ -113,31 +113,36 @@ FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
 }
 
 FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_slice_coordinates(
-    uint32_t tile_row_in_mm_M_block,
-    uint32_t chunk_col_in_tiles,
-    uint32_t mm_core_idx,
-    uint32_t N_block_idx,
-    uint32_t M_block_idx,
-    uint32_t chunk_idx,
-    uint32_t N_block_wt,
-    uint32_t tiles_ht_per_core,
-    uint32_t mm_block_unit_ht,
-    uint32_t chunk_width_in_tiles) {
-    uint32_t rows_before_this_core = mm_core_idx * tiles_ht_per_core;
-    uint32_t rows_before_piece = M_block_idx * mm_block_unit_ht;
-    uint32_t slice_row = rows_before_this_core + rows_before_piece + tile_row_in_mm_M_block;
-    uint32_t slice_col = N_block_idx * N_block_wt + chunk_idx * chunk_width_in_tiles + chunk_col_in_tiles;
+    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t chunk_col_in_tiles,
+    const uint32_t mm_core_idx,
+    const uint32_t N_block_idx,
+    const uint32_t M_block_idx,
+    const uint32_t chunk_idx,
+    const uint32_t N_block_wt,
+    const uint32_t tiles_ht_per_core,
+    const uint32_t mm_block_unit_ht,
+    const uint32_t chunk_width_in_tiles) {
+    const uint32_t rows_before_this_core = mm_core_idx * tiles_ht_per_core;
+    const uint32_t rows_before_piece = M_block_idx * mm_block_unit_ht;
+    const uint32_t slice_row = rows_before_this_core + rows_before_piece + tile_row_in_mm_M_block;
+    const uint32_t slice_col = N_block_idx * N_block_wt + chunk_idx * chunk_width_in_tiles + chunk_col_in_tiles;
 
     return {slice_row, slice_col};
 }
 
-FORCE_INLINE uint32_t slice_coordinates_to_slice_tile_index(uint32_t slice_row, uint32_t slice_col, uint32_t slice_Wt) {
+FORCE_INLINE uint32_t
+slice_coordinates_to_slice_tile_index(const uint32_t slice_row, const uint32_t slice_col, const uint32_t slice_Wt) {
     return slice_row * slice_Wt + slice_col;
 }
 
 FORCE_INLINE uint32_t slice_coordinates_to_global_tile_index(
-    uint32_t slice_row, uint32_t slice_col, uint32_t slice_idx, uint32_t slice_Wt, uint32_t global_Wt) {
-    uint32_t global_col = slice_col + slice_idx * slice_Wt;
+    const uint32_t slice_row,
+    const uint32_t slice_col,
+    const uint32_t slice_idx,
+    const uint32_t slice_Wt,
+    const uint32_t global_Wt) {
+    const uint32_t global_col = slice_col + slice_idx * slice_Wt;
     return slice_row * global_Wt + global_col;
 }
 
@@ -147,20 +152,20 @@ struct TileIndices {
 };
 
 FORCE_INLINE TileIndices coordinates_to_tile_indices(
-    uint32_t tile_row_in_mm_M_block,
-    uint32_t chunk_col_in_tiles,
-    uint32_t mm_core_idx,
-    uint32_t N_block_idx,
-    uint32_t M_block_idx,
-    uint32_t chunk_idx,
-    uint32_t N_block_wt,
-    uint32_t tiles_ht_per_core,
-    uint32_t mm_block_unit_ht,
-    uint32_t chunk_width_in_tiles,
-    uint32_t actual_slice_idx,
-    uint32_t slice_Wt,
-    uint32_t input_tensor_Wt) {
-    auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t chunk_col_in_tiles,
+    const uint32_t mm_core_idx,
+    const uint32_t N_block_idx,
+    const uint32_t M_block_idx,
+    const uint32_t chunk_idx,
+    const uint32_t N_block_wt,
+    const uint32_t tiles_ht_per_core,
+    const uint32_t mm_block_unit_ht,
+    const uint32_t chunk_width_in_tiles,
+    const uint32_t actual_slice_idx,
+    const uint32_t slice_Wt,
+    const uint32_t input_tensor_Wt) {
+    const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
         tile_row_in_mm_M_block,
         chunk_col_in_tiles,
         mm_core_idx,
