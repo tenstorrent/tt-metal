@@ -1,0 +1,1482 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TT-NN Introduction &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/tutorials/ttnn_intro.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Tensor" href="../../tensor.html" />
+    <link rel="prev" title="Install" href="../../installing.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">TT-NN Introduction</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#What-You'll-Learn">What You’ll Learn</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#1.-Getting-Started">1. Getting Started</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Importing-the-Library">Importing the Library</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Device-Initialization">Device Initialization</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#2.-Tensor-Creation-and-Management">2. Tensor Creation and Management</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Creating-Host-Tensors">Creating Host Tensors</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Moving-Tensors-to-Device">Moving Tensors to Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Creating-Tensors-Directly-on-Device">Creating Tensors Directly on Device</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#3.-PyTorch-Interoperability">3. PyTorch Interoperability</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Moving-Tensors-Back-to-Host">Moving Tensors Back to Host</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Converting-Back-to-PyTorch">Converting Back to PyTorch</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#4.-Understanding-Tensor-Layouts">4. Understanding Tensor Layouts</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Layout-Types">Layout Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Why-Tile-Layout-Matters">Why Tile Layout Matters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Default-Behavior">Default Behavior</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Functions-with-Different-Default-Layouts">Functions with Different Default Layouts</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Layout-Preservation-During-Transfer">Layout Preservation During Transfer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Converting-Between-Layouts">Converting Between Layouts</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#5.-Data-Types-and-Precision">5. Data Types and Precision</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Supported-Data-Types">Supported Data Types</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Performance-vs.-Accuracy-Trade-offs">Performance vs. Accuracy Trade-offs</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#6.-Basic-Tensor-Operations">6. Basic Tensor Operations</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Important-Operation-Requirements">Important Operation Requirements</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Creating-Test-Data">Creating Test Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Neural-Network-Operations">Neural Network Operations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#7.-Just-In-Time-Compilation-and-Caching">7. Just-In-Time Compilation and Caching</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#First-Run-vs.-Subsequent-Runs">First Run vs. Subsequent Runs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#What-Affects-Compilation?">What Affects Compilation?</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#Direct-SRAM-(L1)-control">Direct SRAM (L1) control</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Advanced:-Tensor-Sharding">Advanced: Tensor Sharding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Preserving-Intermediate-Results-in-L1">Preserving Intermediate Results in L1</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#Inference-Focus">Inference Focus</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Development-Tools">Development Tools</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Advanced-Topics">Advanced Topics</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#8.-Exercise:-Implement-Scaled-Dot-Product-Attention">8. Exercise: Implement Scaled Dot-Product Attention</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Background">Background</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Your-Task">Your Task</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#Math-Fidelity-Control">Math Fidelity Control</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Metal-Trace">Metal Trace</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Multi-device">Multi-device</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">TT-NN Introduction</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/tutorials/ttnn_intro.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="TT-NN-Introduction">
+<h1>TT-NN Introduction<a class="headerlink" href="#TT-NN-Introduction" title="Permalink to this heading"></a>
+</h1>
+<p>Welcome to TT-NN, a high-performance deep learning framework optimized for Tenstorrent’s AI accelerators. This tutorial will guide you through the fundamental concepts and operations needed to get started with TT-NN.</p>
+<section id="What-You'll-Learn">
+<h2>What You’ll Learn<a class="headerlink" href="#What-You'll-Learn" title="Permalink to this heading"></a>
+</h2>
+<ul class="simple">
+<li><p><strong>Basic Setup</strong>: Device initialization and library importing</p></li>
+<li><p><strong>Tensor Management</strong>: Creating, moving, and manipulating tensors</p></li>
+<li><p><strong>PyTorch Integration</strong>: Seamless interoperability with PyTorch</p></li>
+<li><p><strong>Memory Optimization</strong>: Leveraging SRAM (L1) and DRAM for performance</p></li>
+<li><p><strong>Neural Network Operations</strong>: Building blocks for AI models</p></li>
+<li><p><strong>Advanced Features</strong>: Tensor sharding, compilation, and multi-device support</p></li>
+</ul>
+<p>We recommend downloading and running this tutorial on your device! It’s available <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/ttnn/tutorials/ttnn_intro.ipynb">here</a>.</p>
+</section>
+<section id="1.-Getting-Started">
+<h2>1. Getting Started<a class="headerlink" href="#1.-Getting-Started" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN is implemented in C++ for optimal performance while providing Python bindings for ease of development and prototyping. This hybrid approach gives you the best of both worlds: high performance and developer productivity.</p>
+<section id="Importing-the-Library">
+<h3>Importing the Library<a class="headerlink" href="#Importing-the-Library" title="Permalink to this heading"></a>
+</h3>
+<p>Let’s start by importing TT-NN:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Import the TT-NN library</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="c1"># Display version information</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"TT-NN successfully imported!"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Device-Initialization">
+<h3>Device Initialization<a class="headerlink" href="#Device-Initialization" title="Permalink to this heading"></a>
+</h3>
+<p>Before performing any computations, we need to initialize a Tenstorrent device. The device ID (0) refers to the first available Tenstorrent device in your system:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Initialize the first Tenstorrent device (device_id=0)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Device initialized successfully: </span><span class="si">{</span><span class="n">device</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Device ID: </span><span class="si">{</span><span class="n">device</span><span class="o">.</span><span class="n">id</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Available compute cores: </span><span class="si">{</span><span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="2.-Tensor-Creation-and-Management">
+<h2>2. Tensor Creation and Management<a class="headerlink" href="#2.-Tensor-Creation-and-Management" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN tensors can exist in two locations:</p>
+<ul class="simple">
+<li><p><strong>Host (CPU)</strong>: For data preparation and post-processing</p></li>
+<li><p><strong>Device (Tenstorrent hardware)</strong>: For high-performance computation</p></li>
+</ul>
+<section id="Creating-Host-Tensors">
+<h3>Creating Host Tensors<a class="headerlink" href="#Creating-Host-Tensors" title="Permalink to this heading"></a>
+</h3>
+<p>Let’s start by creating a tensor on the host (CPU memory):</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor filled with 1.0 values on the host (CPU)</span>
+<span class="c1"># Shape: [10, 15] - 10 rows, 15 columns</span>
+<span class="n">host_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">],</span> <span class="mf">1.0</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Host tensor created:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Data type: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Should show None (host)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Memory config: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Moving-Tensors-to-Device">
+<h3>Moving Tensors to Device<a class="headerlink" href="#Moving-Tensors-to-Device" title="Permalink to this heading"></a>
+</h3>
+<p>To perform computations on Tenstorrent hardware, we need to transfer tensors from host to device:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Transfer the host tensor to the device</span>
+<span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">host_tensor</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Device tensor created:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Should show the device ID</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>    <span class="c1"># Same layout as host tensor</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Memory config: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Default DRAM</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Creating-Tensors-Directly-on-Device">
+<h3>Creating Tensors Directly on Device<a class="headerlink" href="#Creating-Tensors-Directly-on-Device" title="Permalink to this heading"></a>
+</h3>
+<p>For efficiency, you can also create tensors directly on the device without going through the host:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with random values directly on the device</span>
+<span class="c1"># This is more efficient as it avoids host-&gt;device transfer</span>
+<span class="n">device_tensor_2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Direct device tensor created:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">device_tensor_2</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">device_tensor_2</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">device_tensor_2</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># May default to different layout</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="3.-PyTorch-Interoperability">
+<h2>3. PyTorch Interoperability<a class="headerlink" href="#3.-PyTorch-Interoperability" title="Permalink to this heading"></a>
+</h2>
+<p>One of TT-NN’s key strengths is seamless integration with PyTorch, allowing you to leverage existing PyTorch code and models. You can easily convert between PyTorch tensors and TT-NN tensors.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Import PyTorch for interoperability demonstrations</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"PyTorch version: </span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">__version__</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Ready for PyTorch &lt;-&gt; TT-NN conversions!"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a PyTorch tensor with random values</span>
+<span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original PyTorch tensor shape: </span><span class="si">{</span><span class="n">torch_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original PyTorch tensor dtype: </span><span class="si">{</span><span class="n">torch_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert PyTorch tensor to TT-NN tensor on host</span>
+<span class="n">host_ttnn_from_torch</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">TT-NN tensor from PyTorch (host):"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">host_ttnn_from_torch</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">host_ttnn_from_torch</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">host_ttnn_from_torch</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert PyTorch tensor to TT-NN tensor directly on device with tile layout</span>
+<span class="c1"># Tile layout is optimized for Tenstorrent hardware operations</span>
+<span class="n">device_ttnn_from_torch</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch_tensor</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">TT-NN tensor from PyTorch (device, tiled):"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">device_ttnn_from_torch</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">device_ttnn_from_torch</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">device_ttnn_from_torch</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Memory config: </span><span class="si">{</span><span class="n">device_ttnn_from_torch</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<section id="Moving-Tensors-Back-to-Host">
+<h3>Moving Tensors Back to Host<a class="headerlink" href="#Moving-Tensors-Back-to-Host" title="Permalink to this heading"></a>
+</h3>
+<p>After performing computations on the device, you often need to transfer results back to the host for further processing or analysis:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a device tensor for demonstration</span>
+<span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span> <span class="mi">15</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original device tensor: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Method 1: Transfer device tensor back to host using ttnn.from_device</span>
+<span class="n">host_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">device_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Transferred to host using from_device(): </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Method 2: Alternative syntax using .cpu() method (similar to PyTorch)</span>
+<span class="n">host_tensor_alt</span> <span class="o">=</span> <span class="n">device_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Transferred to host using .cpu(): </span><span class="si">{</span><span class="n">host_tensor_alt</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Both methods produce equivalent results</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Shapes match: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">shape</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">host_tensor_alt</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Host tensor shape: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Converting-Back-to-PyTorch">
+<h3>Converting Back to PyTorch<a class="headerlink" href="#Converting-Back-to-PyTorch" title="Permalink to this heading"></a>
+</h3>
+<p>TT-NN tensors can be seamlessly converted back to PyTorch tensors for further processing or integration with PyTorch-based pipelines:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Convert TT-NN tensor (device or host) back to PyTorch tensor</span>
+<span class="c1"># Note: Device tensors are automatically transferred to host during conversion</span>
+<span class="n">torch_tensor_result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">device_tensor</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Converted back to PyTorch:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  PyTorch tensor shape: </span><span class="si">{</span><span class="n">torch_tensor_result</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  PyTorch tensor dtype: </span><span class="si">{</span><span class="n">torch_tensor_result</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  PyTorch tensor device: </span><span class="si">{</span><span class="n">torch_tensor_result</span><span class="o">.</span><span class="n">device</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Display tensor properties for comparison</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Tensor Properties Comparison:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Host TT-NN tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Data type: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Memory config: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Device TT-NN tensor:"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Shape: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Layout: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Data type: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Memory config: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Device: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="4.-Understanding-Tensor-Layouts">
+<h2>4. Understanding Tensor Layouts<a class="headerlink" href="#4.-Understanding-Tensor-Layouts" title="Permalink to this heading"></a>
+</h2>
+<p><a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html#layout">📖 Documentation: Tensor Layouts</a></p>
+<p>TT-NN supports two primary tensor layouts that affect how data is stored in memory and how operations are performed:</p>
+<section id="Layout-Types">
+<h3>Layout Types<a class="headerlink" href="#Layout-Types" title="Permalink to this heading"></a>
+</h3>
+<p><strong>🔲 ROW_MAJOR_LAYOUT</strong> - Traditional row-by-row data storage <img alt="Row Major Layout" src="../../../_images/tensor_with_row_major_layout.png"></p>
+<p><strong>🟦 TILE_LAYOUT</strong> - Optimized 32×32 tile-based storage <img alt="Tile Layout" src="../../../_images/tensor_with_tile_layout.png"></p>
+</section>
+<section id="Why-Tile-Layout-Matters">
+<h3>Why Tile Layout Matters<a class="headerlink" href="#Why-Tile-Layout-Matters" title="Permalink to this heading"></a>
+</h3>
+<p>Tenstorrent hardware is specifically optimized for tiled data layouts. Most high-performance operations require tensors in tile layout for efficient execution. When converting to tile layout:</p>
+<ul class="simple">
+<li><p>Tensors are automatically <strong>padded</strong> to fill complete 32×32 tiles</p></li>
+<li><p>This padding is handled <strong>transparently</strong> - you don’t need to worry about it</p></li>
+<li><p>Operations run <strong>significantly faster</strong> on tiled data</p></li>
+</ul>
+</section>
+<section id="Default-Behavior">
+<h3>Default Behavior<a class="headerlink" href="#Default-Behavior" title="Permalink to this heading"></a>
+</h3>
+<p>By default, most tensor creation functions use row-major layout, but this can vary:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Check default layouts for different tensor creation methods</span>
+<span class="n">host_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">],</span> <span class="mf">1.0</span><span class="p">)</span>
+<span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">],</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Host tensor layout: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>        <span class="c1"># ROW_MAJOR_LAYOUT</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Device tensor layout: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>    <span class="c1"># ROW_MAJOR_LAYOUT</span>
+
+<span class="c1"># Note: ttnn.full() uses ROW_MAJOR_LAYOUT by default for both host and device</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Functions-with-Different-Default-Layouts">
+<h3>Functions with Different Default Layouts<a class="headerlink" href="#Functions-with-Different-Default-Layouts" title="Permalink to this heading"></a>
+</h3>
+<p>However, some operations create tensors directly in tile layout for performance reasons:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># ttnn.rand() defaults to TILE_LAYOUT for device tensors</span>
+<span class="n">rand_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span><span class="mi">15</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Random tensor layout: </span><span class="si">{</span><span class="n">rand_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># TILE_LAYOUT</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"This is because ttnn.rand() optimizes for device operations"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Layout-Preservation-During-Transfer">
+<h3>Layout Preservation During Transfer<a class="headerlink" href="#Layout-Preservation-During-Transfer" title="Permalink to this heading"></a>
+</h3>
+<p>When you transfer tensors between host and device, the layout is preserved:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a host tensor (row-major by default)</span>
+<span class="n">host_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="mf">1.0</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Host tensor layout: </span><span class="si">{</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Transfer to device - layout is preserved</span>
+<span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">host_tensor</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Device tensor layout: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># The layout remains ROW_MAJOR_LAYOUT even on device</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Layout preserved during host-&gt;device transfer"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Converting-Between-Layouts">
+<h3>Converting Between Layouts<a class="headerlink" href="#Converting-Between-Layouts" title="Permalink to this heading"></a>
+</h3>
+<p>You can explicitly convert between layouts using <code class="docutils literal notranslate"><span class="pre">ttnn.to_layout()</span></code>. This is often necessary to optimize performance:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Start with row-major layout</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original layout: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert to tile layout for optimized operations</span>
+<span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">device_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"After conversion: </span><span class="si">{</span><span class="n">device_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>When converting from PyTorch tensors, you can specify the desired layout:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">10</span><span class="p">,</span><span class="mi">15</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="5.-Data-Types-and-Precision">
+<h2>5. Data Types and Precision<a class="headerlink" href="#5.-Data-Types-and-Precision" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN supports various data types optimized for AI workloads, ranging from high precision (float32) to ultra-compact formats (bfloat4_b) that maximize throughput and memory efficiency.</p>
+<section id="Supported-Data-Types">
+<h3>Supported Data Types<a class="headerlink" href="#Supported-Data-Types" title="Permalink to this heading"></a>
+</h3>
+<p>TT-NN supports the following data types, each optimized for different use cases:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p><strong>Data Type</strong></p></th>
+<th class="head"><p><strong>Bits</strong></p></th>
+<th class="head"><p><strong>Use Case</strong></p></th>
+<th class="head"><p><strong>Trade-off</strong></p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><strong>uint16</strong></p></td>
+<td><p>16</p></td>
+<td><p>Integer operations</p></td>
+<td><p>Standard integer precision</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><strong>uint32</strong></p></td>
+<td><p>32</p></td>
+<td><p>Integer operations</p></td>
+<td><p>Higher integer precision</p></td>
+</tr>
+<tr class="row-even">
+<td><p><strong>float32</strong></p></td>
+<td><p>32</p></td>
+<td><p>High precision float</p></td>
+<td><p>Standard accuracy, more memory</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><strong>bfloat16</strong></p></td>
+<td><p>16</p></td>
+<td><p>Neural networks</p></td>
+<td><p>Good accuracy, 2x memory savings</p></td>
+</tr>
+<tr class="row-even">
+<td><p><strong>bfloat8_b</strong></p></td>
+<td><p>8</p></td>
+<td><p>Inference, large models</p></td>
+<td><p>4x memory savings, reduced accuracy</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><strong>bfloat4_b</strong></p></td>
+<td><p>4</p></td>
+<td><p>Ultra-efficient inference</p></td>
+<td><p>8x memory savings, lowest accuracy</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="Performance-vs.-Accuracy-Trade-offs">
+<h3>Performance vs. Accuracy Trade-offs<a class="headerlink" href="#Performance-vs.-Accuracy-Trade-offs" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li>
+<p><strong>Lower precision</strong> formats (bfloat8_b, bfloat4_b) provide:</p>
+<ul>
+<li><p><strong>Better memory bandwidth</strong> and computational efficiency</p></li>
+<li><p><strong>Faster operations</strong> due to reduced data movement</p></li>
+<li><p><strong>Reduced numerical accuracy</strong> - may impact model quality</p></li>
+</ul>
+</li>
+<li>
+<p><strong>Higher precision</strong> formats (float32, bfloat16) provide:</p>
+<ul>
+<li><p><strong>Higher accuracy</strong> for numerical computations</p></li>
+<li><p><strong>More memory usage</strong> and potentially slower operations</p></li>
+</ul>
+</li>
+</ul>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with bfloat16 precision (common for neural networks)</span>
+<span class="n">x_bf16</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"BFloat16 tensor: </span><span class="si">{</span><span class="n">x_bf16</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">, Shape: </span><span class="si">{</span><span class="n">x_bf16</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert to different data types using ttnn.typecast()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">=== Data Type Conversions ==="</span><span class="p">)</span>
+
+<span class="c1"># Convert to float32 (higher precision)</span>
+<span class="n">x_float32</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">x_bf16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Float32 tensor: </span><span class="si">{</span><span class="n">x_float32</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert to uint16 (integer type)</span>
+<span class="n">x_uint16</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">x_bf16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"UInt16 tensor: </span><span class="si">{</span><span class="n">x_uint16</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert to bfloat8_b (reduced precision for efficiency)</span>
+<span class="n">x_bf8_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">x_bf16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"BFloat8_b tensor: </span><span class="si">{</span><span class="n">x_bf8_b</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Convert to bfloat4_b (ultra-low precision)</span>
+<span class="n">x_bf4_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">x_bf16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat4_b</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"BFloat4_b tensor: </span><span class="si">{</span><span class="n">x_bf4_b</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Tip: Use lower precision types for inference to maximize throughput!"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="6.-Basic-Tensor-Operations">
+<h2>6. Basic Tensor Operations<a class="headerlink" href="#6.-Basic-Tensor-Operations" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN provides a comprehensive set of tensor operations similar to PyTorch, but optimized for Tenstorrent hardware. Most operations are performed on device tensors for maximum performance.</p>
+<section id="Important-Operation-Requirements">
+<h3>Important Operation Requirements<a class="headerlink" href="#Important-Operation-Requirements" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>Device-only operations</strong>: Most TT-NN operations are only supported on <strong>device tensors</strong>, not host tensors</p></li>
+<li><p><strong>Layout considerations</strong>: Many operations perform better on <strong>TILE_LAYOUT</strong> tensors</p></li>
+<li><p><strong>Matrix multiplication</strong>: For advanced control over math fidelity and performance, see the <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/matrix_engine/matrix_engine.md">Matrix Engine documentation</a></p></li>
+</ul>
+</section>
+<section id="Creating-Test-Data">
+<h3>Creating Test Data<a class="headerlink" href="#Creating-Test-Data" title="Permalink to this heading"></a>
+</h3>
+<p>Let’s create some tensors for demonstrating operations:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a range tensor from 0 to 99, then normalize it to [0, 1]</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Created range tensor: shape=</span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">, layout=</span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Normalize to range [0, 1] by dividing by 100</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Normalized tensor to [0, 1] range"</span><span class="p">)</span>
+
+<span class="c1"># Reshape to a row vector for operations</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Reshaped to: </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Values range from ~0 to ~1"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a second random tensor for binary operations</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Created random tensor y: shape=</span><span class="si">{</span><span class="n">y</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Ready for element-wise operations!"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Arithmetic Operations (Element-wise)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"=== Arithmetic Operations ==="</span><span class="p">)</span>
+
+<span class="c1"># Addition - both operators work</span>
+<span class="n">result_add</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="n">y</span>  <span class="c1"># Operator overloading</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Addition (x + y): shape=</span><span class="si">{</span><span class="n">result_add</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Multiplication</span>
+<span class="n">result_mul</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">y</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Multiplication (x * y): shape=</span><span class="si">{</span><span class="n">result_mul</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Subtraction</span>
+<span class="n">result_sub</span> <span class="o">=</span> <span class="n">x</span> <span class="o">-</span> <span class="n">y</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Subtraction (x - y): shape=</span><span class="si">{</span><span class="n">result_sub</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># Division - using function call</span>
+<span class="n">result_div</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Division ttnn.divide(x, y): shape=</span><span class="si">{</span><span class="n">result_div</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">All arithmetic operations completed successfully!"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Mathematical Functions (Unary operations)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"=== Mathematical Functions ==="</span><span class="p">)</span>
+
+<span class="c1"># Trigonometric functions</span>
+<span class="n">sin_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="n">cos_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"sin(x) and cos(x): computed"</span><span class="p">)</span>
+
+<span class="c1"># Exponential and logarithmic functions</span>
+<span class="n">exp_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>    <span class="c1"># e^x</span>
+<span class="n">log_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>    <span class="c1"># natural logarithm</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"exp(x) and log(x): computed"</span><span class="p">)</span>
+
+<span class="c1"># Power and root functions</span>
+<span class="n">sqrt_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>        <span class="c1"># square root</span>
+<span class="n">pow_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>       <span class="c1"># x^2 (square)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"sqrt(x) and pow(x, 2): computed"</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">All mathematical functions applied to tensor of shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"These functions work element-wise on the entire tensor"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Data movement functions</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Tensor manipulation functions</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>Tensor slicing is also supported:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">x</span><span class="p">[:,</span> <span class="mi">50</span><span class="p">:</span><span class="mi">100</span><span class="p">]</span>
+</pre></div>
+</div>
+</div>
+<p>The full set of supported operations is available in the <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api.html#operations">TT-NN API documentation</a>.</p>
+</section>
+<section id="Neural-Network-Operations">
+<h3>Neural Network Operations<a class="headerlink" href="#Neural-Network-Operations" title="Permalink to this heading"></a>
+</h3>
+<p>TT-NN provides neural network operations as pure functions (similar to <code class="docutils literal notranslate"><span class="pre">torch.nn.functional</span></code>), giving you flexibility in structuring your model classes:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_ids</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="p">)</span>
+<span class="n">emb_weight</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1000</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">embedding</span><span class="p">(</span><span class="n">input_ids</span><span class="p">,</span> <span class="n">emb_weight</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>  <span class="c1"># [2, 32, 512]</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">512</span><span class="p">))</span>
+
+<span class="c1"># LayerNorm</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">epsilon</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">)</span>
+
+<span class="c1"># Linear: 512 -&gt; 2048 -&gt; 512</span>
+<span class="n">w1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
+    <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">2048</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w1</span><span class="p">))</span>
+<span class="n">w2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
+    <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w2</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>For a comprehensive list of neural network operations, refer to the <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api.html">TT-NN API documentation</a>.</p>
+</section>
+</section>
+<section id="7.-Just-In-Time-Compilation-and-Caching">
+<h2>7. Just-In-Time Compilation and Caching<a class="headerlink" href="#7.-Just-In-Time-Compilation-and-Caching" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN uses <strong>just-in-time (JIT) compilation</strong> to generate optimized kernels for Tenstorrent hardware. This means:</p>
+<section id="First-Run-vs.-Subsequent-Runs">
+<h3>First Run vs. Subsequent Runs<a class="headerlink" href="#First-Run-vs.-Subsequent-Runs" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>First execution</strong>: Slow due to kernel compilation</p></li>
+<li><p><strong>Subsequent executions</strong>: Fast using cached compiled kernels</p></li>
+</ul>
+</section>
+<section id="What-Affects-Compilation?">
+<h3>What Affects Compilation?<a class="headerlink" href="#What-Affects-Compilation?" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><strong>Tensor shapes</strong>: Different shapes trigger new compilation</p></li>
+<li><p><strong>Operation types</strong>: Each operation type needs compilation</p></li>
+<li><p><strong>Data types</strong>: Different precisions require different kernels</p></li>
+<li><p><strong>Memory layouts</strong>: ROW_MAJOR vs TILE_LAYOUT use different kernels</p></li>
+</ul>
+<p>Let’s demonstrate this compilation behavior:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="c1"># Create a test tensor</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1000</span><span class="p">,</span> <span class="mi">1000</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Testing compilation with tensor shape: </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># === FIRST EXECUTION (includes compilation time) ===</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">=== First Execution (Compilation + Execution) ==="</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="c1"># IMPORTANT: ttnn.synchronize_device() ensures the operation completes</span>
+<span class="c1"># Without it, we only measure dispatch time, not actual execution time</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">first_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Time: </span><span class="si">{</span><span class="n">first_time</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> seconds (includes compilation)"</span><span class="p">)</span>
+
+<span class="c1"># === SECOND EXECUTION (cached, no compilation) ===</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">=== Second Execution (Cached) ==="</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">cached_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Time: </span><span class="si">{</span><span class="n">cached_time</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> seconds (cached)"</span><span class="p">)</span>
+
+<span class="c1"># Show the speedup from caching</span>
+<span class="n">speedup</span> <span class="o">=</span> <span class="n">first_time</span> <span class="o">/</span> <span class="n">cached_time</span> <span class="k">if</span> <span class="n">cached_time</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s1">'inf'</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Speedup from caching: </span><span class="si">{</span><span class="n">speedup</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">x faster!"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Compilation overhead: </span><span class="si">{</span><span class="p">(</span><span class="n">first_time</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">cached_time</span><span class="p">)</span><span class="o">*</span><span class="mi">1000</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">ms"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>The compilation cache is tied to compile-time parameters such as tensor shape. When these parameters change, a new compilation is triggered:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Same operation, different shape</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1337</span><span class="p">,</span> <span class="mi">1337</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"First iteration: </span><span class="si">{</span><span class="n">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="si">}</span><span class="s2"> seconds"</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Time taken: </span><span class="si">{</span><span class="n">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="si">}</span><span class="s2"> seconds"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Direct-SRAM-(L1)-control">
+<h2>Direct SRAM (L1) control<a class="headerlink" href="#Direct-SRAM-(L1)-control" title="Permalink to this heading"></a>
+</h2>
+<p>TT-Metal and TT-NN provide explicit control over tensor placement in device memory hierarchy, allowing you to optimize data movement between slower DRAM and faster SRAM (L1 cache).</p>
+<div class="line-block">
+<div class="line">
+<strong>Available SRAM per device:</strong> - Wormhole n150: 108 MB - Wormhole n300: 192 MB</div>
+<div class="line">- Blackhole p100a: 180 MB - Blackhole p150a: 210 MB</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">dram_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">4096</span><span class="p">,</span> <span class="mi">4096</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">dram_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">sram_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">sram_tensor</span><span class="o">.</span><span class="n">memory_config</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># warmup, compilation</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sram_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"DRAM Time taken: </span><span class="si">{</span><span class="n">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="si">}</span><span class="s2"> seconds"</span><span class="p">)</span>
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sram_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"SRAM Time taken: </span><span class="si">{</span><span class="n">end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="si">}</span><span class="s2"> seconds"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p><strong>Memory Management Best Practice:</strong></p>
+<p>When performing sequences of operations, manually deallocate intermediate tensors to free memory. This is particularly important for L1 memory due to its limited capacity:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">sram_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<section id="Advanced:-Tensor-Sharding">
+<h3>Advanced: Tensor Sharding<a class="headerlink" href="#Advanced:-Tensor-Sharding" title="Permalink to this heading"></a>
+</h3>
+<p>For optimal performance, you can shard tensors across compute cores to minimize data movement. This keeps data closer to the cores processing it.</p>
+<p>Learn more: - <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html#tensor-sharding">Tensor Sharding Documentation</a> - <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_sharding/tensor_sharding.md">Technical Report on Tensor Sharding</a></p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+<span class="n">interleaved_l1_time</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Interleaved L1 Time taken: </span><span class="si">{</span><span class="n">interleaved_l1_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1000</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">)</span>
+
+<span class="n">sharded_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_sharded_memory_config</span><span class="p">(</span>
+    <span class="n">shape</span><span class="o">=</span><span class="n">dram_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+    <span class="n">core_grid</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+    <span class="n">strategy</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardStrategy</span><span class="o">.</span><span class="n">WIDTH</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">sharded_config</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+<span class="n">width_sharded_time</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Width sharded Time taken: </span><span class="si">{</span><span class="n">width_sharded_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1000</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">)</span>
+
+<span class="n">sharded_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">create_sharded_memory_config</span><span class="p">(</span>
+    <span class="n">shape</span><span class="o">=</span><span class="n">dram_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+    <span class="n">core_grid</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreGrid</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+    <span class="n">strategy</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardStrategy</span><span class="o">.</span><span class="n">HEIGHT</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">sharded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">dram_tensor</span><span class="p">,</span> <span class="n">sharded_config</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+    <span class="n">res</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+<span class="n">height_sharded_time</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Height sharded Time taken: </span><span class="si">{</span><span class="n">height_sharded_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1000</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">sharded_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Preserving-Intermediate-Results-in-L1">
+<h3>Preserving Intermediate Results in L1<a class="headerlink" href="#Preserving-Intermediate-Results-in-L1" title="Permalink to this heading"></a>
+</h3>
+<p>Explicit L1 control allows you to keep intermediate results in fast memory without fusing operations:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">32</span><span class="p">,</span> <span class="mi">128</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">w1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">w2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">x1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w1</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">x1</span><span class="o">.</span><span class="n">memory_config</span><span class="p">())</span>
+
+<span class="n">x2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">x1</span><span class="p">)</span> <span class="c1"># automatically maintains L1 config</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">x2</span><span class="o">.</span><span class="n">memory_config</span><span class="p">())</span>
+
+<span class="n">x3</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x2</span><span class="p">,</span> <span class="n">w2</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">x3</span><span class="o">.</span><span class="n">memory_config</span><span class="p">())</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">x1</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">x2</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">x3</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Inference-Focus">
+<h2>Inference Focus<a class="headerlink" href="#Inference-Focus" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN is optimized for inference workloads and does not include automatic differentiation (autograd).</p>
+<p>For training support, see our separate training framework <a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/tt-train">tt-train</a>.</p>
+</section>
+<section id="Development-Tools">
+<h2>Development Tools<a class="headerlink" href="#Development-Tools" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN includes comprehensive tooling for development and debugging:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_visualizer.html">ttnn-visualizer</a> - Visual debugging and analysis</p></li>
+<li><p><a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html">Tracy Profiler</a> - Host and device profiling</p></li>
+<li><p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md">TT-NN Graph Trace</a> - Operation graph visualization</p></li>
+</ul>
+</section>
+<section id="Advanced-Topics">
+<h2>Advanced Topics<a class="headerlink" href="#Advanced-Topics" title="Permalink to this heading"></a>
+</h2>
+</section>
+<section id="8.-Exercise:-Implement-Scaled-Dot-Product-Attention">
+<h2>8. Exercise: Implement Scaled Dot-Product Attention<a class="headerlink" href="#8.-Exercise:-Implement-Scaled-Dot-Product-Attention" title="Permalink to this heading"></a>
+</h2>
+<p>Now let’s put your TT-NN knowledge to the test! Implement a composite version of <strong>Scaled Dot-Product Attention</strong> (the core operation in Transformers) using basic TT-NN operations.</p>
+<section id="Background">
+<h3>Background<a class="headerlink" href="#Background" title="Permalink to this heading"></a>
+</h3>
+<p>Scaled Dot-Product Attention is defined as:</p>
+<div class="highlight-none notranslate">
+<div class="highlight"><pre><span></span>SDPA(Q, K, V) = softmax((Q × K^T) / √d_k) × V
+</pre></div>
+</div>
+<p>Where:</p>
+<ul class="simple">
+<li><p><strong>Q</strong>: Query matrix</p></li>
+<li><p><strong>K</strong>: Key matrix</p></li>
+<li><p><strong>V</strong>: Value matrix</p></li>
+<li><p><strong>d_k</strong>: Dimension of the key vectors (for scaling)</p></li>
+</ul>
+</section>
+<section id="Your-Task">
+<h3>Your Task<a class="headerlink" href="#Your-Task" title="Permalink to this heading"></a>
+</h3>
+<p>Complete the <code class="docutils literal notranslate"><span class="pre">composite_sdpa</span></code> function below using basic TT-NN operations:</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">composite_sdpa</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">causal_mask</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Implement Scaled Dot-Product Attention using basic TT-NN operations.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        q: Query tensor [batch, num_heads, seq_len, head_dim]</span>
+<span class="sd">        k: Key tensor [batch, num_heads, seq_len, head_dim]</span>
+<span class="sd">        v: Value tensor [batch, num_heads, seq_len, head_dim]</span>
+<span class="sd">        causal_mask: Mask tensor for autoregressive attention</span>
+<span class="sd">        scale: Optional scaling factor (defaults to 1/sqrt(head_dim))</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Attention output tensor [batch, num_heads, seq_len, head_dim]</span>
+<span class="sd">    """</span>
+
+    <span class="c1"># TODO: Implement the following steps:</span>
+
+    <span class="c1"># Step 1: Scale the queries (Q × scale)</span>
+    <span class="c1"># If no scale provided, use 1/sqrt(head_dim)</span>
+    <span class="k">if</span> <span class="n">scale</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">head_dim</span> <span class="o">=</span> <span class="n">q</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">head_dim</span><span class="p">)</span>
+
+    <span class="c1"># YOUR CODE HERE: Scale the queries</span>
+    <span class="n">q_scaled</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.multiply()</span>
+
+    <span class="c1"># Step 2: Transpose the keys (K^T)</span>
+    <span class="c1"># YOUR CODE HERE: Transpose the last two dimensions of k</span>
+    <span class="n">k_t</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.permute()</span>
+
+    <span class="c1"># Step 3: Compute attention scores (Q_scaled × K^T)</span>
+    <span class="c1"># YOUR CODE HERE: Matrix multiply q_scaled and k_t</span>
+    <span class="n">attn_scores</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.matmul()</span>
+
+    <span class="c1"># Step 4: Apply causal mask (add mask to scores)</span>
+    <span class="c1"># YOUR CODE HERE: Add the causal_mask to attention scores</span>
+    <span class="n">masked_scores</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.add()</span>
+
+    <span class="c1"># Step 5: Apply softmax along the last dimension</span>
+    <span class="c1"># YOUR CODE HERE: Apply softmax to get attention weights</span>
+    <span class="n">attn_weights</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.softmax()</span>
+
+    <span class="c1"># Step 6: Apply attention weights to values (attn_weights × V)</span>
+    <span class="c1"># YOUR CODE HERE: Matrix multiply attention weights and values</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="o">...</span>  <span class="c1"># HINT: Use ttnn.matmul()</span>
+
+    <span class="c1"># return output # Replace once your implementation is complete</span>
+    <span class="k">return</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">128</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>  <span class="c1"># Placeholder return</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"SDPA function template ready!"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Replace the placeholder operations above to complete the implementation"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="n">batch</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">,</span> <span class="n">head_dim</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">128</span>
+<span class="n">num_iterations</span><span class="p">,</span> <span class="n">warmup_iterations</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span> <span class="mi">1</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Config: B=</span><span class="si">{</span><span class="n">batch</span><span class="si">}</span><span class="s2">, H=</span><span class="si">{</span><span class="n">num_heads</span><span class="si">}</span><span class="s2">, S=</span><span class="si">{</span><span class="n">seq_len</span><span class="si">}</span><span class="s2">, D=</span><span class="si">{</span><span class="n">head_dim</span><span class="si">}</span><span class="s2">, Causal=True"</span><span class="p">)</span>
+
+<span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<span class="n">Q_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">)</span>
+<span class="n">K_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">)</span>
+<span class="n">V_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">)</span>
+
+<span class="n">Q_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">Q_torch</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">K_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">K_torch</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">V_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">V_torch</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">causal_mask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">triu</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">seq_len</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">)</span> <span class="o">*</span> <span class="nb">float</span><span class="p">(</span><span class="s1">'-inf'</span><span class="p">),</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">causal_mask_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">causal_mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">=== Accuracy Test ==="</span><span class="p">)</span>
+<span class="n">output_composite</span> <span class="o">=</span> <span class="n">composite_sdpa</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">causal_mask_tt</span><span class="p">)</span>
+<span class="n">output_composite_torch</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_composite</span><span class="p">)[:,</span> <span class="p">:,</span> <span class="p">:</span><span class="n">seq_len</span><span class="p">,</span> <span class="p">:</span><span class="n">head_dim</span><span class="p">]</span>
+
+<span class="n">output_optimized</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transformer</span><span class="o">.</span><span class="n">scaled_dot_product_attention</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">is_causal</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">output_optimized_torch</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_optimized</span><span class="p">)[:,</span> <span class="p">:,</span> <span class="p">:</span><span class="n">seq_len</span><span class="p">,</span> <span class="p">:</span><span class="n">head_dim</span><span class="p">]</span>
+
+<span class="n">output_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">scaled_dot_product_attention</span><span class="p">(</span><span class="n">Q_torch</span><span class="p">,</span> <span class="n">K_torch</span><span class="p">,</span> <span class="n">V_torch</span><span class="p">,</span> <span class="n">is_causal</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">pcc_composite</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">corrcoef</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">output_composite_torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">output_torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">()]))[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+<span class="n">pcc_optimized</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">corrcoef</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">output_optimized_torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">output_torch</span><span class="o">.</span><span class="n">flatten</span><span class="p">()]))[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+<span class="n">rmse_composite</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(((</span><span class="n">output_composite_torch</span> <span class="o">-</span> <span class="n">output_torch</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+<span class="n">rmse_optimized</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(((</span><span class="n">output_optimized_torch</span> <span class="o">-</span> <span class="n">output_torch</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Composite vs PyTorch:  PCC=</span><span class="si">{</span><span class="n">pcc_composite</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">, RMSE=</span><span class="si">{</span><span class="n">rmse_composite</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Optimized vs PyTorch:  PCC=</span><span class="si">{</span><span class="n">pcc_optimized</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">, RMSE=</span><span class="si">{</span><span class="n">rmse_optimized</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">=== Speed Test ==="</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"Warming up (compiling kernels)..."</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup_iterations</span><span class="p">):</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">composite_sdpa</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">causal_mask_tt</span><span class="p">)</span>
+    <span class="n">out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transformer</span><span class="o">.</span><span class="n">scaled_dot_product_attention</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">is_causal</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_iterations</span><span class="p">):</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">composite_sdpa</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">causal_mask_tt</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">composite_time</span> <span class="o">=</span> <span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_iterations</span> <span class="o">*</span> <span class="mi">1000</span>
+
+<span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_iterations</span><span class="p">):</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transformer</span><span class="o">.</span><span class="n">scaled_dot_product_attention</span><span class="p">(</span><span class="n">Q_tt</span><span class="p">,</span> <span class="n">K_tt</span><span class="p">,</span> <span class="n">V_tt</span><span class="p">,</span> <span class="n">is_causal</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<span class="n">optimized_time</span> <span class="o">=</span> <span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span> <span class="o">/</span> <span class="n">num_iterations</span> <span class="o">*</span> <span class="mi">1000</span>
+
+<span class="n">speedup</span> <span class="o">=</span> <span class="n">composite_time</span> <span class="o">/</span> <span class="n">optimized_time</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Composite SDPA: </span><span class="si">{</span><span class="n">composite_time</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Optimized SDPA: </span><span class="si">{</span><span class="n">optimized_time</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Speedup:        </span><span class="si">{</span><span class="n">speedup</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">x"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Math-Fidelity-Control">
+<h2>Math Fidelity Control<a class="headerlink" href="#Math-Fidelity-Control" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN provides fine-grained control over computational precision for performance tuning. The matrix engine supports multiple math fidelity modes that trade accuracy for speed.</p>
+<div class="line-block">
+<div class="line">
+<strong>Available Fidelity Modes:</strong> - <strong>LoFi</strong> - Lowest precision, highest performance - <strong>HiFi2</strong> - Medium precision with FP32 accumulation - <strong>HiFi3</strong> - Higher precision</div>
+<div class="line">- <strong>HiFi4</strong> - Highest precision with full FP32 accumulation</div>
+</div>
+<p>Additional resources: - <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/matrix_engine/matrix_engine.md">Matrix Engine Technical Report</a> - <a class="reference external" href="https://docs.tenstorrent.com/pybuda/latest/dataformats.html">Data Format Documentation</a></p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+
+<span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">N</span> <span class="o">=</span> <span class="mi">2048</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="mi">2048</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"&gt; Matrix dimensions: </span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2"> @ </span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">x</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">reference</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">float</span><span class="p">(),</span> <span class="n">b</span><span class="o">.</span><span class="n">float</span><span class="p">())</span>
+
+<span class="n">tt_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">tt_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">"</span> <span class="o">+</span> <span class="s2">"-"</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="s1">'Fidelity'</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'Time (ms)'</span><span class="si">:</span><span class="s2">&lt;12</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'Mean Error'</span><span class="si">:</span><span class="s2">&lt;12</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"-"</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+
+<span class="c1"># Test different fidelities</span>
+<span class="n">fidelities</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MathFidelity</span><span class="o">.</span><span class="n">LoFi</span><span class="p">,</span> <span class="s2">"LoFi"</span><span class="p">),</span>
+    <span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MathFidelity</span><span class="o">.</span><span class="n">HiFi2</span><span class="p">,</span> <span class="s2">"HiFi2"</span><span class="p">),</span>
+    <span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MathFidelity</span><span class="o">.</span><span class="n">HiFi3</span><span class="p">,</span> <span class="s2">"HiFi3"</span><span class="p">),</span>
+    <span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MathFidelity</span><span class="o">.</span><span class="n">HiFi4</span><span class="p">,</span> <span class="s2">"HiFi4"</span><span class="p">),</span>
+<span class="p">]</span>
+
+<span class="k">for</span> <span class="n">fidelity</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">fidelities</span><span class="p">:</span>
+    <span class="c1"># Configure compute kernel</span>
+    <span class="c1"># Note: Enable FP32 accumulation for HiFi2/HiFi4 to see accuracy benefits</span>
+    <span class="c1"># With BF16 accumulation and large values, LSB corrections can introduce noise</span>
+    <span class="n">use_fp32_acc</span> <span class="o">=</span> <span class="p">(</span><span class="n">fidelity</span> <span class="o">!=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MathFidelity</span><span class="o">.</span><span class="n">LoFi</span><span class="p">)</span>
+
+    <span class="n">config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">WormholeComputeKernelConfig</span><span class="p">(</span>
+        <span class="n">math_fidelity</span><span class="o">=</span><span class="n">fidelity</span><span class="p">,</span>
+        <span class="n">math_approx_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">fp32_dest_acc_en</span><span class="o">=</span><span class="n">use_fp32_acc</span><span class="p">,</span>  <span class="c1"># FP32 for HiFi2/HiFi4</span>
+        <span class="n">packer_l1_acc</span><span class="o">=</span><span class="n">use_fp32_acc</span><span class="p">,</span>     <span class="c1"># L1 accumulation for better precision</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Warm-up</span>
+    <span class="n">_</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">tt_a</span><span class="p">,</span> <span class="n">tt_b</span><span class="p">,</span> <span class="n">compute_kernel_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+
+    <span class="c1"># Time the operation</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">50</span><span class="p">):</span>
+        <span class="n">result_tt</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">tt_a</span><span class="p">,</span> <span class="n">tt_b</span><span class="p">,</span> <span class="n">compute_kernel_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">elapsed</span> <span class="o">=</span> <span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span> <span class="o">/</span> <span class="mi">50</span> <span class="o">*</span> <span class="mi">1000</span>  <span class="c1"># Convert to ms</span>
+
+    <span class="c1"># Get result</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">result_tt</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
+
+    <span class="c1"># Compute errors and PCC</span>
+    <span class="n">error</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">reference</span> <span class="o">-</span> <span class="n">result</span><span class="p">)</span>
+    <span class="n">mean_err</span> <span class="o">=</span> <span class="n">error</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">elapsed</span><span class="si">:</span><span class="s2">&gt;10.4f</span><span class="si">}</span><span class="s2">   </span><span class="si">{</span><span class="n">mean_err</span><span class="si">:</span><span class="s2">&gt;10.8f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Metal-Trace">
+<h2>Metal Trace<a class="headerlink" href="#Metal-Trace" title="Permalink to this heading"></a>
+</h2>
+<p>Metal trace allows you to record and replay sequences of operations for improved performance:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Begin recording operations</span>
+<span class="n">tid</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">begin_trace_capture</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">cq_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">run_model</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">end_trace_capture</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">tid</span><span class="p">,</span> <span class="n">cq_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># Replay the traced operations</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">execute_trace</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">tid</span><span class="p">,</span> <span class="n">cq_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This is particularly useful for eliminating Python overhead in production inference.</p>
+</section>
+<section id="Multi-device">
+<h2>Multi-device<a class="headerlink" href="#Multi-device" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN supports distributed computing across multiple devices using collective communication operations (CCL):</p>
+<p><strong>Example: Tensor Sharding Across Devices</strong></p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Open a 1x2 mesh of devices</span>
+<span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+<span class="c1"># Create a torch tensor</span>
+<span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+<span class="n">torch_tensor</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">0</span><span class="p">:</span><span class="mi">32</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="n">torch_tensor</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="mi">32</span><span class="p">:</span><span class="mi">64</span><span class="p">]</span> <span class="o">=</span> <span class="mf">2.0</span>
+
+<span class="c1"># Shard the tensor across devices along dimension 3</span>
+<span class="n">mesh_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch_tensor</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+    <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">),</span>
+<span class="p">)</span>
+
+<span class="c1"># Perform collective operations</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">all_gather</span><span class="p">(</span><span class="n">mesh_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">num_links</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This enables efficient model parallelism and data parallelism across multiple Tenstorrent devices.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../../installing.html" class="btn btn-neutral float-left" title="Install" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../tensor.html" class="btn btn-neutral float-right" title="Tensor" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
