@@ -9,19 +9,11 @@ different MoE architectures including DeepSeek-V3 and GPT-OSS through JSON confi
 """
 
 import json
-import os
-import sys
 from pathlib import Path
 
 import torch
-from loguru import logger
 
 import ttnn
-
-# Add debug logger path if MOE_DEBUG is enabled
-if os.environ.get("MOE_DEBUG", "0") == "1":
-    sys.path.insert(0, "/tmp")
-    from moe_debug_logger import MoEDebugLogger
 
 try:
     # Try relative imports (when used as a module)
@@ -60,10 +52,6 @@ class MoEBlock:
         self.ccl = ccl
 
         # Initialize debug logger if enabled
-        self.debug_logger = None
-        if os.environ.get("MOE_DEBUG", "0") == "1":
-            self.debug_logger = MoEDebugLogger("infrastructure")
-
         # Load configuration
         self.config = self._load_config(config_path)
 
@@ -407,17 +395,6 @@ class MoEBlock:
             indices_chunk = ttnn.slice(indices_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, num_experts_per_tok])
 
             # All-to-all dispatch
-            logger.info(
-                f"DEBUG: Before all_to_all_dispatch - x_chunk shape: {x_chunk.shape}, indices_chunk shape: {indices_chunk.shape}"
-            )
-            logger.info(
-                f"DEBUG: EP axis: {self.ep_axis if self.distributed_expert_enabled else 0}, num_experts_per_device: {self.num_experts_per_device}"
-            )
-            logger.info(
-                f"DEBUG: expert_mapping_tensors type: {type(self.expert_mapping_tensors)}, length: {len(self.expert_mapping_tensors) if hasattr(self.expert_mapping_tensors, '__len__') else 'N/A'}"
-            )
-            logger.info(f"DEBUG: memory_config: {self._get_memory_config(mode, 'dispatch')}")
-            logger.info("DEBUG: *** CALLING all_to_all_dispatch NOW ***")
 
             dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
                 x_chunk,
@@ -428,17 +405,10 @@ class MoEBlock:
                 topology=ttnn.Topology.Linear,
             )
 
-            logger.info("DEBUG: *** all_to_all_dispatch COMPLETED ***")
-
             # Debug log after all_to_all_dispatch
-            if self.debug_logger:
-                self.debug_logger.log_intermediate(dispatch_output, "after_all_to_all_dispatch", save_full=True)
-                self.debug_logger.log_intermediate(dispatch_metadata, "dispatch_metadata", save_full=False)
 
             ttnn.deallocate(x_chunk)
             ttnn.deallocate(indices_chunk)
-
-            logger.info(f"DEBUG: After all_to_all_dispatch - dispatch_output shape: {dispatch_output.shape}")
 
             # After all_to_all_dispatch, each device gets ALL tokens for its subset of experts
             # The actual batch size is in dispatch_output.shape[1]
@@ -448,28 +418,21 @@ class MoEBlock:
             dispatch_chunk = ttnn.reshape(
                 dispatch_output, shape=(1, 1, actual_batch_after_dispatch * seq_len, hidden_size)
             )
-            logger.info(f"DEBUG: After reshape - dispatch_chunk shape: {dispatch_chunk.shape}")
 
             # Apply activations_repeat configuration
             activations_repeat_config = self.config.get("activations_repeat", {})
             if activations_repeat_config:
                 # Use the repeat dims from config or default to num_experts_per_device
                 repeat_dims = activations_repeat_config.get("repeat_dims", [1, self.num_experts_per_device, 1, 1])
-                logger.info(
-                    f"DEBUG: Repeating with dims: {repeat_dims} (num_experts_per_device={self.num_experts_per_device})"
-                )
                 # Use appropriate memory config based on mode
                 repeat_memory_config = self._get_memory_config(mode, "dispatch")
                 dispatch_chunk = ttnn.repeat(
                     dispatch_chunk, ttnn.Shape(repeat_dims), memory_config=repeat_memory_config
                 )
-                logger.info(f"DEBUG: After repeat - dispatch_chunk shape: {dispatch_chunk.shape}")
 
             dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
 
             # Debug log before experts
-            if self.debug_logger:
-                self.debug_logger.log_intermediate(dispatch_chunk, "input_to_experts", save_full=True)
 
             ttnn.deallocate(dispatch_output)
 
@@ -480,10 +443,6 @@ class MoEBlock:
             else:
                 # Fallback if no distributed expert configured
                 experts_output = dispatch_chunk
-
-            # Debug log expert output
-            if self.debug_logger:
-                self.debug_logger.log_intermediate(experts_output, "experts_output", save_full=True)
 
             ttnn.deallocate(dispatch_chunk)
 
@@ -563,11 +522,6 @@ class MoEBlock:
         Returns:
             MoE output tensor with same shape as input
         """
-        logger.info(f"DEBUG MoEBlock.forward: Starting with input shape {x.shape}, mode={mode}")
-        logger.info(
-            f"DEBUG MoEBlock.forward: TP enabled={self.tp_enabled}, TP axis={self.tp_axis}, TP size={self.tp_size}"
-        )
-
         # Check for chunking in prefill mode
         if mode == "prefill":
             prefill_chunk_config = self.config.get("prefill_chunking", {})
@@ -582,9 +536,6 @@ class MoEBlock:
         # Step 1: All-gather if TP is enabled and input is sharded
         x_was_gathered = False
         is_sharded = self._is_tp_sharded(x)
-        logger.info(
-            f"DEBUG MoEBlock.forward: _is_tp_sharded returned {is_sharded} (actual_dim={x.shape[-1]}, expected_sharded={self.config['experts']['distributed']['hidden_size'] // self.tp_size if self.tp_enabled else 'N/A'})"
-        )
 
         if self.tp_enabled and self._is_tp_sharded(x):
             # Get CCL parameters for all_gather
@@ -605,69 +556,27 @@ class MoEBlock:
             x_was_gathered = True
 
         # Step 2: Router forward
-        logger.info(f"DEBUG MoEBlock.forward: Calling router.forward with input shape {x.shape}")
-
-        # Debug log input before router
-        if self.debug_logger:
-            self.debug_logger.log_intermediate(x, "input_to_router", save_full=True)
 
         weights, indices = self.router.forward(x, mode)
-        logger.info(
-            f"DEBUG MoEBlock.forward: Router returned weights shape={weights.shape}, indices shape={indices.shape}"
-        )
-
-        # Debug log router outputs
-        if self.debug_logger:
-            self.debug_logger.log_router_outputs(weights, indices, save_full=True)
 
         # Prepare expert weights
-        logger.info(f"DEBUG MoEBlock.forward: Preparing expert weights")
         weights_prepared = self._prepare_expert_weights(weights, mode)
-        logger.info(f"DEBUG MoEBlock.forward: Weights prepared shape={weights_prepared.shape}")
-
-        # Debug log prepared weights
-        if self.debug_logger:
-            self.debug_logger.log_intermediate(weights_prepared, "weights_prepared", save_full=True)
 
         # Step 3: Expert computation
         outputs = []
 
         # Distributed experts with MoE forward
         if self.distributed_expert_enabled:
-            logger.info(f"DEBUG MoEBlock.forward: Calling _forward_moe with distributed experts")
-
             # Debug log before MoE
-            if self.debug_logger:
-                self.debug_logger.log_expert_input(x, "distributed_moe", save_full=True)
-
             moe_output = self._forward_moe(x, indices, weights_prepared, mode)
-            logger.info(
-                f"DEBUG MoEBlock.forward: _forward_moe returned shape={moe_output.shape if moe_output else 'None'}"
-            )
-
-            # Debug log MoE output
-            if self.debug_logger and moe_output is not None:
-                self.debug_logger.log_expert_output(moe_output, "distributed_moe", save_full=True)
 
             outputs.append(moe_output)
 
         # Shared expert (if enabled and parallel with MoE)
         if self.shared_expert_enabled and self.shared_parallel:
-            logger.info(f"DEBUG MoEBlock.forward: Running SharedExpert.forward_decode")
-
             # Debug log before shared expert
-            if self.debug_logger:
-                self.debug_logger.log_expert_input(x, "shared", save_full=True)
-
             # Use class method forward_decode with the stored config
             shared_out = SharedExpert.forward_decode(x, self.shared_expert_decode_config)
-            logger.info(
-                f"DEBUG MoEBlock.forward: SharedExpert returned shape={shared_out.shape if shared_out else 'None'}"
-            )
-
-            # Debug log shared expert output
-            if self.debug_logger and shared_out is not None:
-                self.debug_logger.log_expert_output(shared_out, "shared", save_full=True)
 
             outputs.append(shared_out)
 
@@ -677,9 +586,6 @@ class MoEBlock:
             output = ttnn.add(outputs[0], outputs[1])
 
             # Debug log combined output
-            if self.debug_logger:
-                self.debug_logger.log_intermediate(output, "combined_output", save_full=True)
-
             for out in outputs:
                 if out is not outputs[-1]:  # Don't deallocate the last one (it's output)
                     ttnn.deallocate(out)
@@ -710,259 +616,8 @@ class MoEBlock:
         ttnn.deallocate(weights_prepared)
 
         # Debug log final output and save summary
-        if self.debug_logger:
-            self.debug_logger.log_intermediate(output, "final_output", save_full=True)
-            self.debug_logger.save_summary()
 
         return output
-
-    def forward_with_intermediates(self, x: ttnn.Tensor, mode: str = "decode"):
-        """
-        Forward pass with intermediate tensor capture for debugging.
-        Captures exactly 6 key intermediate tensors for comparison with reference:
-        1. tp_input: TP=8 input (before all-gather)
-        2. all_gather_output: After all-gather (replicated across row)
-        3. moe_gate_input: Tensor being fed into MoE gate (same as all_gather_output)
-        4. moe_output: MoE module output (after combine)
-        5. shared_expert_output: SharedExpert output
-        6. reduce_scatter_output: Final output after reduce-scatter
-
-        Returns:
-            tuple: (output, intermediates_dict)
-            - output: Final MoE output
-            - intermediates_dict: Dictionary of exactly 6 intermediate tensors
-        """
-        intermediates = {}
-
-        logger.info(f"DEBUG forward_with_intermediates: Starting with input shape {x.shape}, mode={mode}")
-        # 1. Save original input (before all-gather, TP-sharded)
-        intermediates["tp_input"] = x
-
-        # Check for chunking in prefill mode
-        if mode == "prefill":
-            prefill_chunk_config = self.config.get("prefill_chunking", {})
-            chunk_tokens = prefill_chunk_config.get("chunk_size", 16384)
-            num_dispatch_devices = self.mesh_device.shape[0] if hasattr(self.mesh_device, "shape") else 1
-            global_tokens = x.shape[2] * num_dispatch_devices
-
-            if global_tokens > chunk_tokens:
-                chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
-                output = self._forward_chunked_prefill(x, chunk_size)
-                intermediates["final_output"] = output
-                return output, intermediates
-
-        # Step 1: All-gather if TP is enabled and input is sharded
-        x_was_gathered = False
-        is_sharded = self._is_tp_sharded(x)
-
-        if self.tp_enabled and is_sharded:
-            logger.info("Performing all-gather...")
-            all_gather_config = {
-                "cluster_axis": self.tp_axis,
-                "dim": -1,
-                "memory_config": self._get_memory_config(mode, "all_gather"),
-                "topology": ttnn.Topology.Linear,
-            }
-
-            if self.ccl is not None:
-                all_gather_args = self.ccl.populate_all_gather_runtime_args(all_gather_config)
-            else:
-                raise ValueError("CCL instance is required for tensor parallel operations")
-
-            x_gathered = ttnn.experimental.all_gather_async(x, **all_gather_args)
-            x_was_gathered = True
-            # 2. After all-gather
-            intermediates["all_gather_output"] = x_gathered
-        else:
-            x_gathered = x
-            # If no all-gather, still save as all_gather_output for consistency
-            intermediates["all_gather_output"] = x_gathered
-
-        # 3. MoE gate input (same as x_gathered)
-        intermediates["moe_gate_input"] = x_gathered
-
-        # Step 2: Router forward
-        logger.info("Running router forward...")
-        weights, indices = self.router.forward(x_gathered, mode)
-
-        # Prepare expert weights
-        logger.info("Preparing expert weights...")
-        weights_prepared = self._prepare_expert_weights(weights, mode)
-
-        # Step 3: Expert computation
-        outputs = []
-
-        # Distributed experts with MoE forward
-        if self.distributed_expert_enabled:
-            logger.info("Running distributed experts...")
-            # Use the regular _forward_moe without capturing internals
-            moe_output = self._forward_moe(x_gathered, indices, weights_prepared, mode)
-            # 4. MoE module output (after combine)
-            intermediates["moe_output"] = moe_output
-            outputs.append(moe_output)
-
-        # Shared expert (if enabled and parallel with MoE)
-        if self.shared_expert_enabled and self.shared_parallel:
-            logger.info("Running shared expert...")
-            from components.experts.shared_expert import SharedExpert
-
-            shared_out = SharedExpert.forward_decode(x_gathered, self.shared_expert_decode_config)
-            # 5. SharedExpert output
-            intermediates["shared_expert_output"] = shared_out
-            outputs.append(shared_out)
-
-        # Step 4: Combine outputs (only if we have both MoE and shared expert)
-        if len(outputs) > 1:
-            logger.info("Combining MoE and shared expert outputs...")
-            output = ttnn.add(outputs[0], outputs[1])
-            # Note: We don't save combined_output since we already have moe_output and shared_expert_output
-        else:
-            output = outputs[0]
-
-        # Step 5: Reduce-scatter if we did all-gather
-        if x_was_gathered:
-            logger.info("Performing reduce-scatter...")
-            reduce_scatter_config = {
-                "cluster_axis": self.tp_axis,
-                "dim": 3,
-                "memory_config": self._get_memory_config(mode, "reduce_scatter"),
-                "topology": ttnn.Topology.Linear,
-            }
-
-            if self.ccl is not None:
-                reduce_scatter_args = self.ccl.populate_reduce_scatter_runtime_args(reduce_scatter_config)
-            else:
-                raise ValueError("CCL instance is required for tensor parallel operations")
-
-            output = ttnn.experimental.reduce_scatter_minimal_async(output, **reduce_scatter_args)
-            # 6. After reduce-scatter (final output)
-            intermediates["reduce_scatter_output"] = output
-        else:
-            # If no reduce-scatter, save final output as reduce_scatter_output for consistency
-            intermediates["reduce_scatter_output"] = output
-
-        logger.info(f"DEBUG forward_with_intermediates: Complete, captured exactly {len(intermediates)} intermediates")
-
-        return output, intermediates
-
-    def _forward_moe_with_intermediates(
-        self, x: ttnn.Tensor, indices: ttnn.Tensor, weights: ttnn.Tensor, mode: str = "decode"
-    ):
-        """
-        MoE forward pass with intermediate tensor capture.
-
-        Returns:
-            tuple: (output, intermediates_dict)
-        """
-        intermediates = {}
-
-        # Get dimensions - match the original _forward_moe method
-        batch_size_per_device = x.shape[-2]  # Use same indexing as original
-        seq_len = 1  # For a2a dispatch/combine compatibility
-        hidden_size = x.shape[-1]
-
-        # Get configuration
-        num_dispatch_devices = self.mesh_device.shape[0] if hasattr(self.mesh_device, "shape") else 1
-
-        # After all_to_all_dispatch, each device gets ALL tokens for its subset of experts
-        # So we always need to use the full batch size (total tokens across all devices)
-        batch_size = batch_size_per_device * num_dispatch_devices
-
-        num_experts_per_tok = self.config["router"]["config"]["num_experts_per_tok"]
-
-        # Convert to ROW_MAJOR and reshape
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
-        intermediates["x_row_major"] = x_rm
-
-        indices_rm = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        indices_rm = ttnn.reshape(indices_rm, shape=(batch_size_per_device, 1, seq_len, num_experts_per_tok))
-        intermediates["indices_row_major"] = indices_rm
-
-        # For simplicity, we'll process without chunking for debug
-        # All-to-all dispatch
-        dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
-            x_rm,
-            indices_rm,
-            self.expert_mapping_tensors,
-            cluster_axis=self.ep_axis if self.distributed_expert_enabled else 0,
-            memory_config=self._get_memory_config(mode, "dispatch"),
-            topology=ttnn.Topology.Linear,
-        )
-        intermediates["dispatch_output"] = dispatch_output
-        intermediates["dispatch_metadata"] = dispatch_metadata
-
-        # Debug shape information
-        logger.info(f"DEBUG: dispatch_output shape: {dispatch_output.shape}")
-        logger.info(
-            f"DEBUG: batch_size_per_device={batch_size_per_device}, seq_len={seq_len}, hidden_size={hidden_size}"
-        )
-        logger.info(f"DEBUG: batch_size={batch_size}, num_dispatch_devices={num_dispatch_devices}")
-
-        # After all-to-all dispatch, each device gets tokens from ALL devices for its experts
-        # So we need to use the total batch size (batch_size), not batch_size_per_device
-        # This matches what the original _forward_moe does (batch_size_chunk = batch_chunk * num_dispatch_devices)
-        dispatch_chunk = ttnn.reshape(dispatch_output, shape=(1, 1, batch_size * seq_len, hidden_size))
-
-        # Apply activations_repeat configuration
-        activations_repeat_config = self.config.get("activations_repeat", {})
-        if activations_repeat_config:
-            repeat_dims = activations_repeat_config.get("repeat_dims", [1, self.num_experts_per_device, 1, 1])
-            repeat_memory_config = self._get_memory_config(mode, "dispatch")
-            dispatch_chunk = ttnn.repeat(dispatch_chunk, ttnn.Shape(repeat_dims), memory_config=repeat_memory_config)
-            intermediates["after_repeat"] = dispatch_chunk
-
-        dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-        intermediates["dispatch_tile_layout"] = dispatch_chunk
-
-        # Run experts
-        if self.distributed_expert_enabled:
-            from components.experts.distributed_expert import DistributedExpert
-
-            experts_output = DistributedExpert.forward_decode(dispatch_chunk, self.distributed_expert_decode_config)
-            intermediates["experts_output"] = experts_output
-        else:
-            experts_output = dispatch_chunk
-
-        # Reshape expert output
-        # After all-to-all dispatch, each device processes ALL tokens for its experts
-        # So we use batch_size (total), not batch_size_per_device
-        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-        experts_output = ttnn.reshape(
-            experts_output, shape=(self.num_experts_per_device, batch_size, seq_len, hidden_size)
-        )
-        intermediates["experts_reshaped"] = experts_output
-
-        # Reshape metadata for combine
-        # Similarly, use batch_size for the metadata reshape
-        dispatch_metadata = ttnn.reshape(dispatch_metadata, shape=(1, batch_size, seq_len, num_experts_per_tok))
-
-        # All-to-all combine
-        combine_output = ttnn.all_to_all_combine(
-            experts_output,
-            dispatch_metadata,
-            self.expert_mapping_tensors,
-            cluster_axis=self.ep_axis if self.distributed_expert_enabled else 0,
-            memory_config=self._get_memory_config(mode, "combine"),
-            topology=ttnn.Topology.Linear,
-        )
-        intermediates["combine_output"] = combine_output
-
-        # Reshape and apply weights
-        post_combine = ttnn.reshape(
-            combine_output, shape=(num_experts_per_tok, 1, batch_size_per_device * seq_len, hidden_size)
-        )
-        post_combine = ttnn.to_layout(post_combine, ttnn.TILE_LAYOUT)
-
-        # Multiply by weights
-        post_combine = ttnn.mul(post_combine, weights, memory_config=self._get_memory_config(mode, "combine"))
-        intermediates["after_weight_mul"] = post_combine
-
-        # Sum across experts dimension
-        post_combine = ttnn.sum(post_combine, dim=0, keepdim=True)
-        intermediates["after_sum"] = post_combine
-
-        return post_combine, intermediates
 
     def _forward_chunked_prefill(self, x: ttnn.Tensor, chunk_size: int):
         """

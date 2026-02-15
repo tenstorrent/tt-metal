@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import json
+import tempfile
 from pathlib import Path
 
 import pytest
 import torch
+import ttnn.graph
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
@@ -182,12 +185,47 @@ def run_test_forward_pass_decoder2d(
     # Forward pass
     logger.info("Running TTNN forward pass")
 
+    # Use graph capture to trace all operations
+    logger.info("Starting graph capture to trace operations...")
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
     if mode == "prefill":
         tt_output = DecoderBlockClass.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_table)
     else:
         tt_output = DecoderBlockClass.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table
         )
+
+    # Capture the graph as JSON
+    captured_graph = ttnn.graph.end_graph_capture()
+    logger.info("Graph capture complete!")
+
+    # Save captured graph to file
+    trace_dir = tempfile.mkdtemp(prefix="ttnn_graph_capture_")
+    graph_json_path = Path(trace_dir) / "captured_operations.json"
+
+    with open(graph_json_path, "w") as f:
+        json.dump(captured_graph, f, indent=2)
+
+    logger.info(f"Captured graph saved to: {graph_json_path}")
+
+    # Display sample of the captured operations
+    if isinstance(captured_graph, dict):
+        logger.info("Captured graph structure:")
+        logger.info(f"  Keys: {list(captured_graph.keys())}")
+
+        # Show sample of captured operations
+        sample_json = json.dumps(captured_graph, indent=2)[:2000]
+        logger.info(f"Sample of captured operations JSON:\n{sample_json}\n...")
+
+        # Count operations if they're in the graph
+        if "nodes" in captured_graph:
+            num_nodes = len(captured_graph["nodes"])
+            logger.info(f"Total nodes captured: {num_nodes}")
+
+            # Show first few nodes
+            for i, node in enumerate(captured_graph["nodes"][:5]):
+                logger.info(f"  Node {i}: {json.dumps(node, indent=2)[:200]}...")
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)

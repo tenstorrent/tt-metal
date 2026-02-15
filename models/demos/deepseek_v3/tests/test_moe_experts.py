@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 import torch
 import torch.nn as nn
+import ttnn.graph
 
 import ttnn
 

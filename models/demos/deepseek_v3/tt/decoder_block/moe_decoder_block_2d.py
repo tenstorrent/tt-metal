@@ -160,12 +160,12 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
 
         # Run both MoE and SharedExpert with the same gathered input
         mlp_out = MoE.forward_decode(x_gathered, cfg["moe"])
-
         # SharedExpert now always expects collective ops to be handled by caller
         shared_expert_out = SharedExpert.forward_decode(x_gathered, cfg["shared_expert"])
 
         # Add outputs first, then reduce_scatter the combined result
         combined_out = ttnn.add(mlp_out, shared_expert_out)
+
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(shared_expert_out)
 

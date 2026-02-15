@@ -297,9 +297,10 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
             layout=ttnn.TILE_LAYOUT,
         )
     else:
-        # For decode, reshape [batch, 1, hidden] -> [1, 1, batch, hidden]
-        torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)
-        # Use ShardTensor2dMesh like the reference test
+        # For decode, reshape [batch, 1, hidden] -> [1, 1, batch, hidden] (like reference)
+        # Reference does: torch_input.permute(1, 0, 2).unsqueeze(0) for decode
+        torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)  # Shape: (1, 1, 32, 7168)
+        # Use ShardTensor2dMesh with dims=(-2, -1) like the reference test
         tt_input = ttnn.from_torch(
             torch_input_reshaped,
             device=mesh_device,
