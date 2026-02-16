@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
-#include <sstream>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -46,19 +45,6 @@ struct CoreRowAssignment {
     uint32_t start_row;
     uint32_t num_rows;
 };
-
-static std::ostream& operator<<(std::ostream& os, const CoreRowAssignment& a) {
-    return os << "(" << a.core.x << "," << a.core.y << "):" << a.num_rows;
-}
-
-static std::ostream& operator<<(std::ostream& os, const std::vector<CoreRowAssignment>& assignments) {
-    for (size_t i = 0; i < assignments.size(); ++i) {
-        if (i != 0)
-            os << ", ";
-        os << assignments[i];
-    }
-    return os;
-}
 
 static std::vector<CoreCoord> get_worker_cores_in_order(
     const std::optional<CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
@@ -219,19 +205,6 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
     const CoreRangeSet worker_cores(worker_core_ranges);
-
-#ifndef NDEBUG
-    const uint32_t num_cores_total = static_cast<uint32_t>(core_row_assignments.size());
-    const uint32_t rows_per_core_ceil = num_cores_total > 0 ? tt::div_up(num_rows, num_cores_total) : 0;
-    std::ostringstream per_core_rows_stream;
-    per_core_rows_stream << core_row_assignments;
-    log_debug(
-        tt::LogOp,
-        "SoftmaxBackward: Engaged cores {} | rows_per_core(ceil)={} | per-core rows: [{}]",
-        num_cores_total,
-        rows_per_core_ceil,
-        per_core_rows_stream.str());
-#endif
 
     const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
     const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
