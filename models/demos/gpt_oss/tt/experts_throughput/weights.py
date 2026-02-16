@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .config import ThroughputExpertConfig
@@ -97,7 +96,6 @@ def load_throughput_expert_weights(
     mesh_device,
     config: ThroughputExpertConfig,
     state_dict: dict,
-    mesh_config: MeshConfig,
     weight_dtype: ttnn.DataType = ttnn.bfloat4_b,
     tensor_cache_path: str = None,
 ) -> ThroughputExpertWeights:

@@ -155,7 +155,6 @@ class ThroughputExperts:
             mesh_device=mesh_device,
             config=config,
             state_dict=state_dict,
-            mesh_config=self.mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
         )
