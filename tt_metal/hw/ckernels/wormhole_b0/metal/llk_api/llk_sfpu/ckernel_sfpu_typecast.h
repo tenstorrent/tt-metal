@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_typecast.h"
 
 #include "sfpi.h"
 #include "ckernel_sfpu_conversions.h"
@@ -17,6 +16,180 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// Standard typecast internal implementations (Restored)
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_fp32_to_uint16_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint16_to_fp16b_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_int32_to_fp16b_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_fp32_to_int32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_fp32_to_fp16b_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint16_to_fp32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_int32_to_fp32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_fp32_to_uint32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint32_to_fp16b_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint32_to_fp32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint16_to_uint32_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_uint32_to_uint16_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_typecast_int32_to_uint16_() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_fp32_to_fp16b_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint16_to_uint32_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint32_to_fp32_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_int32_to_fp32_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint16_to_fp32_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint16_to_fp16b_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_int32_to_fp16b_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint32_to_fp16b_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_fp32_to_uint16_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_uint32_to_uint16_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_typecast_int32_to_uint16_() {
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
+}
+
+// Public wrappers
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint16() {
     _calculate_typecast_fp32_to_uint16_<APPROXIMATION_MODE, ITERATIONS>();
@@ -139,66 +312,60 @@ inline void init_typecast_int32_to_uint16() {
 
 // UINT8 typecast support functions
 
-// UINT32 -> UINT8: Clamp to [0, 255], store as INT32.
+// UINT32 -> UINT8: Clamp to [0, 255], then OR into bit pattern 0x4B000000.
+// This preserves the integer bits in the mantissa (bits 0-7) and avoids subnormal flushing.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = reinterpret<vInt>(dst_reg[0]);
-        // Clamping logic for UINT32 -> UINT8. Since v is reinterpreted as vInt,
-        // we handle both large positive values and potential negative bits (if vInt is signed).
-        v_if(v < 0 || v > 255) { v = 255; }
+        // Clamping logic for UINT32 -> UINT8. Values > 2^31 appear as negative.
+        v_if(v < 0 || v > 255) {
+            v = 255;
+        }
         v_endif;
-        dst_reg[0] = reinterpret<vFloat>(v);
+        // OR into 2^23 bit pattern (0x4B000000)
+        vInt bits = v | vInt(0x4B000000);
+        dst_reg[0] = reinterpret<vFloat>(bits);
         dst_reg++;
     }
 }
 
-// INT32 -> UINT8: Clamp to [0, 255], store as INT32.
+// INT32 -> UINT8: Clamp to [0, 255], then bitwise OR into 2^23 pattern.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = reinterpret<vInt>(dst_reg[0]);
         v_if(v < 0) { v = 0; }
+        v_elseif(v > 255) { v = 255; }
         v_endif;
-        v_if(v > 255) { v = 255; }
-        v_endif;
-        dst_reg[0] = reinterpret<vFloat>(v);
+        vInt bits = v | vInt(0x4B000000);
+        dst_reg[0] = reinterpret<vFloat>(bits);
         dst_reg++;
     }
 }
 
-// FP32 -> UINT8: Clamp to [0, 255] range, convert to integer using a robust rounding trick,
-// and store as INT8. The packer (configured for UInt8 output) expects the data
-// in the low 8 bits of the destination register.
+// FP32 -> UINT8: Clamp to [0, 255], then use the 2**23 rounding trick.
+// Instead of reinterpreting to subnormal (which flushes to 0), we leave it
+// as a float 2**23 + integer_value (0x4B0000XX). The packer reads the low byte.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // Load FP32 value from dest register
         vFloat v = dst_reg[0];
-
-        // Clamp to [0, 255] range.
         v_if(v < 0.0f) { v = 0.0f; }
         v_endif;
         v_if(v > 255.0f) { v = 255.0f; }
         v_endif;
 
-        // Convert the clamped positive float to a uint32 integer.
-        // We use the 2**23 rounding trick: adding 2**23 to [0, 255] puts the integer
-        // value in the mantissa bits (0-22).
-        vFloat v_rounded = v + 8388608.0f;
-        vInt result = reinterpret<vInt>(v_rounded) & 0x7FFFFF;
-
-        // Store the integer result.
-        dst_reg[0] = reinterpret<vFloat>(result);
+        // Standard 2^23 trick for float to integer conversion bits.
+        dst_reg[0] = v + 8388608.0f;
         dst_reg++;
     }
 }
 
-// UINT8 -> FP32: The unpacker zero-extends UInt8 to the dest register width (as an integer).
-// We then convert the integer bits to Float32.
+// UINT8 -> FP32: Zero-extended integer bits to float value.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint8_to_fp32() {
 #pragma GCC unroll 8
@@ -209,9 +376,7 @@ inline void calculate_typecast_uint8_to_fp32() {
     }
 }
 
-// UINT8 -> FP16B: Same rationale as UINT8 -> FP32; zero-extended by unpacker,
-// then converted to Float32. The packer (configured for FP16B output)
-// handles the conversion to FP16B.
+// UINT8 -> FP16B: Same as above.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint8_to_fp16b() {
 #pragma GCC unroll 8
@@ -222,7 +387,7 @@ inline void calculate_typecast_uint8_to_fp16b() {
     }
 }
 
-// UINT32 -> UINT32: Identity (no-op) used for UINT8 -> UINT32/INT32.
+// IDENTITY for UINT8 -> UINT32/INT32
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint32() {
 #pragma GCC unroll 8
@@ -231,26 +396,21 @@ inline void calculate_typecast_uint32_to_uint32() {
     }
 }
 
-// FP32 -> UINT8: Uses INT8 store format (spec value 5).
-// The packer for UInt8 output expects the data in the low 8 bits.
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT8, 8, 1);
+    TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint8_to_fp32() {
-    // No specific SFPLOADMACRO pipeline needed; uses dst_reg directly.
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint8_to_fp16b() {
-    // No specific SFPLOADMACRO pipeline needed; uses dst_reg directly.
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_uint32() {
-    // Identity copy.
 }
 
 }  // namespace sfpu

@@ -24,8 +24,8 @@ mem_configs = [
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
-cpu_layout = ttnn.Layout.ROW_MAJOR
-npu_layout = ttnn.Layout.TILE
+cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+npu_layout = ttnn.TILE_LAYOUT
 
 
 @pytest.mark.parametrize(
@@ -71,16 +71,16 @@ npu_layout = ttnn.Layout.TILE
         (torch.int, ttnn.uint16, ttnn.int32),
         (torch.int, ttnn.int32, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.uint16),
-        (ttnn.uint8, torch.bfloat16, ttnn.bfloat16),
-        (ttnn.uint8, torch.float32, ttnn.float32),
-        (ttnn.bfloat16, torch.uint8, ttnn.uint8),
-        (ttnn.float32, torch.uint8, ttnn.uint8),
-        (ttnn.uint8, torch.int, ttnn.uint16),
-        (ttnn.uint8, torch.int, ttnn.uint32),
-        (ttnn.uint8, torch.int, ttnn.int32),
-        (ttnn.uint16, torch.uint8, ttnn.uint8),
-        (ttnn.uint32, torch.uint8, ttnn.uint8),
-        (ttnn.int32, torch.uint8, ttnn.uint8),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.uint8),
+        (torch.float32, ttnn.float32, ttnn.uint8),
+        (torch.uint8, ttnn.uint8, ttnn.bfloat16),
+        (torch.uint8, ttnn.uint8, ttnn.float32),
+        (torch.uint8, ttnn.uint8, ttnn.uint16),
+        (torch.uint8, ttnn.uint8, ttnn.uint32),
+        (torch.uint8, ttnn.uint8, ttnn.int32),
+        (torch.int, ttnn.uint16, ttnn.uint8),
+        (torch.int, ttnn.uint32, ttnn.uint8),
+        (torch.int, ttnn.int32, ttnn.uint8),
     ),
 )
 @pytest.mark.parametrize(
@@ -300,7 +300,7 @@ def test_typecast_bf16_to_uint8_specific_case(device):
     # Case from issue #36219: 1.0 -> 1 (not 3)
     torch_ones = torch.ones([1, 1, 32, 32], dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_ones, dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    input_tensor = ttnn.from_torch(torch_ones, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.typecast(input_tensor, ttnn.uint8)
     output_torch = ttnn.to_torch(output)
