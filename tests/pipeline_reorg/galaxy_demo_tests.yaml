@@ -169,7 +169,9 @@
 - name: Galaxy Qwen3-32B demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
-    pytest  models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "performance and batch-1" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000
+    pytest models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000
   model: qwen3_32b
   skus:
     wh_galaxy:
