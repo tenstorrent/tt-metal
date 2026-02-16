@@ -4,7 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
+#include "pcie_noc_utils.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -63,14 +63,13 @@ void kernel_main() {
                 break;
             }
             uint32_t read_addr = get_read_ptr(upstream_interface_index);
-            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
                 read_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
-                page_size,
-                1);
+                page_size);
             noc_async_writes_flushed();
             cb_pop_front(upstream_interface_index, 1);
         } else {
@@ -79,14 +78,13 @@ void kernel_main() {
                 break;
             }
             uint32_t read_addr = receiver_socket.read_ptr;
-            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
                 read_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
-                page_size,
-                1);
+                page_size);
             socket_pop_pages(receiver_socket, 1);
             noc_async_writes_flushed();
             socket_notify_sender(receiver_socket);
@@ -102,5 +100,4 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    DPRINT << "End D2H Main Loop" << ENDL();
 }
