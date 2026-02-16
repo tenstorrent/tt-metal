@@ -93,12 +93,6 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
 private:
-    // Matching algorithm helper methods (internal use only)
-    // Find best matching "meshes" grouping for a given chip count requirement and mesh topology
-    // Uses topology solving to ensure the grouping's adjacency graph can map the mesh's topology
-    GroupingInfo find_best_meshes_grouping(
-        uint32_t required_chips, const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id) const;
-
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
 
