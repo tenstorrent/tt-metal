@@ -1626,6 +1626,7 @@ AdjacencyGraph<NodeId> create_chained_2x4_meshes_with_cardinal(size_t num_meshes
             NodeId global_node = static_cast<NodeId>(base_id + static_cast<NodeId>(node));
             const auto& neighbors = mesh.get_neighbors(node);
             std::vector<NodeId> global_neighbors;
+            global_neighbors.reserve(neighbors.size());
             for (const auto& neighbor : neighbors) {
                 global_neighbors.push_back(static_cast<NodeId>(base_id + static_cast<NodeId>(neighbor)));
             }
@@ -1638,12 +1639,12 @@ AdjacencyGraph<NodeId> create_chained_2x4_meshes_with_cardinal(size_t num_meshes
             CardinalConnectionType cardinal;
             // Group A: rightmost column of previous mesh (nodes at (row, 3) for row in [0, 1])
             for (size_t row = 0; row < 2; ++row) {
-                NodeId prev_right = static_cast<NodeId>((mesh_idx - 1) * mesh_size + row * 4 + 3);
+                NodeId prev_right = static_cast<NodeId>(((mesh_idx - 1) * mesh_size) + (row * 4) + 3);
                 cardinal.group_a.push_back(prev_right);
             }
             // Group B: leftmost column of this mesh (nodes at (row, 0) for row in [0, 1])
             for (size_t row = 0; row < 2; ++row) {
-                NodeId curr_left = static_cast<NodeId>(mesh_idx * mesh_size + row * 4);
+                NodeId curr_left = static_cast<NodeId>((mesh_idx * mesh_size) + (row * 4));
                 cardinal.group_b.push_back(curr_left);
             }
             // 2 connections (one per row)
