@@ -1,0 +1,46 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include "llk_math_common_api.h"
+#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srca_srcb_reuse.h"
+
+/*************************************************************************
+ * LLK ELTWISE BINARY
+ *************************************************************************/
+
+// Version with operands
+template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity>
+inline void llk_math_sdpa_bcast_col_srca_srcb_reuse_init_with_operands(
+    const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<eltwise_binary_type, num_tiles, math_fidelity>(
+        num_faces, acc_to_dest);
+}
+
+template <DstSync DST, bool IS_FP32_MATH_DEST_EN, bool clear_dest = false>
+inline void llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble(uint32_t isrc) {
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST, IS_FP32_MATH_DEST_EN, clear_dest>(isrc);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    uint32_t num_tiles,
+    bool is_fp32_dest_acc_en,
+    MathFidelity math_fidelity,
+    bool skip_signalling = false,
+    bool fused_signalling = false>
+inline void llk_math_sdpa_bcast_col_srca_srcb_reuse(const std::uint32_t dst_index) {
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
+        eltwise_binary_type,
+        num_tiles,
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        math_fidelity,
+        false,
+        skip_signalling,
+        fused_signalling>(dst_index);
+}
