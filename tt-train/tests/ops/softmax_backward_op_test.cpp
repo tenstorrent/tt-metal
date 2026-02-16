@@ -9,6 +9,7 @@
 #include <optional>
 #include <string_view>
 #include <tt-metalium/core_coord.hpp>
+#include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -185,13 +186,36 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
     const tt::tt_metal::CoreRangeSet sub_core_grids(sub_range);
     constexpr SoftmaxBackwardCase test_case{
         .name = "sub_grid_2x2",
-        .n = 10,
-        .c = 2,
+        .n = 23,
+        .c = 1,
         .h = 32,
         .w = 64,
         .dim = 3,
-        .atol = 2.5e-2F,
-        .rtol = 2.5e-2F,
+        .atol = 1e-2F,
+        .rtol = 1e-2F,
+        .grad_min = -10.0F,
+        .grad_max = 10.0F,
+    };
+    run_softmax_backward_case(test_case, GetParam(), s_device, sub_core_grids);
+}
+
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
+    SOFTMAX_BW_SKIP_IF_UNSUPPORTED("sub-core-grid non-rectangular");
+    // Non-rectangular (L-shaped) sub-grid
+    std::vector<tt::tt_metal::CoreRange> ranges = {
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(2, 0)),  // row y=0
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(2, 1), tt::tt_metal::CoreCoord(2, 1)),  // (0,1) only
+    };
+    const tt::tt_metal::CoreRangeSet sub_core_grids(std::move(ranges));
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "sub_grid_L_shape",
+        .n = 13,
+        .c = 1,
+        .h = 32,
+        .w = 512,
+        .dim = 3,
+        .atol = 1e-2F,
+        .rtol = 1e-2F,
         .grad_min = -10.0F,
         .grad_max = 10.0F,
     };

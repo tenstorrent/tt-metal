@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
@@ -39,6 +40,72 @@ constexpr const char* const kWriterPath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/dataflow/writer_softmax_backward.cpp";
 constexpr const char* const kComputePath =
     "tt-train/sources/ttml/metal/ops/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp";
+
+struct CoreRowAssignment {
+    CoreCoord core;
+    uint32_t start_row;
+    uint32_t num_rows;
+};
+
+static std::ostream& operator<<(std::ostream& os, const CoreRowAssignment& a) {
+    return os << "(" << a.core.x << "," << a.core.y << "):" << a.num_rows;
+}
+
+static std::ostream& operator<<(std::ostream& os, const std::vector<CoreRowAssignment>& assignments) {
+    for (size_t i = 0; i < assignments.size(); ++i) {
+        if (i != 0)
+            os << ", ";
+        os << assignments[i];
+    }
+    return os;
+}
+
+static std::vector<CoreCoord> get_worker_cores_in_order(
+    const std::optional<CoreRangeSet>& sub_core_grids, const tt::tt_metal::IDevice* device) {
+    if (sub_core_grids.has_value()) {
+        const CoreRangeSet& sub = *sub_core_grids;
+        std::vector<CoreCoord> cores;
+        cores.reserve(sub.num_cores());
+        for (const CoreRange& range : sub.ranges()) {
+            for (CoreCoord core : range) {
+                cores.push_back(core);
+            }
+        }
+        return cores;
+    }
+    const CoreCoord grid_size = device->compute_with_storage_grid_size();
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size.x * grid_size.y);
+    for (uint32_t x = 0; x < grid_size.x; ++x) {
+        for (uint32_t y = 0; y < grid_size.y; ++y) {
+            cores.emplace_back(x, y);
+        }
+    }
+    return cores;
+}
+
+static void assign_rows_to_cores(
+    const std::vector<CoreCoord>& cores_in_order,
+    uint32_t num_rows,
+    std::vector<CoreRange>& worker_core_ranges,
+    std::vector<CoreRowAssignment>& core_row_assignments) {
+    const uint32_t num_cores = static_cast<uint32_t>(cores_in_order.size());
+    if (num_cores == 0)
+        return;
+    const uint32_t rows_per_core = tt::div_up(num_rows, num_cores);
+    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
+        const uint32_t start_row = core_idx * rows_per_core;
+        if (start_row >= num_rows)
+            continue;
+        const uint32_t end_row = std::min(start_row + rows_per_core, num_rows);
+        const uint32_t num_rows_this_core = end_row - start_row;
+        if (num_rows_this_core == 0)
+            continue;
+        const CoreCoord& core = cores_in_order[core_idx];
+        worker_core_ranges.push_back(CoreRange(core, core));
+        core_row_assignments.push_back({core, start_row, num_rows_this_core});
+    }
+}
 
 }  // namespace
 
@@ -144,60 +211,27 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         width_tiles,
         required_memory_bytes / 1024);
 
-    uint32_t num_cores_x;
-    uint32_t num_cores_y;
-    if (operation_attributes.sub_core_grids.has_value()) {
-        // To support arbitrary CoreRangeSets (e.g. non‑rectangular or not starting at (0,0)),
-        // the next step is to pass per-core (start_row, num_rows) as runtime args to the
-        // reader/writer and have them use those instead of deriving from core_id.
-        const CoreRangeSet& sub = *operation_attributes.sub_core_grids;
-        TT_FATAL(sub.ranges().size() == 1, "SoftmaxBackward: sub_core_grids must be a single CoreRange");
-        const CoreRange& range = sub.ranges().front();
-        TT_FATAL(
-            range.start_coord.x == 0 && range.start_coord.y == 0,
-            "SoftmaxBackward: sub_core_grids must start at (0,0)");
-        num_cores_x = range.end_coord.x + 1;
-        num_cores_y = range.end_coord.y + 1;
-    } else {
-        const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        num_cores_x = compute_with_storage_grid_size.x;
-        num_cores_y = compute_with_storage_grid_size.y;
-    }
-
-    const uint32_t num_cores = num_cores_x * num_cores_y;
-    const uint32_t rows_per_core = tt::div_up(num_rows, num_cores);
+    // Collect worker cores in deterministic order and assign rows to each.
     std::vector<CoreRange> worker_core_ranges;
-    std::vector<std::pair<CoreCoord, uint32_t>> core_row_assignments;
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        const uint32_t start_row = core_idx * rows_per_core;
-        if (start_row >= num_rows)
-            continue;
-        const uint32_t end_row = std::min(start_row + rows_per_core, num_rows);
-        const uint32_t num_rows_this_core = end_row - start_row;
-        if (num_rows_this_core == 0)
-            continue;
-        CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
-        worker_core_ranges.push_back(CoreRange(core, core));
-        core_row_assignments.push_back({core, num_rows_this_core});
-    }
+    std::vector<CoreRowAssignment> core_row_assignments;
+    const std::vector<CoreCoord> cores_in_order =
+        get_worker_cores_in_order(operation_attributes.sub_core_grids, device);
+    assign_rows_to_cores(cores_in_order, num_rows, worker_core_ranges, core_row_assignments);
     TT_FATAL(!worker_core_ranges.empty(), "SoftmaxBackward: no cores have work");
     const CoreRangeSet worker_cores(worker_core_ranges);
 
+#ifndef NDEBUG
+    const uint32_t num_cores_total = static_cast<uint32_t>(core_row_assignments.size());
+    const uint32_t rows_per_core_ceil = num_cores_total > 0 ? tt::div_up(num_rows, num_cores_total) : 0;
     std::ostringstream per_core_rows_stream;
-    for (size_t i = 0; i < core_row_assignments.size(); ++i) {
-        const auto& [core, rows] = core_row_assignments[i];
-        per_core_rows_stream << "(" << core.x << "," << core.y << "):" << rows;
-        if (i + 1 < core_row_assignments.size()) {
-            per_core_rows_stream << ", ";
-        }
-    }
+    per_core_rows_stream << core_row_assignments;
     log_debug(
         tt::LogOp,
-        "SoftmaxBackward: Engaged cores {}/{} | rows_per_core(ceil)={} | per-core rows: [{}]",
-        worker_core_ranges.size(),
-        num_cores,
-        rows_per_core,
+        "SoftmaxBackward: Engaged cores {} | rows_per_core(ceil)={} | per-core rows: [{}]",
+        num_cores_total,
+        rows_per_core_ceil,
         per_core_rows_stream.str());
+#endif
 
     const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
     const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
@@ -227,20 +261,11 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     CreateCircularBuffer(program, worker_cores, c_block_sum_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index,
-        src1_cb_index,
-        ones_cb_index,
-        width_tiles,
-        tiles_per_block,
-        mask_w,
-        num_cores_x,
-        num_cores_y,
-        num_rows};
+        src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
     TensorAccessorArgs(softmax_output.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(upstream_grad.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        out_cb_index, width_tiles, tiles_per_block, num_cores_x, num_cores_y, num_rows};
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles, tiles_per_block};
     TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
@@ -266,13 +291,10 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     SetCommonRuntimeArgs(
         program, reader_kernel_id, {softmax_output.buffer()->address(), upstream_grad.buffer()->address()});
     SetCommonRuntimeArgs(program, writer_kernel_id, {tensor_return_value.buffer()->address()});
-    for (const CoreRange& range : worker_core_ranges) {
-        const CoreCoord core = range.start_coord;
-        const uint32_t core_idx = core.x * num_cores_y + core.y;
-        const uint32_t start_row = core_idx * rows_per_core;
-        const uint32_t end_row = std::min(start_row + rows_per_core, num_rows);
-        const uint32_t num_rows_this_core = end_row - start_row;
-        SetRuntimeArgs(program, compute_kernel_id, core, {num_rows_this_core});
+    for (const CoreRowAssignment& a : core_row_assignments) {
+        SetRuntimeArgs(program, reader_kernel_id, a.core, {a.start_row, a.num_rows});
+        SetRuntimeArgs(program, writer_kernel_id, a.core, {a.start_row, a.num_rows});
+        SetRuntimeArgs(program, compute_kernel_id, a.core, {a.num_rows});
     }
 
     return {
