@@ -169,7 +169,6 @@ jobs:
           # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
           # CCL smoke tests - exactly one representative test from each op category
 
-          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true;
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           # Running only decode and prefill-128 tests with HF weights
           MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers and (mode_decode or mode_prefill_seq_128)" --timeout 600 --durations=0;
