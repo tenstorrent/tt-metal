@@ -195,22 +195,26 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
 def get_or_create_mesh_config(
     cur, mesh_config_cache, mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 ):
-    """Get or create a mesh config entry, return the ID."""
+    """Get or create a mesh config entry, return the ID.
+
+    Note: In V2 schema, ttnn_mesh_config only stores mesh_shape and device_count.
+    Placement info (placement_type, shard_dim) is per-tensor and stored in arguments.
+    """
     if not mesh_shape:
         return None, None
 
-    dist_tuple = tuple(distribution_shape) if distribution_shape else None
-    mesh_key = (tuple(mesh_shape), device_count, placement_type, shard_dim, dist_tuple)
+    # V2 schema only uses mesh_shape and device_count
+    mesh_key = (tuple(mesh_shape), device_count)
 
     if mesh_key not in mesh_config_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2.ttnn_mesh_config (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (mesh_shape, device_count, placement_type, shard_dim, distribution_shape) DO NOTHING
+            INSERT INTO ttnn_ops_v2.ttnn_mesh_config (mesh_shape, device_count)
+            VALUES (%s, %s)
+            ON CONFLICT (mesh_shape, device_count) DO NOTHING
             RETURNING ttnn_mesh_config_id
         """,
-            (mesh_shape, device_count, placement_type, shard_dim, distribution_shape),
+            (mesh_shape, device_count),
         )
         result = cur.fetchone()
         if result:
@@ -219,16 +223,16 @@ def get_or_create_mesh_config(
             cur.execute(
                 """
                 SELECT ttnn_mesh_config_id FROM ttnn_ops_v2.ttnn_mesh_config
-                WHERE mesh_shape = %s AND device_count = %s AND placement_type = %s
-                  AND shard_dim IS NOT DISTINCT FROM %s
-                  AND distribution_shape IS NOT DISTINCT FROM %s
+                WHERE mesh_shape = %s AND device_count = %s
             """,
-                (mesh_shape, device_count, placement_type, shard_dim, distribution_shape),
+                (mesh_shape, device_count),
             )
             result = cur.fetchone()
             if result:
                 mesh_config_cache[mesh_key] = result[0]
 
+    # Return mesh_info with placement for config_hash computation
+    # Even though placement isn't stored in the DB, it's used for hash
     mesh_info = {"mesh_shape": mesh_shape, "placement_type": placement_type, "shard_dim": shard_dim}
     return mesh_config_cache.get(mesh_key), mesh_info
 
@@ -270,19 +274,28 @@ def extract_primary_tensor_info(arguments):
     return {}
 
 
-def parse_mesh_from_machine_info(machine_info):
-    """Extract mesh configuration from machine_info.
+def parse_mesh_from_machine_info(machine_info, arguments=None):
+    """Extract mesh configuration from tensor arguments (V2 format).
+
+    In V2 format, tensor_placement is stored in the tensor arguments themselves,
+    not in machine_info. This function extracts mesh config from the first tensor argument.
 
     Returns: (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
     """
-    tensor_placements = machine_info.get("tensor_placements", [])
+    placement = None
 
-    if not tensor_placements:
-        # No tensor_placements = no specific mesh config
+    # V2 format: Extract tensor_placement from first tensor argument
+    if arguments:
+        for arg_value in arguments.values():
+            if isinstance(arg_value, dict) and arg_value.get("type") == "ttnn.Tensor":
+                if "tensor_placement" in arg_value:
+                    placement = arg_value["tensor_placement"]
+                    break
+
+    if not placement:
+        # No tensor_placement = no specific mesh config
         return None, None, None, None, None
 
-    # Take first placement
-    placement = tensor_placements[0]
     mesh_shape_str = placement.get("mesh_device_shape")
     mesh_shape = parse_array_value(mesh_shape_str)
 
@@ -399,7 +412,7 @@ def load_data():
 
                 # Parse mesh config
                 mesh_shape, device_count, placement_type, shard_dim, distribution_shape = parse_mesh_from_machine_info(
-                    machine_info
+                    machine_info, arguments
                 )
 
                 mesh_config_id = None
