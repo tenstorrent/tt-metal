@@ -204,6 +204,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -218,6 +219,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -232,6 +234,7 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             False,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -246,11 +249,27 @@ def prepare_gpt_oss_generator_args(
             True,  # enable_prefill_trace
             True,  # users_row_sharded
             False,  # long_context_mode
+            True,  # stop_at_eos
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
-            # "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts (128k prompt)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            1,  # data_parallel
+            128,  # batch_size (32 per row, but only 1 real user per row)
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len (128k tokens)
+            50,  # max_generated_tokens (reduced for long context)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # 2048 blocks for 128k
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace
+            True,  # users_row_sharded
+            True,  # long_context_mode - single user per row gets all page blocks
+            True,  # stop_at_eos
+        ),
+        # Long-context mode: short prefill, long decode
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts (128 token prompt)
             1,  # data_parallel
             128,  # batch_size (32 per row, but only 1 real user per row)
             1,  # repeat_batches
@@ -262,7 +281,8 @@ def prepare_gpt_oss_generator_args(
             False,  # enable_prefill_trace
             True,  # users_row_sharded
             True,  # long_context_mode - single user per row gets all page blocks
-        ),
+            False,  # stop_at_eos
+        )
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
         #     1,  # data_parallel
@@ -344,10 +364,10 @@ def test_gpt_oss_demo(
     enable_prefill_trace,
     users_row_sharded,
     long_context_mode,
+    stop_at_eos,
     is_ci_env,
     state_dict,
 ):
-    stop_at_eos = True
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
         pytest.skip(
