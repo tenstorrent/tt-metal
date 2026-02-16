@@ -6,6 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tuple>
 #include <vector>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -59,9 +60,9 @@ auto compute_slice_parameters(
         partitioned_dim_size,
         begin_pos);
 
-    auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
+    auto begins = ttnn::Shape(ttsl::vector_init<uint32_t>(ttsl::vector_size(rank), 0));
     auto ends = input_shape;
-    auto strides = ttnn::Shape(std::vector<uint32_t>(rank, 1));
+    auto strides = ttnn::Shape(ttsl::vector_init<uint32_t>(ttsl::vector_size(rank), 1));
 
     begins[dim] = static_cast<uint32_t>(begin_pos);
     ends[dim] = begins[dim] + partitioned_dim_size;

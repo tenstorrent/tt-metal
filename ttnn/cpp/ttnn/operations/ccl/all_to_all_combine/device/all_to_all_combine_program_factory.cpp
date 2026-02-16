@@ -4,6 +4,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -175,7 +176,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
-    std::vector<uint32_t> reader_compile_time_args = {
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>(
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -189,8 +190,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        operation_attributes.locally_reduced,
-    };
+        operation_attributes.locally_reduced);
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
@@ -210,7 +210,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    std::vector<uint32_t> writer_compile_time_args = {
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>(
         metadata_cb_id,
         local_experts_cb_id,
         client_interface_cb_id,
@@ -228,14 +228,12 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         max_packet_size_bytes,
         common::get_linearized_index(mesh_coordinate, mesh_view),
         (uint32_t)topology,
-        operation_attributes.locally_reduced,
-    };
+        operation_attributes.locally_reduced);
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
-    dest_mesh_id.reserve(all_mesh_coordinates.size());
-    dest_chip_id.reserve(all_mesh_coordinates.size());
+    auto dest_mesh_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(all_mesh_coordinates.size()));
+    auto dest_chip_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(all_mesh_coordinates.size()));
     for (const auto& coord : all_mesh_coordinates) {
         const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
@@ -264,25 +262,23 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         sender_core_grid,
         writer_config);
 
-    std::vector<uint32_t> reader_runtime_args = {
+    auto reader_runtime_args = ttsl::vector_init<uint32_t>(
         mapping_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
         input_tensor.buffer()->address(),
         0,
-        tokens_per_device,
-    };
+        tokens_per_device);
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
     log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
     for (const auto& sender_core : sender_cores) {
-        std::vector<uint32_t> writer_runtime_args = {
+        auto writer_runtime_args = ttsl::vector_init<uint32_t>(
             output_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
-            0,
-        };
+            0);
         reader_runtime_args[3] = tokens_per_core_start;
         reader_runtime_args[4] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
         writer_runtime_args[3] = tokens_per_core_start;

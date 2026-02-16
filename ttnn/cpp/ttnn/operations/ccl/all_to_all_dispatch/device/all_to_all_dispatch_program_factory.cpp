@@ -5,6 +5,7 @@
 #include "all_to_all_dispatch_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -300,7 +301,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
     }
 
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id;
+    auto dest_mesh_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(tensor_coords.coords().size()));
+    auto dest_chip_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(tensor_coords.coords().size()));
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
@@ -313,7 +315,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    std::vector<uint32_t> reader_compile_time_args = {
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>(
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
@@ -358,8 +360,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         l1_alignment,
         metadata_buffer_id,
         operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
-        linearized_mesh_coord,
-    };
+        linearized_mesh_coord);
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
@@ -405,7 +406,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    std::vector<uint32_t> reader_runtime_args = {
+    auto reader_runtime_args = ttsl::vector_init<uint32_t>(
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),
         mapping_tensor.buffer()->address(),
@@ -413,13 +414,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         metadata_tensor.buffer()->address(),
         (uint32_t)cross_device_semaphore.address(),
         0,
-        0,
-    };
+        0);
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
     for (const auto& sender_core : sender_cores) {
-        std::vector<uint32_t> writer_runtime_args = {
+        auto writer_runtime_args = ttsl::vector_init<uint32_t>(
             input_tensor.buffer()->address(),
             indices_tensor.buffer()->address(),
             mapping_tensor.buffer()->address(),
@@ -428,8 +428,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
-            0,
-        };
+            0);
         reader_runtime_args[6] = tokens_per_core_start;
         reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
         writer_runtime_args[7] = tokens_per_core_start;
