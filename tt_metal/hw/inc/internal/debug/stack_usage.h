@@ -5,6 +5,8 @@
 #pragma once
 
 #include "watcher_common.h"
+#include "core_config.h"
+#include "dev_mem_map.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
 #if defined(WATCHER_ENABLED) && \
@@ -14,14 +16,21 @@
 
 constexpr uint32_t stack_usage_pattern = 0xBABABABA;
 
-static inline void mark_stack_usage() {
+// Helper to resolve the stack base without triggering a global constructor
+static inline uint32_t* get_stack_base() {
 #if defined(ARCH_QUASAR)
     extern thread_local uint32_t __stack_base_lwm[];
     extern char __stack_base_offset;
     uint32_t* __stack_base = &__stack_base_lwm[uintptr_t(&__stack_base_offset)];
+    return __stack_base;
 #else
     extern uint32_t __stack_base[];
+    return __stack_base;
 #endif
+}
+
+static inline void mark_stack_usage() {
+    uint32_t* __stack_base = get_stack_base();
     uint32_t tt_l1_ptr *ptr;
     asm ("mv %0,sp" : "=r"(ptr));
 
@@ -32,13 +41,7 @@ static inline void mark_stack_usage() {
 
 // Returns unused stack + 1. (0 means unknown.)
 static inline uint32_t measure_stack_usage() {
-#if defined(ARCH_QUASAR)
-    extern thread_local uint32_t __stack_base_lwm[];
-    extern char __stack_base_offset;
-    uint32_t* __stack_base = &__stack_base_lwm[uintptr_t(&__stack_base_offset)];
-#else
-    extern uint32_t __stack_base[];
-#endif
+    uint32_t* __stack_base = get_stack_base();
     uint32_t tt_l1_ptr* stack_ptr = __stack_base;
     // We don't need to check size here, as we know we'll hit a
     // non-dirty value at some point (a set of return addresses).
@@ -58,7 +61,21 @@ static inline void record_stack_usage(uint32_t stack_free) {
         return;
     }
 
-    auto tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[PROCESSOR_INDEX];
+    std::uint64_t cpu_index = 0;
+#if defined(ARCH_QUASAR)
+    // TODO: The below code is recurring on Quasar.
+    // It needs to be in a get_cpu_idx() API for Quasar
+#if defined(COMPILE_FOR_TRISC)
+    std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+    std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+    cpu_index = MaxDMProcessorsPerCoreType + NUM_TRISC_CORES * neo_id + trisc_id;  // after 8 DM cores
+#else
+    asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+#endif
+#else
+    cpu_index = PROCESSOR_INDEX;
+#endif
+    auto tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[cpu_index];
     // min_free is initialized to zero, which we want to compare as
     // least noteworthy, and an offset free stack of one as the most
     // noteworthy. Decrement the former, so zero wraps around before
@@ -68,7 +85,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
         usage->min_free = stack_free;
         unsigned launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         launch_msg_t tt_l1_ptr* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-        usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+        usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[cpu_index];
     }
 }
 #endif  // KERNEL_BUILD
