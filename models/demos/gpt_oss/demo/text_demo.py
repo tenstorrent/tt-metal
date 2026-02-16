@@ -583,7 +583,6 @@ def test_gpt_oss_demo(
             #   - model.py:process_output_prefill_batched: extract multiple logits per row
             assert users_per_row_prefill % users_per_row_per_iter == 0
             num_prefill_iters = users_per_row_prefill // users_per_row_per_iter
-            users_per_iter = num_rows * users_per_row_per_iter  # Total users per iteration
             model_id = 0  # data_parallel=1, single model
 
             prefilled_token = torch.zeros(global_batch_size, dtype=torch.long)
@@ -600,17 +599,17 @@ def test_gpt_oss_demo(
 
                 # Compute fixed get_last_token for trace (all users must be in same 32-token tile)
                 all_last_idxs = [int(decoding_pos[uid]) - 1 for uid in range(global_batch_size)]
-                fixed_get_last_token = (min(all_last_idxs) // 32) * 32
-                max_tile_start = (max(all_last_idxs) // 32) * 32
-                if fixed_get_last_token != max_tile_start:
-                    logger.warning(
-                        f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
-                        f"using get_last_token=-1 (slower)"
-                    )
-                    fixed_get_last_token = -1
-
                 if users_per_row_per_iter > 1:
                     fixed_get_last_token = -1  # Can't use get_last_token with batch>1
+                else:
+                    fixed_get_last_token = (min(all_last_idxs) // 32) * 32
+                    max_tile_start = (max(all_last_idxs) // 32) * 32
+                    if fixed_get_last_token != max_tile_start:
+                        logger.warning(
+                            f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
+                            f"using get_last_token=-1 (slower)"
+                        )
+                        fixed_get_last_token = -1
 
                 def _prepare_batch_host(user_indices):
                     """Prepare host-side tokens + page_table for a batch of users."""
@@ -681,8 +680,8 @@ def test_gpt_oss_demo(
                 for i in range(len(model)):
                     for layer_obj in model[i].layers:
                         k_cache, v_cache = layer_obj.self_attn.layer_past
-                        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
                 # --- Trace capture ---
                 logger.info("Capturing prefill trace...")
@@ -845,8 +844,8 @@ def test_gpt_oss_demo(
                 for i in range(len(model)):
                     for layer_obj in model[i].layers:
                         k_cache, v_cache = layer_obj.self_attn.layer_past
-                        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
                 # Real prefill
                 logger.info(
