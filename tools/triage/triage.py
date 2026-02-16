@@ -582,9 +582,8 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
                 utils.ERROR(f"  Script help:\n{docstring_indented}")
         else:
             utils.INFO("  pass")
-            if len(warnings) > 0:
-                for warning in warnings:
-                    utils.WARN(f"  {warning}")
+            for warning in warnings:
+                utils.WARN(f"    {warning}")
         return
 
     for failure in failures:

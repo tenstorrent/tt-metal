@@ -22,7 +22,7 @@ from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, log_check_location, run_script
+from triage import ScriptConfig, log_check_location, log_warning, run_script
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -111,9 +111,14 @@ def check_noc_status(
 
 
 def run(args, context: Context):
-    # We skip eth on blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/900
-    BLOCK_TYPES_TO_CHECK = ["tensix"] if context.devices[0].is_blackhole() else ["tensix", "idle_eth"]
-    RISC_CORES_TO_CHECK = ["brisc"] if context.devices[0].is_blackhole() else ["brisc", "erisc", "erisc0", "erisc1"]
+    if context.devices[0].is_blackhole():
+        log_warning(
+            "Currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+        )
+        return
+
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
     NOC_IDS = [0, 1]
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
