@@ -425,6 +425,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     skip_typecast = _env_bool("GLM4_MOE_LITE_SKIP_TYPECAST")
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
     fuse_mlp_moe_reduce = _env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE")
+    fuse_shared_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP")
 
     def _compute_1d_prog_cfg(b_weight: ttnn.Tensor, m_total: int) -> Any:
         """Compute 1D multicast program config for decode matmuls."""
@@ -1246,8 +1247,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             ttnn.deallocate(x_padded, force=False)
             shared_out = shared_out_padded[:, :, :_shared_tokens, :]
     else:
-        gate_shared = _mlp_linear(x, w.w_mlp_gate)
-        up_shared = _mlp_linear(x, w.w_mlp_up)
+        if fuse_shared_gate_up and w.w_mlp_gate_up is not None:
+            gate_up = _mlp_linear(x, w.w_mlp_gate_up)
+            _batch = int(gate_up.shape[2])
+            _inter_tp = int(gate_up.shape[3]) // 2
+            gate_shared = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter_tp])
+            up_shared = ttnn.slice(gate_up, [0, 0, 0, _inter_tp], [1, 1, _batch, _inter_tp * 2])
+            ttnn.deallocate(gate_up, force=False)
+        else:
+            gate_shared = _mlp_linear(x, w.w_mlp_gate)
+            up_shared = _mlp_linear(x, w.w_mlp_up)
         x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
@@ -1439,6 +1448,8 @@ def run_decoder_layer_prefill_update_cache_tt(
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    fuse_shared_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP")
 
     def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         if mlp_compute_kernel_config is None:
@@ -1792,12 +1803,21 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         # Shared expert (dense MLP).
         # DRAM-sharded weights are incompatible with regular ttnn.linear (prefill).
-        _gate_w = _ensure_interleaved(w.w_mlp_gate)
-        _up_w = _ensure_interleaved(w.w_mlp_up)
         _down_w = _ensure_interleaved(w.w_mlp_down)
         t0 = time.perf_counter() if profile is not None else 0.0
-        gate_shared = _mlp_linear(x, _gate_w)
-        up_shared = _mlp_linear(x, _up_w)
+        if fuse_shared_gate_up and w.w_mlp_gate_up is not None:
+            _gate_up_w = _ensure_interleaved(w.w_mlp_gate_up)
+            gate_up = _mlp_linear(x, _gate_up_w)
+            _batch = int(gate_up.shape[2])
+            _inter_tp = int(gate_up.shape[3]) // 2
+            gate_shared = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter_tp])
+            up_shared = ttnn.slice(gate_up, [0, 0, 0, _inter_tp], [1, 1, _batch, _inter_tp * 2])
+            ttnn.deallocate(gate_up, force=False)
+        else:
+            _gate_w = _ensure_interleaved(w.w_mlp_gate)
+            _up_w = _ensure_interleaved(w.w_mlp_up)
+            gate_shared = _mlp_linear(x, _gate_w)
+            up_shared = _mlp_linear(x, _up_w)
         x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
