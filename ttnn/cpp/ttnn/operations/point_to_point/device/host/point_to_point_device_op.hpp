@@ -88,13 +88,6 @@ struct PointToPointOp {
         validate(operation_attributes, tensor_args);
     };
 
-    // Probably the same as on cache miss
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        ;
-        validate(operation_attributes, tensor_args);
-    };
-
     // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 

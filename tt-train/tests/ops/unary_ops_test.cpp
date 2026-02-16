@@ -77,8 +77,6 @@ protected:
 };
 
 TEST_F(UnaryOpsTest, GlobalMean) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
     auto shape = ttnn::Shape({2, 1, 1, 4});
@@ -124,8 +122,6 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
 }
 
 TEST_F(UnaryOpsTest, Silu) {
-    // Skip with watcher enabled github issue #37193
-    SKIP_FOR_WATCHER();
     auto N = 4;
     auto C = 1;
     auto H = 20;

@@ -500,11 +500,14 @@ inline uint32_t c_tensix_core::read_stream_register_field(
     return (read_stream_register(stream_id, index) >> shift) & ((1 << width) - 1);
 }
 
-inline uint32_t c_tensix_core::read_wall_clock_l() { return memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+// TODO check if this is correct
+inline uint32_t c_tensix_core::read_wall_clock_l() {
+    return memory_read(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
+}
 
 inline uint64_t c_tensix_core::read_wall_clock() {
-    uint32_t low = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L);  // latches high
-    uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    uint32_t low = memory_read(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);  // latches high
+    uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLONEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDRCK_H);
 
     return ((uint64_t)high << 32) | low;
 }

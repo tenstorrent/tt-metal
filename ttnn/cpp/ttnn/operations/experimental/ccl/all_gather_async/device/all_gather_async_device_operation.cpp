@@ -45,11 +45,6 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
     }
 }
 
-void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
-    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

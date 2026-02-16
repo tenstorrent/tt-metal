@@ -327,7 +327,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
+    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
+    // so the granularity must evenly divide both to avoid dropping tiles.
+    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
+    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
+        dht_granularity--;
+    }
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these

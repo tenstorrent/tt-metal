@@ -140,9 +140,9 @@ def run_rms_norm_component(
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, ref_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"RMS Norm test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"RMS Norm test failed. Output: {output}"
 
 
 def run_topk_router_component(
@@ -282,9 +282,9 @@ def run_throughput_experts_component(
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"High Throughput Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"High Throughput Experts test failed. Output: {output}"
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
@@ -337,9 +337,9 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+        logger.info(f"Low Latency Experts test passed. Output: {output}")
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        assert passing, f"Low Latency Experts test failed. Output: {output}"
 
 
 def run_full_mlp_pipeline(

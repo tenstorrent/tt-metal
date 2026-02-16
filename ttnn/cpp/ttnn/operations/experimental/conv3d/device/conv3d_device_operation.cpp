@@ -39,11 +39,6 @@ Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_f
     return Conv3dProgramFactory{};
 }
 
-void Conv3dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;

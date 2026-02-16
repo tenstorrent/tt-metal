@@ -143,11 +143,6 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
         q_input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores);
 }
 
-void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 CreateQKVHeadsSeparateTensorsDeviceOperation::spec_return_value_t
 CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

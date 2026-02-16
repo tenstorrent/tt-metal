@@ -19,11 +19,6 @@ RepeatAndInterleaveEltwiseMulDeviceOperation::select_program_factory(
     return RepeatAndInterleaveEltwiseMulProgramFactory{};
 }
 
-void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RepeatAndInterleaveEltwiseMulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;

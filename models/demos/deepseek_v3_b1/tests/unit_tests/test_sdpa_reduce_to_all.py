@@ -61,7 +61,8 @@ def compute_forwarder_scratch_size(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=["device_params"],
 )
-def test_sdpa_reduce_to_all(bh_1d_mesh_device):
+@pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
+def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled):
     num_devices = 4
     num_cores = 8
     l_width = 512
@@ -220,10 +221,38 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
+    # ========================================================================
+    # Scatter destination tensor (optional): HEIGHT_SHARDED, 1x32 tiles, 8x8 grid
+    # Each of the 64 cores gets [1, 512] after scatter
+    # ========================================================================
+    scatter_dest_mesh = None
+    scatter_grid = None
+    num_scatter_cores = num_cores * batch_size  # 8 * 8 = 64
+
+    if scatter_enabled:
+        scatter_tile = ttnn.Tile((1, 32))
+        scatter_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, batch_size - 1))}
+        )
+        scatter_shard_shape = [1, l_width]  # [1, 512] per core
+        scatter_shard_spec = ttnn.ShardSpec(scatter_grid, scatter_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        scatter_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, scatter_shard_spec
+        )
+        scatter_dest_mesh = ttnn.from_torch(
+            torch.zeros([num_scatter_cores, l_width], dtype=torch.bfloat16),
+            device=submesh_device,
+            layout=layout,
+            tile=scatter_tile,
+            dtype=dtype,
+            memory_config=scatter_mem_config,
+            mesh_mapper=mesh_mapper2,
+        )
+
     semaphores = [ttnn.create_global_semaphore(submesh_device, shard_grid, 0) for _ in range(2)]
     ttnn.synchronize_device(submesh_device)
 
-    logger.info("Running SDPA reduce-to-all (single run)...")
+    logger.info(f"Running SDPA reduce-to-all (scatter={'enabled' if scatter_enabled else 'disabled'})...")
     output_mesh = SdpaReduceToAll.op(
         input_l_mesh,
         input_ms_mesh,
@@ -235,9 +264,14 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
         scale_fp32=scale_value,
         cluster_axis=0,
         input_forwarder_cores=forwarder_cores,
+        scatter_dest_tensor_mesh=scatter_dest_mesh,
+        scatter_dest_grid=scatter_grid,
     )
     ttnn.synchronize_device(submesh_device)
 
+    # ========================================================================
+    # Verify L output (original reduce-to-all correctness check)
+    # ========================================================================
     output_l_torch = ttnn.to_torch(output_mesh, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
     out_l_root = output_l_torch[0]
 
@@ -246,3 +280,27 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
 
     logger.info(f"L tensor match: {match}, max_diff: {max_diff:.4f}")
     assert match, f"L tensor mismatch! Max diff: {max_diff}"
+
+    # ========================================================================
+    # Verify scatter output (only when scatter is enabled)
+    # Each core (x=i, y=j) should have ref_l[j, i*l_width:(i+1)*l_width]
+    # In HEIGHT_SHARDED ROW_MAJOR order: tensor row (j * num_cores + i) = core (x=i, y=j)
+    # ========================================================================
+    if scatter_enabled:
+        scatter_out_torch = ttnn.to_torch(
+            scatter_dest_mesh, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0)
+        )
+        scatter_out_root = scatter_out_torch[:num_scatter_cores, :]  # First device
+
+        scatter_max_diff = 0.0
+        for j in range(batch_size):
+            for i in range(num_cores):
+                row_idx = j * num_cores + i
+                expected = ref_l[j, i * l_width : (i + 1) * l_width].float()
+                actual = scatter_out_root[row_idx, :].float()
+                diff = torch.max(torch.abs(actual - expected)).item()
+                scatter_max_diff = max(scatter_max_diff, diff)
+
+        scatter_match = scatter_max_diff < 0.07
+        logger.info(f"Scatter output match: {scatter_match}, max_diff: {scatter_max_diff:.4f}")
+        assert scatter_match, f"Scatter output mismatch! Max diff: {scatter_max_diff}"
