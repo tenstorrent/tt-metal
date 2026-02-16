@@ -246,22 +246,52 @@ The `mesh_id` in rank bindings must match a `mesh_id` defined in your MGD. If yo
 ### 4.3 Running with tt-run
 
 ```bash
-tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
+tt-run --rank-binding config.yaml [options] <program> [args...]
 ```
 
-Example:
+**Common Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--rank-binding` | Path to rank binding YAML file (required) |
+| `--bare` | Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups |
+| `--tcp-interface <iface>` | Specify network interface for MPI TCP communication (e.g., `cnx1`). Uses btl_tcp_if_include instead of default exclusions |
+| `--mpi-args "<args>"` | Pass additional arguments to mpirun (quoted) |
+| `--dry-run` | Print the mpirun command without executing |
+| `-v, --verbose` | Show path resolution diagnostics, environment propagation, and MPI command details |
+
+**Examples:**
 
 ```bash
+# Single-host execution
 tt-run --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml \
-       --mpi-args "--tag-output" \
        python3 my_multi_mesh_workload.py
+
+# Multi-host (multihost MPI settings are default)
+tt-run --rank-binding config.yaml \
+       --mpi-args "--rankfile hosts.txt" \
+       python3 my_workload.py
+
+# Multi-host with specific network interface (e.g., ConnectX NIC)
+tt-run --tcp-interface cnx1 --rank-binding config.yaml \
+       --mpi-args "--rankfile hosts.txt" \
+       python3 my_workload.py
 ```
 
-`tt-run` spawns one process per rank and automatically manages per-rank environments:
+**Default multihost MPI settings:** tt-run applies recommended MPI settings for multi-host clusters by default:
+- `--mca btl self,tcp`: Use TCP byte transfer layer for inter-node communication
+- `--mca btl_tcp_if_exclude docker0,lo`: Exclude Docker bridge and loopback interfaces
+
+If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to explicitly select the network interface. Use `--bare` to disable these settings for single-host or special setups.
+
+**Tagged Output:** `tt-run` always enables `--tag-output`, which prefixes each output line with rank information (e.g., `[1,0]<stdout>:`). This makes it easier to identify which rank produced each line of output when debugging distributed applications.
+
+**Automatic Environment Setup:** `tt-run` spawns one process per rank and automatically manages per-rank environments:
 - `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts when multiple processes compile kernels simultaneously)
 - `TT_MESH_ID`: Mesh identifier from rank binding
 - `TT_MESH_GRAPH_DESC_PATH`: Path to topology descriptor
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
+- `TT_RUN_ORIGINAL_CWD`: Directory where tt-run was launched (for subprocess path resolution)
 
 Each process inherits these environment variables before your script starts. You don't need to parse them. The runtime reads them automatically when you open a device. This automatic environment setup prevents common pitfalls like cache conflicts where multiple processes try to write the same compiled kernel artifacts.
 
@@ -515,9 +545,13 @@ Let's put everything together with a complete working example. This demonstrates
 # Generate rank binding file (run once)
 python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
 
-# Run with tt-run on a Galaxy system
+# Run with tt-run on a Galaxy system (single-host, multi-process)
 tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml \
-       --mpi-args "--tag-output" \
+       python3 tests/ttnn/distributed/test_multi_mesh.py
+
+# For multi-host clusters, use --tcp-interface to specify network interface (multihost MPI settings are default)
+tt-run --tcp-interface cnx1 --rank-binding config.yaml \
+       --mpi-args "--rankfile hosts.txt" \
        python3 tests/ttnn/distributed/test_multi_mesh.py
 ```
 
@@ -620,9 +654,11 @@ if __name__ == "__main__":
 ### Debugging Tips
 
 1. **Start with one rank**: Debug your workload with one process before scaling
-2. **Use `--tag-output`**: Pass `--mpi-args "--tag-output"` to `tt-run` to prefix output with rank numbers
-3. **Check device visibility**: Print `TT_VISIBLE_DEVICES` at script start to verify configuration
-4. **Barrier before close**: Always call `ttnn.distributed_context_barrier()` before closing devices
+2. **Tagged output is automatic**: `tt-run` always enables `--tag-output`, which prefixes output with rank numbers (e.g., `[0,0]<stdout>:`)
+3. **Use `--verbose`**: Shows path resolution diagnostics, environment variable propagation, and the full MPI command being executed
+4. **Check device visibility**: Print `TT_VISIBLE_DEVICES` at script start to verify configuration
+5. **Barrier before close**: Always call `ttnn.distributed_context_barrier()` before closing devices
+6. **Use `--dry-run`**: Preview the generated mpirun command without executing to verify configuration
 
 **Related Documentation**
 
