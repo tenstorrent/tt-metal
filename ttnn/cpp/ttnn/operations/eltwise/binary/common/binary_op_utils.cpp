@@ -515,6 +515,10 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("xlogy_binary_tile_init();")});
             op_name = "xlogy_binary_tile";
             break;
+        case BinaryOpType::FMOD:
+            new_defines.insert({"BINOP_INIT", fmt::format("fmod_binary_tile_init();")});
+            op_name = "fmod_binary_tile";
+            break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
             new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", idst, input_a_dtype));
