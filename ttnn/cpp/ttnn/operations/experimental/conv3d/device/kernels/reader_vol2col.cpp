@@ -253,14 +253,11 @@ void kernel_main() {
                                                         uint32_t shard_offset = (t_local * H_shard_max_W_shard_max +
                                                                                  h_local * W_shard_max + w_base) *
                                                                                 C_in_block_bytes;
-                                                        for (uint32_t kw = 0; kw < kW; kw++) {
-                                                            noc_async_read(
-                                                                shard_noc_base + shard_offset,
-                                                                cb_write_addr,
-                                                                C_in_block_bytes);
-                                                            shard_offset += C_in_block_bytes;
-                                                            cb_write_addr += C_in_block_bytes;
-                                                        }
+                                                        constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
+                                                        noc_async_read(
+                                                            shard_noc_base + shard_offset, cb_write_addr, kW_bytes);
+                                                        shard_offset += kW_bytes;
+                                                        cb_write_addr += kW_bytes;
                                                     }
                                                 }
                                             }
