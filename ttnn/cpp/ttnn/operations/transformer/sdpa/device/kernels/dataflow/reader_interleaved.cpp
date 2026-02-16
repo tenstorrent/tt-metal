@@ -418,23 +418,67 @@ void kernel_main() {
                                 page_table_ptr,
                                 true  // transpose=true for K reads
                             );
+                        } else if constexpr (qk_in1_num_subblocks == 1) {
+                            // Single K subblock — use original monolithic read/receive/forward
+                            uint32_t cb_k_start_address = 0;
+                            if (should_receive) {
+                                cb_reserve_back(cb_k_in, k_chunk_tiles);
+                                cb_k_start_address = get_write_ptr(cb_k_in);
+                                noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                                noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                                noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                                cb_push_back(cb_k_in, k_chunk_tiles);
+                            } else {
+                                if (should_forward) {
+                                    cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
+                                        k_reader, cb_k_in, k_start_tile_id, k_row_tile_count, DHt, Sk_chunk_t, DHt);
+                                } else {
+                                    read_chunk_with_padding<k_tile_bytes>(
+                                        k_reader,
+                                        cb_k_in,
+                                        k_start_tile_id,
+                                        k_row_tile_count,
+                                        DHt,
+                                        Sk_chunk_t,
+                                        DHt,
+                                        barrier_threshold,
+                                        true);
+                                }
+                            }
+                            // K forward (same as original)
+                            if (should_forward) {
+                                noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
+                                noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                                if constexpr (mcast_enabled) {
+                                    uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
+                                    noc_async_write_multicast(
+                                        cb_k_start_address,
+                                        k_mcast_addr,
+                                        k_chunk_tiles * k_tile_bytes,
+                                        mcast_num_dests,
+                                        true /* linked */);
+                                    noc_semaphore_set_multicast(
+                                        valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                                } else {
+                                    uint64_t k_unicast_data_addr =
+                                        get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
+                                    noc_async_write(
+                                        cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                                }
+                            }
                         } else {
-                            // Accumulating sender semaphore threshold for K subblock rounds.
-                            // Avoids resetting to 0 between subblocks (race: receiver's next-round
-                            // increment could arrive before reset, losing the signal).
-                            uint32_t k_sender_threshold = 0;
-
+                            // Multiple K subblocks — per-subblock read/receive then forward
                             for (uint32_t sb = 0; sb < qk_in1_num_subblocks; ++sb) {
                                 uint32_t sub_start_addr = 0;
+                                // Step 1: Read or receive K subblock
                                 if (should_receive) {
-                                    // Receive one K subblock from previous core
                                     cb_reserve_back(cb_k_in, k_sub_tiles);
+                                    sub_start_addr = get_write_ptr(cb_k_in);
                                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                                     cb_push_back(cb_k_in, k_sub_tiles);
                                 } else {
-                                    // Read one K column subblock from DRAM
                                     const uint32_t sb_k_start = sb * qk_subblock_w;
                                     const uint32_t sb_rows =
                                         (k_row_tile_count > sb_k_start)
@@ -444,64 +488,37 @@ void kernel_main() {
 
                                     sub_start_addr = read_k_subblock<k_tile_bytes>(
                                         k_reader, cb_k_in, sb_tile_id, sb_rows, DHt, qk_subblock_w, DHt);
+                                }
 
-                                    // Forward this K subblock (injector only)
-                                    if (should_forward) {
-                                        k_sender_threshold += sender_wait_count;
-                                        noc_semaphore_wait(sender_semaphore_addr_ptr, k_sender_threshold);
+                                // Step 2: Forward K subblock (injector or intermediate unicast core)
+                                // Separate from receive so receiver-forwarders (unicast chains) work
+                                if (should_forward) {
+                                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
+                                    noc_semaphore_set(sender_semaphore_addr_ptr, 0);
 
-                                        if constexpr (mcast_enabled) {
-                                            uint64_t k_mcast_addr = mcast_base_noc_addr | sub_start_addr;
-                                            noc_async_write_multicast(
-                                                sub_start_addr,
-                                                k_mcast_addr,
-                                                k_sub_tiles * k_tile_bytes,
-                                                mcast_num_dests,
-                                                true /* linked */);
-                                            noc_semaphore_set_multicast(
-                                                valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                                        } else {
-                                            uint64_t k_unicast_addr =
-                                                get_noc_addr(next_physical_x, next_physical_y, sub_start_addr);
-                                            noc_async_write(sub_start_addr, k_unicast_addr, k_sub_tiles * k_tile_bytes);
+                                    if constexpr (mcast_enabled) {
+                                        uint64_t k_mcast_addr = mcast_base_noc_addr | sub_start_addr;
+                                        noc_async_write_multicast(
+                                            sub_start_addr,
+                                            k_mcast_addr,
+                                            k_sub_tiles * k_tile_bytes,
+                                            mcast_num_dests,
+                                            true /* linked */);
+                                        noc_semaphore_set_multicast(
+                                            valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                                    } else {
+                                        uint64_t k_unicast_addr =
+                                            get_noc_addr(next_physical_x, next_physical_y, sub_start_addr);
+                                        noc_async_write(sub_start_addr, k_unicast_addr, k_sub_tiles * k_tile_bytes);
 
-                                            if (sb < qk_in1_num_subblocks - 1) {
-                                                // Non-last subblock: flush + signal immediately
-                                                noc_async_writes_flushed();
-                                                noc_semaphore_set_remote(
-                                                    valid_semaphore_addr, receiver_semaphore_noc_addr);
-                                            }
-                                            // Last subblock: defer flush+signal to after mask read
+                                        if (sb < qk_in1_num_subblocks - 1) {
+                                            noc_async_writes_flushed();
+                                            noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                                         }
                                     }
                                 }
-
-                                // Q sub0 interleave: push first Q subblock right after K sub0.
-                                // On k_chunk==0, compute needs both K sub0 AND Q sub0 to start.
-                                if constexpr (use_q_subblock_push) {
-                                    if (k_chunk == 0 && sb == 0) {
-                                        read_q_subblock<q_tile_bytes>(
-                                            q_reader,
-                                            cb_q_in,
-                                            q_read_tile_id,
-                                            0 * qk_subblock_h,
-                                            qk_subblock_h,
-                                            q_row_tile_count,
-                                            DHt,
-                                            DHt,
-                                            barrier_threshold);
-                                    }
-                                }
                             }
-
-                            // Reset sender semaphore after all K subblocks, before V forwarding.
-                            // Safe: all receivers have received all K subblocks (they waited per round),
-                            // so no receiver has signaled for V yet (they still have mask+Q to process).
-                            if (should_forward && k_sender_threshold > 0) {
-                                noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                            }
-
-                        }  // !is_chunked
+                        }  // K subblock handling
 
                         // Mask read (overlaps with last K subblock write in-flight for unicast)
                         if constexpr (use_provided_mask) {
@@ -552,10 +569,12 @@ void kernel_main() {
                             }
                         }
 
-                        // Remaining Q subblocks (k_chunk==0 only, sub1..subM)
+                        // Q subblock push: placed after K forward complete so no outstanding
+                        // NOC writes remain (noc_async_read_barrier inside read_q_subblock
+                        // deadlocks on BH when NOC writes are in-flight).
                         if constexpr (use_q_subblock_push) {
                             if (k_chunk == 0) {
-                                for (uint32_t q_sub = 1; q_sub < q_num_subblocks; ++q_sub) {
+                                for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                                     read_q_subblock<q_tile_bytes>(
                                         q_reader,
                                         cb_q_in,
