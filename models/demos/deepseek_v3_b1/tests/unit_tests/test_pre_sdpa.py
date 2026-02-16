@@ -710,6 +710,7 @@ def test_pre_sdpa(
             sdpa_out_interm_buffer,
             sender_coord,
             kv_cache_tensor=kv_cache_tensor,
+            sdpa_out_interm_tensor=sdpa_out_interm_tensor,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
