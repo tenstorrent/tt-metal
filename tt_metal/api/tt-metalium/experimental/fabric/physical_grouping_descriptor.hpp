@@ -92,6 +92,9 @@ public:
     void validate_and_populate_preformed_groups_from_physical_system(
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
+    // Build flattened adjacency graph by instantiating the grouping's adjacency graph and flattening it.
+    AdjacencyGraph<uint32_t> build_flattened_adjacency_graph(const GroupingInfo& grouping) const;
+
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;
