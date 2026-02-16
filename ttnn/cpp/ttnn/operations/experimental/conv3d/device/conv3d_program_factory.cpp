@@ -183,6 +183,43 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
 
+    // L1 pre-fetch buffer for kernels > 1x1x1.
+    // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
+    const uint32_t kT = operation_attributes.kernel_size[0];
+    const uint32_t kH = operation_attributes.kernel_size[1];
+    const uint32_t kW = operation_attributes.kernel_size[2];
+    const bool use_l1_prefetch = (kT > 1 || kH > 1 || kW > 1);
+
+    uint32_t cb_input_shard_id = 32;  // Invalid; set below if using L1 prefetch
+    uint32_t T_shard_max = 0;
+    uint32_t H_shard_max = 0;
+    uint32_t W_shard_max = 0;
+
+    if (use_l1_prefetch) {
+        // Shard covers the full receptive field span for one spatial block, including padding positions.
+        // Do NOT cap at T_in/H_in/W_in — padding positions outside input bounds are stored in the shard
+        // (zero-filled or clamped) so that Phase 2 can index without boundary checks.
+        T_shard_max = (config.T_out_block - 1) * operation_attributes.stride[0] + kT;
+        H_shard_max = (config.H_out_block - 1) * operation_attributes.stride[1] + kH;
+        W_shard_max = (config.W_out_block - 1) * operation_attributes.stride[2] + kW;
+        uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
+
+        cb_input_shard_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
+
+        log_debug(
+            tt::LogOp,
+            "L1 prefetch: T_shard_max={}, H_shard_max={}, W_shard_max={}, shard_positions={}, "
+            "shard_bytes={}, cb_id={}",
+            T_shard_max,
+            H_shard_max,
+            W_shard_max,
+            shard_positions_max,
+            shard_positions_max * C_in_block_bytes,
+            cb_input_shard_id);
+    }
+
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
@@ -245,7 +282,11 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         semaphore_id,
         operation_attributes.stride[0],
         operation_attributes.stride[1],
-        operation_attributes.stride[2]};
+        operation_attributes.stride[2],
+        cb_input_shard_id,
+        T_shard_max,
+        H_shard_max,
+        W_shard_max};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
@@ -432,6 +473,56 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
     const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
 
+    log_info(tt::LogOp, "Conv3D work distribution diagnostics:");
+    log_info(tt::LogOp, "  Grid: {}x{}, num_cores={}", grid_size.x, grid_size.y, num_cores);
+    log_info(tt::LogOp, "  Input: N={} T={} H={} W={} C={}", N, T_in, H_in, W_in, C_in);
+    log_info(tt::LogOp, "  Output: T={} H={} W={} C={}", T_out, H_out, W_out, C_out);
+    log_info(
+        tt::LogOp,
+        "  Blocks: C_in={} C_out={} T={} H={} W={}",
+        C_in_block,
+        C_out_block,
+        config.T_out_block,
+        config.H_out_block,
+        config.W_out_block);
+    log_info(
+        tt::LogOp,
+        "  Block counts: C_in={} C_out={} T={} H={} W={}",
+        C_in_num_blocks,
+        C_out_num_blocks,
+        T_out_blocks,
+        H_out_blocks,
+        W_out_blocks);
+    log_info(
+        tt::LogOp,
+        "  Parallel factors: C_in={} C_out={} T={} H={} W={}",
+        c_in_parallel_factor,
+        c_out_parallel_factor,
+        t_out_parallel_factor,
+        h_out_parallel_factor,
+        w_out_parallel_factor);
+    log_info(
+        tt::LogOp,
+        "  Per-core (ceil): c_in={} c_out={} t={} h={} w={}",
+        c_in_per_core,
+        c_out_per_core,
+        t_out_per_core,
+        h_out_per_core,
+        w_out_per_core);
+    log_info(
+        tt::LogOp,
+        "  Kernel: {}x{}x{}, stride: {}x{}x{}, padding: {}x{}x{}",
+        operation_attributes.kernel_size[0],
+        operation_attributes.kernel_size[1],
+        operation_attributes.kernel_size[2],
+        operation_attributes.stride[0],
+        operation_attributes.stride[1],
+        operation_attributes.stride[2],
+        operation_attributes.padding[0],
+        operation_attributes.padding[1],
+        operation_attributes.padding[2]);
+    log_info(tt::LogOp, "  num_patches (per spatial block): {}", num_patches);
+
     // Track cores that need to perform reduction together
     std::vector<std::vector<uint32_t>> reduction_groups(total_output_parallel);
 
@@ -501,6 +592,39 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                         (t_out_end > t_out_start) && (h_out_end > h_out_start) && (w_out_end > w_out_start);
 
         bool is_reducer = has_work && c_in_idx == 0;
+
+        // Diagnostic: compute per-core work metrics
+        if (has_work) {
+            uint32_t n_c_out = c_out_block_end - c_out_block_start;
+            uint32_t n_t_blocks = t_out_block_end - t_out_block_start;
+            uint32_t n_h_blocks = h_out_block_end - h_out_block_start;
+            uint32_t n_w_blocks = w_out_block_end - w_out_block_start;
+            uint32_t n_spatial = n_t_blocks * n_h_blocks * n_w_blocks;
+            uint32_t n_reader_iters = n_c_out * n_spatial;  // reader loops: c_out -> spatial
+            uint32_t n_output_positions =
+                (t_out_end - t_out_start) * (h_out_end - h_out_start) * (w_out_end - w_out_start);
+            log_info(
+                tt::LogOp,
+                "  Core ({},{}): c_out=[{},{}) t=[{},{}) h=[{},{}) w=[{},{})  "
+                "c_out_blks={} spatial_blks={}x{}x{}={} reader_iters={} out_positions={}",
+                core.x,
+                core.y,
+                c_out_block_start,
+                c_out_block_end,
+                t_out_start,
+                t_out_end,
+                h_out_start,
+                h_out_end,
+                w_out_start,
+                w_out_end,
+                n_c_out,
+                n_t_blocks,
+                n_h_blocks,
+                n_w_blocks,
+                n_spatial,
+                n_reader_iters,
+                n_output_positions);
+        }
 
         // Only include in reduction group if there's actual work to do
         if (has_work) {

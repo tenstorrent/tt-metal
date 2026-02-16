@@ -401,6 +401,7 @@ def test_wan_conv3d(
         padding=padding,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        dtype=ttnn.bfloat16,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
