@@ -34,9 +34,11 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     ttnn::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
-    // Matmul shape
-    ttnn::TensorSpec minimal_matmul_output_specs = matmul_device_operation_t::compute_output_specs(
+    // Matmul shape - now returns a vector, extract the single output (chunks=1 by default)
+    auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
+    TT_FATAL(minimal_matmul_output_specs_vec.size() == 1, "Expected single matmul output spec");
+    ttnn::TensorSpec minimal_matmul_output_specs = minimal_matmul_output_specs_vec[0];
 
     return {strided_all_gather_output_shape, minimal_matmul_output_specs};
 }
@@ -48,9 +50,11 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
         attributes.strided_all_gather_async_struct,
         StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
-    // Matmul output tensor
-    ttnn::Tensor minimal_matmul_output_tensor = matmul_device_operation_t::create_output_tensors(
+    // Matmul output tensor - now returns a vector, extract the single output (chunks=1 by default)
+    auto minimal_matmul_output_tensors_vec = matmul_device_operation_t::create_output_tensors(
         attributes.matmul_struct, {strided_all_gather_output_tensor, tensor_args.weight_tensor});
+    TT_FATAL(minimal_matmul_output_tensors_vec.size() == 1, "Expected single matmul output tensor");
+    ttnn::Tensor minimal_matmul_output_tensor = minimal_matmul_output_tensors_vec[0];
 
     return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
 }
