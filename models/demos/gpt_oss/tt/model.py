@@ -278,12 +278,26 @@ class Model:
         logits = hidden_states
 
         if get_last_token != -1:
-            # The logits come from the shared method, slice them
             if len(logits.shape) == 3:
                 logits = ttnn.unsqueeze(logits, dim=1)
-            logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
-            logits.deallocate(True)
-            logits = logits_sliced
+            if batch_size > 1:
+                # Batch>1: tokens are concatenated [1,1,B*S,H]. Extract each user's 32-token tile.
+                per_user_seq = logits.shape[2] // batch_size
+                tiles = []
+                for b in range(batch_size):
+                    start = b * per_user_seq + get_last_token
+                    tile = ttnn.slice(logits, (0, 0, start, 0), (1, 1, start + 32, logits.shape[-1]))
+                    tiles.append(tile)
+                logits.deallocate(True)
+                logits = ttnn.concat(tiles, dim=2)  # [1, 1, B*32, H]
+                for t in tiles:
+                    t.deallocate(True)
+            else:
+                logits_sliced = ttnn.slice(
+                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
+                )
+                logits.deallocate(True)
+                logits = logits_sliced
             hidden_states = logits
 
         # Final norm and lm_head
@@ -366,7 +380,7 @@ class Model:
             current_pos=None,  # No current_pos for prefill
             page_table=page_table,
             kv_cache=kv_cache,
-            get_last_token=get_last_token if batch_size == 1 else -1,  # Disable get_last_token for batch>1
+            get_last_token=get_last_token,
             is_decode=False,
             user_id=user_id,
             batch_size=batch_size,

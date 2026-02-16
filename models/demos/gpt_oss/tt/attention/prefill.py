@@ -99,13 +99,15 @@ def prefill_forward(
         block_size = k_cache.shape[2]
         page_len = page_table.shape[-1] * block_size
         if batch_size > 1:
-            for b in range(batch_size):
-                k_b = ttnn.slice(tt_k, (b, 0, 0, 0), (b + 1, tt_k.shape[1], min(page_len, seq_len), tt_k.shape[3]))
-                v_b = ttnn.slice(tt_v, (b, 0, 0, 0), (b + 1, tt_v.shape[1], min(page_len, seq_len), tt_v.shape[3]))
-                ttnn.experimental.paged_fill_cache(k_cache, k_b, page_table, batch_idx=b)
-                ttnn.experimental.paged_fill_cache(v_cache, v_b, page_table, batch_idx=b)
-                k_b.deallocate(True)
-                v_b.deallocate(True)
+            # Flatten batch into seq dim, heads into last dim — single fill call, no per-user loop.
+            # Paged cache just maps sequence positions to physical pages.
+            k_fill = ttnn.reshape(tt_k, [1, 1, total_seq_len, -1])
+            v_fill = ttnn.reshape(tt_v, [1, 1, total_seq_len, -1])
+            page_table_flat = ttnn.reshape(page_table, [1, -1])
+            ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table_flat, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table_flat, batch_idx=0)
+            k_fill.deallocate(True)
+            v_fill.deallocate(True)
         else:
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v

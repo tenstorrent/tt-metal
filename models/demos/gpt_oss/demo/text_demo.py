@@ -599,17 +599,14 @@ def test_gpt_oss_demo(
 
                 # Compute fixed get_last_token for trace (all users must be in same 32-token tile)
                 all_last_idxs = [int(decoding_pos[uid]) - 1 for uid in range(global_batch_size)]
-                if users_per_row_per_iter > 1:
-                    fixed_get_last_token = -1  # Can't use get_last_token with batch>1
-                else:
-                    fixed_get_last_token = (min(all_last_idxs) // 32) * 32
-                    max_tile_start = (max(all_last_idxs) // 32) * 32
-                    if fixed_get_last_token != max_tile_start:
-                        logger.warning(
-                            f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
-                            f"using get_last_token=-1 (slower)"
-                        )
-                        fixed_get_last_token = -1
+                fixed_get_last_token = (min(all_last_idxs) // 32) * 32
+                max_tile_start = (max(all_last_idxs) // 32) * 32
+                if fixed_get_last_token != max_tile_start:
+                    logger.warning(
+                        f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
+                        f"using get_last_token=-1 (slower)"
+                    )
+                    fixed_get_last_token = -1
 
                 def _prepare_batch_host(user_indices):
                     """Prepare host-side tokens + page_table for a batch of users."""
@@ -669,7 +666,7 @@ def test_gpt_oss_demo(
                         tt_logits,
                         [idx % 32 for idx in last_w],
                         users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=max_padded_len,
+                        seq_len_per_user=32,
                     )
                 for row, uid in enumerate(warmup_indices):
                     prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
@@ -753,7 +750,7 @@ def test_gpt_oss_demo(
                             tt_out_trace,
                             [idx % 32 for idx in last_i],
                             users_per_row=users_per_row_per_iter,
-                            seq_len_per_user=max_padded_len,
+                            seq_len_per_user=32,
                         )
                     for row, uid in enumerate(user_indices):
                         prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
@@ -804,7 +801,10 @@ def test_gpt_oss_demo(
                         batched_prefill=True,
                     )
 
-                    get_last_token_val = (max(batch_last_token_idxs) // 32) * 32 if users_per_row_per_iter == 1 else -1
+                    # Use get_last_token if all users' last tokens fall in the same 32-token tile
+                    min_tile = (min(batch_last_token_idxs) // 32) * 32
+                    max_tile = (max(batch_last_token_idxs) // 32) * 32
+                    get_last_token_val = min_tile if min_tile == max_tile else -1
                     tt_logits = model[model_id].ttnn_prefill_forward(
                         tokens_embd,
                         rot_mats_global=rot_mats_global,
@@ -818,13 +818,15 @@ def test_gpt_oss_demo(
 
                     if get_last_token_val == -1:
                         adjusted_last_idxs = batch_last_token_idxs
+                        seq_len_for_output = padded_len
                     else:
                         adjusted_last_idxs = [idx % 32 for idx in batch_last_token_idxs]
+                        seq_len_for_output = 32
                     row_results = model[model_id].process_output_prefill_batched(
                         tt_logits,
                         adjusted_last_idxs,
                         users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=padded_len,
+                        seq_len_per_user=seq_len_for_output,
                     )
                     return row_results
 
