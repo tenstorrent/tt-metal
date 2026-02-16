@@ -6,9 +6,11 @@
 
 #include "chlkc_list.h"
 #include "ckernel.h"
+#ifndef ARCH_QUASAR
 #include "ckernel_globals.h"
-#include "ckernel_include.h"
 #include "ckernel_debug.h"
+#endif
+#include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "internal/risc_attribs.h"
 
@@ -18,10 +20,12 @@
 #include "llk_math_common_api.h"
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_sfpu_api.h"
 #include "llk_math_binary_sfpu_api.h"
 #include "llk_math_reduce_api.h"
+#endif
 #define MATH(x) x
 #define MAIN math_main()
 #else
@@ -41,10 +45,12 @@
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_AB_matmul_api.h"
 #include "llk_unpack_A_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_reduce_api.h"
 #include "llk_unpack_tilize_api.h"
 #include "llk_unpack_untilize_api.h"
+#endif
 #include "llk_io_unpack.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
