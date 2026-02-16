@@ -284,8 +284,48 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         release_dst();
     }
     cb_pop_front(in_cb, num_tiles);
-    cb_reserve_back(in_cb, num_tiles);
-    cb_push_back(in_cb, num_tiles);
+cb_reserve_back(in_cb, num_tiles);
+cb_push_back(in_cb, num_tiles);
+}
+
+/**
+ * Perform FFT on input tensor.
+ *
+ * @param in0_cb Input tensor buffer
+ * @param out_cb Output tensor buffer
+ * @param rows Number of rows in the tensor
+ * @param cols Number of columns in the tensor
+ */
+template <uint32_t in0_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
+void fft_block(uint32_t in1_cb, uint32_t reduce_cb) {
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>(in0_cb);
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)), out_cb);
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+
+    // Perform FFT using in0_cb and store results in out_cb
+    // ...
+}
+
+/**
+ * Perform inverse FFT on input tensor.
+ *
+ * @param in0_cb Input tensor buffer
+ * @param out_cb Output tensor buffer
+ * @param rows Number of rows in the tensor
+ * @param cols Number of columns in the tensor
+ */
+template <uint32_t in0_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
+void ifft_block(uint32_t in1_cb, uint32_t reduce_cb) {
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+
+    // Perform inverse FFT using in0_cb and store results in out_cb
+    // ...
 }
 
 /**

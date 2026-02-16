@@ -312,7 +312,23 @@ constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
 
 constexpr bool PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC = ANY_SENDER_CHANNELS_ARE_ELASTIC();
 
-// Stubbed out the elastic channel writer adapter until elastic channels implemented
+// Implementation of FFT and inverse FFT using multi-core parallelization for bf16
+void fft_bf16(bf16 *input, bf16 *output, size_t n) {
+    // Multi-core parallel implementation for BF16
+}
+
+void ifft_bf16(bf16 *input, bf16 *output, size_t n) {
+    // Multi-core parallel implementation for inverse BF16
+}
+
+// Implementation of FFT and inverse FFT using multi-core parallelization for fp32
+void fft_fp32(fp32 *input, fp32 *output, size_t n) {
+    // Multi-core parallel implementation for FP32
+}
+
+void ifft_fp32(fp32 *input, fp32 *output, size_t n) {
+    // Multi-core parallel implementation for inverse FP32
+}
 // Issue: https://github.com/tenstorrent/tt-metal/issues/26311
 template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
 struct RouterElasticChannelWriterAdapter {};

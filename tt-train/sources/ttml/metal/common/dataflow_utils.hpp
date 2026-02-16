@@ -77,7 +77,11 @@ void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf
     cb_reserve_back(cb_id, onetile);
     uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     // 512 = 32x16
+    #pragma omp parallel for schedule(static)
     for (uint32_t i = 0; i < 512U; ++i) {
+        *ptr++ = packed_bf16_value;
+        *ptr++ = packed_bf16_value;
+        *ptr++ = packed_bf16_value;
         *ptr++ = packed_bf16_value;
     }
     cb_push_back(cb_id, onetile);
