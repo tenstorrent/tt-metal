@@ -659,8 +659,9 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
     int vertical_tile_idx = -1;
-    const uint32_t unpadded_Sk_in_chunk =
-        unpadded_Sk % (Sk_chunk_t * tt::constants::TILE_WIDTH);  // TODO: constant for tile width
+    const uint32_t raw_mod = unpadded_Sk % (Sk_chunk_t * tt::constants::TILE_WIDTH);
+    // When raw_mod == 0, the last K chunk is fully valid (no padding) — treat as full chunk size
+    const uint32_t unpadded_Sk_in_chunk = (raw_mod == 0) ? (Sk_chunk_t * tt::constants::TILE_WIDTH) : raw_mod;
     uint32_t unpad_tile_col_in_chunk = unpadded_Sk_in_chunk / tt::constants::TILE_WIDTH;
     uint32_t unpad_col_in_tile = unpadded_Sk_in_chunk % tt::constants::TILE_WIDTH;
 
