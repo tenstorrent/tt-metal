@@ -10,7 +10,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
+// DEBUG
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/debug/dprint_pages.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -26,6 +28,35 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
         invalidate_l1_cache();
     } while ((*sem_addr) < val);
     WAYPOINT("NSMD");
+}
+
+void print_tile_rows(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = false,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = start_row; r < end_row; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
 }
 
 void kernel_main() {
@@ -141,6 +172,7 @@ void kernel_main() {
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        DPRINT << "expert_id: " << expert_id << " num_tokens: " << num_tokens << "\n";
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
@@ -173,6 +205,12 @@ void kernel_main() {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
+
+            for (uint32_t i = 0; i < 224; ++i) {
+                if (i % 20 == 0) {
+                    PACK((print_tile_rows(cb_s2c_in, i, true)));
+                }
+            }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
