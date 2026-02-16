@@ -100,7 +100,7 @@ struct PacketHeaders {
 };
 
 template <typename TensorAccessorType, typename ConnectionHandleType>
-void forward_half_block_to_fabric_neighbor(
+FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     uint32_t m_tile_start,
     uint32_t k_tile_start,  // this is the k_tile_index in the output
     uint32_t m_block_tiles,
@@ -555,7 +555,7 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
 }
 
 template <typename ConnectionHandleType>
-void close_mux(
+FORCE_INLINE void close_mux(
     ConnectionHandleType mux_connection_handle,
     bool is_termination_master,
     uint32_t termination_sync_address,
