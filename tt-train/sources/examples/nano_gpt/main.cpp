@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+        std::string(CONFIGS_FOLDER) + "/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -312,6 +312,9 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(training_config_name);
 
     TrainingConfig training_config = parse_config(yaml_config);
+    training_config.model_config = expand_config_path(training_config.model_config);
+    training_config.data_path = expand_config_path(training_config.data_path);
+
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 

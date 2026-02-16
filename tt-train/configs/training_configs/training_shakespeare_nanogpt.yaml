@@ -12,8 +12,8 @@ training_config:
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   tokenizer_type: "char"
-  data_path: "data/shakespeare.txt"
-  model_config: "configs/model_configs/nanogpt.yaml"
+  data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/shakespeare.txt"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/nanogpt.yaml"
 
 device_config:
   enable_ddp: false

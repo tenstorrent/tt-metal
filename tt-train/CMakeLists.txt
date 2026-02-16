@@ -36,6 +36,10 @@ endif()
 
 message(STATUS "c++ Standard: ${CMAKE_CXX_STANDARD}")
 
+# tt-train source root — CMAKE_CURRENT_SOURCE_DIR is correct whether tt-train
+# is built standalone or as a subdirectory of tt-metal.
+set(TT_TRAIN_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR} CACHE INTERNAL "tt-train source root")
+
 # Add cmake directory to module path for flatbuffers helper
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
