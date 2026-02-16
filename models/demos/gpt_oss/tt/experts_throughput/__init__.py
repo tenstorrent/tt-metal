@@ -189,7 +189,7 @@ class ThroughputExperts:
         topk_expert_indices: ttnn.Tensor,
         topk_expert_weights: ttnn.Tensor,
         is_decode: bool = True,
-        chunk_size: int = 1024,
+        chunk_size: int = 128,  # TODO: increasing this causes diverging outputs for last mesh row (https://github.com/tenstorrent/tt-metal/issues/36335)
     ) -> ttnn.Tensor:
         """
         Forward pass - automatically dispatches to decode or prefill.
@@ -258,7 +258,7 @@ class ThroughputExperts:
         hidden_states: ttnn.Tensor,
         topk_expert_indices: ttnn.Tensor,
         topk_expert_weights: ttnn.Tensor,
-        chunk_size: int = 1024,
+        chunk_size: int,
     ) -> ttnn.Tensor:
         """
         Prefill forward pass.

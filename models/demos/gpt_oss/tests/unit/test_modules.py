@@ -225,8 +225,8 @@ def run_throughput_experts_component(
     _, _, num_tokens, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
 
-    router_indices = torch.zeros(1, 1, num_tokens, config.num_experts_per_tok, dtype=torch.long)
-    routing_weights = torch.zeros(1, 1, num_tokens, config.num_local_experts)
+    router_indices = torch.zeros(num_tokens, config.num_experts_per_tok, dtype=torch.long)
+    routing_weights = torch.zeros(num_tokens, config.num_local_experts)
 
     for t in range(num_tokens):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
@@ -236,7 +236,7 @@ def run_throughput_experts_component(
         routing_weights[..., t, active_experts] = weights
     topk_weights_dense = torch.tensor(
         [[routing_weights[..., i, j].item() for j in b] for i, b in enumerate(router_indices.squeeze())]
-    ).reshape(1, 1, num_tokens, config.num_experts_per_tok)
+    )
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
     reference_output = reference_experts(

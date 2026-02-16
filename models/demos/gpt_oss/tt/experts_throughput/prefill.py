@@ -29,7 +29,7 @@ def prefill_forward_chunked(
     mesh_device,
     mesh_config: MeshConfig,
     ccl_manager,
-    chunk_size: int = 512,  # TODO: increasing this causes diverging outputs for last mesh row (https://github.com/tenstorrent/tt-metal/issues/36335)
+    chunk_size: int,
 ) -> ttnn.Tensor:
     """Chunked prefill forward pass for very long sequences.
 
@@ -97,6 +97,8 @@ def prefill_forward_chunked(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
         output_chunks.append(chunk_output)
 
