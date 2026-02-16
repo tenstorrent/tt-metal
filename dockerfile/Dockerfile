@@ -45,6 +45,7 @@
 
 # Ubuntu base image version
 ARG UBUNTU_VERSION=22.04
+ARG PYTHON_VERSION=3.10
 
 # Tool images from GHCR (built by Dockerfile.tools, pushed by build-docker-artifact.yaml)
 # These default to scratch (empty image); CI workflow passes actual GHCR tags.
@@ -123,7 +124,18 @@ FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ARG PYTHON_VERSION
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/bin:$PATH"
+
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an accessible
+# shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
+# must be reachable from all nodes. See scripts/install-uv.sh post-install message.
+ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
+RUN umask 000 && uv python install "$PYTHON_VERSION"
 
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
@@ -134,7 +146,6 @@ ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
 ENV CPATH=${OMPI_PREFIX}/include
 ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig
 
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
 COPY --from=openmpi-layer /install/ /opt/
 COPY --from=cmake-layer /install/ /usr/local/
 
@@ -205,14 +216,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-
 #############################################################
 # CI Test image
 #############################################################
 
 FROM ci-build AS ci-test
 
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra (needed even with pre-built venv for requirements file reference)
@@ -303,6 +313,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM base AS release
 
+ARG PYTHON_VERSION
+
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -311,21 +323,33 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR \
-    && umask 022 \
-    && echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc \
-    && mkdir -p /etc \
-    && echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+RUN umask 000 && uv venv --python "$PYTHON_VERSION" --link-mode copy --managed-python --relocatable "$PYTHON_ENV_DIR"
+
+# Patch relocatable venv activate for POSIX sh (Docker RUN uses /bin/sh)
+COPY /scripts/patch_activate_posix.sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh
+RUN /bin/sh /opt/tt_metal_infra/scripts/patch_activate_posix.sh "$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN uv pip install $WHEEL_FILENAME
+RUN umask 000 && uv pip install $WHEEL_FILENAME
 
 #############################################################
 # Release models image
 #############################################################
 
 FROM base AS release-models
+
+ARG PYTHON_VERSION
 
 # Set up virtual environment and TT_METAL_HOME
 ENV PYTHON_ENV_DIR=/opt/venv
@@ -352,11 +376,16 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh \
-    && source $PYTHON_ENV_DIR/bin/activate \
-    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache" \
-    && umask 022 \
-    && echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+    && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && source "$PYTHON_ENV_DIR/bin/activate" \
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \

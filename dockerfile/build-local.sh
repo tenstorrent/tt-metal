@@ -218,10 +218,18 @@ main() {
     log_info "=== Step 3/3: Building main image ==="
     log_info "Building: $OUTPUT_TAG (target: $TARGET)"
 
+    # Derive Python version from Ubuntu (22.04→3.10, 24.04→3.12)
+    if [ "$UBUNTU_VERSION" = "24.04" ]; then
+        PYTHON_VERSION="3.12"
+    else
+        PYTHON_VERSION="3.10"
+    fi
+
     docker build \
         -f "${SCRIPT_DIR}/Dockerfile" \
         --target "$TARGET" \
         --build-arg "UBUNTU_VERSION=${UBUNTU_VERSION}" \
+        --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
         --build-arg "TOOL_CCACHE_IMAGE=tool-ccache:local" \
         --build-arg "TOOL_MOLD_IMAGE=tool-mold:local" \
         --build-arg "TOOL_DOXYGEN_IMAGE=tool-doxygen:local" \

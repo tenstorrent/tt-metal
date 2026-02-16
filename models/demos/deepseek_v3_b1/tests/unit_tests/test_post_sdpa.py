@@ -41,12 +41,11 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
-    "num_devices, mesh_device, device_params",
+    "num_devices, device_params",
     [
-        (1, (1, 1), {}),
+        (1, {}),
         (
             2,
-            (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(15232),
@@ -54,7 +53,7 @@ def create_fabric_router_config(max_payload_size):
         ),
     ],
     ids=["single_device", "multi_device"],
-    indirect=["mesh_device", "device_params"],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize(
     "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
@@ -66,7 +65,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 @pytest.mark.parametrize("ccl_enabled", [True, False], ids=["ccl_on", "ccl_off"])
 def test_post_sdpa(
-    mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     M,
     K1,
@@ -82,7 +81,7 @@ def test_post_sdpa(
     """Test post_sdpa fused operation with optional CCL all-reduce"""
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # CCL requires multiple devices
@@ -94,19 +93,10 @@ def test_post_sdpa(
         pytest.skip("Residual add requires CCL to be enabled")
 
     # Create submesh - fabric requires opening full system mesh first
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
@@ -470,10 +460,6 @@ def test_post_sdpa(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED - {pcc_message}")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct output"
     logger.info(f"✓ Post SDPA fused op test passed (ccl_enabled={ccl_enabled})!")

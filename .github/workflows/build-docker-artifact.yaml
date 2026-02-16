@@ -158,6 +158,7 @@ jobs:
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
       distro: ${{ steps.platform.outputs.distro }}
       version: ${{ steps.platform.outputs.version }}
+      python-version: ${{ steps.python-version.outputs.version }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -169,6 +170,19 @@ jobs:
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
+
+      - name: Determine Python version
+        id: python-version
+        run: |
+          VERSION="${{ steps.platform.outputs.version }}"
+          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
+          if [ "$VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
         run: |
@@ -289,6 +303,7 @@ jobs:
           {
             echo "main<<EOF"
             echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
+            echo "PYTHON_VERSION=${{ needs.image-tags.outputs.python-version }}"
             echo "${{ steps.tool-args.outputs.build-args }}"
             echo "PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.venvs.outputs.ci-build-venv-tag }}"
             echo "PYTHON_CI_TEST_VENV_IMAGE=${{ needs.venvs.outputs.ci-test-venv-tag }}"
@@ -298,6 +313,7 @@ jobs:
           {
             echo "basic-dev<<EOF"
             echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
+            echo "PYTHON_VERSION=${{ needs.image-tags.outputs.python-version }}"
             echo "TOOL_CMAKE_IMAGE=${{ steps.tool-args.outputs.cmake-tag }}"
             echo "TOOL_SFPI_IMAGE=${{ steps.tool-args.outputs.sfpi-tag }}"
             echo "TOOL_OPENMPI_IMAGE=${{ steps.tool-args.outputs.openmpi-tag }}"
