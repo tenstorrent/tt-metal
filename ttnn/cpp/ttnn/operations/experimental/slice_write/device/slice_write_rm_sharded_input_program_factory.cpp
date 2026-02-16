@@ -10,6 +10,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
@@ -56,13 +57,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
-    std::vector<int> size_till_end(num_dims);
+    ttsl::SmallVector<uint32_t> num_input_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_output_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> id_per_dim(num_dims);
+    ttsl::SmallVector<int> size_till_end(num_dims);
 
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    std::vector<uint32_t> accumulated_input_total_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_input_total_per_dim(num_dims);
 
     // TODO: Remove first element of these arrays and update kernel accordingly
     // This currently just matches tile version where we iterate over the row as well

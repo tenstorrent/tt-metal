@@ -11,6 +11,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
@@ -55,13 +56,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(actual_input_shape.rank());
-    std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
-    std::vector<uint32_t> num_input_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_output_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_input_tiles_per_dim(num_dims);
 
-    std::vector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
-    std::vector<uint32_t> accumulated_input_total_tiles_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
-    std::vector<uint32_t> size_till_end(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_input_total_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> id_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> size_till_end(num_dims);
 
     num_input_tiles_per_dim[0] = tt::div_up(actual_input_shape[-1], (TILE_WIDTH * num_cores_channels));
     num_input_tiles_per_dim[1] = tt::div_up(actual_input_shape[-2], TILE_HEIGHT);

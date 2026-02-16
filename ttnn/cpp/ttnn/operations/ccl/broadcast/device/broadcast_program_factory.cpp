@@ -197,8 +197,8 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
             is_sender,                                          // is_sender
         };
     }
-    std::vector<uint32_t> mcast_forward_args(2, 0);
-    std::vector<uint32_t> mcast_backward_args(2, 0);
+    ttsl::SmallVector<uint32_t> mcast_forward_args(2, 0);
+    ttsl::SmallVector<uint32_t> mcast_backward_args(2, 0);
     if (forward_coord.has_value()) {
         mcast_forward_args[0] = 1;
         mcast_forward_args[1] = num_targets_forward;

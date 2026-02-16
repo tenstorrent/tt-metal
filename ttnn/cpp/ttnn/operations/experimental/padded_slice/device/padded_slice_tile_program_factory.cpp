@@ -206,8 +206,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
         reader_kernel_args[6] = max_num_tiles_per_row;
         reader_kernel_args[10] = tt::div_up(input_padded_shape[-1], TILE_WIDTH) - max_num_tiles_per_row;
 
-        std::vector<uint32_t> start_index_per_dim(num_dims);
-        std::vector<uint32_t> end_index_per_dim(num_dims);
+        ttsl::SmallVector<uint32_t> start_index_per_dim(num_dims);
+        ttsl::SmallVector<uint32_t> end_index_per_dim(num_dims);
 
         uint32_t output_written_start = num_sticks_written_start / num_output_sticks_per_dim[0];
         uint32_t output_written_end = num_sticks_written_end / num_output_sticks_per_dim[0];
@@ -237,7 +237,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
                 end_index_per_dim[j] = 0;
             }
         }
-        std::vector<uint32_t> start_index_in_input_per_dim(num_dims);
+        ttsl::SmallVector<uint32_t> start_index_in_input_per_dim(num_dims);
         std::vector<uint32_t> end_index_in_input_per_dim(num_dims);
 
         for (uint32_t index = 0; index < num_dims; index++) {
@@ -304,8 +304,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
             tt::round_down(reversed_tile_start_index[1] + output_tensor_start[2], TILE_HEIGHT) -
             tt::round_down(output_tensor_start[-2], TILE_HEIGHT);
         reversed_tile_start_index[1] /= TILE_HEIGHT;
-        std::vector<uint32_t> reversed_output_start_in_input(num_dims);
-        std::vector<uint32_t> reversed_output_end(num_dims);
+        ttsl::SmallVector<uint32_t> reversed_output_start_in_input(num_dims);
+        ttsl::SmallVector<uint32_t> reversed_output_end(num_dims);
 
         for (uint32_t index = 0; index < num_dims; index++) {
             reversed_output_start_in_input[index] = output_tensor_start[num_dims - index - 1];
