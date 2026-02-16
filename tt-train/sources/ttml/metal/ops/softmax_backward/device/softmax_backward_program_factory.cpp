@@ -44,13 +44,20 @@ constexpr const char* const kComputePath =
 
 namespace ttml::metal::ops::softmax_backward::device {
 
-static std::pair<bool, uint32_t> should_use_non_streaming_kernel(
-    uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
+struct KernelMode {
+    uint32_t buffering_multiplier;
+    uint32_t required_memory_bytes;
+    uint32_t tiles_per_block;
+};
+
+static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, const tt::tt_metal::IDevice* device) {
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t memory_needed =
         (width_tiles * tile_size) * 4 + (1 * tile_size) * 2;  // src0, src1, out, ygrad; sum_reduce, ones
-    return {memory_needed < available_L1_in_bytes, memory_needed};
+    const uint32_t tiles_per_block = (memory_needed < available_L1_in_bytes) ? width_tiles : 1;
+    const uint32_t buffering_multiplier = (memory_needed * 2 > available_L1_in_bytes) ? 1 : 2;
+    return {buffering_multiplier, memory_needed, tiles_per_block};
 }
 
 static void get_tensor_properties(
@@ -126,18 +133,16 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         intermed_tile_size,
         tensor_return_value);
 
-    const auto [use_non_streaming_mode, estimated_memory_bytes] =
-        should_use_non_streaming_kernel(width_tiles, intermed_tile_size, device);
-    const uint32_t tiles_per_block = use_non_streaming_mode ? width_tiles : 1;
-    const uint32_t num_blocks_in_cb = use_non_streaming_mode ? 1 : 2;
+    const auto [buffering_multiplier, required_memory_bytes, tiles_per_block] =
+        get_kernel_mode(width_tiles, intermed_tile_size, device);
 
     log_debug(
         tt::LogOp,
         "SoftmaxBackward: Using {} kernel | Shape: {}x{} tiles | Estimated L1: {} KB",
-        use_non_streaming_mode ? "NON-STREAMING" : "STREAMING",
+        tiles_per_block == width_tiles ? "NON-STREAMING" : "STREAMING",
         num_rows,
         width_tiles,
-        estimated_memory_bytes / 1024);
+        required_memory_bytes / 1024);
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -178,9 +183,9 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         rows_per_core,
         per_core_rows_stream.str());
 
-    const uint32_t block_cb_size_in0 = num_blocks_in_cb * tiles_per_block * input_tile_size;
-    const uint32_t block_cb_size_out = num_blocks_in_cb * tiles_per_block * output_tile_size;
-    const uint32_t block_cb_size_intermed0 = num_blocks_in_cb * tiles_per_block * intermed_tile_size;
+    const uint32_t block_cb_size_in0 = buffering_multiplier * tiles_per_block * input_tile_size;
+    const uint32_t block_cb_size_out = buffering_multiplier * tiles_per_block * output_tile_size;
+    const uint32_t block_cb_size_intermed0 = buffering_multiplier * tiles_per_block * intermed_tile_size;
 
     auto c_in0_config = CircularBufferConfig(block_cb_size_in0, {{src0_cb_index, input_data_format}})
                             .set_page_size(src0_cb_index, input_tile_size);
