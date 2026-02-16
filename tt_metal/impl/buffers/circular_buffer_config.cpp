@@ -47,6 +47,7 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 "address_offset ({}) must be aligned to L1 alignment ({})",
                 descriptor.address_offset,
                 l1_alignment);
+            this->address_offset_ = descriptor.address_offset;
             this->globally_allocated_address_ = this->globally_allocated_address_.value() + descriptor.address_offset;
             this->max_size_ -= descriptor.address_offset;
             TT_FATAL(
@@ -210,6 +211,8 @@ bool CircularBufferConfig::dynamic_cb() const { return this->dynamic_cb_; }
 uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
 
 uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
+
+uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
