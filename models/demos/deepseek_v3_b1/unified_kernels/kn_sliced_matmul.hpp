@@ -105,7 +105,11 @@ struct KNSlicedMatmul {
             constexpr bool finalize = true;
             constexpr uint32_t out_w = CTArgs::out_w;
 
-            custom_mm_block_init<transpose, split_acc, dense_packing>(args.act_cb, args.weights_cb, args.out_cb, out_w);
+            reconfig_data_format<false, true>(args.weights_cb, args.act_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
+
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(
+                args.act_cb, args.weights_cb, args.out_cb, out_w);
 
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);

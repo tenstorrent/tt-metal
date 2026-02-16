@@ -98,7 +98,6 @@ struct RMSNorm {
             // TRISC (Compute)
             // ================================================================
             // Init block done only once
-            binary_op_init_common(args.input_cb, args.input_cb, args.output_cb);
             cb_wait_front(args.gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
 
             compute_rmsnorm(args);
@@ -108,6 +107,8 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
+            reconfig_data_format<false, true>(args.input_cb, args.input_cb);
+            pack_reconfig_data_format<true>(args.output_cb);
             {
                 // Square the input
                 mul_reduce_scalar_init(args.input_cb, args.input_cb);

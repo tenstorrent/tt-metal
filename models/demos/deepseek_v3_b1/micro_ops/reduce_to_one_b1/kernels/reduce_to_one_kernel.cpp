@@ -78,6 +78,8 @@ void kernel_main() {
 
     // Compute has no runtime args
     ReduceToOne::ComputeArgs rt_args{};
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // Execute the op

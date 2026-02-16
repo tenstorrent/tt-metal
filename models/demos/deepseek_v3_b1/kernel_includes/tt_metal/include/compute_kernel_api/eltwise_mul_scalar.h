@@ -23,22 +23,6 @@ namespace ckernel {
 // ============================================================================
 
 /**
- * Hardware startup for scalar broadcast multiply.
- * Call once at kernel start. Same as compute_kernel_hw_startup() but with configurable fp32_dest_acc_en.
- */
-template <bool fp32_dest_acc_en = false>
-ALWI void deepseek_mul_tiles_bcast_scalar_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
-    UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(icb0, icb1)));
-
-    MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
-    MATH((llk_math_hw_configure<fp32_dest_acc_en>(icb0, icb1)));
-
-    PACK((llk_pack_init<false, false, false>(ocb)));
-    PACK((llk_pack_hw_configure<fp32_dest_acc_en>(ocb)));
-    PACK((llk_pack_dest_init<fp32_dest_acc_en, false>(ocb)));
-}
-
-/**
  * Short init for scalar broadcast multiply (assumes hw already configured)
  */
 ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
