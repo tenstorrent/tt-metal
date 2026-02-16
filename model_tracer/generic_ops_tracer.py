@@ -28,6 +28,7 @@ import sys
 import os
 import subprocess
 import json
+import hashlib
 from tqdm import tqdm
 import argparse
 from datetime import datetime
@@ -441,13 +442,60 @@ def update_master_file(master_file_path, operations, test_source):
 
         if matching_config is None:
             # New configuration - assign new config_id
+            # Compute config_hash for stable tracking (same logic as load_ttnn_ops_data_v2.py)
+            machine_info = operation.get("machine_info")
+
+            # Extract hardware tuple
+            hardware = None
+            if machine_info:
+                board_type = machine_info.get("board_type")
+                if board_type:
+                    device_series = machine_info.get("device_series")
+                    if isinstance(device_series, list):
+                        device_series = device_series[0] if device_series else None
+                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
+
+            # Extract mesh config
+            mesh_config = None
+            if machine_info and "tensor_placements" in machine_info:
+                placements = machine_info.get("tensor_placements", [])
+                if placements:
+                    p = placements[0]
+                    mesh_shape_str = p.get("mesh_device_shape")
+                    if mesh_shape_str:
+                        try:
+                            mesh_shape = (
+                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
+                            )
+                            if mesh_shape:
+                                import re
+
+                                placement_str = p.get("placement", "")
+                                shard_dim = None
+                                if "PlacementShard" in placement_str:
+                                    match = re.search(r"PlacementShard\((\d+)\)", placement_str)
+                                    if match:
+                                        shard_dim = int(match.group(1))
+                                mesh_config = {
+                                    "mesh_shape": mesh_shape,
+                                    "placement_type": "shard" if shard_dim is not None else "replicate",
+                                    "shard_dim": shard_dim,
+                                }
+                        except:
+                            pass
+
+            # Compute SHA-256 hash
+            normalized = {"operation": op_name, "arguments": op_args, "hardware": hardware, "mesh": mesh_config}
+            config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
             config_entry = {
                 "config_id": next_config_id,
+                "config_hash": config_hash,
                 "arguments": op_args,
                 "executions": [
                     {
                         "source": test_source,
-                        "machine_info": operation.get("machine_info"),
+                        "machine_info": machine_info,
                         "count": operation.get("execution_count", 1),
                     }
                 ],

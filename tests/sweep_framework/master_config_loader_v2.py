@@ -386,14 +386,14 @@ class MasterConfigLoader:
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
         """
-        Normalize configurations to always return list of (argument list, source, machine_info, config_id, config_hash) tuples.
+        Normalize configurations to always return list of (argument list, source, machine_info, config_hash) tuples.
         Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
             configs: List of configurations (dict with 'arguments' and 'source')
 
         Returns:
-            List of (arguments, source, machine_info, config_id, config_hash) tuples for traceability
+            List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
         # Uses class-level setting instead of environment variable for cleaner control
@@ -403,7 +403,6 @@ class MasterConfigLoader:
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
                 arguments = config["arguments"]
-                config_id = config.get("config_id", "unknown")
                 config_hash = config.get("config_hash", None)
 
                 # Check for new "executions" format (explicit source/machine pairs with counts)
@@ -419,7 +418,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source):
                                 continue  # Skip this execution
 
-                        normalized.append((arguments, source, machine_info, config_id, config_hash))
+                        normalized.append((arguments, source, machine_info, config_hash))
 
                 # Check for mid-level "contexts" format (multiple execution contexts)
                 elif "contexts" in config:
@@ -437,7 +436,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
-                        normalized.append((arguments, source, machine_info, config_id, config_hash))
+                        normalized.append((arguments, source, machine_info, config_hash))
 
                 else:
                     # Old format: single source/machine_info (pairing may be lost)
@@ -449,15 +448,15 @@ class MasterConfigLoader:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((arguments, source, machine_info, config_id, config_hash))
+                    normalized.append((arguments, source, machine_info, config_hash))
             elif isinstance(config, list):
                 # Legacy list format: use as-is with unknown source
                 # Skip if lead_models_only since we can't determine source
                 if not lead_models_only:
-                    normalized.append((config, "unknown", None, "unknown", None))
+                    normalized.append((config, "unknown", None, None))
             else:
                 # Fallback: wrap in list with unknown source and no machine_info
-                normalized.append((config if isinstance(config, list) else [config], "unknown", None, "unknown", None))
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None, None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -694,7 +693,7 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
-        for config_args, source, machine_info, config_id, config_hash in configs:
+        for config_args, source, machine_info, config_hash in configs:
             try:
                 config_dict = {}
                 positional_tensors = []
@@ -746,8 +745,9 @@ class MasterConfigLoader:
                     arg_idx += 1
 
             except Exception as e:
-                # Add config_id context to error
-                logger.warning(f"⚠️ Skipping config_id={config_id} due to error: {e}")
+                # Add config_hash context to error
+                config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
             # Skip if no tensors found
@@ -798,7 +798,6 @@ class MasterConfigLoader:
             # Add metadata
             config_dict["traced_source"] = source
             config_dict["traced_machine_info"] = machine_info
-            config_dict["config_id"] = config_id
             config_dict["config_hash"] = config_hash
 
             traced_config_list.append(config_dict)
@@ -880,7 +879,7 @@ class MasterConfigLoader:
         except Exception as e:
             logger.error(f"❌ Error loading configurations for {operation_name}: {e}")
             logger.error(f"   This error occurred while processing one or more configs.")
-            logger.error(f"   Check logs above for specific config_id that failed.")
+            logger.error(f"   Check logs above for specific config_hash that failed.")
             import traceback
 
             traceback.print_exc()
