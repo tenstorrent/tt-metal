@@ -35,7 +35,7 @@ parameters = {
         "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
         "largest": [True],
         "k": [32],
-        "input_a_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -47,7 +47,7 @@ parameters = {
         "dim": [0, 1, 2, 3, -1, -2, -3, -4, None],
         "largest": [False],
         "k": [32],
-        "input_a_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -59,9 +59,6 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    print(f"test_vector[input_shape]: ", test_vector["input_shape"])
-    print(f"test_vector[dim]: ", test_vector["dim"])
-    print(f"test_vector[k]: ", test_vector["k"])
     if test_vector["dim"] is None:
         return True, "Invalid input configuration: dim parameter cannot be None."
     if (
@@ -98,12 +95,12 @@ def run_topk(
 
     # Sanitize input shape
     input_shape = sanitize_shape(input_shape, "topk")
-    print("========================================")
-    print(f"Running topk with input_shape: {input_shape}, dim: {dim}, k: {k}, input_a_dtype: {input_a_dtype}")
-    print("========================================")
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
+
+    if input_a_dtype == ttnn.bfloat8_b:
+        pytest.xfail("BFLOAT8_B not supported by pad operation")
 
     output_indices_shape = input_shape.copy()
     output_indices_shape[dim] = k
@@ -153,23 +150,23 @@ def run_topk(
     return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
 
 
-# @pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
-# def test_nightly(device, params):
-#     invalidated, output_str = invalidate_vector(params)
+@pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
+def test_nightly(device, params):
+    invalidated, output_str = invalidate_vector(params)
 
-#     if invalidated:
-#         pytest.skip(output_str)
+    if invalidated:
+        pytest.skip(output_str)
 
-#     (result, msg), e2e_perf = run_topk(**params, device=device)
+    (result, msg), e2e_perf = run_topk(**params, device=device)
 
-#     assert result, msg
-#     logger.info(msg)
-#     if e2e_perf:
-#         logger.info(f"E2E Performance: {e2e_perf}")
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 @pytest.mark.parametrize("params", list(permutations(parameters["xfail"])))
-def test_nightly(device, params):
+def test_xfail(device, params):
     invalidated, output_str = invalidate_vector(params)
 
     if invalidated:

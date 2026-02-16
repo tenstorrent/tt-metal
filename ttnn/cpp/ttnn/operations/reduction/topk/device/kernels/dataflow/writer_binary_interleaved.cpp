@@ -20,8 +20,6 @@ void kernel_main() {
     constexpr auto values_tensor_args = TensorAccessorArgs<5>();
     constexpr auto indices_tensor_args = TensorAccessorArgs<values_tensor_args.next_compile_time_args_offset()>();
 
-    DPRINT << "Writer binary interleaved" << ENDL();
-
     // Constants
     constexpr uint32_t onetile = 1;
 

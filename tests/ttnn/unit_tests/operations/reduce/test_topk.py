@@ -15,40 +15,26 @@ UINT16_MAX = 65535
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
     # Input tensor
     shape = [N, C, H, W]
-    # ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
-    # torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
+    ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
+    torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
     torch_dtype = torch.bfloat16
     input = torch.randint(0, 100, shape, dtype=torch_dtype)
-
-    # Build an indices tensor with increasing integer values along the 'dim' dimension:
-    indices_shape = list(shape)
-    axis_len = shape[dim]
-    # Create a 1D increasing range and reshape to broadcast along the required axis
-    axis_input = torch.arange(1, axis_len + 1, dtype=torch.int64)
-    # Create a shape with 1 in all dims, except axis which gets axis_len
-    idx_shape = [1] * len(shape)
-    idx_shape[dim] = axis_len
-    axis_input = axis_input.view(*idx_shape)
-    # Broadcast to full shape
-    input = axis_input.expand(*shape)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
-    # if pass_indices_tensor:
-    #     indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
-    #     for i in range(W):
-    #         indices_tensor_torch[:, :, :, i] = i
-    #     indices_tensor = ttnn.from_torch(
-    #         indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
-    #     )
-    # else:
-    # indices_tensor = None
+    if pass_indices_tensor:
+        indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
+        for i in range(W):
+            indices_tensor_torch[:, :, :, i] = i
+        indices_tensor = ttnn.from_torch(
+            indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
+        )
+    else:
+        indices_tensor = None
 
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
         ttnn_input,
@@ -57,25 +43,11 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         largest=largest,
         sorted=sorted,
         sub_core_grids=sub_core_grids,
-        # indices_tensor=indices_tensor,
+        indices_tensor=indices_tensor,
     )
     # Convert TTNN outputs to Torch for comparison
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
-    print("Input Tensor:")
-    # print(input[0, 0, 2048, :])
-    print("TTNN TopK Values:")
-    # print(ttnn_torch_values[0, 0, 2048, :])
-    print("PyTorch TopK Values:")
-    # print(pyt_topk_values[0, 0, 2048, :])
-    # for n in range(N):
-    #     for c in range(C):
-    #             for i in range(H):
-    #                 ttnn_tensor = ttnn_torch_values[n, c, i, :]
-    #                 torch_tensor = pyt_topk_values[n, c, i, :]
-    #                 print(i, end=', ')
-    #                 assert_equal(ttnn_tensor, torch_tensor)
-    torch.set_printoptions(profile="default")
-    # ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
 
     # # Assert output shapes
     # desired_shape = [N, C, H, W]
@@ -83,28 +55,21 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     # assert list(ttnn_topk_values.shape) == desired_shape
     # assert list(ttnn_topk_indices.shape) == desired_shape
 
-    # # Assert values correctness
-    # if dtype == ttnn.bfloat8_b:
-    #     assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
-    # else:
-    # save_tensor(ttnn_torch_values, "ttnn_torch_values.csv")
-    # save_tensor(pyt_topk_values, "torch_topk_values.csv")
-
     assert_equal(ttnn_torch_values, pyt_topk_values)
 
-    # # Assert indices correctness using gather
-    # # pcc is not a good measure for the raw indices
-    # # if index 49 and index 8 are tied, the order of the indices can be different
-    # # but the values associated with the indices should be the same
-    # # if index 7 and 8 are tied, but swapped, the pcc will be better than if index 49 and 8 are tied but swapped
-    # # rounding may also cause more ties than expected
-    # # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
-    # # use cosine similarity on the gathered indices as this will show the top elements are all about the same
-    # ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
-    # cosine = torch.nn.CosineSimilarity(dim=dim)
-    # ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    # Assert indices correctness using gather
+    # pcc is not a good measure for the raw indices
+    # if index 49 and index 8 are tied, the order of the indices can be different
+    # but the values associated with the indices should be the same
+    # if index 7 and 8 are tied, but swapped, the pcc will be better than if index 49 and 8 are tied but swapped
+    # rounding may also cause more ties than expected
+    # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
+    # use cosine similarity on the gathered indices as this will show the top elements are all about the same
+    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    # assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
 
 
 @pytest.mark.parametrize(

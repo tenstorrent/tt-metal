@@ -143,7 +143,7 @@ void kernel_main() {
             cb_reserve_back(transposed_val_cb_index, input_take);
             cb_reserve_back(transposed_ind_cb_index, input_take);
 
-            // // Transpose input tiles from WH to HW format and pack to intermediate buffers
+            // Transpose input tiles from WH to HW format and pack to intermediate buffers
 
             for (uint32_t i = 0; i < input_take; i++) {
                 cb_wait_front(input_val_cb_index, 1);
