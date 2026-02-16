@@ -189,7 +189,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, users_row_sharded, long_context_mode, stop_at_eos",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -340,6 +340,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_4k",
         "batch128",
         "long_context_128k",
+        "long_context_short_prefill_long_decode"
         # "prefill_8k",
         # "prefill_16k",
         # "prefill_32k",
