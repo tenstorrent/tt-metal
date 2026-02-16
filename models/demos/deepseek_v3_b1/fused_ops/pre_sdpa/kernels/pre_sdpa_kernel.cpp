@@ -563,6 +563,8 @@ void kernel_main() {
         .sin_interm_cb = krope_sin_interm_cb,
         .out_cb = krope_output_cb,
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)

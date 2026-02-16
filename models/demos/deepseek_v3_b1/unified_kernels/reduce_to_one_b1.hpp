@@ -381,7 +381,8 @@ struct ReduceToOneB1 {
             }
 
             // Initialize for binary operations
-            binary_op_init_common(CTArgs::local_cb, CTArgs::received_cb_r1, CTArgs::scratch_cb);
+            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb_r1);
+            pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
             // Load local tiles to dest
             copy_tile_to_dst_init_short(CTArgs::local_cb);
