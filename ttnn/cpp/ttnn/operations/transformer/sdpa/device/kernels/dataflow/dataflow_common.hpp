@@ -203,6 +203,43 @@ FORCE_INLINE void read_q_subblock(
     cb_push_back(cb_id, sb_tiles);
 }
 
+// Read one K column subblock: subblock_w rows of K[Sk x DHt], stored transposed.
+// K[s_local, d] -> CB offset (s_local + d * subblock_w) within the reserved region.
+// Pushes subblock_w * src_cols tiles independently.
+// Returns base_write_ptr for use as forwarding source address.
+template <uint32_t tile_bytes, typename ReaderType>
+FORCE_INLINE uint32_t read_k_subblock(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    uint32_t start_tile_id,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t subblock_w,
+    const uint32_t full_dh_cols) {
+    const uint32_t num_tiles = subblock_w * src_cols;
+    cb_reserve_back(cb_id, num_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+
+    for (uint32_t s = 0; s < src_rows; ++s) {
+        uint32_t tile_id = start_tile_id + s * full_dh_cols;
+        for (uint32_t d = 0; d < src_cols; ++d) {
+            uint32_t write_offset = (s + d * subblock_w) * tile_bytes;
+            noc_async_read_tile(tile_id + d, reader, base_write_ptr + write_offset);
+        }
+    }
+
+    // Zero-pad rows beyond src_rows
+    for (uint32_t s = src_rows; s < subblock_w; ++s) {
+        for (uint32_t d = 0; d < src_cols; ++d) {
+            fill_tile_zeros<tile_bytes, false>(cb_id, s + d * subblock_w);
+        }
+    }
+
+    noc_async_read_barrier();
+    cb_push_back(cb_id, num_tiles);
+    return base_write_ptr;
+}
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
 void read_paged_chunk_with_padding(
     const ReaderType& reader,

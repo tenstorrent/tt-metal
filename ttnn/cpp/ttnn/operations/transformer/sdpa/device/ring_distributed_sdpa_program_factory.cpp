@@ -223,10 +223,11 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         (uint32_t)is_chunked,  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                 // use_attention_sink
-        qk_out_subblock_h  // qk_subblock_h
+        0,                  // use_attention_sink
+        qk_out_subblock_h,  // qk_subblock_h
+        qk_out_subblock_w   // qk_subblock_w
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 24-27)
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 25-28)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
