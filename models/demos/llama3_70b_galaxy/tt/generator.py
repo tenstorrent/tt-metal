@@ -23,8 +23,7 @@ from models.common.llama_models import (
     CompletionPrediction,
 )
 
-from models.common.sampling.generator import format_sampling_params
-from models.tt_transformers.tt.generator import SamplingParams
+from models.common.sampling import SamplingParams, format_sampling_params
 
 
 def get_padded_prefill_len(seq_len: int) -> int:

@@ -12,9 +12,32 @@ from loguru import logger
 
 import ttnn
 
-from ._utils import clamp, is_default_value
+from ._utils import clamp, is_default_value, split_list
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
+
+
+@dataclass(frozen=True)
+class SamplingParams:
+    """
+    Sampling parameters for on-device greedy decoding / sampling.
+
+    Used by Generator decode/prefill functions. vLLM has its own duck-type-compatible
+    TTSamplingParams (in vllm/worker/tt_model_runner.py) that works with the same
+    format_sampling_params / chunk_sampling_params functions.
+    """
+
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
+    presence_penalty: float | list[float] = 0.0
+    frequency_penalty: float | list[float] = 0.0
+    repetition_penalty: float | list[float] = 1.0
+    seed: int | list[int] | None = None
+    enable_log_probs: bool | list[bool] = False
+
+
+SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
 @dataclass(frozen=True)
@@ -95,6 +118,76 @@ class SamplingGenerator:
         if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens(tokens)
+
+    # ---------------------------------------------------------------------
+    # Prefill / decode state helpers
+    # ---------------------------------------------------------------------
+    def apply_prefill_state(
+        self,
+        *,
+        sampling_params,
+        prompt_tokens: torch.Tensor | None,
+        empty_slots: list[int],
+    ):
+        """Prepare sampling state for a prefill request.
+
+        Resets params, seeds, prompt tokens, and output state in the correct order.
+        """
+        self.reset_sampling_params(sampling_params)
+        if getattr(sampling_params, "seed", None) is not None:
+            self.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+        self.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
+        if prompt_tokens is not None:
+            self.reset_prompt_tokens(prompt_tokens)
+        self.reset_output_state()
+
+    def apply_decode_state(
+        self,
+        sampling_params_chunks: list,
+        *,
+        reset_batch: bool = False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
+    ):
+        """Format, merge (if row-sharded), and apply sampling params for one model instance.
+
+        Args:
+            sampling_params_chunks: List of SamplingParams assigned to this instance.
+                Length-1 for simple cases; >1 for row-sharded (sampling_dp > data_parallel).
+            reset_batch: Also reset prompt tokens and output state (first decode step).
+            prompt_tokens: Prompt tokens for penalty tracking.
+            output_tokens: Output tokens for penalty tracking.
+
+        Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
+        advancement separately since generators call it at different points.
+        """
+        chunks_per_model = len(sampling_params_chunks)
+
+        if chunks_per_model == 1:
+            formatted_params = format_sampling_params(sampling_params_chunks[0], 32)
+            self.reset_sampling_params(formatted_params)
+        else:
+            # Row-sharded case: merge all chunks then format
+            def _merge_field(params_list, field_name):
+                vals = []
+                all_none = True
+                for p in params_list:
+                    v = getattr(p, field_name)
+                    if v is None:
+                        continue
+                    all_none = False
+                    vals.extend(v if isinstance(v, list) else [v])
+                return None if all_none else vals
+
+            merged = SamplingParams(
+                **{field: _merge_field(sampling_params_chunks, field) for field in SAMPLING_PARAM_FIELDS}
+            )
+            formatted_params = format_sampling_params(merged, 32 * chunks_per_model)
+            self.reset_sampling_params(formatted_params)
+
+        if reset_batch:
+            self.reset_prompt_tokens(prompt_tokens)
+            self.reset_output_state(output_tokens)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
@@ -343,6 +436,65 @@ def format_sampling_params(sampling_params, max_batch_size):
             sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
 
     return sampling_params
+
+
+def broadcast_sampling_params(
+    formatted_sampling_params,
+    idx: int,
+    slot_len: int = 32,
+):
+    """
+    Create a new SamplingParams where each list field is broadcast to a full list of length
+    ``slot_len``, taking the value from ``idx``. Does not mutate the input.
+    """
+    kwargs = {}
+    for f in fields(formatted_sampling_params):
+        value = getattr(formatted_sampling_params, f.name)
+        if isinstance(value, List):
+            chosen = value[idx] if idx < len(value) else value[0]
+        else:
+            chosen = value
+        if chosen is None:
+            kwargs[f.name] = None
+        else:
+            kwargs[f.name] = [chosen] * slot_len
+    return SamplingParams(**kwargs)
+
+
+def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
+    """
+    Chunk a SamplingParams (or duck-type-compatible object) into ``sampling_dp`` pieces.
+
+    List fields are split evenly (length must be divisible by ``sampling_dp``).
+    Scalar fields are replicated to all chunks.  Falls back to dataclass defaults
+    for missing attributes so that vLLM's TTSamplingParams works transparently.
+
+    Returns a list of SamplingParams.
+    """
+    if sampling_dp == 1:
+        return [sampling_params]
+
+    chunked_fields = {}
+    for field_name in SAMPLING_PARAM_FIELDS:
+        try:
+            val = getattr(sampling_params, field_name)
+        except AttributeError:
+            if hasattr(SamplingParams, field_name):
+                val = getattr(SamplingParams, field_name)
+            else:
+                raise
+        if isinstance(val, list):
+            assert (
+                len(val) % sampling_dp == 0
+            ), f"Sampling param '{field_name}' length {len(val)} not divisible by sampling_dp {sampling_dp}"
+            chunked_fields[field_name] = split_list(val, sampling_dp)
+        else:
+            chunked_fields[field_name] = [val] * sampling_dp
+
+    return [
+        SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
+        for i in range(sampling_dp)
+    ]
 
 
 class SeedManager:
