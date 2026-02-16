@@ -39,6 +39,12 @@ target_compile_definitions(
         CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 target_compile_definitions(
+    llama_inference
+    PRIVATE
+        DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
+)
+target_compile_definitions(
     nano_gpt_aggregator
     PRIVATE
         DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
