@@ -97,15 +97,8 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
-    DPRINT << "compile time args:" << ENDL();
-    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
-    DPRINT << "ring_size: " << ring_size << ENDL();
-    DPRINT << "cb_input_id: " << cb_input_id << ENDL();
-    DPRINT << "cb_intermediate_id: " << cb_intermediate_id << ENDL();
-    DPRINT << "cb_reader_output_id: " << cb_reader_output_id << ENDL();
-    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
-    DPRINT << "page_size: " << page_size << ENDL();
-    DPRINT << "batch_size: " << input_tensor_B << ENDL();
+    ASSERT(dim == 3);
+    ASSERT(slice_C == 1);
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
@@ -113,63 +106,31 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    ASSERT(dim == 3);
-    ASSERT(slice_C == 1);
-    DPRINT << "The reader kernel running its loop." << ENDL();
-    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
-    DPRINT << "effective_worker_id: " << effective_worker_id << ENDL();
-    DPRINT << "effective_advance_by_tiles: " << effective_advance_by_tiles << ENDL();
-    DPRINT << "slice_Wt: " << slice_Wt << ENDL();
-    DPRINT << "slice_C (must be 1): " << slice_C << ENDL();
-    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
-    DPRINT << "direction: " << (uint32_t)direction << ENDL();
-    DPRINT << "input_tensor_Wt: " << input_tensor_Wt << ENDL();
-    DPRINT << " out_ready_sem: " << out_ready_sem << ENDL();
-    DPRINT << " worker_id: " << worker_id << ENDL();
-    DPRINT << " num_workers: " << num_workers << ENDL();
-    DPRINT << " effective_worker_id: " << effective_worker_id << ENDL();
-
     uint32_t out_ready_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
-        DPRINT << "================================================" << ENDL();
-        DPRINT << "batch: " << b << " started" << ENDL();
 
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
-            DPRINT << "--------------------------------" << ENDL();
-            DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
-
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
-                DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_block_wt);
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                 for (uint32_t i = 0; i < ring_size; i++) {
-                    DPRINT << "************************************************" << ENDL();
-                    DPRINT << "ring iteration: " << i << " started" << ENDL();
-                    DPRINT << "slice_idx: " << slice_idx << ENDL();
-                    DPRINT << "direction: " << (uint32_t)direction << ENDL();
-
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
-                    DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
-                           << ", chunk_idx: " << chunk_idx << ENDL();
 
                     // Wait for all chunk_piece_idx tiles for this ring iteration to be written
                     if (do_reduce) {
-                        DPRINT << "Waiting for the semaphore" << ENDL();
-                        DPRINT << "out_ready_sem_target: " << out_ready_sem_target << ENDL();
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
                         out_ready_sem_target++;
                     }
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
@@ -218,7 +179,6 @@ void kernel_main() {
                                     actual_slice_idx,
                                     slice_Wt,
                                     input_tensor_Wt);
-                                DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
                                 const uint32_t input_tile_id = global_tile_idx + batch_offset;
 
                                 const uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
@@ -247,7 +207,6 @@ void kernel_main() {
                                 cb_push_back(cb_intermediate_id, tile_granularity);
                             }
                         }
-                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                     }
 
                     // Next slice idx
@@ -256,18 +215,11 @@ void kernel_main() {
                     } else {
                         slice_idx++;
                     }
-
-                    DPRINT << "ring iteration: " << i << " done" << ENDL();
                 }
-                DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
             }
-            DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
         }
         // Reset the semaphore before the next batch
-        DPRINT << "Resetting the semaphore before the next batch" << ENDL();
-        DPRINT << "out_ready_sem_target: " << out_ready_sem_target << ENDL();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
-        DPRINT << "batch: " << b << " done" << ENDL();
     }
 }

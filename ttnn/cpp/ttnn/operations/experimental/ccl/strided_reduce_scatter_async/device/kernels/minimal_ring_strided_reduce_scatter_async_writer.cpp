@@ -223,65 +223,30 @@ void kernel_main() {
             NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
 
-        // Skip barrier semaphore in minimal version (no fabric multicast to increment it)
-
-        // Let's set some particular values for the params used
-        const uint32_t batch_size = input_tensor_B;
-        const uint32_t last_mm_core_idx = mm_cores_y - 1;
-        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_blocks_per_core;
-
-        uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
-        const uint32_t effective_advance_by_tiles = 2 * num_workers;
-
         ASSERT(dim == 3);
         ASSERT(slice_C == 1);
 
-        DPRINT << "The writer kernel running its loop." << ENDL();
-        DPRINT << "my_chip_id: " << my_chip_id << ENDL();
-        DPRINT << "ring_size: " << ring_size << ENDL();
-        DPRINT << "tile_granularity: " << tile_granularity << ENDL();
-        DPRINT << "page_size: " << page_size << ENDL();
-        DPRINT << "output_batch_num_pages: " << output_batch_num_pages << ENDL();
-        DPRINT << "input_tensor_B: " << input_tensor_B << ENDL();
-        DPRINT << "input_tensor_Wt: " << input_tensor_Wt << ENDL();
-        DPRINT << "slice_C: " << slice_C << ENDL();
-        DPRINT << "slice_Wt: " << slice_Wt << ENDL();
-        DPRINT << "dim: " << dim << ENDL();
-        DPRINT << "chunk_width_in_tiles: " << chunk_width_in_tiles << ENDL();
-        DPRINT << "direction: " << (uint32_t)direction << ENDL();
-        DPRINT << "worker_id: " << worker_id << ENDL();
-        DPRINT << "num_workers: " << num_workers << ENDL();
-        DPRINT << "batch_size: " << input_tensor_B << ENDL();
+        const uint32_t batch_size = input_tensor_B;
+        const uint32_t last_mm_core_idx = mm_cores_y - 1;
+        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_blocks_per_core;
+        const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
+        const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
         for (uint32_t b = 0; b < batch_size; b++) {
-            DPRINT << "================================================" << ENDL();
-            DPRINT << "batch: " << b << " started" << ENDL();
-
             for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
-                DPRINT << "--------------------------------" << ENDL();
-                DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
                 uint32_t output_tile_id_start = b * output_batch_num_pages;
 
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
-                    DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                     const uint32_t effective_chunk_width_in_tiles =
                         get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_block_wt);
                     const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
                     for (uint32_t i = 0; i < ring_size; i++) {
-                        DPRINT << "************************************************" << ENDL();
-                        DPRINT << "ring iteration: " << i << " started" << ENDL();
-                        DPRINT << "slice_idx: " << slice_idx << ENDL();
-                        DPRINT << "direction: " << (uint32_t)direction << ENDL();
-
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
-                        DPRINT << "actual_slice_idx: " << actual_slice_idx << ", m_block_iter: " << m_block_iter
-                               << ", chunk_idx: " << chunk_idx << ENDL();
                         const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                            DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
                             uint32_t first_mm_core_idx = 0;
@@ -301,15 +266,12 @@ void kernel_main() {
                                 last_mm_core_idx,
                                 effective_subchunk_size,
                                 effective_chunk_width_in_tiles);
-                            DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
 
                             while (tiles_to_read > 0) {
                                 const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
 
-                                DPRINT << "Waiting for tiles in the output buffer" << ENDL();
                                 cb_wait_front(cb_output_id, tile_granularity);
-                                DPRINT << "OK done waiting for tiles in the output buffer" << ENDL();
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                                 uint32_t tiles_remaining_in_step = tiles_to_read_in_this_step;
@@ -345,7 +307,6 @@ void kernel_main() {
                                         effective_subchunk_size,
                                         effective_chunk_width_in_tiles,
                                         mm_block_ht);
-                                    DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
 
                                     if (i < (ring_size - 1)) {
                                         auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
@@ -410,10 +371,7 @@ void kernel_main() {
                                 }
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, tile_granularity);
-                                DPRINT << "tiles_read" << ENDL();
                             }
-
-                            DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                         }
 
                         // Signal reader after all chunk_piece_idx tiles for this ring iteration are written
@@ -434,11 +392,8 @@ void kernel_main() {
                         } else {
                             slice_idx++;
                         }
-                        DPRINT << "ring iteration: " << i << " done" << ENDL();
                     }
-                    DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
                 }
-                DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
             }
 
             // Signal batch done and wait for all other chips to finish before next batch
@@ -452,7 +407,6 @@ void kernel_main() {
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
-            DPRINT << "batch: " << b << " done" << ENDL();
         }
 
         noc_async_write_barrier();

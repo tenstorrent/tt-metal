@@ -24,6 +24,9 @@ void kernel_main() {
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
     constexpr uint32_t mm_N_block_wt = get_compile_time_arg_val(13);
 
+    ASSERT(dim == 3);
+    ASSERT(slice_C == 1);
+
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
@@ -34,58 +37,18 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    DPRINT << "compile time args:" << ENDL();
-    DPRINT << "input_cb_id: " << input_cb_id << ENDL();
-    DPRINT << "intermediate_cb: " << intermediate_cb << ENDL();
-    DPRINT << "output_cb: " << output_cb << ENDL();
-    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
-    DPRINT << "ring_size: " << ring_size << ENDL();
-    DPRINT << "batch_size: " << input_tensor_B << ENDL();
-    DPRINT << "effective_worker_id: " << effective_worker_id << ENDL();
-    DPRINT << "effective_advance_by_tiles: " << effective_advance_by_tiles << ENDL();
-    DPRINT << "last_mm_core_idx: " << last_mm_core_idx << ENDL();
-    DPRINT << "slice_Wt: " << slice_Wt << ENDL();
-    DPRINT << "tile_granularity: " << tile_granularity << ENDL();
-    DPRINT << "direction: " << (uint32_t)direction << ENDL();
-    DPRINT << "worker_id: " << worker_id << ENDL();
-    DPRINT << "num_workers: " << num_workers << ENDL();
-    DPRINT << "batch_size: " << batch_size << ENDL();
-    DPRINT << "mm_M_blocks_per_core: " << mm_M_blocks_per_core << ENDL();
-    DPRINT << "chunks_per_mm_N_block: " << chunks_per_mm_N_block << ENDL();
-    DPRINT << "ring_size: " << ring_size << ENDL();
-    DPRINT << "mm_N_blocks_per_slice: " << mm_N_blocks_per_slice << ENDL();
-    DPRINT << "mm_block_ht: " << mm_block_ht << ENDL();
-    DPRINT << "mm_cores_y: " << mm_cores_y << ENDL();
-    DPRINT << "chunk_width_in_tiles: " << chunk_width_in_tiles << ENDL();
-
-    DPRINT << "The reduction kernel running its loop." << ENDL();
-
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < batch_size; b++) {
-        DPRINT << "================================================" << ENDL();
-        DPRINT << "batch: " << b << " started" << ENDL();
-
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
-            DPRINT << "--------------------------------" << ENDL();
-            DPRINT << "m_block_iter: " << m_block_iter << " started" << ENDL();
-
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
-                DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
-
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_block_wt);
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
 
                 for (uint32_t i = 1; i < ring_size; i++) {
-                    DPRINT << "************************************************" << ENDL();
-                    DPRINT << "ring iteration: " << i << " started" << ENDL();
-                    DPRINT << "direction: " << (uint32_t)direction << ENDL();
-
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
-                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " started" << ENDL();
-
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;
@@ -107,8 +70,6 @@ void kernel_main() {
                             effective_subchunk_size,
                             effective_chunk_width_in_tiles);
 
-                        DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
-
                         while (tiles_to_read > 0) {
                             uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
@@ -126,19 +87,9 @@ void kernel_main() {
                             cb_pop_front(intermediate_cb, tile_granularity);
                             cb_push_back(output_cb, tile_granularity);
                         }
-
-                        DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
                     }
-
-                    DPRINT << "ring iteration: " << i << " done" << ENDL();
                 }
-
-                DPRINT << "chunk_idx: " << chunk_idx << " done" << ENDL();
             }
-
-            DPRINT << "m_block_iter: " << m_block_iter << " done" << ENDL();
         }
-
-        DPRINT << "batch: " << b << " done" << ENDL();
     }
 }
