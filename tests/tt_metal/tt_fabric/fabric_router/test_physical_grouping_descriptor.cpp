@@ -2602,4 +2602,85 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x2) {
         }
     }
 }
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyGraph_8x16Mesh_WithCardinalConnections) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with 8x16_Mesh: 4 HOSTS instances arranged in 2x2 grid
+    // Note: get_groupings_by_name searches by type, so we need to search all groupings by name
+    auto all_groupings = pgd.get_all_groupings();
+    auto mesh_it = std::find_if(
+        all_groupings.begin(), all_groupings.end(), [](const GroupingInfo& g) { return g.name == "8x16_Mesh"; });
+    ASSERT_NE(mesh_it, all_groupings.end()) << "8x16_Mesh grouping should exist";
+    const auto& mesh_grouping = *mesh_it;
+
+    // Build flattened adjacency graph
+    auto flattened_graph = pgd.build_flattened_adjacency_graph(mesh_grouping);
+
+    // Verify graph has nodes (ASIC locations from trays)
+    // Each ASIC should be uniquified based on instance path: 4 HOSTS * 4 trays * 8 ASICs = 128 unique nodes
+    const auto& nodes = flattened_graph.get_nodes();
+    EXPECT_EQ(nodes.size(), 128u) << "8x16_Mesh should have 128 unique ASIC locations (4 HOSTS * 4 trays * 8 ASICs)";
+
+    // Verify cardinal connections exist (HOSTS level uses cardinal connections)
+    const auto& cardinal_connections = flattened_graph.get_cardinal_connections();
+    EXPECT_GT(cardinal_connections.size(), 0u) << "Should have cardinal connections between HOSTS instances";
+
+    // Verify each cardinal connection has valid groups and connection count
+    for (const auto& conn : cardinal_connections) {
+        EXPECT_FALSE(conn.group_a.empty()) << "Cardinal connection group_a should not be empty";
+        EXPECT_FALSE(conn.group_b.empty()) << "Cardinal connection group_b should not be empty";
+        EXPECT_GT(conn.num_connections, 0u) << "Cardinal connection should have positive num_connections";
+        // 8x16_Mesh has num_connections: 4 between HOSTS instances
+        EXPECT_GE(conn.num_connections, 1u) << "Cardinal connection should have at least 1 connection";
+    }
+
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_graph.get_neighbors(node);
+        // Every node has at least 2 neighbors
+        EXPECT_GE(neighbors.size(), 2u) << "Each ASIC should have at least 2 neighbors (internal tray mesh)";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyGraph_4x4Mesh_WithConcreteEdges) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+
+    // Test with 4x4_Mesh: 2 TRAY instances - leaf level should have concrete edges
+    // Note: get_groupings_by_name searches by type, so we need to search all groupings by name
+    auto all_groupings = pgd.get_all_groupings();
+    auto tray_mesh_it = std::find_if(
+        all_groupings.begin(), all_groupings.end(), [](const GroupingInfo& g) { return g.name == "4x4_Mesh"; });
+    ASSERT_NE(tray_mesh_it, all_groupings.end()) << "4x4_Mesh grouping should exist";
+    const auto& tray_mesh_grouping = *tray_mesh_it;
+
+    auto tray_flattened_graph = pgd.build_flattened_adjacency_graph(tray_mesh_grouping);
+    const auto& tray_nodes = tray_flattened_graph.get_nodes();
+    // Each ASIC should be uniquified based on instance path: 2 trays * 8 ASICs = 16 unique nodes
+    EXPECT_EQ(tray_nodes.size(), 16u) << "4x4_Mesh should have 16 unique ASIC locations (2 trays * 8 ASICs)";
+
+    // 4x4_Mesh has 2 TRAY instances - connection between trays uses cardinal connections
+    const auto& tray_cardinal = tray_flattened_graph.get_cardinal_connections();
+    EXPECT_EQ(tray_cardinal.size(), 1u) << "4x4_Mesh should have 1 cardinal connection between the 2 TRAY instances";
+
+    // Verify cardinal connection details
+    if (!tray_cardinal.empty()) {
+        const auto& conn = tray_cardinal[0];
+        EXPECT_FALSE(conn.group_a.empty()) << "Cardinal connection group_a should not be empty";
+        EXPECT_FALSE(conn.group_b.empty()) << "Cardinal connection group_b should not be empty";
+        EXPECT_GT(conn.num_connections, 0u) << "Cardinal connection should have positive num_connections";
+        // The num_connections is derived from adjacency graph neighbor counts
+        EXPECT_GE(conn.num_connections, 1u) << "Cardinal connection should have at least 1 connection";
+    }
+
+    // Verify concrete edges exist (from internal TRAY mesh connections)
+    for (uint32_t node : tray_nodes) {
+        const auto& neighbors = tray_flattened_graph.get_neighbors(node);
+        // Every node has at least 2 neighbors from internal tray mesh
+        EXPECT_GE(neighbors.size(), 2u) << "Each ASIC should have at least 2 neighbors (internal tray mesh)";
+    }
+}
 }  // namespace tt::tt_fabric::fabric_router_tests
