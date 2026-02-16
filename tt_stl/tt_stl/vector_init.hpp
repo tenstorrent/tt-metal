@@ -22,6 +22,7 @@ Container container_init(Vs&&... init_values)
     requires requires {
         std::disjunction_v<std::is_same<typename Container::value_type, Vs>...>;
         requires N >= sizeof...(Vs);
+        requires sizeof...(Vs) > 0;
     }
 {
     Container vec;
@@ -37,15 +38,16 @@ Container container_init(Vs&&... init_values) {
 
 template <typename Container, typename... Vs>
 Container container_init(const vector_size reserve_count, Vs&&... init_values)
-    requires requires { std::disjunction_v<std::is_same<typename Container::value_type, Vs>...>; }
+    requires requires {
+        std::disjunction_v<std::is_same<typename Container::value_type, Vs>...>;
+        requires sizeof...(Vs) > 0;
+    }
 {
     Container vec;
     vec.reserve(*reserve_count);
     (vec.emplace_back(std::forward<Vs>(init_values)), ...);
     return vec;
 }
-
-// vector_init: convenience wrappers that delegate to container_init with std::vector<T>
 
 template <typename T, size_t N, typename... Vs>
 std::vector<T> vector_init(Vs&&... init_values) {
@@ -61,8 +63,6 @@ template <typename T, typename... Vs>
 std::vector<T> vector_init(const vector_size reserve_count, Vs&&... init_values) {
     return container_init<std::vector<T>>(reserve_count, std::forward<Vs>(init_values)...);
 }
-
-// small_vector_init: convenience wrappers that delegate to container_init with ttsl::SmallVector<T>
 
 template <typename T, size_t N, typename... Vs>
 SmallVector<T> small_vector_init(Vs&&... init_values) {

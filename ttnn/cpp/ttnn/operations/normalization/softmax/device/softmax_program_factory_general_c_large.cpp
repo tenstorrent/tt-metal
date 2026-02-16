@@ -72,7 +72,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     // Data movement kernels
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
-    auto reader_ct_args = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> reader_ct_args;
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = operations::CreateReadKernel(
         program,
@@ -80,7 +80,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
         all_cores,
         reader_ct_args,
         reader_defines);
-    auto writer_ct_args = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> writer_ct_args;
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = operations::CreateWriteKernel(
         program,

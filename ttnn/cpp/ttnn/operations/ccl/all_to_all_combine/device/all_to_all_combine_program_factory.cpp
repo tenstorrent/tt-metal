@@ -232,8 +232,10 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
-    auto dest_mesh_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(all_mesh_coordinates.size()));
-    auto dest_chip_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(all_mesh_coordinates.size()));
+    std::vector<uint32_t> dest_mesh_id;
+    std::vector<uint32_t> dest_chip_id;
+    dest_mesh_id.reserve(all_mesh_coordinates.size());
+    dest_chip_id.reserve(all_mesh_coordinates.size());
     for (const auto& coord : all_mesh_coordinates) {
         const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);

@@ -150,7 +150,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     // Data movement kernels
-    auto reader_compile_time_args = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     if (tensor_args.mask.has_value()) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().buffer()).append_to(reader_compile_time_args);

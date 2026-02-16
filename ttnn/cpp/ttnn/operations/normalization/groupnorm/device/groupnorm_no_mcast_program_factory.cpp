@@ -467,8 +467,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         {"num_rows_per_group", num_rows_per_batch_per_core_group_2},
     };
 
-    auto reader_mcast_sender_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
-    auto reader_mcast_sender_compile_time_args_group_2 = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1;
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2;
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
@@ -505,8 +505,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
             .named_compile_args = reader_mcast_sender_named_compile_time_args_group_2});
 
     std::map<std::string, std::string> writer_defines;
-    auto writer_mcast_sender_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
-    auto writer_mcast_sender_compile_time_args_group_2 = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1;
+    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_2;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
@@ -623,8 +623,8 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
 
-    auto mcast_sender_compute_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
-    auto mcast_sender_compute_compile_time_args_group_2 = ttsl::vector_init<uint32_t>();
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1;
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2;
 
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},

@@ -301,8 +301,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
     }
 
-    auto dest_mesh_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(tensor_coords.coords().size()));
-    auto dest_chip_id = ttsl::vector_init<uint32_t>(ttsl::vector_size(tensor_coords.coords().size()));
+    std::vector<uint32_t> dest_mesh_id;
+    std::vector<uint32_t> dest_chip_id;
+    dest_mesh_id.reserve(tensor_coords.coords().size());
+    dest_chip_id.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
