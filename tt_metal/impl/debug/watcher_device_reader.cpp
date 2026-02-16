@@ -61,19 +61,8 @@ namespace {  // Helper functions
 const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor_index) {
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            static const char* const names[] = {
-                " brisc",
-                "ncrisc",
-                "trisc0",
-                "trisc1",
-                "trisc2",
-            };
-            TT_FATAL(
-                processor_index < 5,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
-                processor_index,
-                core_type);
-            return names[processor_index];
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
         case HalProgrammableCoreType::ACTIVE_ETH: {
             static const char* const names[] = {"erisc", "subordinate_erisc"};

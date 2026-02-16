@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 
 struct PreAllGatherDeviceOperation {
     using operation_attributes_t = DitLayernormPreAllGatherParams;
-    using tensor_args_t = Tensor;
+    using tensor_args_t = DitLayernormPreAllGatherInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<PreAllGatherWelfordProgramFactory>;
@@ -36,6 +36,7 @@ namespace ttnn::prim {
 
 Tensor dit_layernorm_pre_all_gather(
     const Tensor& input,
+    const Tensor& recip_tensor,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& memory_config);

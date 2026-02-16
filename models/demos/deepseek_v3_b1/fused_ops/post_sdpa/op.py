@@ -91,15 +91,16 @@ class PostSDPA:
         weights2_tensor,
         gather1_output_tensor,
         gather2_output_tensor,
-        intermediate_tensor,
-        output_tensor,
-        semaphores,
+        intermediate_tensor=None,
+        output_tensor=None,
+        semaphores=None,
         cluster_axis=0,
         residual_tensor_mesh=None,
         fp32_dest_acc_en=False,
+        ccl_enabled=True,
     ):
         """
-        Execute post_sdpa fused operation with CCL all-reduce using generic_op.
+        Execute post_sdpa fused operation with optional CCL all-reduce using generic_op.
 
         Args:
             input_tensor_mesh: Input tensor mesh [1, 512] (height-sharded across 8x8 matmul1 cores)
@@ -107,15 +108,17 @@ class PostSDPA:
             weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 112 cores)
             gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
             gather2_output_tensor: Intermediate tensor mesh [1, 7168] for gather2/CCL (on gather core per device)
-            intermediate_tensor: CCL intermediate tensor mesh for receiving remote data (32x32 tiles)
-            output_tensor: Final output tensor mesh [1, 7168]
-            semaphores: List of two global semaphores for CCL synchronization
+            intermediate_tensor: CCL intermediate tensor mesh for receiving remote data (None when ccl_enabled=False)
+            output_tensor: Final output tensor mesh [1, 7168] (None when ccl_enabled=False)
+            semaphores: List of two global semaphores for CCL synchronization (None when ccl_enabled=False)
             cluster_axis: Axis for all-reduce (default 0)
-            residual_tensor_mesh: Optional tensor mesh for residuals [1, 7168]
+            residual_tensor_mesh: Optional tensor mesh for residuals [1, 7168] (ignored when ccl_enabled=False)
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
+            ccl_enabled: Whether to enable CCL all-reduce after gather2 (default True)
 
         Returns:
-            Output tensor mesh with full fused result including all-reduce
+            When ccl_enabled=True: output_tensor mesh with all-reduced result
+            When ccl_enabled=False: gather2_output_tensor mesh with per-device gather2 result
         """
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
@@ -125,16 +128,18 @@ class PostSDPA:
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         gather2_output_tensors_per_device = ttnn.get_device_tensors(gather2_output_tensor)
-        intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
-        output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        if residual_tensor_mesh is not None:
+        if ccl_enabled:
+            intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
+            output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
+        if ccl_enabled and residual_tensor_mesh is not None:
             residual_tensors_per_device = ttnn.get_device_tensors(residual_tensor_mesh)
 
-        # CCL semaphores
-        ccl_semaphore1 = semaphores[0]
-        ccl_semaphore2 = semaphores[1]
-        ccl_semaphore1_addr = ttnn.get_global_semaphore_address(ccl_semaphore1)
-        ccl_semaphore2_addr = ttnn.get_global_semaphore_address(ccl_semaphore2)
+        # CCL semaphores (only when CCL is enabled)
+        if ccl_enabled:
+            ccl_semaphore1 = semaphores[0]
+            ccl_semaphore2 = semaphores[1]
+            ccl_semaphore1_addr = ttnn.get_global_semaphore_address(ccl_semaphore1)
+            ccl_semaphore2_addr = ttnn.get_global_semaphore_address(ccl_semaphore2)
 
         # Get tensor properties from first device
         input_tensor_sample = input_tensors_per_device[0]
@@ -147,11 +152,12 @@ class PostSDPA:
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
         tile_32x32_size = TILE_32x32.get_tile_size(data_format)
 
-        # CCL intermediate tensor info (32x32 tiles)
-        intermediate_tensor_sample = intermediate_tensors_per_device[0]
-        intermediate_tile = intermediate_tensor_sample.tile
-        intermediate_tile_height, intermediate_tile_width = intermediate_tile.tile_shape
-        standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
+        # CCL intermediate tensor info (32x32 tiles, only when CCL is enabled)
+        if ccl_enabled:
+            intermediate_tensor_sample = intermediate_tensors_per_device[0]
+            intermediate_tile = intermediate_tensor_sample.tile
+            intermediate_tile_height, intermediate_tile_width = intermediate_tile.tile_shape
+            standard_tile_size_bytes = intermediate_tile_height * intermediate_tile_width * element_size
 
         # ========================================================================
         # Core grid configuration (same for all devices)
@@ -277,7 +283,6 @@ class PostSDPA:
         l1_alignment = 16
 
         has_residual = 1 if residual_tensor_mesh is not None else 0
-        using_persistent_buffers = 1  # Use persistent buffers for CCL
 
         # ========================================================================
         # Semaphore IDs
@@ -307,8 +312,9 @@ class PostSDPA:
                 # Get the device's tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 gather2_output_tensor_device = gather2_output_tensors_per_device[device_idx]
-                output_tensor_device = output_tensors_per_device[device_idx]
-                intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
+                if ccl_enabled:
+                    output_tensor_device = output_tensors_per_device[device_idx]
+                    intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
 
                 device = input_tensor_device.device()
 
@@ -319,19 +325,20 @@ class PostSDPA:
                 ccl_sender_noc_core = device.worker_core_from_logical_core(ccl_sender_core)
                 ccl_receiver_noc_core = gather_dest_noc_core  # Same as gather core
 
-                # Determine CCL neighbor and semaphores based on position
-                ccl_sender_link = 0 if is_first_chip else 1
-                ccl_receiver_link = 1 if is_first_chip else 0
-                ccl_sender_semaphore_addr = ccl_semaphore1_addr if is_first_chip else ccl_semaphore2_addr
-                ccl_receiver_semaphore_addr = ccl_semaphore2_addr if is_first_chip else ccl_semaphore1_addr
+                # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
+                if ccl_enabled:
+                    ccl_sender_link = 0 if is_first_chip else 1
+                    ccl_receiver_link = 1 if is_first_chip else 0
+                    ccl_sender_semaphore_addr = ccl_semaphore1_addr if is_first_chip else ccl_semaphore2_addr
+                    ccl_receiver_semaphore_addr = ccl_semaphore2_addr if is_first_chip else ccl_semaphore1_addr
 
-                # Calculate neighbor coordinate
-                if is_first_chip:
-                    neighbor_row = row + 1 if cluster_axis == 0 else row
-                    neighbor_col = col if cluster_axis == 0 else col + 1
-                else:
-                    neighbor_row = row - 1 if cluster_axis == 0 else row
-                    neighbor_col = col if cluster_axis == 0 else col - 1
+                    # Calculate neighbor coordinate
+                    if is_first_chip:
+                        neighbor_row = row + 1 if cluster_axis == 0 else row
+                        neighbor_col = col if cluster_axis == 0 else col + 1
+                    else:
+                        neighbor_row = row - 1 if cluster_axis == 0 else row
+                        neighbor_col = col if cluster_axis == 0 else col - 1
 
                 # Buffer addresses
                 gather1_receiver_data_addr = gather1_output_tensor.buffer_address()
@@ -403,7 +410,6 @@ class PostSDPA:
                     ("ccl_receiver_num_standard_tiles", ccl_num_tiles),
                     ("ccl_receiver_cb_residual", ccl_residual_cb),
                     ("ccl_receiver_has_residual", has_residual),
-                    ("ccl_receiver_using_persistent_buffer", using_persistent_buffers),
                     ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather2 already pushed to CB7
                 ]
 
@@ -458,7 +464,6 @@ class PostSDPA:
                     ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
                     ("ccl_sender_dst_num_hops", 1),
                     ("ccl_sender_num_connections", 1),
-                    ("ccl_sender_using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 # ========================================================================
@@ -551,27 +556,6 @@ class PostSDPA:
                     gather2_dst_cb, gather2_output_tensor_device
                 )
 
-                # CB 8: CCL sender input (reads from gather2 output via NOC)
-                ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=ccl_sender_in_cb,
-                    data_format=data_format,
-                    page_size=tile_1x32_size,
-                    tile=matmul1_out_tile_descriptor,
-                )
-                ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=ccl_num_pages * tile_1x32_size,
-                    core_ranges=ccl_sender_core_grid,
-                    format_descriptors=[ccl_sender_in_cb_format],
-                )
-
-                # CB 9: CCL remote data (backed by intermediate tensor with 1x32 tiles)
-                # The intermediate tensor is where the CCL sender writes remote data
-                ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    ccl_remote_data_cb, intermediate_tensor_device
-                )
-                ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
-
-                # CB 10: CCL residual (optional, from sharded tensor)
                 cb_list = [
                     matmul1_in0_cb_descriptor,
                     matmul1_in1_cb_descriptor,
@@ -581,58 +565,83 @@ class PostSDPA:
                     matmul2_in1_cb_descriptor,
                     matmul2_out_cb_descriptor,
                     gather2_dst_cb_descriptor,
-                    ccl_sender_in_cb_descriptor,
-                    ccl_remote_data_cb_descriptor,
                 ]
 
-                if residual_tensor_mesh is not None:
-                    ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        ccl_residual_cb, residual_tensors_per_device[device_idx]
+                # CCL CBs (8-13): only when CCL is enabled
+                if ccl_enabled:
+                    # CB 8: CCL sender input (reads from gather2 output via NOC)
+                    ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=ccl_sender_in_cb,
+                        data_format=data_format,
+                        page_size=tile_1x32_size,
+                        tile=matmul1_out_tile_descriptor,
                     )
-                    ccl_residual_cb_descriptor.core_ranges = gather_core_grid
-                    ccl_residual_cb_descriptor.total_size = ccl_num_tiles * tile_1x32_size
-                    ccl_residual_cb_descriptor.format_descriptors = [
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=ccl_residual_cb,
-                            data_format=data_format,
-                            page_size=tile_1x32_size,
-                            tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
-                        )
-                    ]
-                    cb_list.append(ccl_residual_cb_descriptor)
+                    ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=ccl_num_pages * tile_1x32_size,
+                        core_ranges=ccl_sender_core_grid,
+                        format_descriptors=[ccl_sender_in_cb_format],
+                    )
+                    cb_list.append(ccl_sender_in_cb_descriptor)
 
-                    # CB 11: CCL temp scratch buffer (not backed by tensor)
-                    ccl_temp_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=ccl_num_tiles * tile_1x32_size,
-                        core_ranges=gather_core_grid,
-                        format_descriptors=[
+                    # CB 9: CCL remote data (backed by intermediate tensor with 1x32 tiles)
+                    # The intermediate tensor is where the CCL sender writes remote data
+                    ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        ccl_remote_data_cb, intermediate_tensor_device
+                    )
+                    ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
+                    cb_list.append(ccl_remote_data_cb_descriptor)
+
+                    # CB 10: CCL residual (optional, from sharded tensor)
+                    if residual_tensor_mesh is not None:
+                        ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_residual_cb, residual_tensors_per_device[device_idx]
+                        )
+                        ccl_residual_cb_descriptor.core_ranges = gather_core_grid
+                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * tile_1x32_size
+                        ccl_residual_cb_descriptor.format_descriptors = [
                             ttnn.CBFormatDescriptor(
-                                buffer_index=ccl_temp_cb,
+                                buffer_index=ccl_residual_cb,
                                 data_format=data_format,
                                 page_size=tile_1x32_size,
                                 tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
                             )
-                        ],
+                        ]
+                        cb_list.append(ccl_residual_cb_descriptor)
+
+                        # CB 11: CCL temp scratch buffer (not backed by tensor)
+                        ccl_temp_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=ccl_num_tiles * tile_1x32_size,
+                            core_ranges=gather_core_grid,
+                            format_descriptors=[
+                                ttnn.CBFormatDescriptor(
+                                    buffer_index=ccl_temp_cb,
+                                    data_format=data_format,
+                                    page_size=tile_1x32_size,
+                                    tile=matmul1_out_tile_descriptor,  # 1x32 tiles to match gather2
+                                )
+                            ],
+                        )
+                        cb_list.append(ccl_temp_cb_descriptor)
+
+                    # CB 12: CCL output (from sharded tensor)
+                    ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        ccl_output_cb, output_tensor_device
                     )
-                    cb_list.append(ccl_temp_cb_descriptor)
+                    ccl_output_cb_descriptor.core_ranges = gather_core_grid
+                    cb_list.append(ccl_output_cb_descriptor)
 
-                # CB 12: CCL output (from sharded tensor)
-                ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ccl_output_cb, output_tensor_device)
-                ccl_output_cb_descriptor.core_ranges = gather_core_grid
-                cb_list.append(ccl_output_cb_descriptor)
-
-                # CB 13: CCL packet headers
-                ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=ccl_packet_header_cb,
-                    data_format=ttnn.uint32,
-                    page_size=ccl_packet_header_size_bytes,
-                )
-                ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
-                    total_size=2 * ccl_packet_header_size_bytes,
-                    core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
-                    format_descriptors=[ccl_packet_header_cb_format],
-                )
-                cb_list.append(ccl_packet_header_cb_descriptor)
+                    # CB 13: CCL packet headers
+                    ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=ccl_packet_header_cb,
+                        data_format=ttnn.uint32,
+                        page_size=ccl_packet_header_size_bytes,
+                    )
+                    ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=2 * ccl_packet_header_size_bytes,
+                        core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
+                        format_descriptors=[ccl_packet_header_cb_format],
+                    )
+                    cb_list.append(ccl_packet_header_cb_descriptor)
 
                 # ========================================================================
                 # Semaphore descriptors
@@ -667,11 +676,21 @@ class PostSDPA:
                     core_ranges=full_grid,
                     initial_value=0,
                 )
-                gather2_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-                    id=gather2_completion_semaphore_id,
-                    core_ranges=full_grid,
-                    initial_value=0,
-                )
+                semaphore_list = [
+                    gather1_noc0_semaphore_descriptor,
+                    gather1_noc1_semaphore_descriptor,
+                    mcast_sender_semaphore_descriptor,
+                    mcast_receiver_semaphore_descriptor,
+                    gather2_noc0_semaphore_descriptor,
+                    gather2_noc1_semaphore_descriptor,
+                ]
+                if ccl_enabled:
+                    gather2_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+                        id=gather2_completion_semaphore_id,
+                        core_ranges=full_grid,
+                        initial_value=0,
+                    )
+                    semaphore_list.append(gather2_completion_semaphore_descriptor)
 
                 # ========================================================================
                 # Kernel descriptor
@@ -688,6 +707,7 @@ class PostSDPA:
                         fp32_dest_acc_en=fp32_dest_acc_en,
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
+                    defines=[("SKIP_CCL", "1")] if not ccl_enabled else [],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_matmul1_core",
@@ -716,13 +736,13 @@ class PostSDPA:
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_ccl_sender_core",
                             core_range=ccl_sender_core_grid,
-                            value=1,
+                            value=1 if ccl_enabled else 0,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_ccl_receiver_core",
                             core_range=gather_core_grid,  # CCL receiver = gather core
-                            value=1,
+                            value=1 if ccl_enabled else 0,
                             other_value=0,
                         ),
                     ],
@@ -731,107 +751,100 @@ class PostSDPA:
                 # Get kernel descriptors
                 kernel_result = unified_kernel.get_kernel_descriptors()
 
-                # Get kernel indices for runtime args
-                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
-
                 # ========================================================================
                 # Program descriptor
                 # ========================================================================
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
                     cbs=cb_list,
-                    semaphores=[
-                        gather1_noc0_semaphore_descriptor,
-                        gather1_noc1_semaphore_descriptor,
-                        mcast_sender_semaphore_descriptor,
-                        mcast_receiver_semaphore_descriptor,
-                        gather2_noc0_semaphore_descriptor,
-                        gather2_noc1_semaphore_descriptor,
-                        gather2_completion_semaphore_descriptor,
-                    ],
+                    semaphores=semaphore_list,
                 )
 
                 # ========================================================================
-                # Runtime args for CCL
+                # CCL runtime args and fabric (only when CCL is enabled)
                 # ========================================================================
-                # === COMMON RUNTIME ARGS ===
-                # Sender NCRISC common runtime args (arg 0)
-                ccl_sender_ncrisc_common_rt_args = [
-                    gather2_receiver_data_addr,  # tensor_address
-                ]
+                if ccl_enabled:
+                    # Get kernel indices for runtime args
+                    ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
+                    ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
 
-                # Sender BRISC common runtime args (args 0-1)
-                ccl_sender_brisc_common_rt_args = [
-                    intermediate_tensor_device.buffer_address(),  # receiver_base_address
-                    ccl_sender_semaphore_addr,  # receive_semaphore_addr
-                ]
+                    # === COMMON RUNTIME ARGS ===
+                    # Sender NCRISC common runtime args (arg 0)
+                    ccl_sender_ncrisc_common_rt_args = [
+                        gather2_receiver_data_addr,  # tensor_address
+                    ]
 
-                # Receiver NCRISC common runtime args (arg 0)
-                ccl_receiver_ncrisc_common_rt_args = [
-                    ccl_receiver_semaphore_addr,  # sender_semaphore_addr
-                ]
+                    # Sender BRISC common runtime args (args 0-1)
+                    ccl_sender_brisc_common_rt_args = [
+                        intermediate_tensor_device.buffer_address(),  # receiver_base_address
+                        ccl_sender_semaphore_addr,  # receive_semaphore_addr
+                    ]
 
-                # === PER-CORE RUNTIME ARGS (empty, fabric args appended later) ===
-                ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
+                    # Receiver NCRISC common runtime args (arg 0)
+                    ccl_receiver_ncrisc_common_rt_args = [
+                        ccl_receiver_semaphore_addr,  # sender_semaphore_addr
+                    ]
 
-                ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
+                    # === PER-CORE RUNTIME ARGS (empty, fabric args appended later) ===
+                    ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
+                    ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
 
-                ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
+                    ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
+                    ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
 
-                # Set runtime args and common runtime args for CCL kernels
-                program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
-                program.kernels[
-                    ccl_sender_group.ncrisc_kernel_index
-                ].common_runtime_args = ccl_sender_ncrisc_common_rt_args
-                program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
-                program.kernels[
-                    ccl_sender_group.brisc_kernel_index
-                ].common_runtime_args = ccl_sender_brisc_common_rt_args
-                program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
-                program.kernels[
-                    ccl_receiver_group.ncrisc_kernel_index
-                ].common_runtime_args = ccl_receiver_ncrisc_common_rt_args
+                    ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
+                    ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
 
-                # ========================================================================
-                # Fabric connection setup
-                # ========================================================================
-                fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
-                neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
+                    # Set runtime args and common runtime args for CCL kernels
+                    program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
+                    program.kernels[
+                        ccl_sender_group.ncrisc_kernel_index
+                    ].common_runtime_args = ccl_sender_ncrisc_common_rt_args
+                    program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
+                    program.kernels[
+                        ccl_sender_group.brisc_kernel_index
+                    ].common_runtime_args = ccl_sender_brisc_common_rt_args
+                    program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
+                    program.kernels[
+                        ccl_receiver_group.ncrisc_kernel_index
+                    ].common_runtime_args = ccl_receiver_ncrisc_common_rt_args
 
-                # Setup sender fabric connection
-                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
-                    ccl_sender_core.y
-                ]
-                sender_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl_sender_link],
-                    program,
-                    sender_brisc_kernel_idx,
-                    ccl_sender_core,
-                )
-                sender_brisc_rt_args_ref.extend(sender_fabric_args)
+                    # ========================================================================
+                    # Fabric connection setup
+                    # ========================================================================
+                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
+                    neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
 
-                # Setup receiver fabric connection
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
-                receiver_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl_receiver_link],
-                    program,
-                    receiver_ncrisc_kernel_idx,
-                    gather_core,
-                )
-                receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
+                    # Setup sender fabric connection
+                    sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
+                    sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                        ccl_sender_core.y
+                    ]
+                    sender_fabric_args = ttnn.setup_routing_plane_connection(
+                        fabric_node_id,
+                        [neighbor_fabric_node_id],
+                        [ccl_sender_link],
+                        program,
+                        sender_brisc_kernel_idx,
+                        ccl_sender_core,
+                    )
+                    sender_brisc_rt_args_ref.extend(sender_fabric_args)
+
+                    # Setup receiver fabric connection
+                    receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
+                    receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[
+                        gather_core.x
+                    ][gather_core.y]
+                    receiver_fabric_args = ttnn.setup_routing_plane_connection(
+                        fabric_node_id,
+                        [neighbor_fabric_node_id],
+                        [ccl_receiver_link],
+                        program,
+                        receiver_ncrisc_kernel_idx,
+                        gather_core,
+                    )
+                    receiver_ncrisc_rt_args_ref.extend(receiver_fabric_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -842,12 +855,13 @@ class PostSDPA:
             weights2_tensor,
             gather1_output_tensor,
             gather2_output_tensor,
-            intermediate_tensor,
-            output_tensor,
         ]
-        if residual_tensor_mesh is not None:
+        if ccl_enabled:
+            io_tensors.append(intermediate_tensor)
+            io_tensors.append(output_tensor)
+        if ccl_enabled and residual_tensor_mesh is not None:
             io_tensors.append(residual_tensor_mesh)
 
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
-        return output_tensor
+        return output_tensor if ccl_enabled else gather2_output_tensor

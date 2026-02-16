@@ -42,18 +42,16 @@ void kernel_main() {
     constexpr uint32_t k_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t ncrisc_brisc_sync_semaphore_id = get_compile_time_arg_val(10);
     constexpr uint32_t receiver_ready_semaphore_id = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_q_in = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(13);
 
-    // TensorAccessorArgs for K (KV cache in DRAM) and pos tensor
-    constexpr auto k_args = TensorAccessorArgs<15>();
-    constexpr auto pos_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    // TensorAccessorArgs for K (KV cache in DRAM) only - position is read directly from sharded L1
+    constexpr auto k_args = TensorAccessorArgs<14>();
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);  // Position is height-sharded in L1
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
@@ -66,22 +64,10 @@ void kernel_main() {
     const uint32_t output_core_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_core_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // Get cur_pos from position tensor (MLA decode is always causal)
-    // With single batch, cur_pos is at index 0
-    uint32_t cur_pos;
-    {
-        cb_reserve_back(cb_index_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
-
-        const auto pos_reader = TensorAccessor(pos_args, pos_addr, 32);  // 32-byte aligned stick
-        uint64_t tensor_index_noc_addr = pos_reader.get_noc_addr(0);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, 32);
-        noc_async_read_barrier();
-
-        cb_push_back(cb_index_id, 1);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-        cur_pos = index_ptr[0];  // Single batch, position at index 0
-    }
+    // Get cur_pos from height-sharded position tensor (directly from local L1)
+    // Position tensor is replicated on every core - just read from the local shard address
+    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+    uint32_t cur_pos = pos_ptr[0];
 
     // Sequence length assignment (no sliding window for MLA)
     auto [k_num_chunks, k_chunk_start, k_chunk_end] =
@@ -127,10 +113,12 @@ void kernel_main() {
 
     // Set up NCRISC<->BRISC sync semaphore
     const uint32_t ncrisc_brisc_sync_l1_addr = get_semaphore(ncrisc_brisc_sync_semaphore_id);
-    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_ptr =
+    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_curr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr);
-    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+    volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 4);
+    volatile tt_l1_ptr uint32_t* k_write_ptr_shared =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_brisc_sync_l1_addr + 8);
 
     // Set up receiver_ready semaphore for double-buffer synchronization
     // Receivers signal sender when they've reserved CB space (ensuring consistent addresses)
@@ -144,6 +132,13 @@ void kernel_main() {
     // Single KV head, single batch - no outer loop needed
     // kv_batch = 0 (Bkv = 1)
     constexpr uint32_t kv_batch = 0;
+
+    if (is_mcast_sender) {
+        // Program noc registers from first chunk
+        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk_start;
+        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
+        noc_async_read_one_packet_set_state<true>(k_src_noc_addr, k_page_size, vc);
+    }
 
     // Strided iteration: core N processes chunks N, N+stride, N+2*stride, ...
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += num_cores_per_head) {
@@ -163,9 +158,7 @@ void kernel_main() {
                 const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
                 uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
 
-                noc_async_read_one_packet_set_state<true>(k_src_noc_addr, k_page_size, vc);
-
-                constexpr uint32_t NUM_TRIDS = 2;
+                constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;
                 uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
                 uint32_t src_offset = 0;
                 uint32_t dst_addr = k_write_ptr;
@@ -175,6 +168,7 @@ void kernel_main() {
                 uint32_t pages_issued = 0;
                 uint32_t pages_completed = 0;
 
+                noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
                 for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < k_num_pages; ++i) {
                     noc_async_read_set_trid(curr_trid);
                     noc_async_read_one_packet_with_state_with_trid(src_base_addr, src_offset, dst_addr, curr_trid);
@@ -186,7 +180,7 @@ void kernel_main() {
 
                 while (pages_completed < k_num_pages) {
                     noc_async_read_barrier_with_trid(wait_trid);
-                    *ncrisc_brisc_sync_ptr += 1;
+                    *ncrisc_brisc_sync_curr_ptr += 1;
                     pages_completed++;
 
                     if (pages_issued < k_num_pages) {
@@ -201,14 +195,13 @@ void kernel_main() {
                     wait_trid = (wait_trid % NUM_TRIDS) + 1;
                 }
 
-                noc_semaphore_wait(ncrisc_brisc_sync_ptr, 0);
+                std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
             } else {
                 // Step 2: Receiver signals sender that CB is reserved (address is ready)
                 DeviceZoneScopedN("mcast-receiver-signal-ready");
                 noc_semaphore_inc(sender_receiver_ready_noc_addr, 1);
 
                 // Step 3: Receiver waits for multicast data
-                DeviceZoneScopedN("mcast-receiver-wait");
                 noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                 noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);
             }
