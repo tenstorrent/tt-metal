@@ -345,7 +345,7 @@ class Generator:
             if sampling_enabled:
                 sampling_executed = True
                 sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
-                total_batch = 32 * sampling_dp
+                total_batch = self.model[model_id].sampling.tt_sampling.max_batch_size * sampling_dp
                 per_request_params = format_sampling_params(
                     broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
                 )

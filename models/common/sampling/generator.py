@@ -163,8 +163,10 @@ class SamplingGenerator:
         """
         chunks_per_model = len(sampling_params_chunks)
 
+        max_batch_size = self.tt_sampling.max_batch_size
+
         if chunks_per_model == 1:
-            formatted_params = format_sampling_params(sampling_params_chunks[0], 32)
+            formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
             self.reset_sampling_params(formatted_params)
         else:
             # Row-sharded case: merge all chunks then format
@@ -182,7 +184,7 @@ class SamplingGenerator:
             merged = SamplingParams(
                 **{field: _merge_field(sampling_params_chunks, field) for field in SAMPLING_PARAM_FIELDS}
             )
-            formatted_params = format_sampling_params(merged, 32 * chunks_per_model)
+            formatted_params = format_sampling_params(merged, max_batch_size * chunks_per_model)
             self.reset_sampling_params(formatted_params)
 
         if reset_batch:

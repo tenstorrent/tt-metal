@@ -91,7 +91,9 @@ class TTSampling(LightweightModule):
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.vocab_size = args.vocab_size
-        self.max_batch_size = getattr(args, "max_batch_size", 32)
+        # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
+        raw_batch = getattr(args, "max_batch_size", 32)
+        self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
