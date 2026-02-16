@@ -6,7 +6,7 @@
 # We also demonstrate how a user can setup a pipeline across MeshDevices using sockets.
 # Run this on a Tenstorrent Galaxy system as follows:
 # python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (this generates the rank binding file)
-# tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--tag-output"  python3 tests/ttnn/distributed/test_multi_mesh.py
+# tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml python3 tests/ttnn/distributed/test_multi_mesh.py
 
 # The rank binding file initializes a single physical 4x4 mesh per process.
 # The mesh graph descriptor used for this workload is: tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x4_multi_mesh.textproto
