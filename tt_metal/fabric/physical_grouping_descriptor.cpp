@@ -1113,9 +1113,163 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
-    // TODO continue here
+    // Build flattened adjacency graph for all mesh group infos
+    // Get all mesh group infos from current grouping files
+    std::unordered_map<std::string, AdjacencyGraph<uint32_t>> mesh_flat_adjacency_graphs;
+    for (const auto& mesh_group_info : resolved_groupings_cache_["MESH"]) {
+        mesh_flat_adjacency_graphs[mesh_group_info.name] = build_flattened_adjacency_graph(mesh_group_info);
+    }
 
     return result;
+}
+
+AdjacencyGraph<uint32_t> PhysicalGroupingDescriptor::build_flattened_adjacency_graph(
+    const GroupingInfo& grouping) const {
+    // Shared state to accumulate flattened graph components
+    std::unordered_map<uint32_t, std::vector<uint32_t>> global_adj_map;
+    std::vector<AdjacencyGraph<uint32_t>::CardinalConnectionType> global_cardinal_connections;
+
+    // Helper to add undirected edge to the global map
+    auto add_edge = [&](uint32_t src, uint32_t dst) {
+        if (src == dst) {
+            return;
+        }
+        global_adj_map[src].push_back(dst);
+        global_adj_map[dst].push_back(src);
+    };
+
+    // Static counter for generating unique instance IDs
+    // Each instance gets a unique ID as we encounter it, but ASIC locations remain unchanged
+    uint32_t next_instance_uid = 1;
+
+    // Lambda to get next unique instance ID
+    auto get_unique_instance_id = [&]() -> uint32_t { return next_instance_uid++; };
+
+    // Intermediate structure to pass flattened ASICs up the recursion stack
+    struct InstanceData {
+        uint32_t instance_id;
+        std::vector<uint32_t> asic_locations;  // Already uniquified ASIC IDs
+    };
+
+    // Recursive lambda to process each grouping layer bottom-up
+    auto build_recursive = [&](auto&& self, const GroupingInfo& current_grouping) -> std::vector<InstanceData> {
+        std::vector<InstanceData> instance_data_list;
+        const auto& instance_nodes = current_grouping.adjacency_graph.get_nodes();
+        bool is_leaf_level = true;
+
+        // 1. Process Items: Recursively flatten subgroups or collect leaf ASICs
+        for (size_t i = 0; i < current_grouping.items.size(); ++i) {
+            const auto& item = current_grouping.items[i];
+            // Use instance ID from graph if available, otherwise default to index
+            uint32_t original_instance_id = (i < instance_nodes.size()) ? instance_nodes[i] : static_cast<uint32_t>(i);
+            // Assign unique instance ID for this instance (each instance gets a new unique ID)
+            uint32_t unique_instance_id = get_unique_instance_id();
+            InstanceData data{original_instance_id, {}};  // Keep original instance_id for adjacency graph lookup
+
+            if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                // Leaf node: keep ASIC location unchanged, combine with unique instance ID
+                // The ASIC location value (1-8) remains the same
+                // Create unique node ID by combining unique instance ID and ASIC location
+                uint32_t unique_node_id = (unique_instance_id << 8) | item.asic_location;
+                data.asic_locations.push_back(unique_node_id);
+                global_adj_map[unique_node_id];  // Ensure node exists
+            } else {
+                // Non-leaf: recurse down
+                is_leaf_level = false;
+                auto ref_groupings = get_groupings_by_name(item.grouping_name);
+                if (ref_groupings.empty()) {
+                    TT_THROW(
+                        "Cannot flatten grouping '{}': referenced grouping '{}' not found",
+                        current_grouping.name,
+                        item.grouping_name);
+                }
+                // Recursively build the referenced grouping
+                auto ref_data = self(self, ref_groupings[0]);
+                // Flatten results into current instance (ASICs are already uniquified by recursion)
+                for (const auto& rd : ref_data) {
+                    data.asic_locations.insert(
+                        data.asic_locations.end(), rd.asic_locations.begin(), rd.asic_locations.end());
+                }
+            }
+            instance_data_list.push_back(std::move(data));
+        }
+
+        // 2. Process Connections: Map adjacency graph to physical connections
+        std::unordered_map<uint32_t, const InstanceData*> id_to_data;
+        for (const auto& data : instance_data_list) {
+            id_to_data[data.instance_id] = &data;
+        }
+
+        if (is_leaf_level) {
+            // Optimization for leaf level: direct mapping without aggregation
+            // Leaf instances map 1:1 to ASIC locations, so we can directly transfer edges
+            for (uint32_t src_id : instance_nodes) {
+                auto src_it = id_to_data.find(src_id);
+                if (src_it == id_to_data.end()) {
+                    continue;
+                }
+                // Leaf level implies exactly one ASIC per instance
+                uint32_t src_asic = src_it->second->asic_locations[0];
+
+                for (uint32_t dst_id : current_grouping.adjacency_graph.get_neighbors(src_id)) {
+                    // Process undirected edges once (using ID comparison) to avoid double counting
+                    // add_edge handles adding both directions to the global map
+                    if (src_id >= dst_id) {
+                        continue;
+                    }
+
+                    auto dst_it = id_to_data.find(dst_id);
+                    if (dst_it == id_to_data.end()) {
+                        continue;
+                    }
+                    uint32_t dst_asic = dst_it->second->asic_locations[0];
+
+                    add_edge(src_asic, dst_asic);
+                }
+            }
+        } else {
+            // Higher levels: Aggregate connections for CardinalConnection
+            std::set<std::pair<uint32_t, uint32_t>> processed;
+
+            for (uint32_t src_id : instance_nodes) {
+                if (id_to_data.find(src_id) == id_to_data.end()) {
+                    continue;
+                }
+
+                // Count connection multiplicity for each neighbor
+                std::unordered_map<uint32_t, size_t> neighbor_counts;
+                for (auto nid : current_grouping.adjacency_graph.get_neighbors(src_id)) {
+                    neighbor_counts[nid]++;
+                }
+
+                for (const auto& [dst_id, count] : neighbor_counts) {
+                    if (id_to_data.find(dst_id) == id_to_data.end()) {
+                        continue;
+                    }
+
+                    // Process each pair only once (undirected)
+                    auto pair = std::minmax(src_id, dst_id);
+                    if (!processed.insert(pair).second) {
+                        continue;
+                    }
+
+                    const auto& src_locs = id_to_data[src_id]->asic_locations;
+                    const auto& dst_locs = id_to_data[dst_id]->asic_locations;
+
+                    if (count > 0) {
+                        // Abstract 'Cardinal' connections between groups of ASICs
+                        global_cardinal_connections.push_back({src_locs, dst_locs, count});
+                    }
+                }
+            }
+        }
+        return instance_data_list;
+    };
+
+    build_recursive(build_recursive, grouping);
+    return AdjacencyGraph<uint32_t>(
+        AdjacencyGraph<uint32_t>::AdjacencyMap(global_adj_map.begin(), global_adj_map.end()),
+        global_cardinal_connections);
 }
 
 void PhysicalGroupingDescriptor::validate_and_populate_preformed_groups_from_physical_system(
