@@ -355,87 +355,91 @@ class SamplingGenerator:
 
 def format_sampling_params(sampling_params, max_batch_size):
     """
-    Format sampling parameters to a dictionary.
+    Format sampling parameters for on-device use.
+
+    Converts scalar fields to lists, pads all lists to ``max_batch_size``,
+    inverts temperature, clamps top-p/top-k, and normalises penalties.
+
+    Returns a **new** SamplingParams — the input is never mutated.
     """
     if not isinstance(sampling_params.temperature, List):
-        # convert all sampling_params to lists
         update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
         sampling_params = replace(sampling_params, **update_dict)
 
-    # Must pad sampling_params to max_batch_size
-    default_params = {
-        "temp": 0.0,
-        "p": 1.0,
-        "k": 1,
-        "presence_penalty": 0.0,
-        "frequency_penalty": 0.0,
-        "repetition_penalty": 1.0,
-        "seed": random.randint(0, 1000000),  # set to random seed to have variability while using tensor manual_seed
-    }
     target_len = max_batch_size
     assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"
 
-    for name, tensor in zip(
-        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
-    ):
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
+    # Defaults used when padding short lists to target_len
+    defaults = {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "seed": random.randint(0, 1000000),
+    }
 
-    params = {}
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+    def _pad(lst, name):
+        """Return a new list padded to target_len with the default for *name*."""
+        if len(lst) >= target_len:
+            return list(lst)
+        return list(lst) + [defaults[name]] * (target_len - len(lst))
+
+    # Pad core sampling fields
+    temperature = _pad(sampling_params.temperature, "temperature")
+    top_p = _pad(sampling_params.top_p, "top_p")
+    top_k = _pad(sampling_params.top_k, "top_k")
+
+    # Normalise and pad penalty / seed fields
+    def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
-            params[name] = [default_params[name]]
+            lst = [defaults[name]]
         elif isinstance(value, List):
-            params[name] = list(value)
+            lst = list(value)
         else:
-            params[name] = [value]
+            lst = [value]
+        return _pad(lst, name)
 
-    sampling_params = replace(
-        sampling_params,
-        presence_penalty=params["presence_penalty"],
-        frequency_penalty=params["frequency_penalty"],
-        repetition_penalty=params["repetition_penalty"],
-        seed=params["seed"],
-    )
+    presence_penalty = _normalise_and_pad("presence_penalty")
+    frequency_penalty = _normalise_and_pad("frequency_penalty")
+    repetition_penalty = _normalise_and_pad("repetition_penalty")
+    seed = _normalise_and_pad("seed")
 
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
-        tensor = getattr(sampling_params, name)
-        current_len = len(tensor)
-        if current_len < target_len:
-            tensor.extend([default_params[name]] * (target_len - current_len))
-
-    # We must clamp top-p in range [0.0, 1.0]
-    # Cannot rely on external SamplingParams to be clamped
+    # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
     TOP_P_MAX = 1.0
 
-    for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
-        # Clamp top-p
-        clamped_top_p = clamp(top_p, TOP_P_MIN, TOP_P_MAX)
-        if clamped_top_p != top_p:
-            sampling_params.top_p[i] = clamped_top_p
+    for i in range(len(temperature)):
+        top_p[i] = clamp(top_p[i], TOP_P_MIN, TOP_P_MAX)
 
-        # Process temperature
-        if temp == 0:
-            sampling_params.temperature[i] = 1.0
-            sampling_params.top_k[i] = 1
+        if temperature[i] == 0:
+            temperature[i] = 1.0
+            top_k[i] = 1
         else:
-            sampling_params.temperature[i] = 1 / temp
+            temperature[i] = 1 / temperature[i]
 
-        # `top_k` contract: TT sampling supports up to 32 today.
-        # - k < 1 means "no restriction" so set it to max (32)
-        # - k > 32 is re-mapped to 32 until we support it
-        if sampling_params.top_k[i] < 1:
-            sampling_params.top_k[i] = 32
-        if sampling_params.top_k[i] > 32:
-            sampling_params.top_k[i] = 32
+        # top_k contract: TT sampling supports up to 32 today.
+        # k < 1 means "no restriction" → max (32); k > 32 → capped to 32.
+        if top_k[i] < 1:
+            top_k[i] = 32
+        if top_k[i] > 32:
+            top_k[i] = 32
 
-        if sampling_params.repetition_penalty[i] == 0:
-            sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
+        if repetition_penalty[i] == 0:
+            repetition_penalty[i] = defaults["repetition_penalty"]
 
-    return sampling_params
+    return replace(
+        sampling_params,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        repetition_penalty=repetition_penalty,
+        seed=seed,
+    )
 
 
 def broadcast_sampling_params(
