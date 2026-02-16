@@ -12,7 +12,7 @@ training_config:
   use_moreh_adamw: true
   use_kahan_summation: false
   gradient_accumulation_steps: 1
-  data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/tokenized_shakespeare.csv"
+  data_path: "data/tokenized_shakespeare.csv"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/gpt2s.yaml"
   tokenizer_type: "bpe"
 

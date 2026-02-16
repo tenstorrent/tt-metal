@@ -391,10 +391,10 @@ if(ENABLE_LIBCXX)
     )
 endif()
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${TT_TRAIN_SOURCE_DIR}/data")
+add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
 set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
-set(GPT2_TOKENIZER_FILE "${TT_TRAIN_SOURCE_DIR}/data/gpt2-tokenizer.json")
+set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${GPT2_TOKENIZER_FILE}")
@@ -410,7 +410,7 @@ else()
 endif()
 
 set(TINYLLAMA_TOKENIZER_URL "https://huggingface.co/TinyLlama/TinyLlama_v1.1/resolve/main/tokenizer.json")
-set(TINYLLAMA_TOKENIZER_FILE "${TT_TRAIN_SOURCE_DIR}/data/tinyllama-tokenizer.json")
+set(TINYLLAMA_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tinyllama-tokenizer.json")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")

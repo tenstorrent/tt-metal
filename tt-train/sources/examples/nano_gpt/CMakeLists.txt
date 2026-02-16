@@ -33,31 +33,26 @@ target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
 target_compile_definitions(
     nano_gpt
     PRIVATE
-        DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
         CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
-target_compile_definitions(
-    llama_inference
-    PRIVATE
-        DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
-)
+target_compile_definitions(llama_inference PRIVATE CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs")
 target_compile_definitions(
     nano_gpt_aggregator
     PRIVATE
-        DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
         CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 target_compile_definitions(
     nano_gpt_optimizer
     PRIVATE
-        DATA_FOLDER="${TT_TRAIN_SOURCE_DIR}/data"
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
         CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
-set(SHAKESPEARE_FILE "${TT_TRAIN_SOURCE_DIR}/data/shakespeare.txt")
+set(SHAKESPEARE_FILE "${CMAKE_SOURCE_DIR}/data/shakespeare.txt")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${SHAKESPEARE_FILE}")

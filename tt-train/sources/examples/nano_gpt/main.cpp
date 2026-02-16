@@ -313,7 +313,6 @@ int main(int argc, char **argv) {
 
     TrainingConfig training_config = parse_config(yaml_config);
     training_config.model_config = expand_config_path(training_config.model_config);
-    training_config.data_path = expand_config_path(training_config.data_path);
 
     DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
