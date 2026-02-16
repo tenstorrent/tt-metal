@@ -424,6 +424,46 @@ def run_latency(path):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  PING  (pure signaling round-trip, no data DMA)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.png"):
+    """Plot iteration-by-iteration latency."""
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        print(f"  Warning: {path} not found")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(df.iteration, df.latency_us, "o-", ms=3, lw=1, alpha=0.7)
+    ax.axhline(df.latency_us.median(), color="red", ls="--", lw=1.5, label=f"p50 = {df.latency_us.median():.2f} us")
+    ax.axhline(df.latency_us.mean(), color="orange", ls=":", lw=1.5, label=f"avg = {df.latency_us.mean():.2f} us")
+    ax.set(xlabel="Iteration", ylabel="Latency (us)", title="D2H Pure Ping: Per-Iteration Latency")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def ping_export_csv(path="ping_iterations.csv", out="d2h_ping_summary.csv"):
+    """Export the per-iteration ping data as CSV summary."""
+    try:
+        df = pd.read_csv(path)
+        df.to_csv(out, index=False, float_format="%.4f")
+        print(f"  Saved {out} ({len(df)} iterations)")
+    except FileNotFoundError:
+        print(f"  Warning: {path} not found, skipping CSV export")
+
+
+def run_ping(path):
+    ping_plot_timeseries()
+    ping_export_csv()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CLI
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -432,10 +472,13 @@ if __name__ == "__main__":
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--throughput", action="store_true", help="Analyze throughput benchmark")
     mode.add_argument("--latency", action="store_true", help="Analyze latency benchmark")
+    mode.add_argument("--ping", action="store_true", help="Analyze pure ping benchmark")
     p.add_argument("csv", help="Path to benchmark CSV")
     args = p.parse_args()
 
     if args.throughput:
         run_throughput(args.csv)
-    else:
+    elif args.latency:
         run_latency(args.csv)
+    else:
+        run_ping(args.csv)
