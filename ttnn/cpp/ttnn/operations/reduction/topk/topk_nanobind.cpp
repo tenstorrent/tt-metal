@@ -32,7 +32,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
             .. code-block:: python
 
-                return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, out=None)
+                return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, output_tensor=None)
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.

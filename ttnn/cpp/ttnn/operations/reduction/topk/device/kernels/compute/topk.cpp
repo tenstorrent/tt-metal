@@ -9,10 +9,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
-#include "api/compute/eltwise_unary/fill.h"
-
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tensix.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -67,13 +63,11 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
 }
 
 /**
- * Read tiles from circular buffer and transpose them to destination registers
+ * Read tile from circular buffer and transpose it to destination register
  * Used to prepare input tiles for sorting operations
  *
- * @param cb               Circular buffer index to read tiles from
- * @param base_offset      Base offset in destination registers where transposed tiles will be stored
- * @param get_two         Boolean flag: true to transpose two tiles (tiles 0,1 -> dest base_offset, base_offset+1),
- *                        false to transpose only one tile (tile 0 -> dest base_offset)
+ * @param cb               Circular buffer index to read tile from
+ * @param base_offset      Base offset in destination register where transposed tile will be stored
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
     reconfig_data_format_srca(cb);
