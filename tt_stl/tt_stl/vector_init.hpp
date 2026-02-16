@@ -7,6 +7,7 @@
 #include <vector>
 #include <type_traits>
 
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace ttsl {
@@ -59,6 +60,23 @@ std::vector<T> vector_init(Vs&&... init_values) {
 template <typename T, typename... Vs>
 std::vector<T> vector_init(const vector_size reserve_count, Vs&&... init_values) {
     return container_init<std::vector<T>>(reserve_count, std::forward<Vs>(init_values)...);
+}
+
+// small_vector_init: convenience wrappers that delegate to container_init with ttsl::SmallVector<T>
+
+template <typename T, size_t N, typename... Vs>
+SmallVector<T> small_vector_init(Vs&&... init_values) {
+    return container_init<SmallVector<T>, N>(std::forward<Vs>(init_values)...);
+}
+
+template <typename T, typename... Vs>
+SmallVector<T> small_vector_init(Vs&&... init_values) {
+    return container_init<SmallVector<T>>(std::forward<Vs>(init_values)...);
+}
+
+template <typename T, typename... Vs>
+SmallVector<T> small_vector_init(const vector_size reserve_count, Vs&&... init_values) {
+    return container_init<SmallVector<T>>(reserve_count, std::forward<Vs>(init_values)...);
 }
 
 }  // namespace ttsl
