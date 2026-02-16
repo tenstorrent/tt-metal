@@ -80,11 +80,17 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
             "ND sharded input {} must have buffer distribution spec",
             i);
         input_dist_specs[i] = &input_tensors[i].buffer()->buffer_distribution_spec().value();
+        std::cout << "tensor " << i << " output shards amount " << input_dist_specs[i]->num_shards() << "\n";
     }
     TT_FATAL(
         output.buffer()->buffer_distribution_spec().has_value(),
         "ND sharded output must have buffer distribution spec");
     const BufferDistributionSpec& output_dist_spec = output.buffer()->buffer_distribution_spec().value();
+
+    const uint32_t input_amount_shards = input_dist_specs[0]->num_shards();
+    const uint32_t shard_size = static_cast<uint32_t>(first_nd_spec.shard_shape.volume());
+    const uint32_t total_output_shards = output_dist_spec.num_shards();
+    const uint32_t output_shard_size = static_cast<uint32_t>(output.nd_shard_spec().value().shard_shape.volume());
 
     // Input CBs: each backed by the corresponding input buffer so each core sees only its shard.
     std::vector<CBHandle> cb_inputs(num_input_tensors);
@@ -125,47 +131,84 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
 
     // Per-core runtime args: [start_input_id, end_input_id, (num_pages, write_offset_in_pages) for each input in
     // [start,end)). Reader handles inputs [0, mid), writer handles [mid, num_input_tensors).
-    const uint32_t mid = (num_input_tensors + 1) / 2;
+    //    const uint32_t mid = (num_input_tensors + 1) / 2;
 
     std::cout << "cores amount " << cores.size() << " output cores amount " << output_dist_spec.cores().size() << "\n";
 
-    uint32_t cn = 0;
+    uint32_t destination_shard_pos = 0;
+
+    std::vector<std::pair<uint32_t, uint32_t>> source_shards;
+    source_shards.resize(num_input_tensors * input_amount_shards);
+    for (uint32_t input_id = 0; input_id < num_input_tensors; ++input_id) {
+        for (uint32_t pos_shard = 0; pos_shard < input_amount_shards; ++pos_shard) {
+            std::pair<uint32_t, uint32_t>& pair_tensor_shard =
+                source_shards[input_id * input_amount_shards + pos_shard];
+            pair_tensor_shard.first = input_id;
+            pair_tensor_shard.second = pos_shard;
+        }
+    }
+    // TT_FATAL(total_output_shards == source_shards.size(), "sizes in shards {} must be the same for concat {} {} {}",
+    //     total_output_shards, source_shards.size(), num_input_tensors, input_amount_shards);
+
     for (const CoreCoord& core : cores) {
         const size_t core_idx = find_core_index(core, output_dist_spec.cores());
         if (core_idx >= output_dist_spec.num_cores()) {
             continue;
         }
-        std::cout << "core x :" << ++cn << "\n";
+        std::vector<uint32_t> reader_runtime_args;
+        for (uint32_t core_shard = destination_shard_pos; core_shard < total_output_shards;
+             core_shard += static_cast<uint32_t>(cores.size())) {
+            reader_runtime_args.push_back(core_shard);  // destination shard
+            reader_runtime_args.push_back(core_idx);    // core id
 
-        uint32_t output_write_offset_pages = 0;
-        std::vector<uint32_t> input_num_pages(num_input_tensors);
-        std::vector<uint32_t> input_write_offsets_pages(num_input_tensors);
+            std::pair<uint32_t, uint32_t>& pair_tensor_shard = source_shards[core_shard];
+            reader_runtime_args.push_back(pair_tensor_shard.first);   // input tensor id
+            reader_runtime_args.push_back(pair_tensor_shard.second);  // source shard
 
-        for (uint32_t input_id = 0; input_id < num_input_tensors; ++input_id) {
-            const BufferDistributionSpec& in_spec = *input_dist_specs[input_id];
-            const size_t in_core_idx = find_core_index(core, in_spec.cores());
-            const uint32_t num_pages = (in_core_idx < in_spec.num_cores())
-                                           ? static_cast<uint32_t>(in_spec.num_dev_pages_per_core(in_core_idx))
-                                           : 0;
-            input_num_pages[input_id] = num_pages;
-            input_write_offsets_pages[input_id] = output_write_offset_pages;
-            output_write_offset_pages += num_pages;
+            reader_runtime_args.push_back(shard_size);
+            reader_runtime_args.push_back(output_shard_size);
         }
 
-        std::vector<uint32_t> reader_runtime_args = {0u, mid};
-        for (uint32_t input_id = 0; input_id < mid; ++input_id) {
-            reader_runtime_args.push_back(input_num_pages[input_id]);
-            reader_runtime_args.push_back(input_write_offsets_pages[input_id]);
-        }
-        std::vector<uint32_t> writer_runtime_args = {mid, num_input_tensors};
-        for (uint32_t input_id = mid; input_id < num_input_tensors; ++input_id) {
-            writer_runtime_args.push_back(input_num_pages[input_id]);
-            writer_runtime_args.push_back(input_write_offsets_pages[input_id]);
-        }
-
+        ++destination_shard_pos;
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-    }  // for cores
+        SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);  // TODO: add work too
+    }
+
+    // for (const CoreCoord& core : cores) {
+    //     const size_t core_idx = find_core_index(core, output_dist_spec.cores());
+    //     if (core_idx >= output_dist_spec.num_cores()) {
+    //         continue;
+    //     }
+
+    //     uint32_t output_write_offset_pages = 0;
+    //     std::vector<uint32_t> input_num_pages(num_input_tensors);
+    //     std::vector<uint32_t> input_write_offsets_pages(num_input_tensors);
+
+    //     for (uint32_t input_id = 0; input_id < num_input_tensors; ++input_id) {
+    //         const BufferDistributionSpec& in_spec = *input_dist_specs[input_id];
+    //         const size_t in_core_idx = find_core_index(core, in_spec.cores());
+    //         const uint32_t num_pages = (in_core_idx < in_spec.num_cores())
+    //                                        ? static_cast<uint32_t>(in_spec.num_dev_pages_per_core(in_core_idx))
+    //                                        : 0;
+    //         input_num_pages[input_id] = num_pages;
+    //         input_write_offsets_pages[input_id] = output_write_offset_pages;
+    //         output_write_offset_pages += num_pages;
+    //     }
+
+    //     std::vector<uint32_t> reader_runtime_args = {0u, mid};
+    //     for (uint32_t input_id = 0; input_id < mid; ++input_id) {
+    //         reader_runtime_args.push_back(input_num_pages[input_id]);
+    //         reader_runtime_args.push_back(input_write_offsets_pages[input_id]);
+    //     }
+    //     std::vector<uint32_t> writer_runtime_args = {mid, num_input_tensors};
+    //     for (uint32_t input_id = mid; input_id < num_input_tensors; ++input_id) {
+    //         writer_runtime_args.push_back(input_num_pages[input_id]);
+    //         writer_runtime_args.push_back(input_write_offsets_pages[input_id]);
+    //     }
+
+    //     SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+    //     SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+    // }  // for cores
 
     return {
         std::move(program),
