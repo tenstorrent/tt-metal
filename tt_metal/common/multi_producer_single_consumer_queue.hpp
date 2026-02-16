@@ -68,7 +68,7 @@ public:
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
         std::unique_lock<std::mutex> lock(this->queue_mutex);
-        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail.load()->next != head.load(); });
+        ttsl::nice_spin_until([this] { return tail.load()->next != head.load(); });
         tail.load()->data = std::make_shared<T>(std::move(value));
         tail.store(tail.load()->next);
     }
@@ -82,7 +82,7 @@ public:
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
         std::unique_lock<std::mutex> lock(this->queue_mutex);
-        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail.load()->next != head.load(); });
+        ttsl::nice_spin_until([this] { return tail.load()->next != head.load(); });
         tail.load()->data = std::move(value);
         tail.store(tail.load()->next);
     }

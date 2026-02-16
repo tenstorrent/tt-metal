@@ -124,7 +124,7 @@ public:
         // has progressed (data has been read).
         // A stall is only required when the ring_buffer_ backing the queue
         // is full. Realistically, this should never happen, given the size
-        tt::stl::TT_NICE_SPIN_UNTIL([this] { return tail_.load()->next != head_.load(); });
+        ttsl::nice_spin_until([this] { return tail_.load()->next != head_.load(); });
         tail_.load()->data = std::move(task);
         tail_.store(tail_.load()->next);
     }

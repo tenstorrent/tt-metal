@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,7 +35,7 @@
 #endif
 #endif
 
-namespace tt::stl {
+namespace ttsl {
 
 /**
  * @brief Issues a pause/yield hint to the processor.
@@ -48,7 +48,7 @@ namespace tt::stl {
  * This helps reduce power consumption and improve performance of other
  * threads sharing the same core during busy-wait loops.
  */
-__attribute__((always_inline)) inline void TT_PAUSE() {
+__attribute__((always_inline)) inline void pause() {
 #if defined(__x86_64__) || defined(_M_X64)
     _mm_pause();
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -84,13 +84,13 @@ __attribute__((always_inline)) inline void TT_PAUSE() {
  * @param predicate A callable that returns true when the wait should end
  */
 template <uint32_t N_SPINS = 100, uint32_t MAX_WAIT_US = 16, typename... Ts>
-__attribute__((flatten)) inline void TT_NICE_SPIN_UNTIL(auto predicate, Ts&&... args) {
+__attribute__((flatten)) inline void nice_spin_until(auto predicate, Ts&&... args) {
     uint32_t counter = 0;
     uint32_t sleep_us = 1;
     while (!predicate(std::forward<Ts>(args)...)) {
         ++counter;
         if (counter < N_SPINS) {
-            TT_PAUSE();
+            pause();
         } else {
             counter = 0;
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
@@ -99,4 +99,4 @@ __attribute__((flatten)) inline void TT_NICE_SPIN_UNTIL(auto predicate, Ts&&... 
     }
 }
 
-}  // namespace tt::stl
+}  // namespace ttsl

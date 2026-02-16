@@ -17,7 +17,7 @@ void Event::wait_until_ready() {
         cq_id,
         event_id);
 
-    tt::stl::TT_NICE_SPIN_UNTIL<100, 10>([this] { return ready.load(); });
+    ttsl::nice_spin_until<100, 10>([this] { return ready.load(); });
 
     log_trace(tt::LogMetal, "Event is ready. (ready: {} cq_id: {} event_id: {})", bool(ready.load()), cq_id, event_id);
 

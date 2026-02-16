@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,20 +9,20 @@
 #include <chrono>
 #include <thread>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 TEST(TTPauseTest, PauseDoesNotCrash) {
-    // Simply verify that TT_PAUSE can be called without crashing
+    // Simply verify that pause can be called without crashing
     for (int i = 0; i < 1000; ++i) {
-        TT_PAUSE();
+        pause();
     }
 }
 
 TEST(TTNiceSpinUntilTest, ImmediateReturnWhenPredicateTrue) {
     // Predicate is immediately true, should return without spinning
     auto start = std::chrono::high_resolution_clock::now();
-    TT_NICE_SPIN_UNTIL([] { return true; });
+    nice_spin_until([] { return true; });
     auto end = std::chrono::high_resolution_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -39,7 +39,7 @@ TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
     });
 
     auto start = std::chrono::high_resolution_clock::now();
-    TT_NICE_SPIN_UNTIL([&flag] { return flag.load(); });
+    nice_spin_until([&flag] { return flag.load(); });
     auto end = std::chrono::high_resolution_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -59,7 +59,7 @@ TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithCounter) {
         }
     });
 
-    TT_NICE_SPIN_UNTIL([&counter] { return counter.load() >= 5; });
+    nice_spin_until([&counter] { return counter.load() >= 5; });
     EXPECT_GE(counter.load(), 5);
 
     incrementer.join();
@@ -74,7 +74,7 @@ TEST(TTNiceSpinUntilTest, CustomNSpinsParameter) {
         return call_count.load() >= 50;
     };
 
-    TT_NICE_SPIN_UNTIL<10>(predicate);
+    nice_spin_until<10>(predicate);
     EXPECT_GE(call_count.load(), 50);
 }
 
@@ -87,7 +87,7 @@ TEST(TTNiceSpinUntilTest, CustomMaxWaitUSParameter) {
     });
 
     // Use custom parameters: N_SPINS=50, MAX_WAIT_US=8
-    TT_NICE_SPIN_UNTIL<50, 8>([&flag] { return flag.load(); });
+    nice_spin_until<50, 8>([&flag] { return flag.load(); });
     EXPECT_TRUE(flag.load());
 
     setter.join();
@@ -104,7 +104,7 @@ TEST(TTNiceSpinUntilTest, PredicateWithArguments) {
     // Predicate that takes an argument
     auto check_value = [&value](int expected) { return value.load() == expected; };
 
-    TT_NICE_SPIN_UNTIL(check_value, 42);
+    nice_spin_until(check_value, 42);
     EXPECT_EQ(value.load(), 42);
 
     setter.join();
@@ -125,7 +125,7 @@ TEST(TTNiceSpinUntilTest, PredicateWithMultipleArguments) {
         return a.load() == expected_a && b.load() == expected_b;
     };
 
-    TT_NICE_SPIN_UNTIL(check_sum, 10, 20);
+    nice_spin_until(check_sum, 10, 20);
     EXPECT_EQ(a.load(), 10);
     EXPECT_EQ(b.load(), 20);
 
@@ -143,7 +143,7 @@ TEST(TTNiceSpinUntilTest, ExponentialBackoffBehavior) {
     });
 
     auto start = std::chrono::high_resolution_clock::now();
-    TT_NICE_SPIN_UNTIL([&flag] { return flag.load(); });
+    nice_spin_until([&flag] { return flag.load(); });
     auto end = std::chrono::high_resolution_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -163,11 +163,11 @@ TEST(TTNiceSpinUntilTest, ZeroSpinsGoesDirectlyToSleep) {
         flag.store(true);
     });
 
-    TT_NICE_SPIN_UNTIL<1, 4>([&flag] { return flag.load(); });
+    nice_spin_until<1, 4>([&flag] { return flag.load(); });
     EXPECT_TRUE(flag.load());
 
     setter.join();
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl
