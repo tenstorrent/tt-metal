@@ -1592,8 +1592,13 @@ def moe_sparse_experts_forward_tt(
         ttnn.deallocate(w3_out, force=False)
 
     # Collapse sparse_matmul rank-6 output into [num_blocks, E, block, moe_intermediate]
-    x_ff = ttnn.squeeze(x_ff, 0)
-    x_ff = ttnn.squeeze(x_ff, 1)
+    # squeeze(0)+squeeze(1) fails for prefill (num_blocks > 1) because dim 1 isn't unit.
+    # Use reshape to the known target shape instead.
+    _x_ff_target = (num_blocks, int(rt.num_experts_per_device), block, int(rt.moe_intermediate_size))
+    if debug:
+        print(f"[moe_sparse] x_ff shape: {tuple(x_ff.shape)} -> {_x_ff_target}", flush=True)
+    if tuple(x_ff.shape) != _x_ff_target:
+        x_ff = ttnn.reshape(x_ff, _x_ff_target)
 
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
@@ -1611,8 +1616,11 @@ def moe_sparse_experts_forward_tt(
     ttnn.deallocate(sparsity, force=False)
 
     # STEP 5: Prepare expert output for aggregation.
-    while len(expert_output_sparse.shape) > 4:
-        expert_output_sparse = ttnn.squeeze(expert_output_sparse, 0)
+    _eos_target = (num_blocks, int(rt.num_experts_per_device), block, hidden_size)
+    if debug:
+        print(f"[moe_sparse] eos shape: {tuple(expert_output_sparse.shape)} -> {_eos_target}", flush=True)
+    if tuple(expert_output_sparse.shape) != _eos_target:
+        expert_output_sparse = ttnn.reshape(expert_output_sparse, _eos_target)
 
     # `permute` can behave like a view (no refcounting). Materialize before freeing
     # the source to avoid intermittent use-after-free corruption during decode.
