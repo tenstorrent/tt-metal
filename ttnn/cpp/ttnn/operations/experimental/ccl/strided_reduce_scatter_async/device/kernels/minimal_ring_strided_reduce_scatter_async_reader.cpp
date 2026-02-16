@@ -34,12 +34,12 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t dim = get_compile_time_arg_val(13);
 constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(14);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(15);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(16);
-constexpr uint32_t mm_N_block_wt = get_compile_time_arg_val(17);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(18);
-constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(19);
-constexpr uint32_t mm_N_blocks_per_slice = slice_Wt / mm_N_block_wt;
+constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(15);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
+constexpr uint32_t mm_N_block_wt = get_compile_time_arg_val(18);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
+constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(20);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -55,7 +55,7 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 21;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;

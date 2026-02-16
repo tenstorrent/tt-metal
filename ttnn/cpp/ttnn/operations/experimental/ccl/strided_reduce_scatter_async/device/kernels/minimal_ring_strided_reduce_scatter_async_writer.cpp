@@ -43,19 +43,19 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t dim = get_compile_time_arg_val(14);
 constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(15);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t N_block_wt = get_compile_time_arg_val(18);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(25);
-constexpr uint32_t mm_N_blocks_per_slice = slice_Wt / N_block_wt;
+constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(16);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(17);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
+constexpr uint32_t N_block_wt = get_compile_time_arg_val(19);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
+constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
 
-constexpr uint32_t num_ct_args = 26;
+constexpr uint32_t num_ct_args = 27;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
