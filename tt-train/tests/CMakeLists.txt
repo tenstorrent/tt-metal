@@ -85,8 +85,6 @@ set_target_properties(
 target_compile_options(ttml_tests PRIVATE -fPIC)
 target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
 
-add_definitions(-DTEST_DATA_DIR="${TT_TRAIN_SOURCE_DIR}/data")
-
 # Define the target file location
 set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
 set(TOKENIZER_FILE "${TT_TRAIN_SOURCE_DIR}/data/tokenizer.json")
