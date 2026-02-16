@@ -10,6 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
@@ -47,7 +48,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor with filled values. Defaults to `None`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                tuple[ttnn.Tensor, ttnn.Tensor]: a tuple of (values_tensor, indices_tensor).
 
             Note:
                 The :attr:`input_tensor` supports the following data type and layout:
