@@ -360,6 +360,9 @@ class DecoderLayerTTWeights:
     # Optional fused attention projection (q_a + kv_a) for one matmul.
     w_q_kv_a: Optional[ttnn.Tensor] = None
 
+    # Optional fused gate+up projection for shared expert MLP (one matmul instead of two).
+    w_mlp_gate_up: Optional[ttnn.Tensor] = None
+
     # Optional routed MoE weights (layers >= first_k_dense_replace)
     moe: Optional[MoELayerTTWeights] = None
 
@@ -624,6 +627,20 @@ def convert_decoder_layer_weights(
         w_mlp_up = _maybe_dram_shard_linear_weight(w_mlp_up, device, force=_env_sharded_mlp())
         w_mlp_down = _maybe_dram_shard_linear_weight(w_mlp_down, device, force=_env_sharded_mlp())
 
+    # Optional fused gate+up weight for shared expert MLP (one matmul instead of two).
+    w_mlp_gate_up: Optional[ttnn.Tensor] = None
+    if os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "").strip() == "1":
+        gate_torch = state[f"{mlp_prefix}gate_proj.weight"]  # [out, in]
+        up_torch = state[f"{mlp_prefix}up_proj.weight"]  # [out, in]
+        gate_up_torch = torch.cat([gate_torch, up_torch], dim=0)  # [2*out, in]
+        w_mlp_gate_up = _linear_weight_tt(
+            device=device,
+            torch_weight_out_in=gate_up_torch,
+            cache_file=c("w_mlp_gate_up", mlp_variant),
+            dtype=dense_dtype,
+            mesh_mapper=mlp_gate_mapper,
+        )
+
     # ---- Routed MoE (layers >= first_k_dense_replace) ----
     moe: Optional[MoELayerTTWeights] = None
     if enable_moe and not dense_layer:
@@ -749,5 +766,6 @@ def convert_decoder_layer_weights(
         w_mlp_gate=w_mlp_gate,
         w_mlp_up=w_mlp_up,
         w_mlp_down=w_mlp_down,
+        w_mlp_gate_up=w_mlp_gate_up,
         moe=moe,
     )
