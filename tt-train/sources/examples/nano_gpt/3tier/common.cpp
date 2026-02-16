@@ -28,7 +28,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
-    config.data_path = expand_config_path(config.data_path);
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);

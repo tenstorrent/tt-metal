@@ -85,9 +85,11 @@ set_target_properties(
 target_compile_options(ttml_tests PRIVATE -fPIC)
 target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
 
+add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+
 # Define the target file location
 set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
-set(TOKENIZER_FILE "${TT_TRAIN_SOURCE_DIR}/data/tokenizer.json")
+set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tokenizer.json")
 
 # Check if the file already exists before downloading
 if(NOT EXISTS "${TOKENIZER_FILE}")
@@ -102,8 +104,8 @@ else()
     message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
 endif()
 
-add_definitions(-DTEST_DATA_DIR="${TT_TRAIN_SOURCE_DIR}/data")
-add_definitions(-DTEST_LOCAL_DATA_DIR="${TT_TRAIN_SOURCE_DIR}/tests/local_data")
+add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
