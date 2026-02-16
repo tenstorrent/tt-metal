@@ -8,6 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -75,13 +76,13 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
-    std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
-    std::vector<uint32_t> num_input_tiles_per_dim(num_dims);
-    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_output_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_input_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_output_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_input_sticks_per_dim(num_dims);
 
-    std::vector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
-    std::vector<uint32_t> accumulated_total_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_sticks_per_dim(num_dims);
 
     num_output_tiles_per_dim[0] = num_tiles_per_channel;
     num_output_tiles_per_dim[1] = (tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -

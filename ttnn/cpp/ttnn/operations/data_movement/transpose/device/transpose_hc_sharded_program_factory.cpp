@@ -33,13 +33,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
-    std::vector<uint32_t> shard_grid_x_map;
+    ttsl::SmallVector<uint32_t> shard_grid_x_map;
     shard_grid_x_map.reserve(num_cores_x);
     for (uint32_t i = 0; i < num_cores_x; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
         shard_grid_x_map.push_back(physical_core.x);
     }
-    std::vector<uint32_t> shard_grid_y_map;
+    ttsl::SmallVector<uint32_t> shard_grid_y_map;
     shard_grid_y_map.reserve(num_cores_y);
     for (uint32_t i = 0; i < num_cores_y; ++i) {
         auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));

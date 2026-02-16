@@ -39,11 +39,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_padded_sticks_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_padded_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> id_per_dim(num_dims);
 
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_per_dim(num_dims);
 
     // TODO: Remove first element of these arrays and update kernel accordingly
     // This currently just matches tile version where we iterate over the row as well

@@ -8,6 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -62,11 +63,11 @@ get_padded_slice_runtime_args_rm_sharded_output(
         input_page_size,
         output_row_size_bytes);
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_output_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> num_input_sticks_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> id_per_dim(num_dims);
 
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
+    ttsl::SmallVector<uint32_t> accumulated_total_per_dim(num_dims);
 
     // TODO: Remove first element of these arrays and update kernel accordingly
     // This currently just matches tile version where we iterate over the row as well
