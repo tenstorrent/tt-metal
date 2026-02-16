@@ -136,7 +136,7 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
 }
 
 void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
-    args.reserve(7);
+    args.reserve(args.size() + 7);
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
