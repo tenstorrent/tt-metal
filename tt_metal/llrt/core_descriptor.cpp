@@ -50,7 +50,7 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
+    bool use_small_core_desc_yaml = false;  // override to a different core descriptor for small RTL sims
     if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
@@ -207,12 +207,6 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
-    std::vector<RelativeCoreCoord> dispatch_cores;
-    const auto* dispatch_cores_string = "dispatch_cores";
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
-        dispatch_cores_string = "tg_dispatch_cores";
-    }
-
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
@@ -222,21 +216,30 @@ const core_descriptor_t& get_core_descriptor_config(
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
     }
 
-    for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
-        RelativeCoreCoord coord = {};
-        if (core_node.IsSequence()) {
-            // Logical coord
-            coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
-            if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
-                auto logical_coord = get_core_coord_from_relative(coord, grid_size);
-                if (logical_active_eth_cores.contains(logical_coord)) {
-                    continue;
+    const auto* dispatch_cores_string = "dispatch_cores";
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
+        dispatch_cores_string = "tg_dispatch_cores";
+    }
+    std::vector<RelativeCoreCoord> dispatch_cores;
+    {
+        const auto& dispatch_cores_desc_yaml = desc_yaml[dispatch_cores_string];
+        dispatch_cores.reserve(dispatch_cores_desc_yaml.size());
+        for (const auto& core_node : dispatch_cores_desc_yaml) {
+            RelativeCoreCoord coord = {};
+            if (core_node.IsSequence()) {
+                // Logical coord
+                coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+                if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
+                    auto logical_coord = get_core_coord_from_relative(coord, grid_size);
+                    if (logical_active_eth_cores.contains(logical_coord)) {
+                        continue;
+                    }
                 }
+            } else {
+                TT_THROW("Only logical relative coords supported for dispatch_cores cores");
             }
-        } else {
-            TT_THROW("Only logical relative coords supported for dispatch_cores cores");
+            dispatch_cores.push_back(coord);
         }
-        dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
         !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
@@ -245,6 +248,7 @@ const core_descriptor_t& get_core_descriptor_config(
     // Parse fabric_mux_cores
     std::vector<RelativeCoreCoord> fabric_mux_cores;
     if (desc_yaml["fabric_mux_cores"]) {
+        fabric_mux_cores.reserve(desc_yaml["fabric_mux_cores"].size());
         for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
             RelativeCoreCoord coord = {};
             if (core_node.IsSequence()) {
