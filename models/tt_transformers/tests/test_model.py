@@ -99,7 +99,8 @@ def test_model_inference(
     dtype = ttnn.bfloat8_b
 
     use_hf_rope = request.config.getoption("--use_hf_rope")
-    logger.info("Using HF style rope")
+    if use_hf_rope:
+        logger.info("Using HF style rope")
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
