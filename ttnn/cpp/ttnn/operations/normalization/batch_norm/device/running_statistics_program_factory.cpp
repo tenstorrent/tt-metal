@@ -7,6 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <tt_stl/vector_init.hpp>
 #include <cmath>
 
 namespace {
@@ -234,14 +235,10 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto [tmp3_cb, tmp3_cb_handle] =
         create_cb(tt::CBIndex::c_11, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        batch_mean_tensor_cb,
-        momentum_cb,
-        one_cb,
-    };
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>(batch_mean_tensor_cb, momentum_cb, one_cb);
     tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>(
         static_cast<uint32_t>(running_mean_has_value),
         static_cast<uint32_t>(running_var_has_value),
         batch_var_tensor_cb,
@@ -249,8 +246,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         old_running_mean_tensor_cb,
         old_running_var_tensor_cb,
         updated_m_cb,
-        updated_v_cb,
-    };
+        updated_v_cb);
     tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->buffer() : nullptr)
@@ -306,7 +302,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         }
     }
 
-    std::vector<uint32_t> compute_kernel_args = {
+    auto compute_kernel_args = ttsl::vector_init<uint32_t>(
         static_cast<uint32_t>(running_mean_has_value),
         static_cast<uint32_t>(running_var_has_value),
         batch_mean_tensor_cb,
@@ -320,7 +316,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         one_cb,
         tmp1_cb,
         tmp2_cb,
-        tmp3_cb};
+        tmp3_cb);
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(

@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <optional>
 #include <string>
 #include <variant>
@@ -135,14 +136,11 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto reducer_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
-        (std::uint32_t)reducer_semaphore_id,
-        (std::uint32_t)cores_y,
-    };
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>(
+        (std::uint32_t)block_size, (std::uint32_t)reducer_semaphore_id, (std::uint32_t)cores_y);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>((std::uint32_t)writer_block_size);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
@@ -162,8 +160,8 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     bool float32_reduction = fp32_dest_acc_en && !operation_attributes.program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {
-        tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1 : 0};
+    auto compute_args =
+        ttsl::vector_init<uint32_t>(tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1 : 0);
 
     auto compute_kernels_id = tt::tt_metal::CreateKernel(
         program,

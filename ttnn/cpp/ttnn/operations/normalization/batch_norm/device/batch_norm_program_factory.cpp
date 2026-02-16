@@ -7,6 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <tt_stl/vector_init.hpp>
 #include <cmath>
 
 namespace {
@@ -204,21 +205,17 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [temp_1_cb, temp_1_cb_handle] =
         create_cb(tt::CBIndex::c_8, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb,
-        eps_cb,
-    };
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>(input_tensor_cb, eps_cb);
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>(
         static_cast<uint32_t>(weight_has_value),
         static_cast<uint32_t>(bias_has_value),
         batch_mean_tensor_cb,
         output_tensor_cb,
         batch_var_tensor_cb,
         weight_tensor_cb,
-        bias_tensor_cb,
-    };
+        bias_tensor_cb);
     tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
@@ -270,7 +267,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         }
     }
 
-    std::vector<uint32_t> compute_kernel_args = {
+    auto compute_kernel_args = ttsl::vector_init<uint32_t>(
         static_cast<uint32_t>(weight_has_value),
         static_cast<uint32_t>(bias_has_value),
         input_tensor_cb,
@@ -281,7 +278,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         den_cb,
         weight_tensor_cb,
         temp_1_cb,
-        bias_tensor_cb};
+        bias_tensor_cb);
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(

@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -296,7 +297,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
     }
 
-    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
+    auto reader_mcast_sender_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
@@ -326,7 +327,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {};
+    auto reader_mcast_receiver_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
     std::unordered_map<std::string, uint32_t> reader_mcast_receiver_named_compile_time_args = {
         {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"reduce_sender_semaphore_id", reduce_sender_semaphore_id},
@@ -386,7 +387,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         });
 
     std::map<std::string, std::string> writer_defines;
-    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
+    auto writer_mcast_sender_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
         {"fuse_gamma", gamma.has_value()},
@@ -457,7 +458,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
 
-    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {};
+    auto mcast_sender_compute_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args = {
         {"is_mcast_sender", 1},
         {"do_gamma", gamma.has_value()},
@@ -490,7 +491,7 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"reciprocal_size", num_reciprocals},
     };
 
-    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
+    auto mcast_receiver_compute_compile_time_args_group_1 = ttsl::vector_init<uint32_t>();
     std::unordered_map<std::string, uint32_t> mcast_receiver_compute_named_compile_time_args = {
         {"is_mcast_sender", 0},
         {"do_gamma", gamma.has_value()},

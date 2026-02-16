@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/math.hpp"
 
 #include <optional>
@@ -120,12 +121,10 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)block_size,
-    };
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>((std::uint32_t)block_size);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>((std::uint32_t)writer_block_size);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
@@ -144,7 +143,7 @@ LayerNormPreAllGatherWelfordProgramFactory::cached_program_t LayerNormPreAllGath
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, W};
+    auto compute_args = ttsl::vector_init<uint32_t>(Wt, W);
 
     const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
