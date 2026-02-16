@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
@@ -12,6 +14,7 @@ namespace ttml::metal::ops::softmax_backward::device {
 
 struct SoftmaxBackwardParams {
     uint32_t dim;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 struct SoftmaxBackwardInputs {

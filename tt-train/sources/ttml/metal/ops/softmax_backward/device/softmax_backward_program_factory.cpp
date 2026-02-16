@@ -144,12 +144,28 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         width_tiles,
         required_memory_bytes / 1024);
 
-    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_x;
+    uint32_t num_cores_y;
+    if (operation_attributes.sub_core_grids.has_value()) {
+        // To support arbitrary CoreRangeSets (e.g. non‑rectangular or not starting at (0,0)),
+        // the next step is to pass per-core (start_row, num_rows) as runtime args to the
+        // reader/writer and have them use those instead of deriving from core_id.
+        const CoreRangeSet& sub = *operation_attributes.sub_core_grids;
+        TT_FATAL(sub.ranges().size() == 1, "SoftmaxBackward: sub_core_grids must be a single CoreRange");
+        const CoreRange& range = sub.ranges().front();
+        TT_FATAL(
+            range.start_coord.x == 0 && range.start_coord.y == 0,
+            "SoftmaxBackward: sub_core_grids must start at (0,0)");
+        num_cores_x = range.end_coord.x + 1;
+        num_cores_y = range.end_coord.y + 1;
+    } else {
+        const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        num_cores_x = compute_with_storage_grid_size.x;
+        num_cores_y = compute_with_storage_grid_size.y;
+    }
+
     const uint32_t num_cores = num_cores_x * num_cores_y;
     const uint32_t rows_per_core = tt::div_up(num_rows, num_cores);
-
     std::vector<CoreRange> worker_core_ranges;
     std::vector<std::pair<CoreCoord, uint32_t>> core_row_assignments;
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {

@@ -32,6 +32,10 @@ struct SoftmaxBackwardDeviceOperation {
 
 namespace ttnn::prim {
 
-ttnn::Tensor ttml_softmax_backward(const ttnn::Tensor& softmax_output, const ttnn::Tensor& upstream_grad, uint32_t dim);
+ttnn::Tensor ttml_softmax_backward(
+    const ttnn::Tensor& softmax_output,
+    const ttnn::Tensor& upstream_grad,
+    uint32_t dim,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn::prim

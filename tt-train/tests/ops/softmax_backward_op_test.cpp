@@ -6,7 +6,9 @@
 
 #include <array>
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 #include <string_view>
+#include <tt-metalium/core_coord.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -81,7 +83,10 @@ ttnn::Tensor to_device_tensor(
 }
 
 void run_softmax_backward_case(
-    const SoftmaxBackwardCase& test_case, const DTypeParam& dtype_param, ttnn::distributed::MeshDevice* device) {
+    const SoftmaxBackwardCase& test_case,
+    const DTypeParam& dtype_param,
+    ttnn::distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt) {
     using namespace ttml;
 
     xt::xarray<float> logits_tensor = xt::empty<float>({test_case.n, test_case.c, test_case.h, test_case.w});
@@ -114,7 +119,9 @@ void run_softmax_backward_case(
         return;
     }
 
-    auto result_tt = ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim);
+    ttnn::Tensor result_tt = sub_core_grids.has_value()
+                                 ? ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim, *sub_core_grids)
+                                 : ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim);
     auto result_xtensor = core::to_xtensor(result_tt);
 
     auto expected = reference_softmax_backward(core::to_xtensor(y_tt), core::to_xtensor(grad_tt), dim_u32);
@@ -169,6 +176,26 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
         .grad_max = 10.0F,
     };
     run_softmax_backward_case(test_case, GetParam(), s_device);
+}
+
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
+    SOFTMAX_BW_SKIP_IF_UNSUPPORTED("sub-core-grid rectangular");
+    // Rectangular sub-grid: 2x2 cores starting at (0,0). Requires device with at least 2x2 compute grid.
+    const tt::tt_metal::CoreRange sub_range(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(1, 1));
+    const tt::tt_metal::CoreRangeSet sub_core_grids(sub_range);
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "sub_grid_2x2",
+        .n = 10,
+        .c = 2,
+        .h = 32,
+        .w = 64,
+        .dim = 3,
+        .atol = 2.5e-2F,
+        .rtol = 2.5e-2F,
+        .grad_min = -10.0F,
+        .grad_max = 10.0F,
+    };
+    run_softmax_backward_case(test_case, GetParam(), s_device, sub_core_grids);
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LongRows) {

@@ -85,9 +85,12 @@ SoftmaxBackwardDeviceOperation::create_op_performance_model(
 namespace ttnn::prim {
 
 ttnn::Tensor ttml_softmax_backward(
-    const ttnn::Tensor& softmax_output, const ttnn::Tensor& upstream_grad, uint32_t dim) {
+    const ttnn::Tensor& softmax_output,
+    const ttnn::Tensor& upstream_grad,
+    uint32_t dim,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttml::metal::ops::softmax_backward::device::SoftmaxBackwardDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{dim};
+    auto operation_attributes = OperationType::operation_attributes_t{dim, sub_core_grids};
     auto tensor_args = OperationType::tensor_args_t{softmax_output, upstream_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
