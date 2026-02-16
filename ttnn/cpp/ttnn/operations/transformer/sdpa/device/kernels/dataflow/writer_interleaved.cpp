@@ -6,7 +6,6 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -127,7 +126,6 @@ void kernel_main() {
                       Determine how many rows of OUT will be written. Both start and end rows are
                       capped by valid_Sqt, since Sq padding is independent of Sk padding.
                     */
-                    DeviceZoneScopedN("WR-OUT");
                     const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                     const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;

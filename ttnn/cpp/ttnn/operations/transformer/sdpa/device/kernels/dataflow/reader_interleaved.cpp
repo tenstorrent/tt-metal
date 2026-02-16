@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 
 // Read a KV chunk into a CB for L1-L1 forwarding.
 // Skips intermediate read barriers (single barrier at end) for lower latency.
@@ -428,7 +427,6 @@ void kernel_main() {
                             for (uint32_t sb = 0; sb < qk_in1_num_subblocks; ++sb) {
                                 uint32_t sub_start_addr = 0;
                                 if (should_receive) {
-                                    DeviceZoneScopedN("K-RECV");
                                     // Receive one K subblock from previous core
                                     cb_reserve_back(cb_k_in, k_sub_tiles);
                                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
@@ -436,23 +434,19 @@ void kernel_main() {
                                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                                     cb_push_back(cb_k_in, k_sub_tiles);
                                 } else {
-                                    {
-                                        DeviceZoneScopedN("K-DRAM");
-                                        // Read one K column subblock from DRAM
-                                        const uint32_t sb_k_start = sb * qk_subblock_w;
-                                        const uint32_t sb_rows =
-                                            (k_row_tile_count > sb_k_start)
-                                                ? std::min(qk_subblock_w, k_row_tile_count - sb_k_start)
-                                                : 0u;
-                                        const uint32_t sb_tile_id = k_start_tile_id + sb_k_start * DHt;
+                                    // Read one K column subblock from DRAM
+                                    const uint32_t sb_k_start = sb * qk_subblock_w;
+                                    const uint32_t sb_rows =
+                                        (k_row_tile_count > sb_k_start)
+                                            ? std::min(qk_subblock_w, k_row_tile_count - sb_k_start)
+                                            : 0u;
+                                    const uint32_t sb_tile_id = k_start_tile_id + sb_k_start * DHt;
 
-                                        sub_start_addr = read_k_subblock<k_tile_bytes>(
-                                            k_reader, cb_k_in, sb_tile_id, sb_rows, DHt, qk_subblock_w, DHt);
-                                    }
+                                    sub_start_addr = read_k_subblock<k_tile_bytes>(
+                                        k_reader, cb_k_in, sb_tile_id, sb_rows, DHt, qk_subblock_w, DHt);
 
                                     // Forward this K subblock (injector only)
                                     if (should_forward) {
-                                        DeviceZoneScopedN("K-FWD");
                                         k_sender_threshold += sender_wait_count;
                                         noc_semaphore_wait(sender_semaphore_addr_ptr, k_sender_threshold);
 
@@ -486,7 +480,6 @@ void kernel_main() {
                                 // On k_chunk==0, compute needs both K sub0 AND Q sub0 to start.
                                 if constexpr (use_q_subblock_push) {
                                     if (k_chunk == 0 && sb == 0) {
-                                        DeviceZoneScopedN("RD-Q-SUB0");
                                         read_q_subblock<q_tile_bytes>(
                                             q_reader,
                                             cb_q_in,
@@ -512,7 +505,6 @@ void kernel_main() {
 
                         // Mask read (overlaps with last K subblock write in-flight for unicast)
                         if constexpr (use_provided_mask) {
-                            DeviceZoneScopedN("RD-MASK");
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             barrier_count = 0;
@@ -563,7 +555,6 @@ void kernel_main() {
                         // Remaining Q subblocks (k_chunk==0 only, sub1..subM)
                         if constexpr (use_q_subblock_push) {
                             if (k_chunk == 0) {
-                                DeviceZoneScopedN("RD-Q-REST");
                                 for (uint32_t q_sub = 1; q_sub < q_num_subblocks; ++q_sub) {
                                     read_q_subblock<q_tile_bytes>(
                                         q_reader,
@@ -580,88 +571,83 @@ void kernel_main() {
                         }
 
                         // V: either read locally (injector or not participant) or receive from previous core
-                        {
-                            DeviceZoneScopedN("RD-V");
-                            uint32_t cb_v_start_address = 0;
+                        uint32_t cb_v_start_address = 0;
 
-                            if (should_receive) {
-                                // Receive forwarded V chunk from previous core
-                                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                                cb_v_start_address = get_write_ptr(cb_v_in);
-                                noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                                noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                                noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                                cb_push_back(cb_v_in, v_chunk_tiles);
+                        if (should_receive) {
+                            // Receive forwarded V chunk from previous core
+                            cb_reserve_back(cb_v_in, v_chunk_tiles);
+                            cb_v_start_address = get_write_ptr(cb_v_in);
+                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                            cb_push_back(cb_v_in, v_chunk_tiles);
+                        } else {
+                            // Read V chunk from DRAM
+                            if constexpr (is_chunked) {
+                                // Use page table to read V chunk (forwarding not supported for paged mode)
+                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                    v_reader,
+                                    cb_v_in,
+                                    kv_head,
+                                    k_chunk_start_row_num,
+                                    k_row_tile_count,
+                                    vDHt,
+                                    Sk_chunk_t,
+                                    vDHt,
+                                    v_tile_bytes,
+                                    barrier_threshold,
+                                    page_table_ptr,
+                                    false,
+                                    DHt - vDHt /* src_skip_cols */);
                             } else {
-                                // Read V chunk from DRAM
-                                if constexpr (is_chunked) {
-                                    // Use page table to read V chunk (forwarding not supported for paged mode)
-                                    const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                                    read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                if (should_forward) {
+                                    cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
                                         v_reader,
                                         cb_v_in,
-                                        kv_head,
-                                        k_chunk_start_row_num,
+                                        k_start_tile_id,
                                         k_row_tile_count,
                                         vDHt,
                                         Sk_chunk_t,
                                         vDHt,
-                                        v_tile_bytes,
+                                        DHt - vDHt);
+                                } else {
+                                    read_chunk_with_padding<v_tile_bytes>(
+                                        v_reader,
+                                        cb_v_in,
+                                        k_start_tile_id,
+                                        k_row_tile_count,
+                                        vDHt,
+                                        Sk_chunk_t,
+                                        vDHt,
                                         barrier_threshold,
-                                        page_table_ptr,
                                         false,
                                         DHt - vDHt /* src_skip_cols */);
-                                } else {
-                                    if (should_forward) {
-                                        cb_v_start_address = read_chunk_for_forwarding<v_tile_bytes, false>(
-                                            v_reader,
-                                            cb_v_in,
-                                            k_start_tile_id,
-                                            k_row_tile_count,
-                                            vDHt,
-                                            Sk_chunk_t,
-                                            vDHt,
-                                            DHt - vDHt);
-                                    } else {
-                                        read_chunk_with_padding<v_tile_bytes>(
-                                            v_reader,
-                                            cb_v_in,
-                                            k_start_tile_id,
-                                            k_row_tile_count,
-                                            vDHt,
-                                            Sk_chunk_t,
-                                            vDHt,
-                                            barrier_threshold,
-                                            false,
-                                            DHt - vDHt /* src_skip_cols */);
-                                    }
                                 }
                             }
+                        }
 
-                            // Forward V chunk to next core(s) if applicable
-                            if (should_forward) {
-                                noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                                noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                                if constexpr (mcast_enabled) {
-                                    uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
-                                    noc_async_write_multicast(
-                                        cb_v_start_address,
-                                        v_mcast_addr,
-                                        v_chunk_tiles * v_tile_bytes,
-                                        mcast_num_dests,
-                                        true /* linked: semaphore mcast follows */);
-                                    noc_semaphore_set_multicast(
-                                        valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                                } else {
-                                    uint64_t v_unicast_data_addr =
-                                        get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                                    noc_async_write(
-                                        cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                                    noc_async_writes_flushed();
-                                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                                }
+                        // Forward V chunk to next core(s) if applicable
+                        if (should_forward) {
+                            noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
+                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                            if constexpr (mcast_enabled) {
+                                uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
+                                noc_async_write_multicast(
+                                    cb_v_start_address,
+                                    v_mcast_addr,
+                                    v_chunk_tiles * v_tile_bytes,
+                                    mcast_num_dests,
+                                    true /* linked: semaphore mcast follows */);
+                                noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                            } else {
+                                uint64_t v_unicast_data_addr =
+                                    get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
+                                noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                                noc_async_writes_flushed();
+                                noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
-                        }  // RD-V
+                        }
                     }
                 }
             }

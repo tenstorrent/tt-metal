@@ -21,7 +21,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1227,51 +1226,40 @@ ALWI void matmul_blocks(
                 cb_wait_front(in1_cb, (in1_subblock + 1) * in1_subblock_num_tiles);
             }
 
-            {
-                DeviceZoneScopedSumN1("MATMUL-BLOCK");
-                tile_regs_acquire();
+            tile_regs_acquire();
 
-                uint32_t dst_index = 0;
-                uint32_t in0_index = in0_index_offset;
-                // For transposed K: subblock-contiguous layout, base = sb * K * sw, stride = sw
-                // For non-transposed: original layout, base = sb * sw, stride = N
-                uint32_t in1_index = transpose ? in1_subblock * K * subblock_w : in1_index_offset;
+            uint32_t dst_index = 0;
+            uint32_t in0_index = in0_index_offset;
+            // For transposed K: subblock-contiguous layout, base = sb * K * sw, stride = sw
+            // For non-transposed: original layout, base = sb * sw, stride = N
+            uint32_t in1_index = transpose ? in1_subblock * K * subblock_w : in1_index_offset;
 
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                    matmul_block(
-                        in0_cb,
-                        in1_cb,
-                        in0_index,
-                        in1_index,
-                        dst_index,
-                        transpose,
-                        subblock_w,
-                        subblock_h,
-                        in0_block_w);
-                    in0_index++;
-                    in1_index += transpose ? subblock_w : N;
-                }
-                if (add_mask) {
-                    cb_wait_front(mask_cb, out_subblock_num_tiles);
-                    cb_wait_front(zero_cb, 1);
-                    add_tiles_init(zero_cb, mask_cb, true);
-                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                        add_tiles(zero_cb, mask_cb, 0, i, i);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                uint32_t dst_idx = 0;
-                uint32_t out_col_offset = in1_subblock * subblock_w;
-                for (uint32_t r = 0; r < subblock_h; r++) {
-                    uint32_t out_row_offset = r * N;
-                    for (uint32_t c = 0; c < subblock_w; c++) {
-                        pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
-                        dst_idx++;
-                    }
-                }
-                tile_regs_release();
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                in0_index++;
+                in1_index += transpose ? subblock_w : N;
             }
+            if (add_mask) {
+                cb_wait_front(mask_cb, out_subblock_num_tiles);
+                cb_wait_front(zero_cb, 1);
+                add_tiles_init(zero_cb, mask_cb, true);
+                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                    add_tiles(zero_cb, mask_cb, 0, i, i);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            uint32_t dst_idx = 0;
+            uint32_t out_col_offset = in1_subblock * subblock_w;
+            for (uint32_t r = 0; r < subblock_h; r++) {
+                uint32_t out_row_offset = r * N;
+                for (uint32_t c = 0; c < subblock_w; c++) {
+                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    dst_idx++;
+                }
+            }
+            tile_regs_release();
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
