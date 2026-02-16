@@ -37,18 +37,18 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
-    "mode,num_tokens",
-    [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
-    ],
-)
-@pytest.mark.parametrize(
     "device_params",
     [
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode,num_tokens",
+    [
+        ("decode", 128),
+        ("prefill", _prefill_seq_len),
+    ],
 )
 @pytest.mark.parametrize(
     "topk_fallback",
