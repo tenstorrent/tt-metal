@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 
 #include <utility>
 
@@ -71,7 +72,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     // Data movement kernels
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
-    std::vector<uint32_t> reader_ct_args = {};
+    auto reader_ct_args = ttsl::vector_init<uint32_t>();
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = operations::CreateReadKernel(
         program,
@@ -79,7 +80,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
         all_cores,
         reader_ct_args,
         reader_defines);
-    std::vector<uint32_t> writer_ct_args = {};
+    auto writer_ct_args = ttsl::vector_init<uint32_t>();
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = operations::CreateWriteKernel(
         program,
@@ -130,11 +131,11 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
             TT_THROW("Core not in specified core ranges");
         }
 
-        const std::vector<uint32_t> reader_args = {
-            input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+        const auto reader_args = ttsl::vector_init<uint32_t>(
+            input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size);
 
-        const std::vector<uint32_t> writer_args = {
-            output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
+        const auto writer_args = ttsl::vector_init<uint32_t>(
+            output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size);
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

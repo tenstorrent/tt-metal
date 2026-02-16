@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 
 #include <utility>
 
@@ -131,7 +132,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     // reader compile arg
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)program_config.block_w};
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>((std::uint32_t)program_config.block_w);
     tt::tt_metal::TensorAccessorArgs(tensor_args.mask ? tensor_args.mask->buffer() : nullptr)
         .append_to(reader_compile_time_args);
     std::map<std::string, std::string> softmax_defines;
@@ -181,12 +182,8 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
         all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
     // compute kernel compile time args
-    std::vector<uint32_t> compute_compile_time_args = {
-        program_config.block_h,
-        program_config.block_w,
-        program_config.subblock_w,
-        num_subblocks_w,
-    };
+    const auto compute_compile_time_args = ttsl::vector_init<uint32_t>(
+        program_config.block_h, program_config.block_w, program_config.subblock_w, num_subblocks_w);
     if (attributes.numeric_stable) {
         softmax_defines["NUMERIC_STABLE"] = "1";
     }
@@ -290,11 +287,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                 CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
                 // reader args
-                std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(s.u);
-                reader_args.push_back(mask_addr);
-                reader_args.push_back(mask_start_tile_id);
+                auto reader_args = ttsl::vector_init<uint32_t>(0x3f803f80, s.u, mask_addr, mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }
@@ -330,11 +323,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                 CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
                 // reader args
-                std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
-                reader_args.push_back(s.u);
-                reader_args.push_back(mask_addr);
-                reader_args.push_back(mask_start_tile_id);
+                auto reader_args = ttsl::vector_init<uint32_t>(0x3f803f80, s.u, mask_addr, mask_start_tile_id);
                 if (attributes.is_scale_causal_mask_hw_dims_softmax) {
                     reader_args.push_back(num_tiles_in_attn_mask);
                 }

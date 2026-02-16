@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <utility>
@@ -149,7 +150,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     // Data movement kernels
-    std::vector<uint32_t> reader_compile_time_args = {};
+    auto reader_compile_time_args = ttsl::vector_init<uint32_t>();
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     if (tensor_args.mask.has_value()) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.mask.value().buffer()).append_to(reader_compile_time_args);
@@ -160,7 +161,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {num_datum_padded};
+    auto writer_compile_time_args = ttsl::vector_init<uint32_t>(num_datum_padded);
     tt::tt_metal::TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
     std::map<std::string, std::string> softmax_defines, writer_defines;
     if (tensor_args.mask.has_value()) {

@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/vector_init.hpp>
 
 #include <utility>
 
@@ -73,7 +74,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     // Data movement kernel
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
-    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
+    auto reader_ct_args = ttsl::vector_init<uint32_t>(static_cast<uint32_t>(input.dtype() == DataType::FLOAT32));
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     const auto reader_kernel_id = operations::CreateReadKernel(
         program,
@@ -81,7 +82,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
         all_cores,
         reader_ct_args,
         reader_defines);
-    std::vector<uint32_t> writer_ct_args = {};
+    auto writer_ct_args = ttsl::vector_init<uint32_t>();
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
     const auto writer_kernel_id = operations::CreateWriteKernel(
         program,
@@ -130,17 +131,17 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
         }
-        const std::vector<uint32_t> reader_args = {
+        const auto reader_args = ttsl::vector_init<uint32_t>(
             input.buffer()->address(),
             num_tiles_per_core,
             tile_offset,
             Ht,
             Wt,
             *reinterpret_cast<uint32_t*>(&scaler),
-            mask_h};
+            mask_h);
 
-        const std::vector<uint32_t> writer_args = {
-            output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
+        const auto writer_args =
+            ttsl::vector_init<uint32_t>(output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt);
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
