@@ -112,7 +112,7 @@ def expert_mlp_forward(
     program_config: ThroughputProgramConfig,
     total_tokens: int,
 ) -> ttnn.Tensor:
-        # All dispatched tokens are processed by all local experts. The combine
+    # All dispatched tokens are processed by all local experts. The combine
     # step will select the correct expert output for each token.
 
     # Build 1D multicast program configs sized for total_tokens (M dimension)
@@ -131,9 +131,11 @@ def expert_mlp_forward(
         )
 
         # Fused projection: [1, E, total_tokens, H] x [1, E, H, 2*I] -> [1, E, total_tokens, 2*I]
-        w1_w3_out = ttnn.matmul(experts_input, weights.w1_w3_fused, memory_config=memory_config)
-        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
-        # w1_w3_out = ttnn.matmul(post_dispatch, weights.w1_w3_fused, memory_config=memory_config, program_config=fused_gate_up_matmul_config)
+        # w1_w3_out = ttnn.matmul(experts_input, weights.w1_w3_fused, memory_config=memory_config)
+        # w1_w3_out = ttnn.matmul(experts_input, weights.w1_w3_fused, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+        w1_w3_out = ttnn.matmul(
+            experts_input, weights.w1_w3_fused, memory_config=memory_config, program_config=fused_gate_up_matmul_config
+        )
         ttnn.deallocate(experts_input)
 
         # Add fused bias: [1, num_experts_per_device, 1, 2*I] broadcasts across total_tokens
@@ -175,13 +177,13 @@ def expert_mlp_forward(
 
         # Gate projection (w1)
         w1_out = ttnn.matmul(experts_input, weights.w1, memory_config=memory_config)
-        # w1_out = ttnn.matmul(post_dispatch, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
+        # w1_out = ttnn.matmul(experts_input, weights.w1, memory_config=memory_config, program_config=gate_up_matmul_config)
         # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
         ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
 
         # Up projection (w3)
         w3_out = ttnn.matmul(experts_input, weights.w3, memory_config=memory_config)
-        # w3_out = ttnn.matmul(post_dispatch, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
+        # w3_out = ttnn.matmul(experts_input, weights.w3, memory_config=memory_config, program_config=gate_up_matmul_config)
         ttnn.deallocate(experts_input)
         # Bias: [1, num_experts_per_device, 1, I] broadcasts across total_tokens
         ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
@@ -190,8 +192,8 @@ def expert_mlp_forward(
     activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
 
     # Down projection (w2): [1, E, total_tokens, I] x [1, E, I, H] -> [1, E, total_tokens, H]
-    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
-    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
+    # expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config)
+    expert_output = ttnn.matmul(activated, weights.w2, memory_config=memory_config, program_config=down_matmul_config)
     ttnn.deallocate(activated)
     # Bias: [1, num_experts_per_device, 1, H] broadcasts across total_tokens
     ttnn.add(expert_output, weights.w2_bias, output_tensor=expert_output)
@@ -371,7 +373,6 @@ def decode_forward(
         program_config=program_config,
         total_tokens=total_tokens,
     )
-
 
     # ==========================================================================
     # STEP 6: ALL_TO_ALL_COMBINE - Route expert outputs back to token positions
