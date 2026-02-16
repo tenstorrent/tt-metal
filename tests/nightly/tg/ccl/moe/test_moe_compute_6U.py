@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 from loguru import logger
 import math
 import os
@@ -10,6 +11,7 @@ import random
 import torch
 import ttnn
 
+from models.common.utility_functions import comp_pcc
 
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
@@ -290,7 +292,7 @@ def prepare_output_tensor_from_combine_writer(
     torch_output = torch.zeros([experts_per_device, total_tokens, hidden], dtype=torch.bfloat16)
 
     for e in range(experts_per_device):
-        active_tokens = active_token_counts[e]
+        active_tokens = active_token_counts[e].item()
         tokens_per_shard = math.ceil(active_tokens / output_shard_height_dim)
         for t in range(active_tokens):
             bt = t // tokens_per_shard
@@ -299,7 +301,7 @@ def prepare_output_tensor_from_combine_writer(
             contrib = shaped_torch_output[e, bt * total_tokens // output_shard_height_dim + ot]
 
             torch_output[e, t] = contrib
-
+        print(f"{torch_output[e,:active_tokens,:16]=}")
     return torch_output
 
 
@@ -321,15 +323,14 @@ def validate_matmul(
 
     devices = math.prod(mesh_device.shape)
 
-    raw_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    raw_output = ttnn.to_torch(tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     # (D * all cores, E/D, T/D, H) -> (D, all cores, E/D, T/D, H)
     # note this shape does not yet match the layout of the underlying data.
-    raw_shape = raw_output.shape
+    raw_shape = list(raw_output.shape)
     raw_output = raw_output.reshape([devices, raw_shape[0] // devices] + raw_shape[1:])
 
     reshape_func = functools.partial(
         prepare_output_tensor_from_combine_writer,
-        active_token_counts=expert_token_counts,
         all_core_range_set=all_core_range_set,
         output_shard_cores=output_shard_cores,
         output_shard_height_dim=output_shard_height_dim,
@@ -340,16 +341,19 @@ def validate_matmul(
     )
 
     # (D, E/devices, T, H)
-    reshaped_device_outputs = torch.stack([reshape_func(raw_output[d]) for d in range(devices)])
+    reshaped_device_outputs = torch.stack([reshape_func(raw_output[d], expert_token_counts[d]) for d in range(devices)])
 
     matmul_all_passed = True
 
     MATMUL_PCC_THRESHOLD = 0.988
     for d in range(devices):
         for expert_id in range(experts_per_device):
+            active_tokens = expert_token_counts[d, expert_id].item()
             # torch_output_ref is (L, D, E/D, T, H)
-            torch_layer_output = torch_output_ref[layer_id, d, expert_id, :, :]
-            tt_layer_output = tt_to_torch_outputs[d, expert_id, :, :]
+            torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
+            tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
+
+            # print(f"{torch_layer_output[:16]=}")
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
             std = torch_layer_output.std().item()
@@ -358,13 +362,12 @@ def validate_matmul(
                 if std != 0
                 else 0.0
             )
-            allclose_passed, allclose_val = comp_allclose(torch_layer_output, tt_layer_output)
 
-            if pcc < MATMUL_PCC_THRESHOLD:
+            if pcc_val < MATMUL_PCC_THRESHOLD:
                 matmul_all_passed = False
-                logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f}")
+                logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
-                logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f} (Passed)")
+                logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} (Passed)")
 
     return matmul_all_passed
 
@@ -665,7 +668,8 @@ def gen_sparse_buffer_and_indices(
 
     # Generate original tokens for each source device
     # Shape: [num_dispatch_devices, tokens_per_device, hidden_size]
-    original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    # original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
@@ -1393,7 +1397,6 @@ def test_moe_compute(
     )
 
     output_shard_cores = ttnn.get_moe_combine_cores(mesh_device)
-
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1435,21 +1438,21 @@ def test_moe_compute(
                 e_t_all_passed = False
 
             # ========== Matmul Output Tensor Validation ==========
-            # if not validate_matmul(
-    #                 layer_id,
-    #                 experts_per_device,
-    #                 all_core_range_set,
-    #                 output_shard_cores,
-    #                 output_height_shard_dim,
-    #                 output_width_shard_dim,
-    #                 total_tokens,
-    #                 hidden_size,
-    #                 per_expert_total_tokens_output_tensor,
-    #                 matmul_goldens,
-    #                 output_tensor,
-    #                 mesh_device,
-    #             ):
-    #                 matmul_all_passed = False
+            if not validate_matmul(
+                layer_id,
+                experts_per_device,
+                all_core_range_set,
+                output_shard_cores,
+                output_height_shard_dim,
+                output_width_shard_dim,
+                total_tokens,
+                hidden_size,
+                expert_token_counts,
+                matmul_goldens,
+                output_tensor,
+                mesh_device,
+            ):
+                matmul_all_passed = False
 
     # Asserts
     logger.info(f"\n========== Asserts ==========")

@@ -363,7 +363,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         program,
         shard_cores,
         output_page_size,
-        output_pages / shard_cores.size(),
+        shared_cb_num_pages,
         tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype()),
         tilize_output_tensor.buffer());
     tt::tt_metal::CBHandle matmul_writer_cb_handle = std::get<1>(matmul_writer_cb);
@@ -559,7 +559,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         | cb_r2c_w0      | CBIndex::c_1  | Bfp4_b     | true  |    14*6  |      48384      |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
-        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*2   |      24576      |
+        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*12  |      147456     |
         | cb_w2c_md      | CBIndex::c_5  | UInt32     | false |    2     |      8          |
         ------------------------------------------------------------------------------------
     */
@@ -570,7 +570,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"cb_r2c_w0", tt::CBIndex::c_1, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 2},
+        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 12},
         {"cb_w2c_md", tt::CBIndex::c_5, tt::DataFormat::UInt32, false, 2},
     };
 
@@ -913,7 +913,6 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t tile_width = tilize_input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
-    //const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
     const uint32_t output_height_shard_dim = args.output_height_shard_dim;
     const uint32_t output_width_shard_dim = args.output_width_shard_dim;
     const uint32_t output_shard_width_tiles = hidden_size / tile_width / output_width_shard_dim;
@@ -976,6 +975,19 @@ MoEComputeMeshWorkloadFactory::create_at(
             .math_approx_mode = true,
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
+
+    const ttnn::CoreRangeSet output_shard_core_range_set(combine_cores);
+    auto combine_dm1_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/combine_dm1.cpp",
+        output_shard_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
+
+    // Create semaphore on combine cores for source->combine completion signaling.
+    // The dm1 kernel uses get_semaphore(ring_semaphore_id) to compute the remote address,
+    // so the combine cores need a semaphore at the same ID.
+    const uint32_t combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_shard_core_range_set, 0);
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
@@ -1052,6 +1064,11 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::SetRuntimeArgs(program, matmul_compute_kernel_handle, core, matmul_runtime_args);
 
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
+    }
+
+    const std::vector<uint32_t> combine_runtime_args = {combine_semaphore_id};
+    for (const auto& core : combine_cores) {
+        tt::tt_metal::SetRuntimeArgs(program, combine_dm1_kernel_handle, core, combine_runtime_args);
     }
 
     //-------------------------------------------------------------------------

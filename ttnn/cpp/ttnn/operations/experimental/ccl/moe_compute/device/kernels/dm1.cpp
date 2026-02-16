@@ -6,6 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "moe_ring_common.h"
 
+#include "api/debug/dprint_pages.h"
+
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
@@ -92,6 +94,8 @@ void kernel_main() {
     const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
     // offset in tiles into the token width for this core
     const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
+    const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -182,7 +186,6 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for compute core to tell us that all mm01 data is ready
 
-            DPRINT << "WAIT FRONT 0. expert_id: " << expert_id << " chunk: " << chunk << "\n";
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
 
@@ -241,7 +244,6 @@ void kernel_main() {
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
-            DPRINT << "WAIT FRONT 1. expert_id: " << expert_id << " chunk: " << chunk << "\n";
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
 
@@ -277,6 +279,8 @@ void kernel_main() {
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
+                    // tt::data_movement::common::print_bf16_pages(source_l1_addr, width_transfer_bytes/2, 1);
+
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
                     if (++shard_row == max_tokens_per_height_shard) {
@@ -291,4 +295,12 @@ void kernel_main() {
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
         }
     }
+
+    for (uint32_t y = 0; y < height_shard_dim; ++y) {
+        uint32_t idx = combine_core_x + y * width_shard_dim;
+        uint64_t dest_sem_noc_addr =
+            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
+        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
+    }
+    noc_async_atomic_barrier(/*noc_idx=*/1);
 }

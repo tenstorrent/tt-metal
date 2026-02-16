@@ -10,6 +10,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
+#include "api/compute/eltwise_unary/fill.h"
+
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -150,26 +152,20 @@ void kernel_main() {
     // Expert loop
     //-------------------------------------------------------------------------
 
-    // Zero out dest registers
-    MATH(ckernel::zeroacc());
-
     // This decides which half of the buffer will have the valid data sent by tilize cores
     bool use_second_half_buffer = false;
-
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Initialize matmul for W0
-            mm_block_init(
-                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            // Zero out dest registers
+            MATH((ckernel::zeroacc()));
 
             // Initialize SFPU for SILU and eltwise multiply
             PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
-            //---------------------------------------------------------------------
-            // Compute in @ {W0,W1}
-            //---------------------------------------------------------------------
-            cb_wait_front(cb_s2c_in, num_w0_w1_tiles_h);
+            // Initialize matmul for W0
+            mm_block_init(
+                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
@@ -178,6 +174,9 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
+            //---------------------------------------------------------------------
+            // Compute in @ {W0,W1}
+            //---------------------------------------------------------------------
             for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
@@ -201,7 +200,6 @@ void kernel_main() {
                 }
 
                 tile_regs_commit();
-                // DPRINT<<"SFPU STUFF 0 expert_id: "<<expert_id<< " chunk: "<<chunk<< " tile_id: " << tile_id<< "\n";
 
                 // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
                 // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
@@ -210,14 +208,8 @@ void kernel_main() {
                     semaphore::t6_sem(semaphore::MATH_PACK),
                     p_stall::STALL_ON_ZERO));
 
-                DPRINT << "SFPU STUFF 1 expert_id: " << expert_id << " chunk: " << chunk << " tile_id: " << tile_id
-                       << "\n";
-
                 // Make SFPU access the appropriate half of the destination registers
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                DPRINT << "SFPU STUFF 1.5 expert_id: " << expert_id << " chunk: " << chunk << " tile_id: " << tile_id
-                       << "\n";
 
                 //---------------------------------------------------------------------
                 // Apply SILU activation and then eltwise multiply
@@ -225,25 +217,14 @@ void kernel_main() {
                 PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
                 PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
-                DPRINT << "SFPU STUFF 1.75 expert_id: " << expert_id << " chunk: " << chunk << " tile_id: " << tile_id
-                       << "\n";
-
                 PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
                 PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
-                DPRINT << "SFPU STUFF 2 expert_id: " << expert_id << " chunk: " << chunk << " tile_id: " << tile_id
-                       << "\n";
-
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-                // DPRINT<<"SFPU STUFF 3 expert_id: "<<expert_id<< " chunk: "<<chunk<< " tile_id: " << tile_id<< "\n";
 
                 pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
                 pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
                 tile_regs_release();
-
-                DPRINT << "SFPU STUFF 4 expert_id: " << expert_id << " chunk: " << chunk << " tile_id: " << tile_id
-                       << "\n";
             }
             cb_pop_front(cb_s2c_in, num_w0_w1_tiles_h);
 
@@ -297,6 +278,12 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
+
+                // fill_tile_init();
+                // fill_tile(0,1.0);
+                // fill_tile(1,1.0);
+                // fill_tile(2,1.0);
+                // fill_tile(3,1.0);
 
                 tile_regs_commit();
 
