@@ -173,6 +173,7 @@ public:
     void initialize_results_csv_file(bool telemetry_enabled_) override;
     void load_golden_csv() override;
     void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) override;
+    void append_to_csv(const TestConfig& config, const LatencyResult& result);
     void compare_latency_results_with_golden();
     void generate_latency_summary();
     void setup_ci_artifacts();
