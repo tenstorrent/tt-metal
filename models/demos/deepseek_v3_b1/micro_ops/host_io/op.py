@@ -110,14 +110,16 @@ class HostInterface:
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
-            self.embedding_page_size = self.embedding_tensor.spec.compute_page_size_bytes()
             # For now, we assume that tokens will be passed in as 64 bytes packets to embedding.
             # This allows us to add more information in the input packet as needed.
             assert self.h2d_page_size == 64
-            assert self.embedding_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
-            assert self.embedding_page_size == self.embedding_tensor.shape[3] * dtype_size(
-                self.embedding_tensor.dtype
+            assert (
+                self.embedding_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+                and self.embedding_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                and self.embedding_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
+            # Tensor is DRAM interleaved, and row major. Page size is inner dim stride.
+            self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
             self.embedding_cb_index = 2
 
     def _create_h2d_kernel(self):
