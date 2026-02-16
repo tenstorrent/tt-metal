@@ -275,8 +275,9 @@ void kernel_main() {
     uint32_t slice_writes = 0;
     bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Ring) {
-        if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of the
-                                                    // tiles, otherwise we write the entire packet
+        if (ring_size % 2 == 0 && ring_size > 2 &&
+            input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
+                                                             // the tiles, otherwise we write the entire packet
             split_forwarding_enabled = true;
         }
     }

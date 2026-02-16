@@ -171,8 +171,9 @@ void kernel_main() {
     //   Note: backward needs to receive an ADDITIONAL slice for the second half!
     bool split_forwarding_enabled = false;
     if constexpr (topology == Topology::Ring) {
-        if (ring_size % 2 == 0 && ring_size > 2) {  // if ring size is even, we need to write the first half of the
-                                                    // tiles, otherwise we write the entire packet
+        if (ring_size % 2 == 0 && ring_size > 2 &&
+            input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
+                                                             // the tiles, otherwise we write the entire packet
             split_forwarding_enabled = true;
             // Match writer's special case: backward worker forwards half slice when num_targets_backward_direction == 1
             if (direction == 1) {
