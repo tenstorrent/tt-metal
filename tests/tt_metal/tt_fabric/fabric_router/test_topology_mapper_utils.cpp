@@ -1021,6 +1021,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     // Logical Mesh 0: 2x2 grid
     std::vector<FabricNodeId> logical_nodes_m0;
+    logical_nodes_m0.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
         logical_nodes_m0.push_back(FabricNodeId(logical_mesh0, i));
     }
@@ -1028,6 +1029,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     // Logical Mesh 1: 2x2 grid
     std::vector<FabricNodeId> logical_nodes_m1;
+    logical_nodes_m1.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
         logical_nodes_m1.push_back(FabricNodeId(logical_mesh1, i));
     }
@@ -1067,6 +1069,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     // Physical Mesh 1: 2x4 grid (8 ASICs)
     std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    physical_asics_m1.reserve(8);
     for (uint64_t i = 0; i < 8; ++i) {
         physical_asics_m1.push_back(tt::tt_metal::AsicID{100 + i});
     }
@@ -1074,6 +1077,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     // Physical Mesh 2: 2x2 grid (4 ASICs)
     std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    physical_asics_m2.reserve(4);
     for (uint64_t i = 0; i < 4; ++i) {
         physical_asics_m2.push_back(tt::tt_metal::AsicID{200 + i});
     }
@@ -1162,8 +1166,9 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_Fail
     PhysicalMultiMeshGraph physical_graph;
     for (uint32_t m = 0; m < 3; ++m) {
         std::vector<tt::tt_metal::AsicID> asics;
+        asics.reserve(4);
         for (uint64_t i = 0; i < 4; ++i) {
-            asics.push_back(tt::tt_metal::AsicID{100 * m + i});
+            asics.push_back(tt::tt_metal::AsicID{(100 * m) + i});
         }
         physical_graph.mesh_adjacency_graphs_[MeshId{m}] =
             AdjacencyGraph<tt::tt_metal::AsicID>(build_grid_adjacency(asics, 2, 2));
@@ -1594,7 +1599,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
 
     // Add intermesh connections: right edge of mesh 0 to left edge of mesh 1
     for (size_t row = 0; row < kFullMeshSize; ++row) {
-        size_t mesh0_right_idx = row * kFullMeshSize + (kFullMeshSize - 1);
+        size_t mesh0_right_idx = (row * kFullMeshSize) + (kFullMeshSize - 1);
         size_t mesh1_left_idx = row * kFullMeshSize;
         physical_adj_m0[physical_asics_m0[mesh0_right_idx]].push_back(physical_asics_m1[mesh1_left_idx]);
         physical_adj_m1[physical_asics_m1[mesh1_left_idx]].push_back(physical_asics_m0[mesh0_right_idx]);
@@ -1724,7 +1729,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
     std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumMeshes);
 
     for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
-        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + (mesh_idx * 100));
         physical_adj_by_mesh[mesh_idx] =
             build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
     }
@@ -1732,7 +1737,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
     // Add intermesh connections: connect all meshes in a ring (0->1, 1->2, 2->0)
     // Connect right edge of mesh 0 to left edge of mesh 1
     for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-        size_t mesh0_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh0_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);
         size_t mesh1_left_idx = row * kPhysicalMeshSize;
         physical_adj_by_mesh[0][physical_asics_by_mesh[0][mesh0_right_idx]].push_back(
             physical_asics_by_mesh[1][mesh1_left_idx]);
@@ -1742,7 +1747,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
 
     // Connect right edge of mesh 1 to left edge of mesh 2
     for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-        size_t mesh1_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh1_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);
         size_t mesh2_left_idx = row * kPhysicalMeshSize;
         physical_adj_by_mesh[1][physical_asics_by_mesh[1][mesh1_right_idx]].push_back(
             physical_asics_by_mesh[2][mesh2_left_idx]);
@@ -1752,7 +1757,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
 
     // Connect right edge of mesh 2 to left edge of mesh 0
     for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-        size_t mesh2_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+        size_t mesh2_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);
         size_t mesh0_left_idx = row * kPhysicalMeshSize;
         physical_adj_by_mesh[2][physical_asics_by_mesh[2][mesh2_right_idx]].push_back(
             physical_asics_by_mesh[0][mesh0_left_idx]);
@@ -1996,6 +2001,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
 
     // Physical Mesh 0: 2x2 grid
     std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    physical_asics_m0.reserve(4);
     for (uint64_t i = 0; i < 4; ++i) {
         physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
     }
@@ -2003,6 +2009,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
 
     // Physical Mesh 1: 2x2 grid
     std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    physical_asics_m1.reserve(4);
     for (uint64_t i = 0; i < 4; ++i) {
         physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
     }
@@ -2010,6 +2017,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
 
     // Physical Mesh 2: 2x2 grid
     std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    physical_asics_m2.reserve(4);
     for (uint64_t i = 0; i < 4; ++i) {
         physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
     }
@@ -2177,7 +2185,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumPhysicalMeshes);
 
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
-        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + (mesh_idx * 100));
         physical_adj_by_mesh[mesh_idx] =
             build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
     }
@@ -2187,7 +2195,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
         size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
         for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+            size_t current_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);
             size_t next_left_idx = row * kPhysicalMeshSize;
             physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][current_right_idx]].push_back(
                 physical_asics_by_mesh[next_mesh_idx][next_left_idx]);
@@ -2360,7 +2368,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     std::vector<PhysicalAdjacencyMap> physical_adj_by_mesh(kNumPhysicalMeshes);
 
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
-        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + mesh_idx * 100);
+        physical_asics_by_mesh[mesh_idx] = make_asics(kPhysicalMeshSize * kPhysicalMeshSize, 100 + (mesh_idx * 100));
         physical_adj_by_mesh[mesh_idx] =
             build_grid_adjacency(physical_asics_by_mesh[mesh_idx], kPhysicalMeshSize, kPhysicalMeshSize);
     }
@@ -2370,7 +2378,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
         size_t next_mesh_idx = (mesh_idx + 1) % kNumPhysicalMeshes;
         for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);
+            size_t current_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);
             size_t next_left_idx = row * kPhysicalMeshSize;
             physical_adj_by_mesh[mesh_idx][physical_asics_by_mesh[mesh_idx][current_right_idx]].push_back(
                 physical_asics_by_mesh[next_mesh_idx][next_left_idx]);
@@ -2548,7 +2556,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
 
         // Also connect right edge to left edge for full ring connectivity
         for (size_t row = 0; row < kPhysicalMeshSize; ++row) {
-            size_t current_right_idx = row * kPhysicalMeshSize + (kPhysicalMeshSize - 1);  // Device 1 or 3
+            size_t current_right_idx = (row * kPhysicalMeshSize) + (kPhysicalMeshSize - 1);  // Device 1 or 3
             size_t next_left_idx = row * kPhysicalMeshSize;                                // Device 0 or 2
             // Only add if not already added above
             if (row == 0 && current_right_idx == 1) {
