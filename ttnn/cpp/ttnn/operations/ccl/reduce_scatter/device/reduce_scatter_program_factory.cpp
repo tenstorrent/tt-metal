@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt_stl/vector_init.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 
@@ -42,7 +43,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
     };
     // 1 barrier semaphore used to ensure that all the buffers are allocated
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
+    auto subdevice_ids = ttsl::small_vector_init<tt::tt_metal::SubDeviceId>(sd_id);
     auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated

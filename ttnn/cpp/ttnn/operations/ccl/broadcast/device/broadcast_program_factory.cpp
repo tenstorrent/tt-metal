@@ -17,6 +17,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/vector_init.hpp>
 #include <algorithm>
 
 namespace ttnn::prim {
@@ -32,7 +33,7 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     auto* mesh_device = tensor_args.input_tensor.device();
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    auto subdevices = ttsl::small_vector_init<tt::tt_metal::SubDeviceId>(subdevice_id);
 
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
