@@ -172,7 +172,7 @@ jobs:
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true;
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           # Running only decode and prefill-128 tests with HF weights
-          pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers and (mode_decode or mode_prefill_seq_128)" --timeout 600 --durations=0;
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers and (mode_decode or mode_prefill_seq_128)" --timeout 600 --durations=0;
 
           pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
 
