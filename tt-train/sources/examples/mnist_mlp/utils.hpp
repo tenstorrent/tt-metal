@@ -34,7 +34,7 @@ inline std::string expand_config_path(const std::string &path) {
     }
     std::string result = path;
     result.replace(pos, kPlaceholder.length(), tt_metal_root);
-    return result;
+    return std::filesystem::path(result).lexically_normal().string();
 }
 
 class LossAverageMeter {

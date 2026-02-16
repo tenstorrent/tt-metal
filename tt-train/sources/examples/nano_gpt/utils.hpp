@@ -25,8 +25,8 @@
 // Expand ${TT_METAL_RUNTIME_ROOT} in a config path string.
 // Training YAML configs use ${TT_METAL_RUNTIME_ROOT}/tt-train/... so paths are
 // absolute and binaries work regardless of the current working directory.
-// Falls back to inferring the value from the compile-time CONFIGS_FOLDER when
-// the environment variable is not set.
+// TT_METAL_RUNTIME_ROOT is optional: if unset, the value is inferred from the
+// compile-time CONFIGS_FOLDER (tt-metal root = parent of tt-train source).
 inline std::string expand_config_path(const std::string &path) {
     static const std::string kPlaceholder = "${TT_METAL_RUNTIME_ROOT}";
     auto pos = path.find(kPlaceholder);
@@ -46,7 +46,7 @@ inline std::string expand_config_path(const std::string &path) {
 
     std::string result = path;
     result.replace(pos, kPlaceholder.length(), tt_metal_root);
-    return result;
+    return std::filesystem::path(result).lexically_normal().string();
 }
 
 class LossAverageMeter {
