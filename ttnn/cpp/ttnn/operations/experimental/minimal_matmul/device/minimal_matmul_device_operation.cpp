@@ -86,6 +86,25 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "minimal_matmul dimensions must be positive");
 
+    // Validate chunks and dim parameters
+    const int32_t chunks = operation_attributes.chunks;
+    const int32_t dim = operation_attributes.dim;
+    TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
+    TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
+
+    if (chunks > 1) {
+        // Validate N is divisible by chunks
+        TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
+
+        // Validate each chunk is tile-aligned
+        const uint32_t N_per_chunk = N / chunks;
+        TT_FATAL(
+            N_per_chunk % tt::constants::TILE_WIDTH == 0,
+            "Each chunk size N/chunks={} must be a multiple of TILE_WIDTH={}",
+            N_per_chunk,
+            tt::constants::TILE_WIDTH);
+    }
+
     if (has_bias) {
         const auto& b_logical = bias_ptr->logical_shape();
         TT_FATAL(b_logical.rank() >= 1, "minimal_matmul bias must have rank >= 1");
@@ -108,6 +127,56 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     if (has_bias) {
         const auto& b_padded = bias_ptr->padded_shape();
         TT_FATAL(b_padded[-1] % TILE_WIDTH == 0, "minimal_matmul bias last dimension must be tile-aligned");
+    }
+
+    // Validate fused ternary tensors if present
+    bool has_fused_ternary = operation_attributes.fused_ternary_scalar.has_value();
+    if (has_fused_ternary) {
+        TT_FATAL(
+            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value(),
+            "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_b must be "
+            "provided");
+
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "minimal_matmul does not support using fused_activation together with ternary inputs "
+            "(dit_minimal_matmul_addcmul_fused). "
+            "Please use either fused_activation or ternary inputs, not both.");
+
+        const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
+        const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
+
+        TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
+        TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
+        TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
+        TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
+        TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
+        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
+
+        TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
+        TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
+
+        TT_FATAL(
+            dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_b.dtype()),
+            "fused_ternary tensors must have supported dtypes");
+
+        const auto& ternary_a_logical = ternary_a.logical_shape();
+        const auto& ternary_b_logical = ternary_b.logical_shape();
+
+        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
+        TT_FATAL(
+            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
+            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
+            M,
+            N,
+            ternary_a_logical[-2],
+            ternary_a_logical[-1]);
+        TT_FATAL(
+            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            N,
+            ternary_b_logical[-2],
+            ternary_b_logical[-1]);
     }
 
     // Config constraints
@@ -150,28 +219,46 @@ MinimalMatmulDeviceOperation::spec_return_value_t MinimalMatmulDeviceOperation::
     const auto& in1_input_tensor = tensor_args.weight_tensor;
     const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
     const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
-    uint32_t N = in1_input_tensor_shape[-1];
-
-    ttnn::Shape output_shape(in0_input_tensor_shape);
-    output_shape[-1] = N;
+    const uint32_t N = in1_input_tensor_shape[-1];
+    const int32_t chunks = operation_attributes.chunks;
 
     const auto& memory_config = operation_attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
     auto dtype = operation_attributes.output_dtype.value_or(in0_input_tensor.dtype());
 
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
+    // Create specs for output tensors
+    std::vector<TensorSpec> output_specs;
+    output_specs.reserve(chunks);
+
+    const uint32_t N_per_chunk = N / chunks;
+    for (int32_t i = 0; i < chunks; ++i) {
+        ttnn::Shape output_shape(in0_input_tensor_shape);
+        output_shape[-1] = N_per_chunk;
+        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+    }
+
+    return output_specs;
 }
 
 MinimalMatmulDeviceOperation::tensor_return_value_t MinimalMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    auto* device = tensor_args.input_tensor.device();
+
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(output_specs.size());
+
+    for (const auto& spec : output_specs) {
+        output_tensors.push_back(create_device_tensor(spec, device));
+    }
+
+    return output_tensors;
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-Tensor minimal_matmul(
+std::vector<Tensor> minimal_matmul(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
@@ -179,7 +266,12 @@ Tensor minimal_matmul(
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t chunks,
+    int32_t dim,
+    std::optional<float> fused_ternary_scalar,
+    const std::optional<Tensor>& fused_ternary_input_a,
+    const std::optional<Tensor>& fused_ternary_input_b) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -195,9 +287,17 @@ Tensor minimal_matmul(
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config,
             .output_dtype = dtype,
-            .compute_kernel_config = kernel_config_val},
+            .fused_ternary_scalar = fused_ternary_scalar,
+            .compute_kernel_config = kernel_config_val,
+            .chunks = chunks,
+            .dim = dim},
         OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
+            .input_tensor = input_tensor,
+            .weight_tensor = weight_tensor,
+            .bias_tensor = bias_tensor,
+            .optional_input_tensor = std::nullopt,
+            .fused_ternary_input_a = fused_ternary_input_a,
+            .fused_ternary_input_b = fused_ternary_input_b});
 }
 
 }  // namespace ttnn::prim

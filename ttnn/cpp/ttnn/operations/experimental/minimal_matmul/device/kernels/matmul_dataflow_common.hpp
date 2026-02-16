@@ -202,6 +202,80 @@ void write_block_sync(
 }
 
 /**
+ * Read ternary inputs (ternary_a and ternary_b) and write data to CB
+ *
+ * For ternary_a: read M_block_tiles * N_block_tiles tiles (full block)
+ * For ternary_b: only read 1 row of tiles (N_block_tiles). Compute kernel will bcast this row.
+ *
+ * Performance optimization: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_a
+ * tiles one row at a time. This allows the compute kernel to begin processing addcmul operations
+ * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
+ * of data movement and compute improves overall throughput.
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_ternary_blocks_sync(
+    const TensorAccessorType& ternary_a_accessor,
+    const TensorAccessorType& ternary_b_accessor,
+    const TensorShape2D& shape,
+    uint32_t ternary_a_cb,
+    uint32_t ternary_b_cb,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+
+    cb_reserve_back(ternary_b_cb, N_block_tiles);
+    uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
+    for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+        if (n_tile_id >= shape.logical_d1) {
+            // Do not move tile data into CB if tile is outside ternary/output tensor.
+            // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+            // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+            // N_block_tiles=4)
+            break;
+        }
+
+        noc_async_read_tile(n_tile_id, ternary_b_accessor, ternary_b_write_ptr);
+        ternary_b_write_ptr += tile_size_bytes;
+    }
+    noc_async_read_barrier();
+
+    cb_push_back(ternary_b_cb, N_block_tiles);
+
+    uint32_t m_id = 0;
+    uint32_t i = d0_start;
+    for (; i < d0_end; i++, m_id++) {
+        cb_reserve_back(ternary_a_cb, N_block_tiles);
+
+        uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            if (j >= shape.logical_d1) {
+                // Do not move tile data into CB if tile is outside ternary/output tensor.
+                // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+                // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+                // N_block_tiles=4)
+                break;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, ternary_a_accessor, ternary_a_write_ptr);
+            }
+            ternary_a_write_ptr += tile_size_bytes;
+        }
+        noc_async_read_barrier();
+
+        cb_push_back(ternary_a_cb, N_block_tiles);
+    }
+    for (; m_id < M_block_tiles; m_id++) {
+        cb_reserve_back(ternary_a_cb, N_block_tiles);
+        cb_push_back(ternary_a_cb, N_block_tiles);
+    }
+}
+
+/**
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
  */
