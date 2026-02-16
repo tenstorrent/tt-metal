@@ -25,7 +25,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    auto grid_size = config.compute_with_storage_grid_size;
+    // DEBUG: Force 8x8 core grid to reproduce WH behavior on BH (remove after testing)
+    constexpr CoreCoord HARDCODED_GRID_8X8{8, 8};
+    auto grid_size = HARDCODED_GRID_8X8;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
     /*
