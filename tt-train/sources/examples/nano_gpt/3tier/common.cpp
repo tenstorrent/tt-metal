@@ -80,12 +80,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     auto sequence_length = std::visit(
         [&](auto &&arg) {
-            if constexpr (requires { arg.max_sequence_length; }) {
-                return arg.max_sequence_length;
-            } else {
-                throw std::runtime_error(
-                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
-            }
+            return arg.max_sequence_length;
         },
         config.transformer_config);
 
