@@ -38,7 +38,7 @@ model_config: dict        # keys: GALAXY_NUM_LINKS, DECODE_SAMPLING_INPUT_MEMCFG
 
 **`sampling_dp`**: When >1, k/p/temp tensors must have length `max_batch_size * sampling_dp` and are row-sharded via `ShardTensor2dMesh(dims=(0, None))`. The `Generator` in `models/tt_transformers/tt/generator.py` handles chunking and merging automatically.
 
-**Trace invalidation**: Changing `force_argmax_sampling` state (e.g. switching from k=1,p=1,temp=1 to non-default) invalidates captured traces. `SamplingGenerator.reset_sampling_params` handles this.
+**Trace invalidation**: Changing `force_argmax_sampling` state invalidates captured traces. Force-argmax is triggered when callers pass k=1, p=1.0, temp=1.0 (note: p=1.0 means "no top-p filtering", distinct from the internal initialization default of p=0). `SamplingGenerator.reset_sampling_params` handles this.
 
 ## Future Work
 

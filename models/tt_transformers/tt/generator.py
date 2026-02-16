@@ -712,9 +712,11 @@ class Generator:
             # shard users across mesh rows (users_row_sharded) — each row samples
             # 32 users independently, so sampling params must be chunked by the
             # number of rows even though data_parallel=1 for the forward pass.
-            sampling_dp = max(
-                self.data_parallel, *(getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel))
-            )
+            sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+            assert (
+                len(set(sampling_dp_values)) == 1
+            ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+            sampling_dp = max(self.data_parallel, sampling_dp_values[0])
 
             # Fall back to dataclass defaults when optional fields are omitted
             chunked_fields = {}
@@ -727,6 +729,9 @@ class Generator:
                     else:
                         raise
                 if isinstance(val, list):
+                    assert (
+                        len(val) % sampling_dp == 0
+                    ), f"Sampling param '{field}' length {len(val)} not divisible by sampling_dp {sampling_dp}"
                     chunked_fields[field] = split_list(val, sampling_dp)
                 else:
                     chunked_fields[field] = [val] * sampling_dp
@@ -745,6 +750,9 @@ class Generator:
                 sampling_module = getattr(self.model[i], "sampling", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 # Number of sampling chunks handled by this model instance
+                assert (
+                    sampling_dp % self.data_parallel == 0
+                ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
                 chunks_per_model = sampling_dp // self.data_parallel
                 model_params = sampling_params_list[i * chunks_per_model : (i + 1) * chunks_per_model]
                 if chunks_per_model == 1:
