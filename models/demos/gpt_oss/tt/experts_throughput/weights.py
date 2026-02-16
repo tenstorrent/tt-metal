@@ -153,8 +153,7 @@ def load_throughput_expert_weights(
     w2_bias = state_dict.get("down_proj_bias", torch.zeros(1, num_experts, 1, hidden_size)).reshape(
         1, num_experts, 1, hidden_size
     )
-    pad_w2 = False
-    if pad_w2:
+    if config.pad_w2:
         # Pad w2 output dimension for tile alignment in CCL operations.
         # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
         # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.

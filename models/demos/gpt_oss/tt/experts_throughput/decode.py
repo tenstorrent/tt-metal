@@ -205,7 +205,7 @@ def expert_mlp_forward(
     # Combine expects: [num_experts_per_device, 1, total_tokens, H] in ROW_MAJOR
     expert_output = ttnn.reshape(
         expert_output,
-        shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size + 192),
+        shape=(config.num_experts_per_device, 1, total_tokens, -1),
     )
 
     expert_output_tiled = expert_output
@@ -215,7 +215,7 @@ def expert_mlp_forward(
     return expert_output
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, mesh_device, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     Apply tensor parallel allreduce if needed.
 
@@ -424,15 +424,16 @@ def decode_forward(
     # 3. But tokens may route to experts in different COLUMNS
     # 4. After combine, each device has partial results from experts in its column
     # 5. We need to sum these partials across columns to get complete expert outputs
-    output_all_reduced = ttnn.all_reduce(
-        output,
-        num_links=4,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=1,
-        memory_config=memory_config,
-    )
-
-    # output_all_reduced = apply_allreduce(output, mesh_config, ccl_manager, mesh_device, config.hidden_size)
+    if config.use_experimental_all_reduce:
+        output_all_reduced = apply_allreduce(output, mesh_config, ccl_manager, config.hidden_size)
+    else:
+        output_all_reduced = ttnn.all_reduce(
+            output,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=memory_config,
+        )
     ttnn.deallocate(output)
 
     # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)

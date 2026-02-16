@@ -45,6 +45,8 @@ class ThroughputExpertConfig:
     swiglu_limit: float = 7.0
     alpha: float = 1.702
     use_fused_gate_up: bool = True  # If True, fuse w1 and w3 into single matmul
+    pad_w2: bool = False
+    use_experimental_all_reduce: bool = False
 
     def __post_init__(self):
         """Validate and compute derived values."""
