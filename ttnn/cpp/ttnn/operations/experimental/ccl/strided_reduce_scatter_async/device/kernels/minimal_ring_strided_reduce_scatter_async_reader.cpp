@@ -143,7 +143,7 @@ void kernel_main() {
             for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
                 const uint32_t effective_chunk_width_in_tiles =
-                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
+                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_block_wt);
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 

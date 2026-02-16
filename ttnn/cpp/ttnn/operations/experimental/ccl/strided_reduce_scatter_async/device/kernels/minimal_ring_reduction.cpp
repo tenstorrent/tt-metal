@@ -22,6 +22,7 @@ void kernel_main() {
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(11);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
+    constexpr uint32_t mm_N_block_wt = slice_Wt / mm_N_blocks_per_slice;
 
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
@@ -74,7 +75,7 @@ void kernel_main() {
                 DPRINT << "chunk_idx: " << chunk_idx << " started" << ENDL();
 
                 const uint32_t effective_chunk_width_in_tiles =
-                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, slice_Wt);
+                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_block_wt);
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
 
                 for (uint32_t i = 1; i < ring_size; i++) {

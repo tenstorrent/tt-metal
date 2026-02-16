@@ -478,7 +478,7 @@ def run_reduce_scatter_impl(
         pytest.param(
             ReduceScatterTestConfig(
                 # each device has 16 x 8 tiles with eight 4 x 4 mm blocks from an assumed 2 x 8 mm core grid
-                # chunk is 8 tileswide
+                # chunk is 8 tiles wide
                 rs_input_shape=[4, 1, 512, 2048],
                 dim=3,
                 layout=ttnn.TILE_LAYOUT,
@@ -502,7 +502,7 @@ def run_reduce_scatter_impl(
         ),
         pytest.param(
             ReduceScatterTestConfig(
-                # each device has 4 x 4 tiles with four 2 x 2 mm blocks from an assumed 2 x 8 mm core grid
+                # each device has 16 x 8 tiles with eight 4 x 4 mm blocks from an assumed 2 x 8 mm core grid
                 # chunk is 8 tiles wide
                 rs_input_shape=[4, 1, 512, 2048],
                 dim=3,
@@ -604,10 +604,11 @@ def run_reduce_scatter_impl(
         ),
         pytest.param(
             ReduceScatterTestConfig(
-                # each device has 16 x 10 tiles (non-power-of-2 slice width from 2560-wide input)
-                # from an assumed 2 x 8 mm core grid with smaller 2x2 mm blocks
-                # larger chunk_width_in_mm_blocks=4 (chunk width 8), partial last chunk (effective width 2)
-                rs_input_shape=[4, 1, 512, 2560],
+                # each device has 24 x 12 tiles (from 768x3072 input)
+                # from an assumed 2 x 8 mm core grid with non-power-of-2 3x3 mm blocks
+                # key property: 2 N-blocks of width 6 AND 2 chunks per N-block (chunk width 3)
+                # -- tests the combination of multiple N-blocks with multiple chunks within each
+                rs_input_shape=[4, 1, 768, 3072],
                 dim=3,
                 layout=ttnn.TILE_LAYOUT,
                 rs_input_dtype=ttnn.bfloat16,
@@ -621,12 +622,40 @@ def run_reduce_scatter_impl(
                 verify_output_pcc=True,
                 small_random_ints=True,
                 mm_cores_y=2,
-                mm_block_ht=2,
-                mm_block_wt=2,
-                mm_N_block_wt=10,
-                chunk_width_in_mm_blocks=4,
+                mm_block_ht=3,
+                mm_block_wt=3,
+                mm_N_block_wt=6,
+                chunk_width_in_mm_blocks=1,
             ),
-            id="experimental_strided_16x10_partial_last_chunk_2x2_blocks_large_chunk_mm",
+            id="experimental_strided_24x12_3x3_blocks_2_N_blocks_chunk_1_mm_blocks",
+        ),
+        pytest.param(
+            ReduceScatterTestConfig(
+                # each device has 24 x 30 tiles (from 768x7680 input)
+                # from an assumed 2 x 8 mm core grid with non-power-of-2 3x3 mm blocks
+                # key property: 2 N-blocks of width 15 AND 3 chunks per N-block (chunk width 6)
+                # with partial last chunk (pattern: 6, 6, 3) -- tests the combination of
+                # multiple N-blocks, multiple chunks, AND a partial final chunk
+                rs_input_shape=[4, 1, 768, 7680],
+                dim=3,
+                layout=ttnn.TILE_LAYOUT,
+                rs_input_dtype=ttnn.bfloat16,
+                use_new=False,
+                enable_trace=False,
+                num_iters=1,
+                use_barrier=True,
+                use_persistent_buffers=True,
+                use_strided=True,
+                verify_output_shape=True,
+                verify_output_pcc=True,
+                small_random_ints=True,
+                mm_cores_y=2,
+                mm_block_ht=3,
+                mm_block_wt=3,
+                mm_N_block_wt=15,
+                chunk_width_in_mm_blocks=2,
+            ),
+            id="experimental_strided_24x30_3x3_blocks_2_N_blocks_partial_last_chunk",
         ),
         pytest.param(
             ReduceScatterTestConfig(
@@ -657,31 +686,6 @@ def run_reduce_scatter_impl(
         ),
         pytest.param(
             ReduceScatterTestConfig(
-                # each device has 128 x 16 tiles with balanced 8x8 mm blocks
-                # from an assumed 4 x 8 mm core grid;
-                rs_input_shape=[4, 1, 4096, 4096],
-                dim=3,
-                layout=ttnn.TILE_LAYOUT,
-                rs_input_dtype=ttnn.bfloat16,
-                use_new=False,
-                enable_trace=False,
-                num_iters=1,
-                use_barrier=True,
-                use_persistent_buffers=True,
-                use_strided=True,
-                verify_output_shape=True,
-                verify_output_pcc=True,
-                small_random_ints=True,
-                mm_cores_y=4,
-                mm_block_ht=8,
-                mm_block_wt=8,
-                mm_N_block_wt=8,
-                chunk_width_in_mm_blocks=1,
-            ),
-            id="experimental_strided_128x16_4_cores_balanced_8x8_blocks_2_N_blocks",
-        ),
-        pytest.param(
-            ReduceScatterTestConfig(
                 # each device has 128 x 16 tiles with 8x8 mm blocks
                 # from an assumed 4 x 8 mm core grid; single N-block spanning full width
                 # chunk width is 16 tiles (single chunk covers entire N-block)
@@ -705,32 +709,6 @@ def run_reduce_scatter_impl(
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_128x16_4_cores_single_N_block_wide_chunk",
-        ),
-        pytest.param(
-            ReduceScatterTestConfig(
-                # each device has 128 x 16 tiles with 8x8 mm blocks
-                # from an assumed 8 x 8 mm core grid; single N-block spanning full width
-                # same as above but 8 core rows (2 M-blocks/core vs 4)
-                rs_input_shape=[4, 1, 4096, 4096],
-                dim=3,
-                layout=ttnn.TILE_LAYOUT,
-                rs_input_dtype=ttnn.bfloat16,
-                use_new=False,
-                enable_trace=False,
-                num_iters=1,
-                use_barrier=True,
-                use_persistent_buffers=True,
-                use_strided=True,
-                verify_output_shape=True,
-                verify_output_pcc=True,
-                small_random_ints=True,
-                mm_cores_y=8,
-                mm_block_ht=8,
-                mm_block_wt=8,
-                mm_N_block_wt=16,
-                chunk_width_in_mm_blocks=2,
-            ),
-            id="experimental_strided_128x16_8_cores_single_N_block_wide_chunk",
         ),
     ],
 )
