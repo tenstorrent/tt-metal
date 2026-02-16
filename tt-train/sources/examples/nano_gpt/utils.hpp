@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
@@ -19,6 +22,33 @@
 #include "schedulers/sequential_scheduler.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+
+// Expand ${TT_METAL_RUNTIME_ROOT} in a config path string.
+// Training YAML configs use ${TT_METAL_RUNTIME_ROOT}/tt-train/... so paths are
+// absolute and binaries work regardless of the current working directory.
+// Falls back to inferring the value from the compile-time CONFIGS_FOLDER when
+// the environment variable is not set.
+inline std::string expand_config_path(const std::string &path) {
+    static const std::string kPlaceholder = "${TT_METAL_RUNTIME_ROOT}";
+    auto pos = path.find(kPlaceholder);
+    if (pos == std::string::npos) {
+        return path;
+    }
+
+    std::string tt_metal_root;
+    const char *env = std::getenv("TT_METAL_RUNTIME_ROOT");
+    if (env != nullptr) {
+        tt_metal_root = env;
+    } else {
+        // CONFIGS_FOLDER is <tt-train-source>/configs (set by CMake).
+        // tt-metal root is one level above the tt-train source directory.
+        tt_metal_root = std::filesystem::path(CONFIGS_FOLDER).parent_path().parent_path().string();
+    }
+
+    std::string result = path;
+    result.replace(pos, kPlaceholder.length(), tt_metal_root);
+    return result;
+}
 
 class LossAverageMeter {
     float m_sum = 0.0F;
