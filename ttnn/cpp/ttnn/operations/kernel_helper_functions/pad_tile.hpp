@@ -30,9 +30,9 @@ enum class NeutralPolicy : uint32_t {
  * @tparam policy The neutral value policy
  * @return The appropriate fill value as a uint32_t (for Float32) or uint16_t (for Bfloat16)
  */
-template <tt::DataFormat data_format, NeutralPolicy policy>
+template <DataFormat data_format, NeutralPolicy policy>
 constexpr auto get_neutral_value() {
-    if constexpr (data_format == tt::DataFormat::Float32) {
+    if constexpr (data_format == DataFormat::Float32) {
         if constexpr (policy == NeutralPolicy::Zero) {
             return static_cast<uint32_t>(0);
         } else if constexpr (policy == NeutralPolicy::NegInf) {
@@ -237,10 +237,10 @@ void pad_last_ktile(uint32_t l1_write_addr_in0) {
  * @tparam policy The neutral value policy (Zero for sum/mean, NegInf for max, PosInf for min)
  * @param l1_write_addr The L1 memory address where the padding should be written
  */
-template <tt::DataFormat data_format, uint32_t last_tile_w, NeutralPolicy policy>
+template <DataFormat data_format, uint32_t last_tile_w, NeutralPolicy policy>
 void pad_last_wtile(uint32_t l1_write_addr) {
     using namespace tt::constants;
-    if constexpr (data_format == tt::DataFormat::Float32) {
+    if constexpr (data_format == DataFormat::Float32) {
         constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint32_t, last_tile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(l1_write_addr, fill_value);
     } else {
@@ -261,10 +261,10 @@ void pad_last_wtile(uint32_t l1_write_addr) {
  * @tparam policy The neutral value policy (Zero for sum/mean, NegInf for max, PosInf for min)
  * @param l1_write_addr The L1 memory address where the padding should be written
  */
-template <tt::DataFormat data_format, uint32_t last_tile_h, NeutralPolicy policy>
+template <DataFormat data_format, uint32_t last_tile_h, NeutralPolicy policy>
 void pad_last_htile(uint32_t l1_write_addr) {
     using namespace tt::constants;
-    if constexpr (data_format == tt::DataFormat::Float32) {
+    if constexpr (data_format == DataFormat::Float32) {
         constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint32_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
     } else {
@@ -287,10 +287,10 @@ void pad_last_htile(uint32_t l1_write_addr) {
  */
 template <uint32_t IN_DF, uint32_t LAST_W, NeutralPolicy policy>
 void apply_width_padding(uint32_t l1_write_addr) {
-    if constexpr (IN_DF == static_cast<uint32_t>(tt::DataFormat::Bfloat16)) {
-        pad_last_wtile<tt::DataFormat::Bfloat16, LAST_W, policy>(l1_write_addr);
+    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Bfloat16)) {
+        pad_last_wtile<DataFormat::Bfloat16, LAST_W, policy>(l1_write_addr);
     } else {
-        pad_last_wtile<tt::DataFormat::Float32, LAST_W, policy>(l1_write_addr);
+        pad_last_wtile<DataFormat::Float32, LAST_W, policy>(l1_write_addr);
     }
 }
 
@@ -307,9 +307,9 @@ void apply_width_padding(uint32_t l1_write_addr) {
  */
 template <uint32_t IN_DF, uint32_t LAST_H, NeutralPolicy policy>
 void apply_height_padding(uint32_t l1_write_addr) {
-    if constexpr (IN_DF == static_cast<uint32_t>(tt::DataFormat::Bfloat16)) {
-        pad_last_htile<tt::DataFormat::Bfloat16, LAST_H, policy>(l1_write_addr);
+    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Bfloat16)) {
+        pad_last_htile<DataFormat::Bfloat16, LAST_H, policy>(l1_write_addr);
     } else {
-        pad_last_htile<tt::DataFormat::Float32, LAST_H, policy>(l1_write_addr);
+        pad_last_htile<DataFormat::Float32, LAST_H, policy>(l1_write_addr);
     }
 }
