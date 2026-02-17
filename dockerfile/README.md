@@ -50,7 +50,7 @@ flowchart TB
 Tool and venv layers are injected into Dockerfiles via [Docker Buildx Bake contexts](https://docs.docker.com/build/bake/). Each downstream Dockerfile declares stub stages (`FROM scratch AS ccache-layer`, etc.) that Bake overrides:
 
 - **Locally:** `"target:ccache"` -- Bake builds the `ccache` target from `Dockerfile.tools` first, then wires its output into the main build.
-- **In CI:** `"docker-image://ghcr.io/.../ccache:tag"` -- Bake uses the pre-built GHCR image directly via `--set` overrides.
+- **In CI:** `"docker-image://ghcr.io/.../ccache:tag"` -- `docker/bake-action` uses the pre-built GHCR image directly via `set` overrides.
 
 This eliminates the need for `--build-arg TOOL_X_IMAGE=...` plumbing between Dockerfiles, shell scripts, and workflows.
 
@@ -113,7 +113,7 @@ flowchart TD
 
 ### Tool Tags JSON Bundle
 
-Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. In CI, the JSON is parsed to generate Bake `--set` context overrides.
+Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. In CI, the JSON is parsed to generate Bake `set` context overrides for `docker/bake-action`.
 
 **JSON bundle format:**
 ```json
@@ -132,7 +132,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 
 ## When to Use CI vs Local Builds
 
-- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using `docker buildx bake` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
+- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using `docker/bake-action` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
 - **Local development**: Use `docker buildx bake` (directly or via `build-local.sh`) to build images locally. Bake automatically builds tool and venv dependencies first.
 
 ## Local Builds

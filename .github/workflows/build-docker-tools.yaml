@@ -3,8 +3,8 @@ name: "[internal] Build Docker tool images"
 # Reusable workflow that checks and builds tool images (ccache, mold, doxygen, etc.).
 # Called by build-docker-artifact.yaml. Tool images are pushed to GHCR.
 #
-# Uses docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools
-# in a single invocation instead of individual build-push-action steps.
+# Uses docker/bake-action (dockerfile/docker-bake.hcl) to build missing tools
+# in a single invocation.
 permissions:
   packages: write
 
@@ -103,7 +103,7 @@ jobs:
           done
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  # Build any tool images that don't exist yet using docker buildx bake
+  # Build any tool images that don't exist yet using docker/bake-action
   build:
     name: "🔧 Build missing tools"
     needs: tags
@@ -118,8 +118,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -128,13 +126,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push missing tool images
+      - name: Prepare bake overrides
+        id: bake
         env:
           TOOL_TAGS: ${{ needs.tags.outputs.tool-tags }}
         run: |
-          BAKE_OUTPUT="type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
-          TARGETS=()
-          BAKE_SETS=()
+          BAKE_OUTPUT="type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          TARGETS=""
+          SET=""
 
           add_if_missing() {
             local name="$1"
@@ -142,9 +141,9 @@ jobs:
             if [ "$exists" != "true" ]; then
               local tag
               tag=$(echo "$TOOL_TAGS" | jq -r ".\"${name}-tag\"")
-              TARGETS+=("$name")
-              BAKE_SETS+=(--set "${name}.tags=${tag}")
-              BAKE_SETS+=(--set "${name}.output=${BAKE_OUTPUT}")
+              TARGETS+="${name},"
+              SET+="${name}.tags=${tag}"$'\n'
+              SET+="${name}.output=${BAKE_OUTPUT}"$'\n'
             fi
           }
 
@@ -158,9 +157,20 @@ jobs:
           add_if_missing sfpi "${{ needs.tags.outputs.sfpi-exists }}"
           add_if_missing openmpi "${{ needs.tags.outputs.openmpi-exists }}"
 
-          if [ ${#TARGETS[@]} -gt 0 ]; then
-            echo "Building missing tools: ${TARGETS[*]}"
-            docker buildx bake -f dockerfile/docker-bake.hcl \
-              "${BAKE_SETS[@]}" \
-              "${TARGETS[@]}"
-          fi
+          TARGETS="${TARGETS%,}"
+
+          echo "targets=$TARGETS" >> $GITHUB_OUTPUT
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build and push missing tool images
+        if: steps.bake.outputs.targets != ''
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: ${{ steps.bake.outputs.targets }}
+          set: ${{ steps.bake.outputs.set }}
