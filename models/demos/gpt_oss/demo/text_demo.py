@@ -571,8 +571,7 @@ def test_gpt_oss_demo(
                     prefilled_token[user_id] = tokenizer.eos_token_id
 
             logger.info(f"Prefill finished for {num_real_users} real users")
-            logger.info(f"First generated token (user 0): '{tokenizer.decode(prefilled_token[0])}'")
-        else:
+        elif users_row_sharded:
             # Row-parallel batched prefill: process 4 users at once (one per mesh row)
             # This gives ~4x speedup over sequential per-user prefill
             num_rows = mesh_device.shape[0]
@@ -869,7 +868,36 @@ def test_gpt_oss_demo(
                 profiler.end(f"inference_prefill", iteration=batch_idx)
                 logger.info(f"Row-parallel batched prefill finished ({num_prefill_iters} iterations)")
 
-            logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
+        else:
+            # Standard sequential prefill (batch_size < num_rows)
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt[:1],
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
+
+            logger.info(f"Starting prefill...")
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+            )
+            prefilled_token = torch.argmax(logits, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Prefill finished")
+
+        logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
