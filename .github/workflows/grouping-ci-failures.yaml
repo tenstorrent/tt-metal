@@ -1,4 +1,4 @@
-name: Analyze ND Failures
+name: (triage) Grouping CI Failures
 
 on:
   schedule:
@@ -24,7 +24,7 @@ on:
         default: ""
 
 jobs:
-  analyze-nd-failures:
+  grouping-ci-failures:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,12 +51,12 @@ jobs:
           echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
           echo "Using calculated start date: $START_DATE"
 
-      - name: Run analyze nd failures
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+      - name: Run grouping ci failures
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
-          github_token: ${{ secrets.EVAN_PAT }}
+          github_token: ${{ secrets.ERROR_GROUPING_TOKEN }}
           # slack_token: Slack Bot Token for fetching messages
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
           # channel_id: Slack channel ID to fetch messages from
@@ -64,7 +64,11 @@ jobs:
           update_mode: ${{ inputs.update_mode || 'update' }}
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
-          workflow_file: '.github/workflows/analyze-nd-failures.yaml'
+          github_repo_owner: "tenstorrent"
+          github_repo_name: "tt-auto-triage"
+          project_owner: "tenstorrent"
+          project_name: "issue dump"
+          workflow_file: '.github/workflows/grouping-ci-failures.yaml'
 
       - name: Install infra dependencies
         if: ${{ !cancelled() }}
@@ -76,8 +80,28 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
-      - name: Upload job failure cluster data
+      - name: Check if incremental JSON is empty
+        id: check-json
         if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if [ -f "incremental_error_report.json" ]; then
+            # Check if file is empty or contains only empty array/object
+            content=$(cat incremental_error_report.json | tr -d '[:space:]')
+            if [ -z "$content" ] || [ "$content" = "[]" ] || [ "$content" = "{}" ]; then
+              echo "is_empty=true" >> $GITHUB_OUTPUT
+              echo "Incremental JSON is empty, skipping upload"
+            else
+              echo "is_empty=false" >> $GITHUB_OUTPUT
+              echo "Incremental JSON contains data, proceeding with upload"
+            fi
+          else
+            echo "is_empty=true" >> $GITHUB_OUTPUT
+            echo "Incremental JSON file not found, skipping upload"
+          fi
+
+      - name: Upload job failure cluster data
+        if: ${{ !cancelled() && steps.check-json.outputs.is_empty == 'false' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
