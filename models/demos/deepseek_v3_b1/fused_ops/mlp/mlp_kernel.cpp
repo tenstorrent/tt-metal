@@ -710,20 +710,17 @@ void kernel_main() {
         // No step 3 (Gate Gather) — MLP has no routing
 
         // 3a. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
+        //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
+        //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
         {
-            deepseek_b1_ops::KNSlicedMatmul::
-                Op<Mlp::Shared::GUMatmulCTArgs, Core::Shared::is_compute_core, false, false>
-                    shared_gu_matmul;
+            DeviceZoneScopedN("SHARED_GU_MATMUL");
+            deepseek_b1_ops::KNSlicedMatmul::Op<
+                Mlp::Shared::GUMatmulCTArgs,
+                Core::Shared::is_compute_core,
+                !Core::Routed::is_gate_proj_core,  // pop_act
+                false>                             // pop_weights
+                shared_gu_matmul;
             shared_gu_matmul(mlp.shared.gu_matmul_args);
-            // Pop act CB (gate_mm_input_cb) on shared compute cores that are NOT gate_proj cores.
-            // On gate_proj cores, up_proj (step 7) is the last consumer and pops CB 1.
-            if constexpr (Core::Shared::is_compute_core && !Core::Routed::is_gate_proj_core) {
-#if defined(COMPILE_FOR_TRISC)
-                cb_pop_front(
-                    get_named_compile_time_arg_val("shared_gu_act_cb"),
-                    get_named_compile_time_arg_val("shared_gu_act_total_tiles"));
-#endif
-            }
         }
 
         // No step 4 (Gate TopK) — MLP has no routing
@@ -881,15 +878,13 @@ void kernel_main() {
         // 12. Eltwise Add: down_proj + shared_expert_output
         {
             DeviceZoneScopedN("ELTWISE_ADD");
-            deepseek_b1_ops::EltwiseAdd::Op<Mlp::Routed::AddCTArgs, Core::Routed::is_gate_proj_core> add_op;
+            deepseek_b1_ops::EltwiseAdd::Op<
+                Mlp::Routed::AddCTArgs,
+                Core::Routed::is_gate_proj_core,
+                true,  // PopInputs
+                true>  // PopOutput (for looping)
+                add_op;
             add_op();
-            // Pop output CB so cb_reserve_back succeeds on the next iteration
-            if constexpr (Core::Routed::is_gate_proj_core) {
-#if defined(COMPILE_FOR_TRISC)
-                cb_pop_front(
-                    get_named_compile_time_arg_val("add_cb_out"), get_named_compile_time_arg_val("add_num_tiles"));
-#endif
-            }
         }
     };
 

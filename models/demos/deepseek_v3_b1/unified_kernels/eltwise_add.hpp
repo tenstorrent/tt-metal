@@ -105,8 +105,9 @@ struct EltwiseAdd {
     // ========================================================================
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopInputs: If true (default), pops input CBs after compute.
+    // PopOutput: If true, pops output CB after push (for looping).
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopInputs = true>
+    template <typename CTArgs, bool IsActiveCore, bool PopInputs = true, bool PopOutput = false>
     class Op {
     public:
         void operator()() {
@@ -175,6 +176,9 @@ struct EltwiseAdd {
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
                 cb_pop_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
+            }
+            if constexpr (PopOutput) {
+                cb_pop_front(CTArgs::cb_out, num_tiles);
             }
 #endif
         }
