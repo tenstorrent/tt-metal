@@ -21,9 +21,18 @@ from loguru import logger
 # ============================================================================
 
 
-def _parse_signposts(rows):
+def _parse_signposts(rows, *, op_code_idx=0, op_type_idx=1):
     """
     Parse the CSV rows to identify signpost regions.
+
+    Parameters
+    ----------
+    rows : list[list[str]]
+        CSV data rows (without the header).
+    op_code_idx : int
+        Column index for the OP CODE field (signpost name).
+    op_type_idx : int
+        Column index for the OP TYPE field (checked for ``"signpost"``).
 
     Returns a dict with signpost info:
     - warmup_range: (start_idx, end_idx) of warmup ops (excluding signposts)
@@ -46,8 +55,8 @@ def _parse_signposts(rows):
     # Find all signpost positions
     signpost_positions = []
     for idx, row in enumerate(rows):
-        if row[1] == "signpost":  # OP TYPE column
-            signpost_positions.append((idx, row[0]))  # (index, signpost_name)
+        if row[op_type_idx] == "signpost":
+            signpost_positions.append((idx, row[op_code_idx]))
 
     # Parse the signpost structure
     warmup_open = None
@@ -195,7 +204,7 @@ def filter_profile_csv(input_path, output_path):
     op_to_op_latency_idx = header.index("OP TO OP LATENCY [ns]")
     device_kernel_duration_idx = header.index("DEVICE KERNEL DURATION [ns]")
 
-    signpost_info = _parse_signposts(rows)
+    signpost_info = _parse_signposts(rows, op_code_idx=op_code_idx, op_type_idx=op_type_idx)
 
     logger.info(f"Warmup range: {signpost_info['warmup_range']}")
     logger.info(
@@ -335,7 +344,8 @@ def _get_num_trace_executions(rows):
             try:
                 trace_indices.add(int(run_type.split("_")[-1]))
             except ValueError:
-                pass
+                # Ignore malformed trace_execution labels but log for diagnostics.
+                logger.debug("Ignoring malformed RUN TYPE for trace execution: {!r}", run_type)
     return len(trace_indices)
 
 
@@ -390,7 +400,10 @@ def _calculate_stats(rows, reference, skip_traces=1):
                         try:
                             durations.append(float(dur))
                         except ValueError:
-                            pass
+                            logger.warning(
+                                f"Non-numeric kernel duration '{dur}' for op_idx={op_idx}, "
+                                f"device_id={device_id} in warmup; skipping this value."
+                            )
             if durations:
                 kernel_duration = max(durations)
         else:  # CCL
@@ -406,7 +419,10 @@ def _calculate_stats(rows, reference, skip_traces=1):
                             try:
                                 durations.append(float(dur))
                             except ValueError:
-                                pass
+                                logger.warning(
+                                    f"Non-numeric kernel duration '{dur}' for op_idx={op_idx}, "
+                                    f"device_id={device_id}, run_type={run_type}; skipping this value."
+                                )
                 if durations:
                     iteration_averages.append(sum(durations) / len(durations))
             if iteration_averages:
@@ -423,7 +439,10 @@ def _calculate_stats(rows, reference, skip_traces=1):
                     try:
                         latencies.append(float(lat))
                     except ValueError:
-                        pass
+                        logger.warning(
+                            f"Non-numeric op-to-op latency '{lat}' for op_idx={op_idx}, "
+                            f"run_type={run_type}; skipping this value."
+                        )
         op_to_op_latency = (sum(latencies) / len(latencies)) if latencies else None
 
         results.append(
@@ -440,14 +459,21 @@ def _calculate_stats(rows, reference, skip_traces=1):
 
 
 def _reorder_by_level(results):
-    """Reorder results: Embedding → Dense Decoder → MoE Decoder → Tail."""
+    """Reorder results: Embedding → Dense Decoder → MoE Decoder → Tail.
+
+    Any rows whose OP_LEVEL is not one of the known levels are preserved and
+    appended after the known levels, in their original relative order.
+    """
     level_order = ["Embedding", "Dense Decoder", "MoE Decoder", "Tail"]
     by_level = defaultdict(list)
     for r in results:
         by_level[r["OP_LEVEL"]].append(r)
     ordered = []
     for level in level_order:
-        ordered.extend(by_level[level])
+        ordered.extend(by_level.pop(level, []))
+    # Append any remaining levels (e.g., "Unknown") in insertion order.
+    for remaining_level in by_level:
+        ordered.extend(by_level[remaining_level])
     return ordered
 
 

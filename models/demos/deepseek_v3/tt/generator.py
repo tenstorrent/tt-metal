@@ -635,13 +635,12 @@ class DeepseekGenerator:
             num_of_users = tokens_batched.shape[0]
             if self.profile_decode:
                 logger.info("Skipping prefill (profile_decode=True) - using random tokens for decode profiling")
-                profiler.start("inference_prefill")
-                # Generate random initial tokens for decode
+                # Generate random starting token IDs directly instead of
+                # allocating a full [num_users, vocab_size] logits tensor.
                 vocab_size = int(getattr(self.hf_config, "vocab_size", 32768))
-                last_logits = torch.randn(num_of_users, vocab_size)
+                next_tokens_override = torch.randint(0, vocab_size, (num_of_users,))
                 # Set lengths to 0 so positions start at 0
                 lengths = torch.zeros((num_of_users,), dtype=torch.int32)
-                profiler.end("inference_prefill")
             else:
                 if self.signpost:
                     signpost(header="prefill")
@@ -674,7 +673,8 @@ class DeepseekGenerator:
                 if self.signpost:
                     signpost(header="prefill")
 
-            assert len(last_logits) == num_of_users
+            if not self.profile_decode:
+                assert len(last_logits) == num_of_users
 
             logger.info(
                 f"Finished prefill for all users..."
@@ -690,8 +690,12 @@ class DeepseekGenerator:
                 if early_print_first_user:
                     logger.info("===== Generation for first user =====")
 
-                # First generated token comes from prefill's last-position logits
-                next_tokens = self._sample_greedy(last_logits)
+                # First generated token comes from prefill's last-position logits,
+                # or from random IDs when profiling decode only.
+                if self.profile_decode:
+                    next_tokens = next_tokens_override
+                else:
+                    next_tokens = self._sample_greedy(last_logits)
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
@@ -750,7 +754,7 @@ class DeepseekGenerator:
 
         profiler.end("run")
         # Calculate statistics
-        prefill_time = profiler.get_duration("inference_prefill")
+        prefill_time = profiler.get_duration("inference_prefill") if not self.profile_decode else 0
         decode_steps = max(max_new_tokens - 1, 0)
         decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(decode_steps)]
 
