@@ -9,6 +9,21 @@
 #ifndef RM_HAS_B
 #define RM_HAS_B 1
 #endif
+#ifndef RM_ROW_BCAST_A
+#define RM_ROW_BCAST_A 0
+#endif
+#ifndef RM_ROW_BCAST_B
+#define RM_ROW_BCAST_B 0
+#endif
+#ifndef RM_COL_BCAST_A
+#define RM_COL_BCAST_A 0
+#endif
+#ifndef RM_COL_BCAST_B
+#define RM_COL_BCAST_B 0
+#endif
+#ifndef SCALAR_OP
+#define SCALAR_OP 0
+#endif
 
 void kernel_main() {
     uint32_t index = 0;
@@ -37,9 +52,12 @@ void kernel_main() {
     const uint32_t page_size_b_arg = get_arg_val<uint32_t>(index++);
     const uint32_t alignment_a = get_arg_val<uint32_t>(index++);
     const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
+    const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
+    const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
+    const uint32_t packed_scalar = get_arg_val<uint32_t>(index++);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
-#if RM_HAS_B
+#if (RM_HAS_B || SCALAR_OP)
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 #endif
     constexpr auto src_args = TensorAccessorArgs<0>();
@@ -62,19 +80,35 @@ void kernel_main() {
     const uint32_t outN = (aN > bN) ? aN : bN;
     const uint32_t outD = (aD > bD) ? aD : bD;
 
-    bool is_a_col_bcast = (aWt == 1 && row_width_elements > 1);
-    const uint32_t page_size_a = is_a_col_bcast ? element_size : ALIGN_TO(page_size_a_arg, alignment_a);
-#if RM_HAS_B
-    bool is_b_col_bcast = (bWt == 1 && row_width_elements > 1);
-    const uint32_t page_size_b = is_b_col_bcast ? element_size : ALIGN_TO(page_size_b_arg, alignment_b);
+#if RM_COL_BCAST_A
+    const uint32_t page_size_a = element_size;
 #else
-    const bool is_b_col_bcast = false;
+    const uint32_t page_size_a = ALIGN_TO(page_size_a_arg, alignment_a);
+#endif
+#if RM_HAS_B
+#if RM_COL_BCAST_B
+    const uint32_t page_size_b = element_size;
+#else
+    const uint32_t page_size_b = ALIGN_TO(page_size_b_arg, alignment_b);
+#endif
+#else
     const uint32_t page_size_b = 0;
 #endif
 
     const auto src = TensorAccessor(src_args, src_addr, page_size_a);
 #if RM_HAS_B
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, page_size_b);
+#endif
+#if SCALAR_OP
+    cb_reserve_back(cb_id_src_b, 1);
+#ifdef FILL_WITH_VALUE_FLOAT_B
+    const auto float_ptr_b = reinterpret_cast<const float*>(&packed_scalar);
+    FILL_WITH_VALUE_FLOAT_B(cb_id_src_b, *float_ptr_b);
+#endif
+#ifdef FILL_WITH_VALUE_B
+    FILL_WITH_VALUE_B(cb_id_src_b, packed_scalar);
+#endif
+    cb_push_back(cb_id_src_b, 1);
 #endif
 
     const uint32_t s_h_a = (aHt == 1) ? 0 : 1;
@@ -101,9 +135,6 @@ void kernel_main() {
     uint32_t start_d = tmp % outD;
     tmp /= outD;
     uint32_t start_nd = tmp;
-
-    const uint32_t tiles_per_row = (row_width_elements + tile_hw - 1) / tile_hw;
-    uint32_t stride_size_bytes = (row_width_bytes > tile_bytes) ? tile_bytes : ALIGN_TO(row_width_bytes, alignment_a);
 
     uint32_t rows_in_current_tile = 0;
     bool tile_reserved = false;
@@ -179,58 +210,107 @@ void kernel_main() {
                                     (stride_size_bytes < bytes_left_in_row) ? stride_size_bytes : bytes_left_in_row;
                                 uint32_t current_chunk_elements = current_chunk_bytes / element_size;
 
-                                uint32_t read_len_a = is_a_col_bcast ? element_size_aligned_a
-                                                                     : ALIGN_TO(current_chunk_bytes, alignment_a);
+#if RM_COL_BCAST_A
+                                uint32_t read_len_a = element_size_aligned_a;
+#else
+                                uint32_t read_len_a = ALIGN_TO(current_chunk_bytes, alignment_a);
+#endif
 #if RM_HAS_B
-                                uint32_t read_len_b = is_b_col_bcast ? element_size_aligned_b
-                                                                     : ALIGN_TO(current_chunk_bytes, alignment_b);
+#if RM_COL_BCAST_B
+                                uint32_t read_len_b = element_size_aligned_b;
+#else
+                                uint32_t read_len_b = ALIGN_TO(current_chunk_bytes, alignment_b);
+#endif
 #endif
 
+                                uint32_t chunk_l1_a = curr_l1_a;
+#if RM_HAS_B
+                                uint32_t chunk_l1_b = curr_l1_b;
+#endif
+
+#if RM_ROW_BCAST_A
+#if RM_COL_BCAST_A
+                                uint64_t addr_a = get_noc_addr(row_block_a, src);
+#else
+                                uint64_t addr_a = get_noc_addr(row_block_a, src) + t_offset;
+#endif
+                                noc_async_read(addr_a, chunk_l1_a, read_len_a);
+#else
                                 for (uint32_t k = 0; k < chunk; ++k) {
                                     uint32_t logical_r = r_offset + k;
                                     uint32_t row_idx_a = row_block_a + logical_r * s_h_a;
-#if RM_HAS_B
-                                    uint32_t row_idx_b = row_block_b + logical_r * s_h_b;
+#if RM_COL_BCAST_A
+                                    uint64_t addr_a = get_noc_addr(row_idx_a, src);
+#else
+                                    uint64_t addr_a = get_noc_addr(row_idx_a, src) + t_offset;
 #endif
-
-                                    uint64_t addr_a = get_noc_addr(row_idx_a, src) + (is_a_col_bcast ? 0 : t_offset);
-#if RM_HAS_B
-                                    uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + (is_b_col_bcast ? 0 : t_offset);
-#endif
-
                                     noc_async_read(addr_a, curr_l1_a, read_len_a);
-#if RM_HAS_B
-                                    noc_async_read(addr_b, curr_l1_b, read_len_b);
+                                    curr_l1_a += current_chunk_bytes;
+                                }
 #endif
 
-                                    curr_l1_a += current_chunk_bytes;
 #if RM_HAS_B
-                                    curr_l1_b += current_chunk_bytes;
+#if RM_ROW_BCAST_B
+#if RM_COL_BCAST_B
+                                uint64_t addr_b = get_noc_addr(row_block_b, src_b);
+#else
+                                uint64_t addr_b = get_noc_addr(row_block_b, src_b) + t_offset;
 #endif
+                                noc_async_read(addr_b, chunk_l1_b, read_len_b);
+#else
+                                for (uint32_t k = 0; k < chunk; ++k) {
+                                    uint32_t logical_r = r_offset + k;
+                                    uint32_t row_idx_b = row_block_b + logical_r * s_h_b;
+#if RM_COL_BCAST_B
+                                    uint64_t addr_b = get_noc_addr(row_idx_b, src_b);
+#else
+                                    uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + t_offset;
+#endif
+                                    noc_async_read(addr_b, curr_l1_b, read_len_b);
+                                    curr_l1_b += current_chunk_bytes;
                                 }
+#endif
+#endif
 
                                 noc_async_read_barrier();
+#if RM_HAS_B
+#endif
 
-                                if (is_a_col_bcast || is_b_col_bcast) {
-                                    curr_l1_a = base_l1_a + (rows_in_current_tile * stride_size_bytes);
-#if RM_HAS_B
-                                    curr_l1_b = base_l1_b + (rows_in_current_tile * stride_size_bytes);
-#endif
-                                    for (uint32_t k = 0; k < chunk; ++k) {
-                                        if (is_a_col_bcast) {
-                                            FILL_TILE_WITH_FIRST_COLUMN_RM(curr_l1_a, current_chunk_elements);
-                                        }
-#if RM_HAS_B
-                                        if (is_b_col_bcast) {
-                                            FILL_TILE_WITH_FIRST_COLUMN_RM(curr_l1_b, current_chunk_elements);
-                                        }
-#endif
-                                        curr_l1_a += current_chunk_bytes;
-#if RM_HAS_B
-                                        curr_l1_b += current_chunk_bytes;
-#endif
-                                    }
+#if RM_COL_BCAST_A
+#if RM_ROW_BCAST_A
+                                FILL_TILE_WITH_FIRST_COLUMN_RM(chunk_l1_a, current_chunk_elements);
+#else
+                                uint32_t fill_ptr_a = chunk_l1_a;
+                                for (uint32_t k = 0; k < chunk; ++k) {
+                                    FILL_TILE_WITH_FIRST_COLUMN_RM(fill_ptr_a, current_chunk_elements);
+                                    fill_ptr_a += current_chunk_bytes;
                                 }
+#endif
+#endif
+#if RM_HAS_B
+#if RM_COL_BCAST_B
+#if RM_ROW_BCAST_B
+                                FILL_TILE_WITH_FIRST_COLUMN_RM(chunk_l1_b, current_chunk_elements);
+#else
+                                uint32_t fill_ptr_b = chunk_l1_b;
+                                for (uint32_t k = 0; k < chunk; ++k) {
+                                    FILL_TILE_WITH_FIRST_COLUMN_RM(fill_ptr_b, current_chunk_elements);
+                                    fill_ptr_b += current_chunk_bytes;
+                                }
+#endif
+#endif
+#endif
+
+#if RM_ROW_BCAST_A
+                                FILL_TILE_WITH_FIRST_ROW_RM(chunk_l1_a, current_chunk_elements, chunk);
+#endif
+#if RM_HAS_B
+#if RM_ROW_BCAST_B
+                                FILL_TILE_WITH_FIRST_ROW_RM(chunk_l1_b, current_chunk_elements, chunk);
+#endif
+#endif
+#if RM_HAS_B
+#endif
                             }
 
                             rows_in_current_tile += chunk;
