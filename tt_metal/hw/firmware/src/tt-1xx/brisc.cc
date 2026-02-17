@@ -23,7 +23,6 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
-#include "api/dataflow/dataflow_api.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
 
@@ -34,7 +33,9 @@
 
 // clang-format on
 
+// Global so triage can see these values.
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -70,6 +71,11 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -323,11 +329,20 @@ inline void wait_ncrisc_trisc() {
 
 inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
+inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t noc_mode, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
     // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
     if (end_cb_index != NUM_CIRCULAR_BUFFERS) {
-        noc_async_atomic_barrier(noc_index);
+        WAYPOINT("NABW");
+        if (noc_mode == DM_DYNAMIC_NOC) {
+            do {
+                invalidate_l1_cache();
+            } while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+        } else {
+            while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+        }
+        invalidate_l1_cache();
+        WAYPOINT("NABD");
     }
 #endif
 }
@@ -360,7 +375,6 @@ int main() {
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
-    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     trigger_sync_register_init();
@@ -464,14 +478,21 @@ int main() {
             WAYPOINT("R");
             int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
             if (enables & (1u << index)) {
-                uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
-                setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+                // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+                // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+                uint64_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
+                uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
+                setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
+#ifdef ARCH_BLACKHOLE
+                uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
+                setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
+#endif
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -493,7 +514,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();

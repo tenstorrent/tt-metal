@@ -14,11 +14,12 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn {
 
@@ -190,13 +191,12 @@ Tensor full_like_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().layout() : layout.value_or(tensor.layout());
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
-    auto arch = tensor.device()->arch();
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_tile_layout &&
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
-             (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) &&
+             dtype_value == DataType::FLOAT32) &&
             tensor.storage_type() == StorageType::DEVICE) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
         }

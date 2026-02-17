@@ -7,22 +7,12 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_align.hpp>
-#include "tt_metal/hw/inc/hostdev/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
 
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-struct SocketSenderSize {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
-    const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
-    const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
-};
 
 // Need to index the connections to properly read the FabricNodeId from peer descriptor.
 // This will get cleaned up with the improved socket APIs. See Issue #27207
@@ -337,13 +327,13 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = connections.size();                   // num_downstreams
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // write_ptr
                 config_data[md_offset++] = 0;                                    // bytes_sent
+                config_data[md_offset++] = connections.size();                   // num_downstreams
+                config_data[md_offset++] = 0;  // write_ptr (offset from downstream_fifo_addr)
                 config_data[md_offset++] = peer_config_buf_addr;                 // downstream_bytes_sent_addr
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
                 config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
-                config_data[md_offset++] = is_sender;                            // is_sender
+                config_data[md_offset++] = 0;                                    // is_d2h
 
                 // Write downstream encodings for each receiver of this sender core
                 uint32_t enc_offset = (idx * sender_total_size_bytes + sender_size.md_size_bytes +
@@ -408,13 +398,13 @@ void write_socket_configs(
                 md.read_ptr = local_descriptor.data_buffer_address;
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;
-                md.upstream_mesh_id = *upstream_mesh_id;
-                md.upstream_chip_id = upstream_chip_id;
-                md.upstream_noc_y = sender_virtual_core.y;
-                md.upstream_noc_x = sender_virtual_core.x;
-                md.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
-                                               sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
-                md.is_sender = is_sender;
+                md.is_h2d = 0;
+                md.d2d.upstream_mesh_id = *upstream_mesh_id;
+                md.d2d.upstream_chip_id = upstream_chip_id;
+                md.d2d.upstream_noc_y = sender_virtual_core.y;
+                md.d2d.upstream_noc_x = sender_virtual_core.x;
+                md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
+                                                   sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }

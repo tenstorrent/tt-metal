@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -17,6 +17,8 @@ file(
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
     all_to_all_async/device/kernels/*
+    all_to_all_async_generic/device/kernels/*
+    all_to_all_dispatch_metadata/device/kernels/*
     llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*
@@ -27,7 +29,8 @@ file(
     send_recv_async/send_async/device/kernels/*
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
-    deepseek_minimal_broadcast/device/kernels/*
+    strided_all_gather_async/device/kernels/*
+    deepseek_moe_reduce_scatter/device/kernels/*
 )
 
 target_sources(
@@ -57,8 +60,8 @@ target_sources(
         llama_common.cpp
         composite_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
-        ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
         all_reduce_async/device/all_reduce_async_device_operation.cpp
         all_reduce_async/device/all_reduce_async_program_factory.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
@@ -115,9 +118,12 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
-        deepseek_minimal_broadcast/deepseek_minimal_broadcast.cpp
-        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.cpp
-        deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.cpp
+        deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
+        deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
+        deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
+        all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
+        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
+        all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

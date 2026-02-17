@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
@@ -10,17 +11,12 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
+namespace ttnn::experimental::prim {
 
 RotaryEmbeddingLlamaFusedQKDeviceOperation::program_factory_t
 RotaryEmbeddingLlamaFusedQKDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::RotaryEmbeddingLlamaFusedQKProgramFactory{};
-}
-
-void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return RotaryEmbeddingLlamaFusedQKProgramFactory{};
 }
 
 void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
@@ -69,8 +65,7 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
         "Q input tensor and K input tensor must have same head dimensions");
     uint32_t head_dim = q_input_tensor.logical_shape()[-1];
     TT_FATAL(
-        head_dim <= 128 ||
-            std::get<ttnn::WormholeComputeKernelConfig>(args.compute_kernel_config).fp32_dest_acc_en == false,
+        head_dim <= 128 || args.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
 
     if (args.row_major_QK) {
@@ -125,7 +120,7 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
         "Transformation matrix must be sharded to single tile of shape (32, 32)");
 }
 
-spec_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::compute_output_specs(
+RotaryEmbeddingLlamaFusedQkResultSpec RotaryEmbeddingLlamaFusedQKDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& q_input_tensor = tensor_args.q_input;
     const auto& k_input_tensor = tensor_args.k_input;
@@ -140,7 +135,7 @@ spec_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::compute_output_s
             TensorLayout(k_input_tensor.dtype(), PageConfig(k_input_tensor.layout()), args.k_output_mem_config))};
 }
 
-tensor_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::create_output_tensors(
+RotaryEmbeddingLlamaFusedQkResult RotaryEmbeddingLlamaFusedQKDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto [spec_q, spec_k] = compute_output_specs(operation_attributes, tensor_args);
     return {
@@ -148,12 +143,11 @@ tensor_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::create_output_
         create_device_tensor(spec_k, tensor_args.k_input.device())};
 }
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::tensor_return_value_t
-rotary_embedding_llama_fused_qk(
+ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQkResult rotary_embedding_llama_fused_qk(
     const Tensor& q_input_tensor,
     const Tensor& k_input_tensor,
     const Tensor& cos_cache,
@@ -163,8 +157,7 @@ rotary_embedding_llama_fused_qk(
     const tt::tt_metal::MemoryConfig& k_output_mem_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     bool row_major_QK) {
-    using OperationType = ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
-        RotaryEmbeddingLlamaFusedQKDeviceOperation;
+    using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQKDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .q_output_mem_config = q_output_mem_config,

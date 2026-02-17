@@ -15,17 +15,23 @@
 #include <tt_stl/assert.hpp>
 #include "cumprod.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn {
 
-Tensor CumprodOperation::invoke(
+Tensor cumprod(
     const Tensor& input_tensor,
     const int32_t& dim,
-    std::optional<DataType>& dtype,
+    std::optional<DataType> dtype,
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config) {
-    return common::accumulation_invoke(
-        input_tensor, dim, dtype, std::move(optional_out), reverse_order, memory_config, AccumulationOp::CUMPROD);
+    return operations::reduction::accumulation::common::accumulation_invoke(
+        input_tensor,
+        dim,
+        dtype,
+        std::move(optional_out),
+        reverse_order,
+        memory_config,
+        ttnn::prim::AccumulationOp::CUMPROD);
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn

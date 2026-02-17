@@ -2,58 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
-#include <cerrno>
-#include <fmt/base.h>
 #include <cmath>
-#include <cstdlib>
-#include <sys/types.h>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <cstdint>
-#include <cstring>
-#include <exception>
-#include <functional>
-#include <map>
-#include <memory>
-#include <string>
-#include <utility>
-#include <variant>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include "test_gold_impls.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 using std::vector;
 using namespace tt;
-using namespace constants;
-
-using std::uint16_t;
-using std::uint32_t;
-using std::vector;
+using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace {
+
 const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     TT_FATAL(multibank && "Only multibank is supported correctly.", "Error");
     if (bcast_dim == BcastDim::H) {
@@ -82,312 +58,255 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
     return "";
 }
 
-}  // namespace
+const char* bdim_to_log_string[] = {"", "BCAST_H", "BCAST_W", "", "BCAST_HW"};
+const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
+const char* op_id_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
+const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
+const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 
-//////////////////////////////////////////////////////////////////////////////////////////
-// Tests reduce_h kernel in H dimension (NCHW->NC1W)
-//////////////////////////////////////////////////////////////////////////////////////////
-int main() {
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
-    bool pass = true;
-
-    const char* bdim_to_log_string[] = {"", "BCAST_H", "BCAST_W", "", "BCAST_HW"};
-    const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
-    const char* op_id_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
-    const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
-    const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
+void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_op) {
     bool multibank = true;
 
-    auto bdims = BcastDim::all();
-    auto ops = BcastOp::all();
-    // ops = { BcastOp::MUL }; // TODO(AP): for debugging
-    for (auto bcast_op : ops) {
-        for (auto bcast_dim : bdims) {
-            log_info(LogTest, "=============================================================");
-            log_info(
-                LogTest,
-                "======= Running bcast test for bdim={}, op={}",
-                bdim_to_log_string[bcast_dim],
-                op_id_to_op_name[bcast_op]);
-            try {
-                ////////////////////////////////////////////////////////////////////////////
-                //                      Device Setup
-                ////////////////////////////////////////////////////////////////////////////
-                int device_id = 0;
-                tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    log_info(LogTest, "=============================================================");
+    log_info(
+        LogTest,
+        "======= Running bcast test for bdim={}, op={}",
+        bdim_to_log_string[bcast_dim],
+        op_id_to_op_name[bcast_op]);
 
-                ////////////////////////////////////////////////////////////////////////////
-                //                      Application Setup
-                ////////////////////////////////////////////////////////////////////////////
-                tt_metal::Program program = tt_metal::CreateProgram();
+    Program program = CreateProgram();
 
-                CoreCoord core = {0, 0};
+    CoreCoord core = {0, 0};
 
-                vector<uint32_t> shape = {2, 4, 2 * TILE_HEIGHT, 3 * TILE_WIDTH};
-                uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0], N = shape[0], C = shape[1];
-                TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
-                TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
-                uint32_t Wt = W / TILE_WIDTH;
-                uint32_t Ht = H / TILE_HEIGHT;
-                uint32_t num_tensor_tiles = NC * H * W / (32 * 32);
+    vector<uint32_t> shape = {2, 4, 2 * TILE_HEIGHT, 3 * TILE_WIDTH};
+    uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0], N = shape[0], C = shape[1];
+    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
+    uint32_t Wt = W / TILE_WIDTH;
+    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t num_tensor_tiles = NC * H * W / (32 * 32);
 
-                uint32_t single_tile_bytes = 2 * 1024;
-                uint32_t dram_buffer_bytes =
-                    single_tile_bytes *
-                    num_tensor_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t single_tile_bytes = 2 * 1024;
+    uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles;
 
-                uint32_t page_size = single_tile_bytes;
-                if (not multibank) {
-                    page_size = dram_buffer_bytes;
-                }
-
-                tt_metal::InterleavedBufferConfig buff_config{
-                    .device = device,
-                    .size = dram_buffer_bytes,
-                    .page_size = page_size,
-                    .buffer_type = tt_metal::BufferType::DRAM};
-
-                auto src0_dram_buffer = CreateBuffer(buff_config);
-                uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-                auto dst_dram_buffer = CreateBuffer(buff_config);
-                uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-                uint32_t src0_cb_index = 0;
-                uint32_t num_buffer_tiles = 2;
-                // this buffer is used in transpose_hc.cpp NCRISC kernel
-                tt_metal::CircularBufferConfig cb_src0_config =
-                    tt_metal::CircularBufferConfig(
-                        num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                        .set_page_size(src0_cb_index, single_tile_bytes);
-                tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-                uint32_t src1_cb_index = 1;
-                tt_metal::CircularBufferConfig cb_src1_config =
-                    tt_metal::CircularBufferConfig(
-                        num_buffer_tiles * single_tile_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                        .set_page_size(src1_cb_index, single_tile_bytes);
-                tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-
-                uint32_t ouput_cb_index = tt::CBIndex::c_16;
-                uint32_t num_output_buffer_tiles = 2;
-                // this buffer is used in writer_unary.cpp BRISC kernel
-                tt_metal::CircularBufferConfig cb_output_config =
-                    tt_metal::CircularBufferConfig(
-                        num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-                        .set_page_size(ouput_cb_index, single_tile_bytes);
-                tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-                vector<uint16_t> tiled_bcast_values;
-                vector<uint16_t> ref_bcast_values;
-                float bcast_1value = 10.0f;
-                uint16_t bcast_1value16 = std::bit_cast<uint16_t>(bfloat16(bcast_1value));
-                unsigned num_bcast_tiles = 0;
-                // build the constant tiles to be broadcast
-                if (bcast_dim == BcastDim::HW) {
-                    ref_bcast_values.resize(NC, 0);
-                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, TILE_WIDTH};
-                    vector<uint16_t> ref_bcast_values_with_tile_padding;
-                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
-                    for (int j = 0; j < NC; j++) {
-                        // add something not too large but different between tiles
-                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
-                        ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
-                    }
-                    // convert the reference broadcast tensor to tiled format
-                    tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
-                        ref_bcast_shape_with_tile_padding,
-                        TensorLayoutType::LIN_ROW_MAJOR,
-                        TensorLayoutType::TILED_NFACES);
-                    TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
-                    num_bcast_tiles = NC;
-                    // restore ref values and shape to 1
-                } else if (bcast_dim == BcastDim::H) {
-                    // For bcast_h a.k.a. Dim::R we broadcast _over_ H, meaning we take a W vector and += it over each
-                    // element in the H dimension At least that's the behavior i've seen from a single tile bcast-H So
-                    // this is why here we create a W-sized vector Same for the if branch for BCAST_W below
-                    TT_FATAL(W % 32 == 0, "Error");
-                    // pad values and shape with extra 32 values because the reader kernel expects it
-                    // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
-                    // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
-                    ref_bcast_values.resize(NC * W, 0);
-                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, W};
-                    vector<uint16_t> ref_bcast_values_with_tile_padding;
-                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
-                    for (int j = 0; j < NC * W; j++) {
-                        // add something not too large but different between tiles
-                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
-                        ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
-                    }
-                    tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
-                        ref_bcast_shape_with_tile_padding,
-                        TensorLayoutType::LIN_ROW_MAJOR,
-                        TensorLayoutType::TILED_NFACES);
-                    num_bcast_tiles = NC * Wt;
-                    // restore values and shape to W
-                } else if (bcast_dim == BcastDim::W) {
-                    // see the comments above for BCAST_H
-                    ref_bcast_values.resize(NC * H, 0);
-                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, H, TILE_WIDTH};
-                    vector<uint16_t> ref_bcast_values_with_tile_padding;
-                    ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
-                    for (int j = 0; j < NC * H; j++) {
-                        // add something not too large but different between tiles
-                        auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
-                        ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
-                    }
-                    tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values_with_tile_padding,
-                        ref_bcast_shape_with_tile_padding,
-                        TensorLayoutType::LIN_ROW_MAJOR,
-                        TensorLayoutType::TILED_NFACES);
-                    num_bcast_tiles = NC * Ht;
-                }
-
-                auto bcast_tiled_u32 = u32_from_u16_vector(tiled_bcast_values);
-                auto bcast_vals_nbytes = bcast_tiled_u32.size() * sizeof(bcast_tiled_u32[0]);
-                uint32_t src1_page_size = single_tile_bytes;
-                if (not multibank) {
-                    src1_page_size = bcast_vals_nbytes;
-                }
-
-                tt_metal::InterleavedBufferConfig src1_config{
-                    .device = device,
-                    .size = bcast_vals_nbytes,
-                    .page_size = src1_page_size,
-                    .buffer_type = tt_metal::BufferType::DRAM};
-
-                auto src1_dram_buffer = CreateBuffer(src1_config);
-                uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-                tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
-
-                std::vector<uint32_t> reader_compile_time_args;
-                tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
-                tt::tt_metal::TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
-
-                const char* reader_name = get_reader_name(multibank, bcast_dim);
-                auto binary_reader_kernel = tt_metal::CreateKernel(
-                    program,
-                    reader_name,
-                    core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                        .noc = tt_metal::NOC::RISCV_1_default,
-                        .compile_args = reader_compile_time_args});
-
-                std::vector<uint32_t> writer_compile_time_args;
-                tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
-                auto unary_writer_kernel = tt_metal::CreateKernel(
-                    program,
-                    multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                              : "tt_metal/kernels/dataflow/writer_unary.cpp",
-                    core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = writer_compile_time_args});
-
-                uint32_t nc1 = 0;
-                tt_metal::SetRuntimeArgs(
-                    program,
-                    binary_reader_kernel,
-                    core,
-                    {dram_buffer_src0_addr,  // 0
-                     (std::uint32_t)0,       // 1
-                     num_tensor_tiles,       // 2
-                     dram_buffer_src1_addr,  // 3
-                     (std::uint32_t)0,       // 4
-                     num_bcast_tiles,
-                     NC * Ht * Wt,
-                     NC,
-                     Ht,
-                     Wt,
-                     nc1});  // 5 6 7 8 9 10
-
-                tt_metal::SetRuntimeArgs(
-                    program, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, num_tensor_tiles});
-
-                std::map<std::string, std::string> compute_defines = {
-                    {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
-                    {"BCAST_OP", op_id_to_op_define[bcast_op]},
-                    {"BCAST_LLKOP", op_id_to_llkop_define[bcast_op]}};
-                auto eltwise_binary_kernel = tt_metal::CreateKernel(
-                    program,
-                    get_compute_name(bcast_dim),
-                    core,
-                    tt_metal::ComputeConfig{.compile_args = {}, .defines = compute_defines});
-
-                tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel, core, {uint(NC), uint(Ht), uint(Wt)});
-
-                ////////////////////////////////////////////////////////////////////////////
-                //                      Execute Application
-                ////////////////////////////////////////////////////////////////////////////
-                vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
-                tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
-
-                tt_metal::detail::LaunchProgram(device, program);
-
-                // The kernel will view the input as TILED_NFACES
-                vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-
-                ////////////////////////////////////////////////////////////////////////////
-                //                      Validation & Teardown
-                ////////////////////////////////////////////////////////////////////////////
-
-                int argfail = -1;
-                auto comparison_function = [](float a, float b) {
-                    const float rtol = 0.02f;
-                    const float atol = 1e-3f;
-                    float maxabs = fmaxf(fabsf(a), fabsf(b));
-                    float absdiff = fabsf(a - b);
-                    auto result = (absdiff <= atol) || absdiff < rtol * maxabs;
-                    return result;
-                };
-
-                // recover a linear view of input vector for consumption by gold_ function
-                auto u16_src0_vec = u16_from_u32_vector(src0_vec);
-                vector<uint16_t> src_linear = convert_layout<uint16_t>(
-                    u16_src0_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-                vector<uint16_t> gold_added = gold_bcast_op(
-                    src_linear, shape, ref_bcast_values, bcast_dim, bcast_op);  // result is uint16_t untilized
-
-                // Tilize from row major and convert to pairs (uint32_t)
-                vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
-                auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-                    gold_added, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
-
-                pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-                if (!pass) {
-                    log_error(LogTest, "Failure position={}", argfail);
-                }
-
-                pass &= tt_metal::CloseDevice(device);
-
-            } catch (const std::exception& e) {
-                pass = false;
-                // Capture the exception error message
-                log_error(LogTest, "{}", e.what());
-                // Capture system call errors that may have returned from driver/kernel
-                log_error(LogTest, "System error message: {}", std::strerror(errno));
-            }
-
-        }  // for bcast_op loop
-    }  // for bcast_mode loop
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
+    uint32_t page_size = single_tile_bytes;
+    if (!multibank) {
+        page_size = dram_buffer_bytes;
     }
 
-    TT_FATAL(pass, "Error");
+    InterleavedBufferConfig buff_config{
+        .device = dev, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
 
-    return 0;
+    auto src0_dram_buffer = CreateBuffer(buff_config);
+    uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
+    auto dst_dram_buffer = CreateBuffer(buff_config);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+
+    uint32_t src0_cb_index = 0;
+    uint32_t num_buffer_tiles = 2;
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_bytes);
+    CreateCircularBuffer(program, core, cb_src0_config);
+
+    uint32_t src1_cb_index = 1;
+    CircularBufferConfig cb_src1_config =
+        CircularBufferConfig(num_buffer_tiles * single_tile_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, single_tile_bytes);
+    CreateCircularBuffer(program, core, cb_src1_config);
+
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_buffer_tiles = 2;
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_bytes);
+    CreateCircularBuffer(program, core, cb_output_config);
+
+    vector<uint16_t> tiled_bcast_values;
+    vector<uint16_t> ref_bcast_values;
+    float bcast_1value = 10.0f;
+    unsigned num_bcast_tiles = 0;
+
+    // build the constant tiles to be broadcast
+    if (bcast_dim == BcastDim::HW) {
+        ref_bcast_values.resize(NC, 0);
+        vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, TILE_WIDTH};
+        vector<uint16_t> ref_bcast_values_with_tile_padding;
+        ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
+        for (uint32_t j = 0; j < NC; j++) {
+            auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
+            ref_bcast_values[j] = val;
+            ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
+        }
+        tiled_bcast_values = convert_layout<uint16_t>(
+            ref_bcast_values_with_tile_padding,
+            ref_bcast_shape_with_tile_padding,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
+        num_bcast_tiles = NC;
+    } else if (bcast_dim == BcastDim::H) {
+        TT_FATAL(W % 32 == 0, "Error");
+        ref_bcast_values.resize(NC * W, 0);
+        vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, W};
+        vector<uint16_t> ref_bcast_values_with_tile_padding;
+        ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
+        for (uint32_t j = 0; j < NC * W; j++) {
+            auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
+            ref_bcast_values[j] = val;
+            ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
+        }
+        tiled_bcast_values = convert_layout<uint16_t>(
+            ref_bcast_values_with_tile_padding,
+            ref_bcast_shape_with_tile_padding,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
+        num_bcast_tiles = NC * Wt;
+    } else if (bcast_dim == BcastDim::W) {
+        ref_bcast_values.resize(NC * H, 0);
+        vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, H, TILE_WIDTH};
+        vector<uint16_t> ref_bcast_values_with_tile_padding;
+        ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
+        for (uint32_t j = 0; j < NC * H; j++) {
+            auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
+            ref_bcast_values[j] = val;
+            ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
+        }
+        tiled_bcast_values = convert_layout<uint16_t>(
+            ref_bcast_values_with_tile_padding,
+            ref_bcast_shape_with_tile_padding,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
+        num_bcast_tiles = NC * Ht;
+    }
+
+    auto bcast_tiled_u32 = u32_from_u16_vector(tiled_bcast_values);
+    auto bcast_vals_nbytes = bcast_tiled_u32.size() * sizeof(bcast_tiled_u32[0]);
+    uint32_t src1_page_size = single_tile_bytes;
+    if (!multibank) {
+        src1_page_size = bcast_vals_nbytes;
+    }
+
+    InterleavedBufferConfig src1_config{
+        .device = dev, .size = bcast_vals_nbytes, .page_size = src1_page_size, .buffer_type = BufferType::DRAM};
+
+    auto src1_dram_buffer = CreateBuffer(src1_config);
+    uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
+    detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
+
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
+
+    const char* reader_name = get_reader_name(multibank, bcast_dim);
+    auto binary_reader_kernel = CreateKernel(
+        program,
+        reader_name,
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
+
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
+    auto unary_writer_kernel = CreateKernel(
+        program,
+        multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
+                  : "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
+
+    uint32_t nc1 = 0;
+    SetRuntimeArgs(
+        program,
+        binary_reader_kernel,
+        core,
+        {dram_buffer_src0_addr,
+         (std::uint32_t)0,
+         num_tensor_tiles,
+         dram_buffer_src1_addr,
+         (std::uint32_t)0,
+         num_bcast_tiles,
+         NC * Ht * Wt,
+         NC,
+         Ht,
+         Wt,
+         nc1});
+
+    SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, num_tensor_tiles});
+
+    std::map<std::string, std::string> compute_defines = {
+        {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
+        {"BCAST_OP", op_id_to_op_define[bcast_op]},
+        {"BCAST_LLKOP", op_id_to_llkop_define[bcast_op]}};
+    auto eltwise_binary_kernel = CreateKernel(
+        program, get_compute_name(bcast_dim), core, ComputeConfig{.compile_args = {}, .defines = compute_defines});
+
+    SetRuntimeArgs(program, eltwise_binary_kernel, core, {uint(NC), uint(Ht), uint(Wt)});
+
+    // Execute
+    vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
+    detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+
+    detail::LaunchProgram(dev, program);
+
+    vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+
+    // Validation
+    auto comparison_function = [](float a, float b) {
+        const float rtol = 0.02f;
+        const float atol = 1e-3f;
+        float maxabs = fmaxf(fabsf(a), fabsf(b));
+        float absdiff = fabsf(a - b);
+        return (absdiff <= atol) || absdiff < rtol * maxabs;
+    };
+
+    auto u16_src0_vec = u16_from_u32_vector(src0_vec);
+    vector<uint16_t> src_linear =
+        convert_layout<uint16_t>(u16_src0_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+    vector<uint16_t> gold_added = gold_bcast_op(src_linear, shape, ref_bcast_values, bcast_dim, bcast_op);
+
+    vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
+    auto gold_4f_u32 = u32_from_u16_vector(
+        convert_layout<uint16_t>(gold_added, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
+
+    int argfail = -1;
+    bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
+    EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+}  // namespace
+
+TEST_F(MeshDeviceSingleCardFixture, BcastHAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::MUL);
+}
+
+TEST_F(MeshDeviceSingleCardFixture, BcastWAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastWSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastWMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::MUL);
+}
+
+TEST_F(MeshDeviceSingleCardFixture, BcastHWAdd) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::ADD);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHWSub) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::SUB);
+}
+TEST_F(MeshDeviceSingleCardFixture, BcastHWMul) {
+    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::MUL);
 }

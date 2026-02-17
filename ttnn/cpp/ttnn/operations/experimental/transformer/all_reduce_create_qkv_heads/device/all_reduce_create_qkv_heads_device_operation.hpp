@@ -13,18 +13,17 @@
 #include <optional>
 #include <variant>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads {
+namespace ttnn::experimental::prim {
 
 struct AllReduceCreateQkvHeadsDeviceOperation {
-    using operation_attributes_t = all_reduce_create_qkv_heads::operation_attributes_t;
-    using tensor_args_t = all_reduce_create_qkv_heads::tensor_args_t;
-    using spec_return_value_t = all_reduce_create_qkv_heads::spec_return_value_t;
-    using tensor_return_value_t = all_reduce_create_qkv_heads::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AllReduceCreateQkvHeadsMeshWorkloadFactory>;
+    using operation_attributes_t = AllReduceCreateQkvHeadsParams;
+    using tensor_args_t = AllReduceCreateQkvHeadsInputs;
+    using spec_return_value_t = AllReduceCreateQkvHeadsResultSpec;
+    using tensor_return_value_t = AllReduceCreateQkvHeadsResult;
+    using program_factory_t = std::variant<AllReduceCreateQkvHeadsMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -34,10 +33,10 @@ struct AllReduceCreateQkvHeadsDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads::tensor_return_value_t all_reduce_create_qkv_heads(
+ttnn::experimental::prim::AllReduceCreateQkvHeadsResult all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const Tensor& batch_offset_tensor,

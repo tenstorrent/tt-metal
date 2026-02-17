@@ -80,7 +80,7 @@ struct CreateTensorParams {
 
 }  // namespace
 
-class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
+class CreateTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<CreateTensorTest>,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
@@ -105,7 +105,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 
 using CombinationInputParams =
     std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
-class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
+class EmptyTensorTest : public ttnn::TTNNFixtureWithSuiteDevice<EmptyTensorTest>,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
 TEST_P(EmptyTensorTest, Combinations) {

@@ -10,15 +10,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::data_movement::bcast::program {
+namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
 BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const BcastParams& operation_attributes, const BcastInputs& tensor_args, Tensor& tensor_return_value) {
     const Tensor& a = tensor_args.input_a;
     const Tensor& b = tensor_args.input_b;
     Tensor& output = tensor_return_value;
@@ -220,9 +218,9 @@ BcastMultiCoreHWProgramFactory::cached_program_t BcastMultiCoreHWProgramFactory:
 
 void BcastMultiCoreHWProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const BcastParams& /*operation_attributes*/,
+    const BcastInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = cached_program.shared_variables.compute_with_storage_grid_size.y;
     const auto& output_tensor = cached_program.shared_variables.inplace ? tensor_args.input_a : tensor_return_value;
@@ -329,4 +327,4 @@ void BcastMultiCoreHWProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::bcast::program
+}  // namespace ttnn::prim

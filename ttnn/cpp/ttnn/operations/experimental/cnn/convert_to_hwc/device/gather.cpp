@@ -13,7 +13,7 @@
 #include <cstring>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
-namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -494,14 +494,13 @@ std::vector<std::vector<BlockedTransferGroup>> split_by_destination_core(
     return result;
 }
 
-}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail
+}  // namespace ttnn::experimental::prim
 
 // fmt formatter implementations
 namespace fmt {
 
-auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer& t, format_context& ctx) const
-    -> format_context::iterator {
+auto formatter<ttnn::experimental::prim::GatherTransfer>::format(
+    const ttnn::experimental::prim::GatherTransfer& t, format_context& ctx) const -> format_context::iterator {
     std::string str = fmt::format(
         "GatherTransfer(B={}, C={}: Core{}[{},{}][row={}·C+{}, cols={}:{}] → Core{}[{},{}][row={}, cols={}:{}], "
         "len={})",
@@ -524,9 +523,8 @@ auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::Gath
     return fmt::format_to(ctx.out(), "{}", str);
 }
 
-auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer& t,
-    format_context& ctx) const -> format_context::iterator {
+auto formatter<ttnn::experimental::prim::LowLevelGatherTransfer>::format(
+    const ttnn::experimental::prim::LowLevelGatherTransfer& t, format_context& ctx) const -> format_context::iterator {
     std::string str = fmt::format(
         "LowLevelGatherTransfer(src_shard{}[{}:{}] (offset={} B) @ NOC({},{}) => dst_shard{}[{}:{}] (offset={} B), "
         "len={}, size={} B)",
@@ -545,9 +543,8 @@ auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowL
     return fmt::format_to(ctx.out(), "{}", str);
 }
 
-auto formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup>::format(
-    const ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup& t,
-    format_context& ctx) const -> format_context::iterator {
+auto formatter<ttnn::experimental::prim::BlockedTransferGroup>::format(
+    const ttnn::experimental::prim::BlockedTransferGroup& t, format_context& ctx) const -> format_context::iterator {
     uint32_t col_start = t.dst_block_idx * t.block_size;
     uint32_t col_end = col_start + t.block_size;
 

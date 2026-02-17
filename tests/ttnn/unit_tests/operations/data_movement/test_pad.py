@@ -436,6 +436,7 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize(
     "shape, padded_shape",
     [
@@ -444,11 +445,11 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
         [[3, 3, 1392, 1392], [3, 3, 1408, 1408]],
     ],
 )
-def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
+def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape, mem_config):
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
     in_torch = torch.randint(-5, 5, shape, dtype=torch_dtype).float()
-    in_ttnn = ttnn.from_torch(in_torch, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, dtype=dtype)
+    in_ttnn = ttnn.from_torch(in_torch, memory_config=mem_config, device=device, dtype=dtype)
 
     out_ttnn = ttnn.pad(in_ttnn, padded_shape, [0, 0, 0, 0], 0, use_multicore=use_multicore)
     out_torch = out_ttnn.cpu().to_torch().float()
@@ -462,12 +463,11 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout):
-    if layout == ttnn.TILE_LAYOUT and in_dtype != ttnn.bfloat16:
-        pytest.skip("tiled multicore pad only supported for bf16")
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_config):
     torch_input = random_torch_tensor(in_dtype, shape)
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=layout)
     output_tt = ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore)
     output_tt = ttnn.to_torch(output_tt)
     assert output_tt.shape == torch.Size(padshape)

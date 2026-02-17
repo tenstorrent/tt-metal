@@ -9,8 +9,9 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::data_movement::bcast {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,21 +28,21 @@ BcastDeviceOperation::program_factory_t BcastDeviceOperation::select_program_fac
         if (input_tensor_a.is_sharded()) {
             if (input_tensor_a.padded_shape()[0] == input_tensor_b.padded_shape()[0] ||
                 (input_tensor_a.padded_shape()[0] > 1 && input_tensor_b.padded_shape()[0] == 1)) {
-                selected_factory = program::BcastShardedHOptimisedProgramFactory{};
+                selected_factory = BcastShardedHOptimisedProgramFactory{};
                 factory_name = "BcastShardedHOptimisedProgramFactory";
             } else {
-                selected_factory = program::BcastShardedHProgramFactory{};
+                selected_factory = BcastShardedHProgramFactory{};
                 factory_name = "BcastShardedHProgramFactory";
             }
         } else {
-            selected_factory = program::BcastMultiCoreHProgramFactory{};
+            selected_factory = BcastMultiCoreHProgramFactory{};
             factory_name = "BcastMultiCoreHProgramFactory";
         }
     } else if (operation_attributes.dim == BcastOpDim::W) {
-        selected_factory = program::BcastMultiCoreWProgramFactory{};
+        selected_factory = BcastMultiCoreWProgramFactory{};
         factory_name = "BcastMultiCoreWProgramFactory";
     } else if (operation_attributes.dim == BcastOpDim::HW) {
-        selected_factory = program::BcastMultiCoreHWProgramFactory{};
+        selected_factory = BcastMultiCoreHWProgramFactory{};
         factory_name = "BcastMultiCoreHWProgramFactory";
     } else {
         TT_THROW("Unsupported Bcast Dim");
@@ -49,11 +50,6 @@ BcastDeviceOperation::program_factory_t BcastDeviceOperation::select_program_fac
 
     log_debug(tt::LogOp, "Selected bcast factory: {}", factory_name);
     return selected_factory;
-}
-
-void BcastDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void BcastDeviceOperation::validate_on_program_cache_miss(
@@ -181,7 +177,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t BcastDeviceOperation::compute_output_specs(
+TensorSpec BcastDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -217,7 +213,7 @@ spec_return_value_t BcastDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()));
 }
 
-tensor_return_value_t BcastDeviceOperation::create_output_tensors(
+Tensor BcastDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -231,22 +227,18 @@ tensor_return_value_t BcastDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t BcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const program_factory_t program_factory = select_program_factory(operation_attributes, tensor_args);
+    log_trace(tt::LogOp, "BcastDeviceOperation::compute_program_hash is called");
+
     const bool bcast_scalar = (tensor_args.input_b.padded_shape()[-2] * tensor_args.input_b.padded_shape()[-1] == 1) &&
                               operation_attributes.dim == BcastOpDim::HW;
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
     return operation::hash_operation<BcastDeviceOperation>(
-        operation_attributes,
-        program_factory.index(),
-        tensor_args.input_a.memory_config(),
-        tensor_args.input_a.dtype(),
-        tensor_args.input_b.memory_config(),
-        tensor_args.input_b.dtype(),
-        bcast_scalar,
-        operation_attributes.in_place);
+        operation_attributes, tensor_args, bcast_scalar, program_factory.index());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-BcastDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation::create_op_performance_model(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -260,16 +252,16 @@ BcastDeviceOperation::create_op_performance_model(
     const bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
                           (output_tensor.memory_config().shard_spec().value().grid ==
                            input_tensor0.memory_config().shard_spec().value().grid);
-    const int ideal_dev_clock_cycles =
-        common_tm_bw_model(input_tensor1, output_tensor, false, 0, false, false, is_local);
+    const int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(
+        input_tensor1, output_tensor, false, 0, false, false, is_local);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor0, input_tensor1}, tensor_return_value, ideal_dev_clock_cycles);
     return result;
 }
-}  // namespace ttnn::operations::data_movement::bcast
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_value_t bcast(
+BcastDeviceOperation::tensor_return_value_t bcast(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     ttnn::BcastOpMath bcast_op,
@@ -277,7 +269,7 @@ ttnn::operations::data_movement::bcast::BcastDeviceOperation::tensor_return_valu
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool in_place,
     const std::optional<Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::bcast::BcastDeviceOperation;
+    using OperationType = BcastDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .math_op = bcast_op, .dim = bcast_dim, .output_mem_config = output_mem_config, .in_place = in_place},

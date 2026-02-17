@@ -179,31 +179,22 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
 RouterConnectionMapping RouterConnectionMapping::for_z_router() {
     RouterConnectionMapping mapping;
 
-    // VC0: Standard mesh forwarding (if Z router participates in mesh routing)
-    // For now, Z routers primarily use VC1, so VC0 may be unused or reserved
-    // This can be extended later if needed
-
-    // VC1: Multi-target Z_TO_MESH connections
-    // Sender channels 0-3 map to N/E/S/W mesh routers
-    // Each sender channel has intent to connect to a specific direction
-    // FabricBuilder will skip non-existent directions (2-4 mesh routers on edge devices)
-
-    std::vector<RoutingDirection> mesh_directions = {
-        RoutingDirection::N,   // Sender channel 0
-        RoutingDirection::E,    // Sender channel 1
-        RoutingDirection::S,   // Sender channel 2
-        RoutingDirection::W     // Sender channel 3
+    std::vector<RoutingDirection> vc1_outbound_directions = {
+        RoutingDirection::E,  // Forward to EAST mesh router
+        RoutingDirection::W,  // Forward to WEST mesh router
+        RoutingDirection::N,  // Forward to NORTH mesh router
+        RoutingDirection::S   // Forward to SOUTH mesh router
     };
 
-    for (size_t i = 0; i < mesh_directions.size(); ++i) {
+    for (size_t i = 0; i < vc1_outbound_directions.size(); ++i) {
         mapping.add_target(
             1,  // VC1
-            0,  // Receiver channels 0-3
+            0,  // Receiver channel 0
             ConnectionTarget(
                 ConnectionType::Z_TO_MESH,
                 1,  // Target mesh router VC1
-                i,  // Target receiver channel (resolved by mesh router)
-                mesh_directions[i]));
+                i,  // Target sender channel on mesh router (0-3, no worker)
+                vc1_outbound_directions[i]));
     }
 
     return mapping;

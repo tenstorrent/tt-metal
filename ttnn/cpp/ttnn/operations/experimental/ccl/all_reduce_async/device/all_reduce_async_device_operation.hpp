@@ -10,18 +10,16 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_reduce_async {
+namespace ttnn::experimental::prim {
 
 struct AllReduceAsyncDeviceOperation {
-    using operation_attributes_t = all_reduce_async::operation_attributes_t;
-    using tensor_args_t = all_reduce_async::tensor_args_t;
-    using spec_return_value_t = all_reduce_async::spec_return_value_t;
-    using tensor_return_value_t = all_reduce_async::tensor_return_value_t;
+    using operation_attributes_t = AllReduceAsyncParams;
+    using tensor_args_t = AllReduceAsyncInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<AllReduceAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,12 +30,11 @@ struct AllReduceAsyncDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation::tensor_return_value_t
-all_reduce_async(
+ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     uint32_t cluster_axis,

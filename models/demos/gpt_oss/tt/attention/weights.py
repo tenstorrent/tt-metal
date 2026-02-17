@@ -119,23 +119,47 @@ def load_attention_weights(
     )
 
     # Attention sinks (GPT-OSS specific feature)
+    #
+    # IMPORTANT: TT SDPA kernels apply `scale` inside the exp path for BOTH QK and sinks.
+    # HF GPT-OSS behavior is: QK logits are scaled, sinks are NOT additionally scaled.
+    # To match HF, we provide sinks in "pre-divided" form: sink_input = sink / scale,
+    # so that the kernel's internal multiplication by `scale` yields the original sink values.
     sinks = state_dict["sinks"].reshape(1, config.num_heads, 1, 1)
+    sinks_for_sdpa = sinks / config.scaling
     decode_sinks = torch.nn.functional.pad(
         sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
     )
     decode_sinks /= config.scaling
 
     # Output projection
+    # Pad o_proj output dimension for tile alignment in CCL operations.
+    # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
+    # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
+    hidden_size = config.hidden_size
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
+    o_proj_pad_size = padded_local_hidden - local_hidden
+
+    if o_proj_pad_size > 0 and mesh_config.tp > 1:
+        # Pad the output dimension of o_proj weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
+        # Each TP device's output goes from local_hidden to padded_local_hidden
+        padded_hidden = padded_local_hidden * mesh_config.tp
+        o_proj = torch.nn.functional.pad(o_proj, (0, padded_hidden - hidden_size), "constant", value=0.0)
+        # Pad bias similarly
+        o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padded_hidden - hidden_size), "constant", value=0.0)
+
     if mesh_config.tp > 1:
         o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1)
 
+    # Use unique cache key when padding is applied
+    o_proj_cache_suffix = f"_padded{padded_local_hidden}" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
     o_proj_tt = ttnn.as_tensor(
         o_proj,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -145,7 +169,7 @@ def load_attention_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj_bias{o_proj_cache_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -160,12 +184,13 @@ def load_attention_weights(
     )
 
     sinks_tt = ttnn.as_tensor(
-        sinks,
+        sinks_for_sdpa,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=mesh_config.sequence_parallel(mesh_device),
-        cache_file_name=get_cache_file_name(tensor_cache_path, "sinks"),
+        # Bump cache key since values are now pre-divided by `config.scaling`.
+        cache_file_name=get_cache_file_name(tensor_cache_path, "sinks_div_scale"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

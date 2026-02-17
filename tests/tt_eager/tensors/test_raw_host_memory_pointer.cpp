@@ -103,7 +103,7 @@ void test_raw_host_memory_pointer() {
     // Check that numpy array's data is now set to that value
     for (auto index = 0; index < a_np_array.size(); index++) {
         auto a_np_array_element = static_cast<bfloat16*>(a_np_array_data)[index];
-        TT_ASSERT(a_np_array_element == a_value);
+        TT_FATAL(a_np_array_element == a_value, "a_np_array_element does not match expected value");
     }
     /* Sanity Check End */
 
@@ -112,12 +112,15 @@ void test_raw_host_memory_pointer() {
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
-    tt::tt_metal::memcpy(tensor_for_printing, c_dev);
+    {
+        auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
+        tt::tt_metal::copy_to_host(c_dev.device()->mesh_command_queue(), c_dev, dst_host_buffer.view_bytes().data());
+    }
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 2.0f;
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
-        TT_ASSERT(element == output_value);
+        TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
     std::cout << ttnn::to_string(tensor_for_printing) << "\n";
@@ -126,11 +129,14 @@ void test_raw_host_memory_pointer() {
     /* Alternative Way to Print Start */
     // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
-    void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
-    tt::tt_metal::memcpy(storage_of_alternative_tensor_for_printing, c_dev);
+    std::unique_ptr<std::byte[]> storage_of_alternative_tensor_for_printing(
+        new std::byte[shape.volume() * sizeof(bfloat16)]);
+    tt::tt_metal::copy_to_host(
+        c_dev.device()->mesh_command_queue(), c_dev, storage_of_alternative_tensor_for_printing.get());
 
     HostBuffer alternative_tensor_for_printing_buffer(
-        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
+        tt::stl::Span<bfloat16>(
+            reinterpret_cast<bfloat16*>(storage_of_alternative_tensor_for_printing.get()), shape.volume()),
         tt::tt_metal::MemoryPin([]() {}, []() {}));
 
     Tensor alternative_tensor_for_printing =
@@ -138,10 +144,9 @@ void test_raw_host_memory_pointer() {
     std::cout << ttnn::to_string(alternative_tensor_for_printing) << "\n";
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
-        TT_ASSERT(element == output_value);
+        TT_FATAL(element == output_value, "Element does not match expected output_value");
     }
 
-    free(storage_of_alternative_tensor_for_printing);
     /* Alternative Way to Print End */
 
     auto d_np_array = NDArray<bfloat16>(shape);
@@ -157,14 +162,16 @@ void test_raw_host_memory_pointer() {
     }
 
     Tensor d_dev = a_dev;
-    memcpy(d_dev, d_cpu);
+    auto d_cpu_buffer = tt::tt_metal::host_buffer::get_host_buffer(d_cpu);
+    tt::tt_metal::copy_to_device(d_dev.device()->mesh_command_queue(), d_cpu_buffer.view_bytes().data(), d_dev);
 
     Tensor e_dev = ttnn::add(c_dev, d_dev);
 
-    tt::tt_metal::memcpy(tensor_for_printing, e_dev);
+    auto dst_host_buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor_for_printing);
+    tt::tt_metal::copy_to_host(e_dev.device()->mesh_command_queue(), e_dev, dst_host_buffer.view_bytes().data());
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
-        TT_ASSERT(element == bfloat16(10.0f));
+        TT_FATAL(element == bfloat16(10.0f), "Element does not match expected bfloat16(10.0f)");
     }
 }
 

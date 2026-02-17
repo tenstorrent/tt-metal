@@ -60,6 +60,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
@@ -82,6 +83,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
@@ -117,7 +119,7 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
-             .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .local_init_addr = UINT32_MAX,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
@@ -133,32 +135,58 @@ HalCoreInfoType create_tensix_mem_map() {
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         },
         // COMPUTE
-        // {
-        //     // TRISC0
-        //     {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
-        //      .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
-        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC0_RESET_PC,
-        //      .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-        //     // TRISC1
-        //     {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
-        //      .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
-        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC1_RESET_PC,
-        //      .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
-        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-        //     // TRISC2
-        //     {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
-        //      .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
-        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
-        //      .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
-        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-        //     // TRISC3
-        //     {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
-        //      .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
-        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC3_RESET_PC,
-        //      .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
-        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-        // },
+        {
+            // NEO0
+            // TRISC0
+            {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // TRISC1
+            {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // TRISC2
+            {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // TRISC3
+            {.fw_base_addr = MEM_TRISC3_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // // NEO1
+            // // TRISC0
+            // {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
+            //  .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
+            //  .fw_launch_addr = 0x0,
+            //  .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
+            //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // // TRISC1
+            // {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
+            //  .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
+            //  .fw_launch_addr = 0x0,
+            //  .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
+            //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // // TRISC2
+            // {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+            //  .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+            //  .fw_launch_addr = 0x0,
+            //  .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
+            //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // // TRISC3
+            // {.fw_base_addr = MEM_TRISC3_FIRMWARE_BASE,
+            //  .local_init_addr = MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH,
+            //  .fw_launch_addr = 0x0,
+            //  .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
+            //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
     };
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
         // DM
@@ -174,21 +202,38 @@ HalCoreInfoType create_tensix_mem_map() {
         },
         // COMPUTE
         {
-            {"TR0", "TRISC0"},
-            {"TR1", "TRISC1"},
-            {"TR2", "TRISC2"},
+            {"N0TR0", "Neo0TRISC0"},
+            {"N0TR1", "Neo0TRISC1"},
+            {"N0TR2", "Neo0TRISC2"},
+            {"N0TR3", "Neo0TRISC3"},
+            {"N1TR0", "Neo1TRISC0"},
+            {"N1TR1", "Neo1TRISC1"},
+            {"N1TR2", "Neo1TRISC2"},
+            {"N1TR3", "Neo1TRISC3"},
+            {"N2TR0", "Neo2TRISC0"},
+            {"N2TR1", "Neo2TRISC1"},
+            {"N2TR2", "Neo2TRISC2"},
+            {"N2TR3", "Neo2TRISC3"},
+            {"N3TR0", "Neo3TRISC0"},
+            {"N3TR1", "Neo3TRISC1"},
+            {"N3TR2", "Neo3TRISC2"},
+            {"N3TR3", "Neo3TRISC3"},
         },
     };
+    std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1, /*COMPUTE*/ 4};
+
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         true /*supports_cbs*/,
+        true /*supports_dfbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory()};

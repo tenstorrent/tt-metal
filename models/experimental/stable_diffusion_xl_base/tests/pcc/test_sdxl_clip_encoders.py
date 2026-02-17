@@ -11,9 +11,9 @@ import ttnn
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextModel
 
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.experimental.tt_dit.utils.check import assert_quality
+from models.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(
@@ -117,10 +117,11 @@ def test_clip_encoder(
         layer_norm_eps=hf_model.config.layer_norm_eps,
         attention_dropout=hf_model.config.attention_dropout,
         hidden_act=hf_model.config.hidden_act,
+        projection_dim=hf_model.config.projection_dim if has_projection else None,
     )
 
     tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
     logger.info(f"text encoder creation time: {time.time() - start_time}")
 
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
@@ -151,14 +152,14 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
+    tt_clip(tt_tokens, mesh_device)
 
     logger.info("executing text encoder...")
     start_time = time.time()
 
     ttnn.ReadDeviceProfiler(mesh_device)
 
-    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device, with_projection=has_projection)
+    tt_sequence_output, tt_projected_output = tt_clip(tt_tokens, mesh_device)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")

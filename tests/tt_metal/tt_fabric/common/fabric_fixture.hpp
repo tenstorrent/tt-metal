@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -42,6 +43,15 @@ class ControlPlaneFixture : public ::testing::Test {
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
+};
+
+struct WorkerMemMap {
+    uint32_t source_l1_buffer_address;
+    uint32_t packet_payload_size_bytes;
+    uint32_t test_results_address;
+    uint32_t target_address;
+    uint32_t notification_mailbox_address;
+    uint32_t test_results_size_bytes;
 };
 
 class BaseFabricFixture : public ::testing::Test {
@@ -150,6 +160,30 @@ public:
             tt::tt_metal::distributed::Finish(cq);
         }
     }
+
+    // Utility function reused across tests to get address params
+    static WorkerMemMap generate_worker_mem_map(
+        const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
+        constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
+        constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
+        constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
+
+        uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
+        uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
+        uint32_t target_address = source_l1_buffer_address;
+        uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
+
+        uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
+
+        return {
+            source_l1_buffer_address,
+            packet_payload_size_bytes,
+            test_results_address,
+            target_address,
+            notification_mailbox_address,
+            TEST_RESULTS_SIZE_BYTES};
+    }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
@@ -251,7 +285,15 @@ protected:
     }
 };
 
-class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {};
+class NightlyFabric2DUDMModeFixture : public Fabric2DUDMModeFixture {
+protected:
+    void SetUp() override {
+        if (devices_.size() < 8) {
+            GTEST_SKIP() << "Test requires at least 8 devices (2x4 mesh), found " << devices_.size();
+        }
+        Fabric2DUDMModeFixture::SetUp();
+    }
+};
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
@@ -391,9 +433,10 @@ void UDMFabricUnicastCommon(
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
         std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
     std::optional<RoutingDirection> override_initial_direction = std::nullopt,
-    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt);
+    std::optional<std::vector<std::pair<CoreCoord, CoreCoord>>> worker_coords_list = std::nullopt,
+    bool dual_risc = false);
 
-void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type);
+void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_send_type, bool dual_risc = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,

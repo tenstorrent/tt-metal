@@ -18,7 +18,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include "impl/dispatch/command_queue.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "dispatch_test_utils.hpp"
@@ -52,7 +51,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
             mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
-        TT_ASSERT(cqs.size() == 2);
+        ASSERT_EQ(cqs.size(), 2) << "Expected 2 command queues";
         const int num_cmds_per_cq = 1;
 
         auto start = std::chrono::system_clock::now();
@@ -92,7 +91,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
         this->device_->mesh_command_queue(0), this->device_->mesh_command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
-    TT_ASSERT(cqs.size() == 2);
+    ASSERT_EQ(cqs.size(), 2) << "Expected 2 command queues";
     const int num_cmds_per_cq = 1;
 
     auto start = std::chrono::system_clock::now();
@@ -131,7 +130,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
         vector<uint32_t> events_issued_per_cq = {0, 0};
         size_t num_events = 10;
 
-        TT_ASSERT(cqs.size() == 2);
+        ASSERT_EQ(cqs.size(), 2) << "Expected 2 command queues";
         const int num_events_per_cq = 1;
 
         auto start = std::chrono::system_clock::now();
@@ -163,7 +162,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
         const size_t num_events_per_cq = 10;
 
         // Currently hardcoded for 2 CQ. For 3+ CQ, can extend to record for CQ0, Wait for CQ1,CQ2,etc.
-        TT_ASSERT(cqs.size() == 2);
+        ASSERT_EQ(cqs.size(), 2) << "Expected 2 command queues";
         const int num_cmds_per_cq = 1;
         vector<uint32_t> expected_event_id = {0, 0};
 
@@ -265,10 +264,6 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
-    }
-
     for (auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
@@ -344,10 +339,6 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 // Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
-    }
-
     for (auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 1, .page_size = 16, .buftype = BufferType::DRAM};
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
@@ -361,7 +352,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
         int num_wr_rd_per_buf = 5;
         bool use_events = true;  // Set to false to see failures.
 
-        TT_ASSERT(cqs.size() == 2);
+        ASSERT_EQ(cqs.size(), 2) << "Expected 2 command queues";
 
         auto start = std::chrono::system_clock::now();
 
@@ -430,8 +421,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     distributed::EventSynchronize(event_done_reads);
                 }
 
-                TT_ASSERT(write_data.size() == read_results.size());
-                TT_ASSERT(write_data.size() == num_wr_rd_per_buf);
+                ASSERT_EQ(write_data.size(), read_results.size());
+                ASSERT_EQ(write_data.size(), num_wr_rd_per_buf);
 
                 for (uint j = 0; j < num_wr_rd_per_buf; j++) {
                     // Make copy of read results, helpful for comparison without events, since vector may be updated

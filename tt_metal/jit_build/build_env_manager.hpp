@@ -60,7 +60,8 @@ public:
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.
-    BuildIndexAndTypeCount get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
+    BuildIndexAndTypeCount get_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class, bool is_fw);
 
     // Method to get the build environment info for all devices
     std::vector<BuildEnvInfo> get_all_build_envs_info();
@@ -73,8 +74,14 @@ private:
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?
-    ProgCoreMapping build_state_indices_;
+    ProgCoreMapping kernel_build_state_indices_;
+    ProgCoreMapping firmware_build_state_indices_;
     std::mutex lock;
+
+    BuildIndexAndTypeCount get_kernel_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class) const;
+    BuildIndexAndTypeCount get_firmware_build_index_and_state_count(
+        uint32_t programmable_core, uint32_t processor_class) const;
 };
 
 }  // namespace tt::tt_metal

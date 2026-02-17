@@ -14,28 +14,26 @@
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_nearest_program_factory.hpp"
 
-namespace ttnn::operations::pool::grid_sample {
+namespace ttnn::prim {
 
 constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
 constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
 struct GridSampleOperation {
-    using operation_attributes_t = grid_sample::operation_attributes_t;
-    using tensor_args_t = grid_sample::tensor_args_t;
-    using spec_return_value_t = grid_sample::spec_return_value_t;
-    using tensor_return_value_t = grid_sample::tensor_return_value_t;
-    using program_factory_t =
-        std::variant<program::GridSampleBilinearProgramFactory, program::GridSampleNearestProgramFactory>;
+    using operation_attributes_t = GridSampleParams;
+    using tensor_args_t = GridSampleInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<GridSampleBilinearProgramFactory, GridSampleNearestProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::pool::grid_sample
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 ttnn::Tensor grid_sample(

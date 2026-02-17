@@ -473,6 +473,7 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
         auto [in_start, in_end] = in_shard;
         max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
     }
+
     return max_out_nsticks_per_core;
 }
 
@@ -1155,7 +1156,7 @@ Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,
     const ParallelConfig& p_config,
     bool is_block_sharded,
-    distributed::MeshDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     bool store_in_dram) {
     if (store_in_dram) {
         return config_tensor.to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});

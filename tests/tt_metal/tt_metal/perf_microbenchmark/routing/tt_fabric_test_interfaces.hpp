@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <optional>
@@ -23,6 +24,14 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
 enum class HighLevelTrafficPattern;  // Forward declaration
 
+// Represents a single traffic edge: source node sending to destination in a direction
+// Used for tracing multicast traffic through device boundaries and computing destinations
+struct TrafficEdge {
+    MeshCoordinate source;
+    MeshCoordinate dest;
+    RoutingDirection direction{};
+};
+
 class IDeviceInfoProvider {
 public:
     virtual ~IDeviceInfoProvider() = default;
@@ -33,6 +42,7 @@ public:
     virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
+    virtual std::vector<CoreCoord> get_available_worker_cores() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
     virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
@@ -119,6 +129,15 @@ public:
         const FabricNodeId& src_node_id) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
     virtual void validate_single_hop(const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
+
+    // Trace traffic through device boundaries for bandwidth profiling.
+    // Returns a map of (device_id -> direction -> traffic_count) representing
+    // how much traffic crosses each device boundary in each direction.
+    // Handles both unicast (dimension-order routing) and multicast (trunk-and-spine pattern).
+    virtual std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> trace_traffic_per_boundary(
+        const FabricNodeId& src_node_id,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        ChipSendType chip_send_type) const = 0;
 };
 
 class IDistributedContextManager {

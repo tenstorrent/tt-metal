@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_decode_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <cmath>
@@ -12,16 +13,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa_decode {
+namespace ttnn::prim {
 
 SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::SdpaDecodeProgramFactory{};
-}
-
-void SdpaDecodeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
+    return SdpaDecodeProgramFactory{};
 }
 
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
@@ -57,13 +53,22 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
     const auto k_shape = input_tensors.at(1).padded_shape();
+    const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
 
     // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
-    // For the sake validation, we will use the K tensor shape for V tensor, and validate head_dim_v separately.
-    const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
+    // If V tensor is not provided, we assume that V is subset of K in the hidden dimension. Hence we use K shape for V.
+    // If V tensor is provided, we take the V tensor and use that to validate head_dim_v. (hidden dim of V must be equal
+    // to head_dim_v)
 
     if (use_mla) {
         // Head dim v validation
+        if (tensor_args.v.has_value()) {
+            TT_FATAL(
+                v_shape[3] == operation_attributes.head_dim_v.value(),
+                "Head dimension of V must be equal to head_dim_v, got {} and {}",
+                v_shape[3],
+                operation_attributes.head_dim_v.value());
+        }
         TT_FATAL(
             q_shape[3] == k_shape[3],
             "Head dimension of Q must be equal to head dim of K, got {} and {}",
@@ -209,8 +214,20 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         }
 
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
-        TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
 
+        if (use_mla) {
+            TT_FATAL(
+                k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
+            if (tensor_args.v.has_value()) {
+                TT_FATAL(
+                    v_shape[3] == operation_attributes.head_dim_v.value(),
+                    "V must have hidden size equal to head_dim_v, got {} and {}",
+                    v_shape[3],
+                    operation_attributes.head_dim_v.value());
+            }
+        } else {
+            TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
+        }
         // Validate chunk size for paged version
         // k_chunk_size can also be zero; if k_chunk_size = 0, figure it out in kernels
         TT_FATAL(
@@ -274,12 +291,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "K tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
             k_shape[-1],
             D);
-        TT_FATAL(
-            v_shape[-1] == D,
-            "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
-            v_shape[-1],
-            D);
 
+        if (!use_mla) {
+            TT_FATAL(
+                v_shape[-1] == D,
+                "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+                v_shape[-1],
+                D);
+        }
         // Check valid seqlen
         for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
             TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
@@ -335,7 +354,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
+TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
@@ -352,7 +371,7 @@ spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
         output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-tensor_return_value_t SdpaDecodeDeviceOperation::create_output_tensors(
+Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
@@ -383,11 +402,7 @@ tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         tensor_args.attention_sink);
 }
 
-}  // namespace ttnn::operations::transformer::sdpa_decode
-
-namespace ttnn::prim {
-
-ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_return_value_t sdpa_decode(
+Tensor sdpa_decode(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,
@@ -407,7 +422,7 @@ ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation::tensor_re
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v) {
-    using OperationType = ttnn::operations::transformer::sdpa_decode::SdpaDecodeDeviceOperation;
+    using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
         .paged_attention = paged_attention,

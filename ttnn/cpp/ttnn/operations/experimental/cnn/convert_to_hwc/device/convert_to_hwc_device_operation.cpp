@@ -6,20 +6,16 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "convert_to_hwc_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::experimental::prim {
 
 ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::ConvertToHWCProgramFactory{};
-}
-
-void ConvertToHWCDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return ConvertToHWCProgramFactory{};
 }
 
 void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
@@ -45,7 +41,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
         "Output tensor must be height sharded");
 }
 
-spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
+TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.input.logical_shape();
     const int B = shape[1];
@@ -53,7 +49,7 @@ spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
     const int HW = shape[3];
 
     // Output needs to be multiple of alignment requirement to guarantee aligned copies
-    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(tensor_args.input);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(tensor_args.input);
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return TensorSpec(
@@ -61,7 +57,7 @@ spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
         TensorLayout(args.dtype, PageConfig(Layout::ROW_MAJOR), args.memory_config));
 }
 
-tensor_return_value_t ConvertToHWCDeviceOperation::create_output_tensors(
+Tensor ConvertToHWCDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -72,13 +68,13 @@ tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
         tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
+ttnn::experimental::prim::ConvertToHWCDeviceOperation::tensor_return_value_t convert_to_hwc(
     const Tensor& input, const MemoryConfig& memory_config, const DataType& dtype) {
-    using OperationType = ttnn::operations::experimental::cnn::ConvertToHWCDeviceOperation;
+    using OperationType = ttnn::experimental::prim::ConvertToHWCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config,

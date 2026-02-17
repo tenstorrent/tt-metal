@@ -8,19 +8,15 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_async {
+namespace ttnn::experimental::prim {
 
 AllReduceAsyncDeviceOperation::program_factory_t AllReduceAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return AllReduceAsyncMeshWorkloadFactory{};
-}
-
-void AllReduceAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -98,39 +94,34 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
 
 tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    auto output_dtype = args.dtype;
+    log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");
 
-    bool has_sub_device_id = args.sub_device_id.has_value();
-    auto worker_cores = has_sub_device_id
-                            ? input_tensor.device()->worker_cores(
-                                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.sub_device_id.value())
-                            : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    auto program_factory = select_program_factory(args, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
         args.num_links,
         args.ring_size,
+        args.dtype,
         args.output_mem_config,
         args.topology,
+        args.use_noc1_only,
+        args.use_optimal_ccl_for_llama,
         args.cluster_axis,
-        has_sub_device_id,
-        worker_cores,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config,
-        output_dtype);
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation::tensor_return_value_t
-all_reduce_async(
+ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     uint32_t cluster_axis,
@@ -143,7 +134,7 @@ all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    using OperationType = ttnn::operations::experimental::ccl::all_reduce_async::AllReduceAsyncDeviceOperation;
+    using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");

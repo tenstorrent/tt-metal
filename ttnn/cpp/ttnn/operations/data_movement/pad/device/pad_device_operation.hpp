@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
@@ -22,24 +22,23 @@
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::pad {
+namespace ttnn::prim {
 struct PadDeviceOperation {
-    using operation_attributes_t = ttnn::operations::data_movement::pad::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::data_movement::pad::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::data_movement::pad::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::pad::tensor_return_value_t;
+    using operation_attributes_t = PadParams;
+    using tensor_args_t = PadInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::PadRmReaderWriterMultiCoreProgramFactory,
-        program::PadRmReaderWriterMultiCoreV2ProgramFactory,
-        program::PadRmReaderWriterProgramFactory,
-        program::PadRmShardedHeightOnlyProgramFactory,
-        program::PadRmShardedWidthOnlyProgramFactory,
-        program::PadTileMulticoreProgramFactory,
-        program::PadTileCoreProgramFactory>;
+        PadRmReaderWriterMultiCoreProgramFactory,
+        PadRmReaderWriterMultiCoreV2ProgramFactory,
+        PadRmReaderWriterProgramFactory,
+        PadRmShardedHeightOnlyProgramFactory,
+        PadRmShardedWidthOnlyProgramFactory,
+        PadTileMulticoreProgramFactory,
+        PadTileCoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -52,10 +51,10 @@ struct PadDeviceOperation {
         std::vector<Tensor>& output_tensors);
 
 };
-}  // namespace ttnn::operations::data_movement::pad
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t pad(
+PadDeviceOperation::tensor_return_value_t pad(
     const Tensor& input,
     const ttnn::Shape& output_logical_shape,
     const ttnn::Shape& output_padded_shape,

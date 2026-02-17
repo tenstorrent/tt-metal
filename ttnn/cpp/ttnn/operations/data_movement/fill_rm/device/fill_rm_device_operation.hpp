@@ -12,18 +12,17 @@
 
 #include "fill_rm_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm {
+namespace ttnn::prim {
 
 struct FillRMDeviceOperation {
-    using operation_attributes_t = fill_rm::operation_attributes_t;
-    using tensor_args_t = fill_rm::tensor_args_t;
-    using spec_return_value_t = fill_rm::spec_return_value_t;
-    using tensor_return_value_t = fill_rm::tensor_return_value_t;
-    using program_factory_t = std::variant<program::FillRMProgramFactory>;
+    using operation_attributes_t = FillRmParams;
+    using tensor_args_t = FillRmInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<FillRMProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -36,9 +35,6 @@ struct FillRMDeviceOperation {
         const tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::fill_rm
-
-namespace ttnn::prim {
 ttnn::Tensor fill_rm(
     uint32_t N,
     uint32_t C,
@@ -50,4 +46,5 @@ ttnn::Tensor fill_rm(
     float val_hi,
     float val_lo,
     const MemoryConfig& output_memory_config);
+
 }  // namespace ttnn::prim

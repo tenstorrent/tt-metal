@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cassert>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
@@ -746,14 +745,9 @@ int main(int argc, char** argv) {
     }
 
     // Check hardware prerequisites
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_error(tt::LogTest, "Need at least 2 devices to run this test");
-        return -1;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_error(tt::LogTest, "Test must be run on WH");
         return -1;
     }
 

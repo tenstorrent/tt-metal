@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <cstdint>
-#include <tt-metalium/event.hpp>
 #include <algorithm>
 #include <memory>
 #include <numeric>
@@ -125,7 +125,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             // Create tensor and transfer to device
             std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
-            memcpy(device->mesh_command_queue(*write_cq), device_tensor, host_tensor);
+            copy_to_device(host_tensor, device_tensor, write_cq);
             EXPECT_TRUE(is_device_tensor(device_tensor));
 
             {

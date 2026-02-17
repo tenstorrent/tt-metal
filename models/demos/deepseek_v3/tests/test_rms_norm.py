@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
+from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
@@ -19,6 +21,9 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+_max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+_prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+
 
 @pytest.mark.parametrize(
     "device_params",
@@ -29,8 +34,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
     "mode, seq_len",
     [
         ("decode", 32),
-    ]
-    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
+        ("prefill", _prefill_seq_len),
+    ],
 )
 @pytest.mark.parametrize(
     "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
@@ -38,10 +43,18 @@ from models.demos.deepseek_v3.utils.test_utils import (
         (None, DistributedRMSNorm, "hidden_size"),
         ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
         ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
-        (None, RMSNorm, "kv_lora_rank"),
-        (None, RMSNorm, "q_lora_rank"),
-        ("model.layers.0.self_attn.kv_a_layernorm", RMSNorm, "kv_lora_rank"),
-        ("model.layers.0.self_attn.q_a_layernorm", RMSNorm, "q_lora_rank"),
+        (None, RMSNorm, "kv_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (None, RMSNorm, "q_lora_rank"),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.kv_a_layernorm",
+            RMSNorm,
+            "kv_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
+        (
+            "model.layers.0.self_attn.q_a_layernorm",
+            RMSNorm,
+            "q_lora_rank",
+        ),  # TODO: not properly tested here, needs fixing
     ],
 )
 def test_forward_pass(
@@ -59,11 +72,6 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
     num_module_layers, _ = mesh_device.shape
 
     # Get the hidden_size of the norm
@@ -103,10 +111,10 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
-    if RMSNormClass is not DistributedRMSNorm:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
-    else:
+    if RMSNormClass is DistributedRMSNorm:
         memory_config = run_config["input_memory_config"]
+    else:
+        memory_config = ttnn.L1_MEMORY_CONFIG
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

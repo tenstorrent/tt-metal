@@ -17,7 +17,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
-#include <metal_soc_descriptor.h>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -61,19 +61,8 @@ namespace {  // Helper functions
 const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor_index) {
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            static const char* const names[] = {
-                " brisc",
-                "ncrisc",
-                "trisc0",
-                "trisc1",
-                "trisc2",
-            };
-            TT_FATAL(
-                processor_index < 5,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
-                processor_index,
-                core_type);
-            return names[processor_index];
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
         }
         case HalProgrammableCoreType::ACTIVE_ETH: {
             static const char* const names[] = {"erisc", "subordinate_erisc"};
@@ -788,6 +777,14 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 "NOC posted writes sent barrier).";
             break;
         }
+        case dev_msgs::DebugAssertRtaOutOfBounds: {
+            error_msg += "accessed unique runtime arg index out of bounds.";
+            break;
+        }
+        case dev_msgs::DebugAssertCrtaOutOfBounds: {
+            error_msg += "accessed common runtime arg index out of bounds.";
+            break;
+        }
         default:
             LogRunningKernels();
             TT_THROW(
@@ -1040,12 +1037,19 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
+    if (!hal.has_stream_registers()) {
+        return;
+    }
+
+    uint32_t operand_start_stream = hal.get_operand_start_stream();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+
     // Read back all of the stream state, most of it is unused
     std::vector<uint32_t> data;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-        // XXXX TODO(PGK) get this from device
-        const uint32_t OPERAND_START_STREAM = 8;
-        uint32_t base = NOC_OVERLAY_START_ADDR + ((OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE);
+    for (uint32_t operand = 0; operand < max_cbs; operand++) {
+        uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
         uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(

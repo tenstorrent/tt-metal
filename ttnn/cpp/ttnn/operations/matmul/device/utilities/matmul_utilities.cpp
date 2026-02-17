@@ -4,6 +4,9 @@
 
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <algorithm>
+#include <set>
+
 #include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -38,10 +41,6 @@ uint32_t get_estimated_size_of_cbs(
         auto* in0_buffer = input_tensor_a.buffer();
         const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
-        if (transpose_a) {
-            // An intermediate CB (c_10) of same size is needed to hold the transposed data
-            in0_shard_width_in_tiles *= 2;
-        }
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 
@@ -52,7 +51,13 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
     uint32_t bias_size = in0_block_w * bias_single_tile_size;
-    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size;
+
+    uint32_t in0_transpose_size = 0;
+    if (transpose_a) {
+        // An extra intermediate CB (c_10) is needed to hold the transposed A data
+        in0_transpose_size = input_tensor_a.is_sharded() ? in2_size : in0_size;
+    }
+    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size + in0_transpose_size;
 }
 
 uint32_t estimate_interm_tile_size(
@@ -227,3 +232,64 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
 }
 
 }  // namespace ttnn::operations::matmul::utilities
+
+
+namespace ttnn::prim::dram_sharded_helpers {
+
+tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
+    ttnn::distributed::MeshDevice* device = a.device();
+    const ttnn::distributed::MeshDeviceView& view = device->get_view();
+    if (!view.contains(coord) || !view.is_local(coord)) {
+        return device;
+    }
+    return a.device()->get_device(coord);
+}
+
+void get_max_page_size_and_num_pages(
+    tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
+    uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
+
+    // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
+    uint32_t noc_max_page_size;
+    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        noc_max_page_size = 8192;
+    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+        noc_max_page_size = 16384;
+    } else {
+        TT_THROW(
+            "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported. Got: {}",
+            device->arch());
+    }
+
+    page_size = (noc_max_page_size / tile_size) * tile_size;
+    while (total_size % page_size != 0 && page_size >= tile_size) {
+        page_size -= tile_size;
+    }
+    num_pages = total_size / page_size;
+}
+
+void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons) {
+    for (const CoreCoord& item : v2) {
+        if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
+            commons.push_back(item);
+        }
+    }
+
+    for (const CoreCoord& item : commons) {
+        v2.erase(std::remove(v2.begin(), v2.end(), item), v2.end());
+    }
+}
+
+void get_optimal_dram_bank_to_reader_assignment(
+    tt::tt_metal::IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::set<CoreRange> all_cores_set;
+    for (const auto& worker_core : all_worker_cores_ordered) {
+        all_cores_set.insert(CoreRange(worker_core));
+    }
+    all_worker_cores = CoreRangeSet(all_cores_set);
+}
+}  // namespace ttnn::prim::dram_sharded_helpers

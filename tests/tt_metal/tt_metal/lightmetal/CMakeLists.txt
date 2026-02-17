@@ -1,4 +1,5 @@
-set(UNIT_TESTS_LIGHTMETAL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_lightmetal.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_lightmetal ${UNIT_TESTS_LIGHTMETAL_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_lightmetal)

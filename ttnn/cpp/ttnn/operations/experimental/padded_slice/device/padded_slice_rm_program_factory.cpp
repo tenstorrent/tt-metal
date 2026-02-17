@@ -23,10 +23,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::padded_slice::program {
+namespace ttnn::experimental::prim {
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
@@ -45,7 +46,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    [[maybe_unused]] uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
+    [[maybe_unused]] uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
@@ -189,9 +191,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 }
 
 PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
@@ -223,7 +223,8 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
 
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
-    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output);
+    uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output);
 
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
@@ -284,20 +285,21 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     } else {
         non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
     }
+    uint32_t num_trids = 2;
     if (is_non_aligned) {
         tt::tt_metal::create_cb(
             non_aligned_temp_cb_index,
             program,
             total_cores,
-            a.logical_shape()[-1] * a.element_size(),
-            2,
+            tt::align(a.logical_shape()[-1] * a.element_size(), src_buffer_alignment),
+            num_trids,
             cb_data_format);
     }
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)output_cb_index};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {
-        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, src_buffer_alignment};
+        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, src_buffer_alignment, num_trids};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -349,9 +351,9 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
 
 void PaddedSliceRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& /*operation_attributes*/,
+    const PaddedSliceInputs& tensor_args,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
@@ -375,4 +377,4 @@ void PaddedSliceRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice::program
+}  // namespace ttnn::experimental::prim

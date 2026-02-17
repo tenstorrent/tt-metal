@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -41,16 +43,15 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
+
+namespace {
 
 // Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
 // this is usually used for activation so that blocks data is contiguous in memory
@@ -73,7 +74,7 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_faces(std::vector<bfloat16> data, const std::string& name) {
+[[maybe_unused]] void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
 
     int tile_index = 0;
@@ -96,22 +97,13 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << std::endl;
 }
 
-int main() {
+}  // namespace
+
+TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
+    IDevice* dev = devices_[0]->get_devices()[0];
     bool pass = true;
 
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
@@ -134,19 +126,19 @@ int main() {
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         tt_metal::InterleavedBufferConfig act_config{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size_act,
             .page_size = dram_buffer_size_act,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig weights_config{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size_weights,
             .page_size = dram_buffer_size_weights,
             .buffer_type = tt_metal::BufferType::DRAM};
 
         tt_metal::InterleavedBufferConfig dst_config{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size_out,
             .page_size = dram_buffer_size_out,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -202,7 +194,7 @@ int main() {
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
         tt_metal::InterleavedBufferConfig l1_config{
-            .device = device,
+            .device = dev,
             .size = source_addresses.size() * sizeof(uint32_t),
             .page_size = source_addresses.size() * sizeof(uint32_t),
             .buffer_type = tt_metal::BufferType::L1};
@@ -308,13 +300,13 @@ int main() {
             convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
-        tt_metal::detail::WriteToDeviceL1(device, core, source_addresses_in_l1_addr, source_addresses);
+        tt_metal::detail::WriteToDeviceL1(dev, core, source_addresses_in_l1_addr, source_addresses);
 
         tt_metal::SetRuntimeArgs(program, generic_binary_reader_kernel, core, generic_binary_reader_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        tt_metal::detail::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(dev, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -335,7 +327,6 @@ int main() {
         // print_vec_of_bfloat16(tensor.get_values(), 16, "Golden");
 
         pass &= (tensor.get_values() == result_untilized);
-        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -345,13 +336,5 @@ int main() {
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    ASSERT_TRUE(pass);
 }

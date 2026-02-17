@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include <enchantum/enchantum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 AccumulationDeviceOperation::program_factory_t AccumulationDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
@@ -59,11 +60,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
 }
 
-void AccumulationDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.opt_output.has_value()) {
@@ -111,9 +107,6 @@ operation::Hash AccumulationDeviceOperation::compute_program_hash(
         tensor_args.opt_output.has_value() ? tensor_args.opt_output.value().dtype() : DataType{});
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
-
-namespace ttnn::prim {
 ttnn::Tensor accumulation(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -121,8 +114,8 @@ ttnn::Tensor accumulation(
     const bool& reverse_order,
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::operations::reduction::accumulation::AccumulationOp op) {
-    using OperationType = ttnn::operations::reduction::accumulation::AccumulationDeviceOperation;
+    AccumulationOp op) {
+    using OperationType = AccumulationDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             (dim < 0) ? (dim + input_tensor.logical_shape().rank()) : dim,
@@ -135,4 +128,5 @@ ttnn::Tensor accumulation(
             op},
         OperationType::tensor_args_t{input_tensor, std::move(optional_out)});
 }
+
 }  // namespace ttnn::prim

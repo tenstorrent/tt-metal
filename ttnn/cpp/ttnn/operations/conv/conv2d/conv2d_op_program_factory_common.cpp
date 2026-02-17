@@ -18,7 +18,11 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
+
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 
@@ -668,9 +672,9 @@ bool is_split_reader_viable(
 
 void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*output_tensor*/) {
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
@@ -757,4 +761,4 @@ void post_conv2d_op_memory_checks(
         l1_usage.tensor_allocation_size);
 }
 
-}  // namespace ttnn::operations::conv::conv2d
+}  // namespace ttnn::prim

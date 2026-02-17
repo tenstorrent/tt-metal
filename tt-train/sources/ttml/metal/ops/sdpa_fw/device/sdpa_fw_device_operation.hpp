@@ -19,7 +19,6 @@ struct SDPAForwardDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -38,7 +37,8 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
-    const std::optional<ttnn::Tensor>& mask,
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    const std::optional<ttnn::Tensor>& mask = std::nullopt,
     const float dropout_probability = 0.0F,
     const bool return_intermediates = false,
     const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,

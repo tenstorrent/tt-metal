@@ -15,21 +15,20 @@
 #include "slice_write_tiled_sharded_input_program_factory.hpp"
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::experimental::prim {
 
 struct SliceWriteDeviceOperation {
-    using operation_attributes_t = slice_write::operation_attributes_t;
-    using tensor_args_t = slice_write::tensor_args_t;
-    using spec_return_value_t = slice_write::spec_return_value_t;
-    using tensor_return_value_t = slice_write::tensor_return_value_t;
+    using operation_attributes_t = SliceWriteParams;
+    using tensor_args_t = SliceWriteInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::SliceWriteRMShardedInputProgramFactory,
-        program::SliceWriteTiledShardedInputProgramFactory,
-        program::SliceWriteRMInterleavedProgramFactory>;
+        SliceWriteRMShardedInputProgramFactory,
+        SliceWriteTiledShardedInputProgramFactory,
+        SliceWriteRMInterleavedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -41,11 +40,11 @@ struct SliceWriteDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::slice_write::SliceWriteDeviceOperation::tensor_return_value_t slice_write(
+Tensor slice_write(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,

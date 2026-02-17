@@ -5,7 +5,13 @@
 #pragma once
 
 #include <stdint.h>
+#include <functional>
+#include <ostream>
+#include <optional>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/reflection.hpp>
+
+#include <fmt/format.h>
 
 namespace tt::tt_fabric {
 
@@ -48,6 +54,14 @@ FabricManagerMode operator|(FabricManagerMode lhs, FabricManagerMode rhs);
 FabricManagerMode operator&(FabricManagerMode lhs, FabricManagerMode rhs);
 bool has_flag(FabricManagerMode flags, FabricManagerMode test_flag);
 
+// Configuration for router-level parameters
+// Extensible for future router tuning (buffer counts, VC settings, etc.)
+struct FabricRouterConfig {
+    // Optional override for maximum packet payload size (bytes)
+    // If not set, uses architecture and routing mode defaults
+    std::optional<size_t> max_packet_payload_size_bytes = std::nullopt;
+};
+
 enum class FabricType {
     MESH = 1 << 0,
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
@@ -82,12 +96,45 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
+/**
+ * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ */
+class FabricNodeId {
+public:
+    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    MeshId mesh_id{0};
+    std::uint32_t chip_id = 0;
+};
+
+bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs);
+std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
+
 }  // namespace tt::tt_fabric
+
+namespace std {
+template <>
+struct hash<tt::tt_fabric::FabricNodeId> {
+    size_t operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept;
+};
+}  // namespace std
+
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
+};
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using ASICPosition = std::pair<TrayID, ASICLocation>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;

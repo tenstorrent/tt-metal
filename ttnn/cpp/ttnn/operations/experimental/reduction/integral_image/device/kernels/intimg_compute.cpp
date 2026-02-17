@@ -3,24 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/cumsum.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/cumsum.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
 
 #define APPROX false
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 
 #include "common.hpp"
 
@@ -265,9 +265,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
 
 }  // namespace
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr auto ctas{get_ctas()};
 
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
@@ -277,5 +275,3 @@ void MAIN {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
     }
 }
-
-}  // namespace NAMESPACE

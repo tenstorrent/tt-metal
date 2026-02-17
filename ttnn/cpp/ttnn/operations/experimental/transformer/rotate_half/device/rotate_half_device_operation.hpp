@@ -9,19 +9,16 @@
 #include "rotate_half_device_operation_types.hpp"
 #include "rotate_half_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotate_half {
+namespace ttnn::experimental::prim {
 
 struct RotateHalfDeviceOperation {
-    using operation_attributes_t = rotate_half::operation_attributes_t;
-    using tensor_args_t = rotate_half::tensor_args_t;
-    using spec_return_value_t = rotate_half::spec_return_value_t;
-    using tensor_return_value_t = rotate_half::tensor_return_value_t;
-    using program_factory_t = std::variant<program::RotateHalfProgramFactory>;
+    using operation_attributes_t = RotateHalfParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<RotateHalfProgramFactory>;
 
     static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
@@ -34,9 +31,8 @@ struct RotateHalfDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotate_half
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-ttnn::operations::experimental::transformer::rotate_half::tensor_return_value_t rotate_half(
-    const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+Tensor rotate_half(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim

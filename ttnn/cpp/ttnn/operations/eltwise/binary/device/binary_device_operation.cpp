@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -56,6 +57,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
+        case BinaryOpType::FMOD:
         case BinaryOpType::POWER: return true;
         default: return false;
     }

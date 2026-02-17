@@ -4,13 +4,12 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
@@ -33,4 +32,3 @@ void MAIN {
         release_dst();
     }
 }
-}  // namespace NAMESPACE

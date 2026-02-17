@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
@@ -81,11 +82,6 @@ void validate(
 }
 
 void BcastToOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-};
-
-void BcastToOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 };

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <device.hpp>
-#include <stdint.h>
 #include <memory>
 #include <set>
 #include <vector>
@@ -14,6 +13,7 @@
 #include "data_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 
 namespace tt::tt_metal {
 

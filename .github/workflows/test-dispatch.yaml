@@ -14,15 +14,6 @@ on:
         required: true
         type: string
         default: '["in-service"]'
-      build-type:
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
       tracy:
         required: false
         type: boolean
@@ -35,32 +26,50 @@ on:
         type: string
         default: "Custom test dispatch"
         required: false
-      version:
-        required: false
-        type: choice
-        default: "22.04"
-        options:
-            - "22.04"
-            - "24.04"
       commit:
         required: false
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 run-name: ${{ inputs.description }}
 jobs:
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
-      version: ${{ inputs.version }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120
@@ -118,11 +127,11 @@ jobs:
           ls -la
           WHEEL_FILENAME=$(ls -1 *.whl)
           echo "📦 Installing $WHEEL_FILENAME"
-          pip3 install "$WHEEL_FILENAME"
+          uv pip install "$WHEEL_FILENAME"
         shell: bash
       - name: Run regression in loop
         run: |
-          pip3 install pytest-repeat
+          uv pip install pytest-repeat
           ${{ inputs.command }}
         shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

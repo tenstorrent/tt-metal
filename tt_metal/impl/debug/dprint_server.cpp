@@ -19,7 +19,6 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <tuple>
 #include <vector>
@@ -36,6 +35,7 @@
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
+#include "dprint_parser.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/dprint_common.h"
@@ -51,7 +51,6 @@ using std::ofstream;
 using std::ostream;
 using std::ostringstream;
 using std::set;
-using std::setw;
 using std::string;
 using std::to_string;
 using std::tuple;
@@ -91,13 +90,6 @@ namespace {
 
 string logfile_path = "generated/dprint/";
 
-inline float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
-}
-
 string GetRiscName(ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool abbreviated = false) {
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -105,14 +97,6 @@ string GetRiscName(ChipId device_id, const umd::CoreDescriptor& logical_core, in
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
-}
-
-void AssertSize(uint8_t sz, uint8_t expected_sz) {
-    TT_ASSERT(
-        sz == expected_sz,
-        "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
-        sz,
-        expected_sz);
 }
 
 inline bool RiscEnabled(tt_metal::HalProgrammableCoreType core_type, int risc_index) {
@@ -129,212 +113,6 @@ public:
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
 
-void ResetStream(ostringstream* stream) {
-    stream->str("");
-    stream->clear();
-}  // ResetStream
-
-bool StreamEndsWithNewlineChar(const ostringstream* stream) {
-    const string stream_str = stream->str();
-    return !stream_str.empty() && stream_str.back() == '\n';
-}  // StreamEndsWithNewlineChar
-
-void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
-    TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
-    std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
-    TileSliceHostDev<0>* ts = &ts_copy;
-    TT_ASSERT(
-        offsetof(TileSliceHostDev<0>, data) % sizeof(uint32_t) == 0,
-        "TileSliceHostDev<0> data field is not properly aligned");
-    uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
-
-    // Read any error codes and handle accordingly
-    tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
-    switch (ts->return_code) {
-        case DPrintOK: break;  // Continue to print the tile slice
-        case DPrintErrorBadPointer: {
-            uint32_t ptr = ts->cb_ptr;
-            uint8_t count = ts->data_count;
-            *stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count);
-            return;
-        }
-        case DPrintErrorUnsupportedFormat: {
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            *stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
-            return;
-        }
-        case DPrintErrorMath:
-            *stream << "Warning: MATH core does not support TileSlice printing, omitting print...\n";
-            return;
-        case DPrintErrorEthernet:
-            *stream << "Warning: Ethernet core does not support TileSlice printing, omitting print...\n";
-            return;
-        default:
-            *stream << fmt::format(
-                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
-            return;
-    }
-
-    // No error codes, print the TileSlice
-    uint32_t i = 0;
-    bool count_exceeded = false;
-    for (int h = ts->slice_range.h0; h < ts->slice_range.h1; h += ts->slice_range.hs) {
-        for (int w = ts->slice_range.w0; w < ts->slice_range.w1; w += ts->slice_range.ws) {
-            // If the number of data specified by the SliceRange exceeds the number that was
-            // saved in the print buffer (set by the MAX_COUNT template parameter in the
-            // TileSlice), then break early.
-            if (i >= ts->data_count) {
-                count_exceeded = true;
-                break;
-            }
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            switch (data_format) {
-                case tt::DataFormat::Float16_b: {
-                    uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
-                    *stream << bfloat16_to_float(float16_b_ptr[i]);
-                    break;
-                }
-                case tt::DataFormat::Float32: {
-                    float* float32_ptr = reinterpret_cast<float*>(data);
-                    *stream << float32_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::Bfp4_b:
-                case tt::DataFormat::Bfp8_b: {
-                    // Saved the exponent and data together
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
-                    uint8_t val = (data_ptr[i] >> 8) & 0xFF;
-                    uint8_t exponent = data_ptr[i] & 0xFF;
-                    uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
-                    *stream << *reinterpret_cast<float*>(&bit_val);
-                    break;
-                }
-                case tt::DataFormat::Int8: {
-                    int8_t* data_ptr = reinterpret_cast<int8_t*>(data);
-                    *stream << (int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt8: {
-                    uint8_t* data_ptr = reinterpret_cast<uint8_t*>(data);
-                    *stream << (unsigned int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt16: {
-                    uint16_t* data_ptr = reinterpret_cast<uint16_t*>(data);
-                    *stream << (unsigned int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::Int32: {
-                    int32_t* data_ptr = reinterpret_cast<int32_t*>(data);
-                    *stream << (int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt32: {
-                    uint32_t* data_ptr = reinterpret_cast<uint32_t*>(data);
-                    *stream << (unsigned int)data_ptr[i];
-                    break;
-                }
-                default: break;
-            }
-            if (w + ts->slice_range.ws < ts->slice_range.w1) {
-                *stream << " ";
-            }
-            i++;
-        }
-
-        // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
-        // know that the slice has been truncated.
-        if (count_exceeded) {
-            *stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>\n";
-            break;
-        }
-
-        if (ts->endl_rows) {
-            *stream << "\n";
-        }
-    }
-}  // PrintTileSlice
-
-// Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
-// Assumes the following order of bits in the input data:
-//   [sign bit][mantissa bits][exponent bits]
-float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
-    int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
-    const int exp_mask = (1 << (exp_bit_count)) - 1;
-    int exp_bias = (1 << (exp_bit_count - 1)) - 1;
-    int exp_val = (data & exp_mask) - exp_bias;
-    const int mantissa_mask = ((1 << mantissa_bit_count) - 1) << exp_bit_count;
-    int mantissa_val = (data & mantissa_mask) >> exp_bit_count;
-    float result = 1.0 + ((float)mantissa_val / (float)(1 << mantissa_bit_count));
-    result = result * pow(2, exp_val);
-    if (sign) {
-        result = -result;
-    }
-    return result;
-}
-
-// Prints a given datum in the array, given the data_format
-void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum, uint16_t data_format) {
-    switch (data_format) {
-        case static_cast<std::uint8_t>(tt::DataFormat::Float16):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2):
-        case static_cast<std::uint8_t>(tt::DataFormat::Lf8):
-            *stream << setw(setwidth) << make_float(5, 10, datum & 0xffff) << " ";
-            *stream << setw(setwidth) << make_float(5, 10, (datum >> 16) & 0xffff) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Float16_b):
-            *stream << setw(setwidth) << make_float(8, 7, datum & 0xffff) << " ";
-            *stream << setw(setwidth) << make_float(8, 7, (datum >> 16) & 0xffff) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
-            *stream << setw(setwidth) << make_float(8, 10, datum) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Float32): {
-            float value;
-            memcpy(&value, &datum, sizeof(float));
-            *stream << setw(setwidth) << value << " ";
-        } break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt32): *stream << setw(setwidth) << datum << " "; break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt16):
-            *stream << setw(setwidth) << (datum & 0xffff) << " ";
-            *stream << setw(setwidth) << (datum >> 16) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Int32):
-            *stream << setw(setwidth) << static_cast<int32_t>(datum) << " ";
-            break;
-        default: *stream << "Unknown data format " << data_format << " "; break;
-    }
-}
-
-// Prints a typed uint32 array given the number of elements including the type.
-// If force_element_type is set to a valid type, it is assumed that the type is not included in the
-// data array, and the type is forced to be the given type.
-void PrintTypedUint32Array(
-    ostringstream* stream,
-    int setwidth,
-    uint32_t raw_element_count,
-    uint32_t* data,
-    TypedU32_ARRAY_Format force_array_type = TypedU32_ARRAY_Format_INVALID) {
-    uint16_t array_type = data[raw_element_count - 1] >> 16;
-    uint16_t array_subtype = data[raw_element_count - 1] & 0xffff;
-
-    raw_element_count = (force_array_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
-
-    for (uint32_t i = 0; i < raw_element_count - 1; i++) {
-        switch (array_type) {
-            case TypedU32_ARRAY_Format_Raw: *stream << std::hex << "0x" << data[i] << " "; break;
-            case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
-                PrintTensixRegisterData(stream, setwidth, data[i], array_subtype);
-                break;
-            default: *stream << "Unknown type " << array_type; break;
-        }
-    }
-}
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific risc/core/chip
 // Used for debug print server startup sequence.
@@ -415,15 +193,11 @@ private:
     // A counter to keep track of how many iterations the print server has gone through without
     std::atomic<int> wait_loop_iterations_ = 0;
 
-    // For keeping track of the previous dprint type read for each risc. In some cases, the way that the current dprint
-    // type is parsed depends on the previous dprint type.
-    std::map<RiscKey, DPrintTypeID, RiscKeyComparator> risc_to_prev_type_;
-
     ofstream* outfile_ = nullptr;  // non-cout
     ostream* stream_ = nullptr;    // either == outfile_ or is &cout
 
-    // For buffering up partial dprints from each risc.
-    std::map<RiscKey, ostringstream*, RiscKeyComparator> risc_to_intermediate_stream_;
+    // Parser instances for each risc (handles parsing state, intermediate buffering, and line prefixing)
+    std::map<RiscKey, std::unique_ptr<DPrintParser>, RiscKeyComparator> risc_to_parser_;
 
     // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
     std::map<RiscKey, ofstream*, RiscKeyComparator> risc_to_file_stream_;
@@ -450,14 +224,8 @@ private:
     bool peek_one_risc_non_blocking(
         ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
 
-    // Transfers data from all intermdeiate streams to output stream and flushes it.
+    // Transfers data from all parser intermediate streams to output stream and flushes it.
     void transfer_all_streams_to_output(ChipId device_id);
-
-    // Transfers the given intermediate stream to the output stream and flushes it.
-    void transfer_stream_to_output(const RiscKey& risc_key, ostringstream* intermediate_stream);
-
-    // Returns the formatted output data from a dprint stream
-    string get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream);
 
     // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
     // stdout, or nothing.
@@ -467,9 +235,6 @@ private:
     void init_device(ChipId device_id);
     void attach_device(ChipId device_id);
     void detach_device(ChipId device_id);
-
-    // Stores the last value of setw, so that array elements can reuse the width.
-    char most_recent_setw = 0;
 };
 
 DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
@@ -527,9 +292,7 @@ DPrintServer::Impl::~Impl() {
         key_and_stream.second->close();
         delete key_and_stream.second;
     }
-    for (auto& [key, intermediate_stream] : risc_to_intermediate_stream_) {
-        delete intermediate_stream;
-    }
+    // Parser instances are automatically cleaned up via unique_ptr
 }  // Impl::~Impl
 
 void DPrintServer::Impl::await() {
@@ -864,14 +627,22 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
     ChipId chip_id = device_id;
     RiscKey risc_key{chip_id, logical_core, risc_id};
 
-    if (!risc_to_prev_type_[risc_key]) {
-        risc_to_prev_type_[risc_key] = DPrintTypeID_Count;
+    // Get or create parser for this RISC
+    if (!risc_to_parser_[risc_key]) {
+        // Compute line prefix based on RTOptions
+        std::string line_prefix;
+        const bool prepend_device_core_risc =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+                tt::llrt::RunTimeDebugFeatureDprint);
+        if (prepend_device_core_risc) {
+            const string& device_id_str = to_string(device_id);
+            const string& core_coord_str = logical_core.coord.str();
+            const string& risc_name = GetRiscName(device_id, logical_core, risc_id, true);
+            line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
+        }
+        risc_to_parser_[risc_key] = std::make_unique<DPrintParser>(line_prefix);
     }
-
-    if (!risc_to_intermediate_stream_[risc_key]) {
-        risc_to_intermediate_stream_[risc_key] = new ostringstream;
-    }
-    ostringstream* intermediate_stream = risc_to_intermediate_stream_[risc_key];
+    DPrintParser* parser = risc_to_parser_[risc_key].get();
 
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
@@ -889,193 +660,18 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         // The producer only updates rpos in case of buffer overflow.
         // Then it waits for rpos to first catch up to wpos (rpos update by the consumer) before proceeding
 
-        constexpr uint32_t bufsize = sizeof(DebugPrintMemLayout::data);
-        // parse the input codes
-        while (rpos < wpos) {
-            DPrintTypeID code = static_cast<DPrintTypeID>(l->data[rpos++]);
-            TT_ASSERT(rpos <= bufsize);
-            uint8_t sz = l->data[rpos++];
-            TT_ASSERT(rpos <= bufsize);
-            uint8_t* ptr = l->data + rpos;
+        // Parse the data using DPrintParser
+        uint32_t data_len = wpos - rpos;
+        DPrintParser::ParseResult result = parser->parse(l->data + rpos, data_len);
 
-            // Possible to break before rpos == wpos due to waiting on another core's raise.
-            bool break_due_to_wait = false;
+        // Write each completed line to output
+        for (const auto& line : result.completed_lines) {
+            ostream* output_stream = get_output_stream(risc_key);
+            *output_stream << line << flush;
+        }
 
-            // we are sharing the same output file between debug print threads for multiple cores
-            switch (code) {
-                case DPrintCSTR:  // const char*
-                {
-                    // null terminating char was included in size and should be present in the buffer
-                    const char* cptr = reinterpret_cast<const char*>(ptr);
-                    const size_t cptr_len = strnlen(cptr, sizeof(DebugPrintMemLayout::data) - 2);
-                    if (cptr_len == sizeof(DebugPrintMemLayout::data) - 2) {
-                        *intermediate_stream << "STRING BUFFER OVERFLOW DETECTED\n";
-                        transfer_stream_to_output(risc_key, intermediate_stream);
-                    } else {
-                        // if we come across a newline char, we should transfer the data up to the newline to the output
-                        // stream and flush it
-                        const char* newline_pos = strchr(cptr, '\n');
-                        bool contains_newline = newline_pos != nullptr;
-                        while (contains_newline) {
-                            const char* pos_after_newline = newline_pos + 1;
-                            const uint32_t substr_len = pos_after_newline - cptr;
-
-                            // strchr returns nullptr if it encounters a null terminator,
-                            // so we can guarantee that this is valid data since it was
-                            // already checked. We don't need to append a '\0' because
-                            // the stream operator only takes upto '\0' when passed
-                            // a char* (wrt the previous impl)
-                            const std::string_view substr_upto_newline(cptr, substr_len);
-
-                            *intermediate_stream << substr_upto_newline;
-                            transfer_stream_to_output(risc_key, intermediate_stream);
-                            cptr = pos_after_newline;
-                            newline_pos = strchr(cptr, '\n');
-                            contains_newline = newline_pos != nullptr;
-                        }
-                        *intermediate_stream << cptr;
-                    }
-                    AssertSize(sz, cptr_len + 1);
-                    break;
-                }
-                case DPrintTILESLICE: PrintTileSlice(intermediate_stream, ptr); break;
-
-                case DPrintENDL:
-                    if (risc_to_prev_type_[risc_key] != DPrintTILESLICE ||
-                        !StreamEndsWithNewlineChar(intermediate_stream)) {
-                        *intermediate_stream << '\n';
-                    }
-                    transfer_stream_to_output(risc_key, intermediate_stream);
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintSETW: {
-                    char val = CAST_U8P(ptr)[0];
-                    *intermediate_stream << setw(val);
-                    most_recent_setw = val;
-                    AssertSize(sz, 1);
-                    break;
-                }
-                case DPrintSETPRECISION:
-                    *intermediate_stream << std::setprecision(*ptr);
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintFIXED:
-                    *intermediate_stream << std::fixed;
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintDEFAULTFLOAT:
-                    *intermediate_stream << std::defaultfloat;
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintHEX:
-                    *intermediate_stream << std::hex;
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintOCT:
-                    *intermediate_stream << std::oct;
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintDEC:
-                    *intermediate_stream << std::dec;
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintUINT8:
-                    // iostream default uint8_t printing is as char, not an int
-                    *intermediate_stream << *reinterpret_cast<uint8_t*>(ptr);
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintUINT16: {
-                    uint16_t value;
-                    memcpy(&value, ptr, sizeof(uint16_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 2);
-                } break;
-                case DPrintUINT32: {
-                    uint32_t value;
-                    memcpy(&value, ptr, sizeof(uint32_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 4);
-                } break;
-                case DPrintUINT64: {
-                    uint64_t value;
-                    memcpy(&value, ptr, sizeof(uint64_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 8);
-                } break;
-                case DPrintINT8: {
-                    int8_t value;
-                    memcpy(&value, ptr, sizeof(int8_t));
-                    *intermediate_stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
-                    AssertSize(sz, 1);
-                } break;
-                case DPrintINT16: {
-                    int16_t value;
-                    memcpy(&value, ptr, sizeof(int16_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 2);
-                } break;
-                case DPrintINT32: {
-                    int32_t value;
-                    memcpy(&value, ptr, sizeof(int32_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 4);
-                } break;
-                case DPrintINT64: {
-                    int64_t value;
-                    memcpy(&value, ptr, sizeof(int64_t));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 8);
-                } break;
-                case DPrintFLOAT32: {
-                    float value;
-                    memcpy(&value, ptr, sizeof(float));
-                    *intermediate_stream << value;
-                    AssertSize(sz, 4);
-                } break;
-                case DPrintBFLOAT16: {
-                    uint16_t rawValue;
-                    memcpy(&rawValue, ptr, sizeof(uint16_t));
-                    float value = bfloat16_to_float(rawValue);
-                    *intermediate_stream << value;
-                    AssertSize(sz, 2);
-                } break;
-                case DPrintCHAR:
-                    *intermediate_stream << *reinterpret_cast<char*>(ptr);
-                    AssertSize(sz, 1);
-                    break;
-                case DPrintU32_ARRAY:
-                    PrintTypedUint32Array(
-                        intermediate_stream,
-                        most_recent_setw,
-                        sz / 4,
-                        reinterpret_cast<uint32_t*>(ptr),
-                        TypedU32_ARRAY_Format_Raw);
-                    break;
-                case DPrintTYPED_U32_ARRAY:
-                    PrintTypedUint32Array(
-                        intermediate_stream, most_recent_setw, sz / 4, reinterpret_cast<uint32_t*>(ptr));
-                    break;
-                default:
-                    TT_THROW(
-                        "Unexpected debug print type wpos {:#x} rpos {:#x} code {} chip {} phy {}, {}",
-                        wpos,
-                        rpos,
-                        (uint32_t)code,
-                        chip_id,
-                        virtual_core.x,
-                        virtual_core.y);
-            }
-
-            risc_to_prev_type_[risc_key] = code;
-
-            rpos += sz;  // parse the payload size
-            TT_ASSERT(rpos <= wpos);
-
-            // Break due to wait (we'll get the rest of the print buffer after the raise).
-            if (break_due_to_wait) {
-                break;
-            }
-        }  // while (rpos < wpos)
+        // Update rpos based on bytes consumed
+        rpos += result.bytes_consumed;
 
         // writes by the producer should've been atomic w.r.t code+size+payload
         // i.e at this point we shouldn't have piecemeal reads on code+size+payload
@@ -1168,45 +764,17 @@ void DPrintServer::Impl::poll_print_data() {
 }  // poll_print_data
 
 void DPrintServer::Impl::transfer_all_streams_to_output(ChipId device_id) {
-    for (auto& [risc_key, intermediate_stream] : risc_to_intermediate_stream_) {
+    for (auto& [risc_key, parser] : risc_to_parser_) {
         const ChipId risc_key_device_id = get<0>(risc_key);
         if (device_id == risc_key_device_id) {
-            transfer_stream_to_output(risc_key, intermediate_stream);
+            std::string remaining = parser->flush();
+            if (!remaining.empty()) {
+                ostream* output_stream = get_output_stream(risc_key);
+                *output_stream << remaining << flush;
+            }
         }
     }
 }  // transfer_all_streams_to_output
-
-void DPrintServer::Impl::transfer_stream_to_output(const RiscKey& risc_key, ostringstream* intermediate_stream) {
-    const string& output_data = get_formatted_output_data(risc_key, intermediate_stream);
-    ostream* output_stream = get_output_stream(risc_key);
-    *output_stream << output_data << flush;
-    ResetStream(intermediate_stream);
-}  // transfer_stream_to_output
-
-string DPrintServer::Impl::get_formatted_output_data(const RiscKey& risc_key, const ostringstream* stream) {
-    string output;
-    const bool prepend_device_core_risc =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
-            tt::llrt::RunTimeDebugFeatureDprint);
-    if (prepend_device_core_risc) {
-        const ChipId device_id = get<0>(risc_key);
-        const umd::CoreDescriptor& core_desc = get<1>(risc_key);
-        const uint32_t risc_id = get<2>(risc_key);
-
-        const string& device_id_str = to_string(device_id);
-        const string& core_coord_str = core_desc.coord.str();
-        const string& risc_name = GetRiscName(device_id, core_desc, risc_id, true);
-        output += fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
-    }
-
-    if (stream->str().empty()) {
-        output = "";
-    } else {
-        output += stream->str();
-    }
-
-    return output;
-}
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;

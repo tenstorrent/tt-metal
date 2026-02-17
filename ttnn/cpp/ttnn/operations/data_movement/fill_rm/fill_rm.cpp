@@ -4,7 +4,7 @@
 
 #include "fill_rm.hpp"
 #include "device/fill_rm_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::data_movement {

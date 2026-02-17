@@ -22,21 +22,25 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
-namespace ttnn::operations::conv::conv2d {
+namespace ttnn::prim {
+
+using ttnn::operations::conv::calculate_output_image_size;
+
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
-        return program::Conv2dWidthShardedProgramFactory{};
+        return Conv2dWidthShardedProgramFactory{};
     }  // Use regular sharded implementation
-    return program::Conv2dShardedProgramFactory{};
+    return Conv2dShardedProgramFactory{};
 }
 
-spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
+TensorSpec Conv2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -85,7 +89,7 @@ spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
             padded_output_shape));
 }
 
-tensor_return_value_t Conv2dDeviceOperation::create_output_tensors(
+Tensor Conv2dDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
 }
@@ -133,11 +137,6 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void Conv2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     hashable_operation_attributes_t hashable_args = {
@@ -161,8 +160,7 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
-Conv2dDeviceOperation::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
@@ -221,11 +219,7 @@ Conv2dDeviceOperation::create_op_performance_model(
     return result;
 }
 
-}  // namespace ttnn::operations::conv::conv2d
-
-namespace ttnn::prim {
-
-ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t conv2d(
+Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -234,8 +228,8 @@ ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t con
     uint32_t groups,
     bool untilize_out,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const ttnn::operations::conv::conv2d::Conv2dParallelizationConfig& parallelization_config,
-    const ttnn::operations::conv::conv2d::Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -246,7 +240,7 @@ ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t con
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
     std::optional<bool> force_split_reader) {
-    using OperationType = ttnn::operations::conv::conv2d::Conv2dDeviceOperation;
+    using OperationType = Conv2dDeviceOperation;
 
     TT_FATAL(b.layout() == Layout::TILE, "Weights should be in TILE layout.");
 

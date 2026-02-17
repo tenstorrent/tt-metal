@@ -18,7 +18,8 @@
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 
 using namespace tt::tt_metal;
-namespace ttnn::operations::data_movement::pad {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::common_tm_bw_model;
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> PadDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
@@ -58,34 +59,24 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                 return {};
             }
             if (input_w != output_w) {
-                return program::PadRmShardedWidthOnlyProgramFactory{};
+                return PadRmShardedWidthOnlyProgramFactory{};
             }
             // height-only padding or no padding
-            return program::PadRmShardedHeightOnlyProgramFactory{};
+            return PadRmShardedHeightOnlyProgramFactory{};
         }
         if (operation_attributes.use_multicore) {
-            return program::PadRmReaderWriterMultiCoreV2ProgramFactory{};
+            return PadRmReaderWriterMultiCoreV2ProgramFactory{};
         }
-        return program::PadRmReaderWriterProgramFactory{};
+        return PadRmReaderWriterProgramFactory{};
     }
     if (input_tensor.layout() == Layout::TILE) {
-        if (operation_attributes.use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
-            !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
-            return program::PadTileMulticoreProgramFactory{};
+        if (operation_attributes.use_multicore) {
+            return PadTileMulticoreProgramFactory{};
         }
-        log_warning(
-            tt::LogType::LogOp,
-            "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
-            "core. #29295");
-        return program::PadTileCoreProgramFactory{};
+        return PadTileCoreProgramFactory{};
     }
     TT_THROW("Unsupported layout for pad");
     return {};
-}
-
-void PadDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void PadDeviceOperation::validate_on_program_cache_miss(
@@ -180,10 +171,8 @@ Tensor PadDeviceOperation::create_output_tensors(
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
-}  // namespace ttnn::operations::data_movement::pad
 
-namespace ttnn::prim {
-ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t pad(
+PadDeviceOperation::tensor_return_value_t pad(
     const Tensor& input,
     const ttnn::Shape& output_logical_shape,
     const ttnn::Shape& output_padded_shape,
@@ -192,7 +181,7 @@ ttnn::operations::data_movement::pad::PadDeviceOperation::tensor_return_value_t 
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool use_multicore,
     const std::optional<ttnn::Tensor>& preallocated_output) {
-    using OperationType = ttnn::operations::data_movement::pad::PadDeviceOperation;
+    using OperationType = PadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             output_logical_shape, output_padded_shape, input_tensor_start, pad_value, output_mem_config, use_multicore},
