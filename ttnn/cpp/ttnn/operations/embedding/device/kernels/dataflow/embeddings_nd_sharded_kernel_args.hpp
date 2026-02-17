@@ -10,10 +10,10 @@
 namespace ttnn::kernel {
 
 struct EmbeddingsReaderKernelArgs {
-    std::uint32_t input_buffer_src_addr;
-    std::uint32_t weight_buffer_src_addr;
-    std::uint32_t input_page_id;
-    std::uint32_t num_of_pages;
+    uint32_t input_buffer_src_addr;
+    uint32_t weight_buffer_src_addr;
+    uint32_t input_page_id;
+    uint32_t num_of_pages;
 };
 
 struct CompileTimeEmbeddingsReaderKernelArgs {
@@ -31,9 +31,9 @@ struct CompileTimeEmbeddingsReaderKernelArgs {
 };
 
 struct EmbeddingsWriterKernelArgs {
-    std::uint32_t output_buffer_src_addr;
-    std::uint32_t input_page_id;
-    std::uint32_t num_of_pages;
+    uint32_t output_buffer_src_addr;
+    uint32_t input_page_id;
+    uint32_t num_of_pages;
 };
 
 struct CompileTimeEmbeddingsWriterKernelArgs {
