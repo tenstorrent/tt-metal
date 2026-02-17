@@ -105,7 +105,9 @@ void kernel_main() {
     // Configure packet header once before loop (optimization to avoid reconfiguring on every packet)
     uint64_t initial_dst_addr = receiver_noc_coord_addr + send_socket.write_ptr;
     downstream_data_packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{initial_dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size},
+        NocUnicastAtomicIncFusedCommandHeader{
+            initial_dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size, false},
+        // NocUnicastAtomicIncFusedCommandHeader{initial_dst_addr, downstream_bytes_sent_noc_addr, whole_packet_size},
         whole_packet_size);
 
     for (uint32_t i = 0; i < 100; ++i) {
