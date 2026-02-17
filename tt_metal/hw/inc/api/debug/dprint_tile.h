@@ -10,10 +10,7 @@
 
 // Printing tiles from CBs requires reading CB config from generated files
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
-#include "chlkc_unpack_data_format.h"
-#include "chlkc_unpack_tile_dims.h"
-#include "chlkc_pack_data_format.h"
-#include "chlkc_pack_tile_dims.h"
+#include "chlkc_descriptors.h"
 #endif
 
 // Macros for printing circular buffer internals
