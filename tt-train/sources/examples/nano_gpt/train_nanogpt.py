@@ -6,7 +6,7 @@
 
 This example provides a comprehensive Python implementation that mirrors the C++ nano_gpt example,
 including:
-- Full model training with GPT2/NanoGPT architectures
+- Full model training with GPT2/NanoGPT and Llama architectures
 - Gradient accumulation
 - Learning rate scheduling (identity, warmup_linear)
 - Optimizers (AdamW, MorehAdamW)
@@ -21,7 +21,7 @@ import argparse
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, Union
 import time
 import pickle
 
@@ -36,10 +36,18 @@ from ttml.models.nanogpt import (
     NanoGPTExperimentalConfig,
     create_nanogpt,
 )
+from ttml.models.llama import (
+    Llama,
+    LlamaConfig,
+    LlamaRopeScalingConfig,
+)
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
+
+# Union type for models that share the same forward(input, mask) interface
+Model = Union[NanoGPT, Llama]
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -100,7 +108,11 @@ class ModelExperimentalConfig:
 
 @dataclass
 class ModelConfig:
-    """Model configuration aligned with ttml.common.config.TransformerConfig naming."""
+    """Model configuration aligned with ttml.common.config.TransformerConfig naming.
+
+    Field names follow the universal project format (matching YAML/C++ conventions).
+    Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
+    """
 
     model_type: str = "gpt2"  # "gpt2" or "llama"
     model_path: str = ""
@@ -117,6 +129,15 @@ class ModelConfig:
     experimental: ModelExperimentalConfig = field(
         default_factory=ModelExperimentalConfig
     )
+    # Llama-specific fields (universal naming matching YAML/C++ conventions)
+    num_groups: int = 3  # GQA: num_heads / num_key_value_heads
+    theta: float = 500000.0  # RoPE theta parameter
+    intermediate_dim: Optional[int] = None  # MLP intermediate dimension
+    # RoPE NTK-aware scaling (nested under rope_scaling in YAML, matching C++ LlamaConfig)
+    scaling_factor: float = 0.0  # 0.0 means no scaling
+    high_freq_factor: float = 4.0
+    low_freq_factor: float = 1.0
+    original_context_length: int = 0  # 0 means no scaling
 
 
 class LossAverageMeter:
@@ -289,7 +310,7 @@ def get_loss_value(loss: ttml.autograd.Tensor) -> float:
 
 
 def train_step(
-    model: NanoGPT,
+    model: Model,
     optimizer: ttml.optimizers.OptimizerBase,
     scheduler_fn: Optional[callable],
     scheduler_step: int,
@@ -386,40 +407,56 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     config.model_type = transformer_config.get("model_type", config.model_type)
     config.model_path = transformer_config.get("model_path", config.model_path)
 
+    # Common fields shared between model types
+    config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
+    config.embedding_dim = transformer_config.get("embedding_dim", config.embedding_dim)
+    config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
+    config.num_heads = transformer_config.get("num_heads", config.num_heads)
+    config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
+    config.max_sequence_length = transformer_config.get(
+        "max_sequence_length", config.max_sequence_length
+    )
+
+    if "runner_type" in transformer_config:
+        config.runner_type = ttml.models.RunnerType.from_string(
+            transformer_config["runner_type"]
+        )
+
+    if "weight_tying" in transformer_config:
+        config.weight_tying = ttml.models.WeightTyingType.from_string(
+            transformer_config["weight_tying"]
+        )
+
     if config.model_type == "gpt2":
-        # GPT2 config fields are directly under transformer_config
-        config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-        config.embedding_dim = transformer_config.get(
-            "embedding_dim", config.embedding_dim
-        )
-        config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
-        config.num_heads = transformer_config.get("num_heads", config.num_heads)
-        config.dropout_prob = transformer_config.get(
-            "dropout_prob", config.dropout_prob
-        )
+        # GPT2-specific fields
         config.bias = transformer_config.get("bias", config.bias)
-        config.max_sequence_length = transformer_config.get(
-            "max_sequence_length", config.max_sequence_length
-        )
         config.positional_embedding_type = transformer_config.get(
             "positional_embedding_type", config.positional_embedding_type
         )
-
-        tc_runner_type = transformer_config.get("runner_type")
-        if tc_runner_type is not None:
-            config.runner_type = ttml.models.RunnerType.from_string(tc_runner_type)
-
-        tc_weight_tying = transformer_config.get("weight_tying")
-        if tc_weight_tying is not None:
-            config.weight_tying = ttml.models.WeightTyingType.from_string(
-                tc_weight_tying
-            )
 
         exp_config = transformer_config.get("experimental")
         if isinstance(exp_config, dict):
             config.experimental.use_composite_layernorm = exp_config.get(
                 "use_composite_layernorm", config.experimental.use_composite_layernorm
             )
+    elif config.model_type == "llama":
+        # Llama-specific fields (matching C++ read_config in llama.cpp)
+        config.num_groups = transformer_config.get("num_groups", config.num_groups)
+        config.theta = transformer_config.get("theta", config.theta)
+        if "intermediate_dim" in transformer_config:
+            config.intermediate_dim = transformer_config["intermediate_dim"]
+
+        # RoPE NTK-aware scaling parameters (nested under rope_scaling in YAML)
+        if "rope_scaling" in transformer_config:
+            rope_scaling = transformer_config["rope_scaling"]
+            if "scaling_factor" in rope_scaling:
+                config.scaling_factor = rope_scaling["scaling_factor"]
+            if "high_freq_factor" in rope_scaling:
+                config.high_freq_factor = rope_scaling["high_freq_factor"]
+            if "low_freq_factor" in rope_scaling:
+                config.low_freq_factor = rope_scaling["low_freq_factor"]
+            if "original_context_length" in rope_scaling:
+                config.original_context_length = rope_scaling["original_context_length"]
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -427,7 +464,7 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
 
 
 def sample_greedy(
-    model: NanoGPT,
+    model: Model,
     tokenizer: CharTokenizer,
     prompt: str,
     max_new_tokens: int,
@@ -439,7 +476,7 @@ def sample_greedy(
     """Generate text from a prompt using sampling with temperature.
 
     Args:
-        model: Trained NanoGPT model
+        model: Trained model (NanoGPT or Llama)
         tokenizer: Character tokenizer
         prompt: Starting prompt text
         max_new_tokens: Maximum number of tokens to generate
@@ -693,10 +730,67 @@ def sample_greedy(
     return generated_text
 
 
+def create_model_from_config(model_config: ModelConfig) -> Model:
+    """Create a model from ModelConfig, dispatching on model_type.
+
+    Converts universal ModelConfig field names to model-specific config fields.
+
+    Args:
+        model_config: Universal model configuration
+
+    Returns:
+        A NanoGPT or Llama model instance
+    """
+    if model_config.model_type == "gpt2":
+        nanogpt_exp_config = NanoGPTExperimentalConfig(
+            use_composite_layernorm=model_config.experimental.use_composite_layernorm,
+        )
+        nanogpt_config = NanoGPTConfig(
+            vocab_size=model_config.vocab_size,
+            block_size=model_config.max_sequence_length,
+            n_embd=model_config.embedding_dim,
+            n_layer=model_config.num_blocks,
+            n_head=model_config.num_heads,
+            dropout=model_config.dropout_prob,
+            bias=model_config.bias,
+            runner_type=model_config.runner_type,
+            weight_tying=model_config.weight_tying,
+            positional_embedding_type=model_config.positional_embedding_type,
+            experimental=nanogpt_exp_config,
+        )
+        return create_nanogpt(nanogpt_config)
+    elif model_config.model_type == "llama":
+        num_key_value_heads = model_config.num_heads // model_config.num_groups
+        rope_scaling_config = LlamaRopeScalingConfig(
+            scaling_factor=model_config.scaling_factor,
+            high_freq_factor=model_config.high_freq_factor,
+            low_freq_factor=model_config.low_freq_factor,
+            original_context_length=model_config.original_context_length,
+        )
+        llama_config = LlamaConfig(
+            hidden_size=model_config.embedding_dim,
+            intermediate_size=model_config.intermediate_dim,
+            num_hidden_layers=model_config.num_blocks,
+            num_attention_heads=model_config.num_heads,
+            num_key_value_heads=num_key_value_heads,
+            vocab_size=model_config.vocab_size,
+            max_position_embeddings=model_config.max_sequence_length,
+            rope_theta=model_config.theta,
+            attention_dropout=model_config.dropout_prob,
+            mlp_dropout=model_config.dropout_prob,
+            runner_type=model_config.runner_type,
+            weight_tying=model_config.weight_tying,
+            rope_scaling=rope_scaling_config,
+        )
+        return Llama(llama_config)
+    else:
+        raise ValueError(f"Unsupported model type: {model_config.model_type}")
+
+
 def save_checkpoint(
     checkpoint_path: str,
     step: int,
-    model: NanoGPT,
+    model: Model,
     tokenizer: CharTokenizer,
     model_config: ModelConfig,
     training_config: TrainingConfig,
@@ -706,7 +800,7 @@ def save_checkpoint(
     Args:
         checkpoint_path: Path to save checkpoint (will add .pkl if not present)
         step: Training step number
-        model: NanoGPT model to save
+        model: Model to save (NanoGPT or Llama)
         tokenizer: Tokenizer to save
         model_config: Model configuration
         training_config: Training configuration
@@ -793,7 +887,7 @@ def find_latest_checkpoint(base_path: str) -> Optional[str]:
 
 def load_model_from_checkpoint(
     checkpoint_path: str,
-) -> Tuple[NanoGPT, CharTokenizer, ModelConfig, TrainingConfig, int]:
+) -> Tuple[Model, CharTokenizer, ModelConfig, TrainingConfig, int]:
     """Load model from checkpoint file.
 
     Args:
@@ -817,26 +911,8 @@ def load_model_from_checkpoint(
     training_config = checkpoint.get("training_config", None)
     step = checkpoint.get("step", 0)
 
-    # Create model config (map aligned names to NanoGPTConfig fields)
-    nanogpt_exp_config = NanoGPTExperimentalConfig(
-        use_composite_layernorm=model_config.experimental.use_composite_layernorm,
-    )
-    nanogpt_config = NanoGPTConfig(
-        vocab_size=model_config.vocab_size,
-        block_size=model_config.max_sequence_length,
-        n_embd=model_config.embedding_dim,
-        n_layer=model_config.num_blocks,
-        n_head=model_config.num_heads,
-        dropout=model_config.dropout_prob,
-        bias=model_config.bias,
-        runner_type=model_config.runner_type,
-        weight_tying=model_config.weight_tying,
-        positional_embedding_type=model_config.positional_embedding_type,
-        experimental=nanogpt_exp_config,
-    )
-
-    # Create model
-    model = create_nanogpt(nanogpt_config)
+    # Create model from config
+    model = create_model_from_config(model_config)
 
     # Load model parameters
     print("  Loading model parameters...")
@@ -1226,26 +1302,8 @@ def main():
             # Round vocab size to tile boundary (matching C++ behavior)
             model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
 
-            # Create model config (map aligned names to NanoGPTConfig fields)
-            nanogpt_exp_config = NanoGPTExperimentalConfig(
-                use_composite_layernorm=model_config.experimental.use_composite_layernorm,
-            )
-            nanogpt_config = NanoGPTConfig(
-                vocab_size=model_config.vocab_size,
-                block_size=model_config.max_sequence_length,
-                n_embd=model_config.embedding_dim,
-                n_layer=model_config.num_blocks,
-                n_head=model_config.num_heads,
-                dropout=model_config.dropout_prob,
-                bias=model_config.bias,
-                runner_type=model_config.runner_type,
-                weight_tying=model_config.weight_tying,
-                positional_embedding_type=model_config.positional_embedding_type,
-                experimental=nanogpt_exp_config,
-            )
-
             # Create model
-            model = create_nanogpt(nanogpt_config)
+            model = create_model_from_config(model_config)
 
             # Count parameters
             total_params = sum(

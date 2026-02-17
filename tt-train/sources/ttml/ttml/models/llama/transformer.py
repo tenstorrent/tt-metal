@@ -13,7 +13,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer
 
 from .gqattn import GroupedQueryAttention
 
@@ -68,7 +68,7 @@ class LlamaMLP(AbstractModuleBase):
 
         Args:
             embedding_size: Dimension of embeddings
-            intermediate_dim: Intermediate dimension
+            intermediate_size: Intermediate dimension
             dropout: Dropout probability
         """
         super().__init__()
@@ -118,6 +118,7 @@ class LlamaBlock(AbstractModuleBase):
         attention_dropout: float = 0.0,
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
+        attention_bias: bool = False,
     ) -> None:
         super().__init__()
 
@@ -132,16 +133,20 @@ class LlamaBlock(AbstractModuleBase):
             num_groups=num_groups,
             dropout=attention_dropout,
             rope_params=rope_params,
+            bias_linears=attention_bias,
         )
 
     def forward(
         self,
         input: ttml.autograd.Tensor,
         mask: ttml.autograd.Tensor,
+        kv_cache: Optional[ttml.models.KvCache] = None,
+        layer_idx: Optional[int] = None,
+        new_tokens: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
         residual = input
         h = self.attention_norm(input)
-        h = self.attention(h, mask)
+        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens)
         h = ttml.ops.binary.add(h, residual)
 
         residual = h
