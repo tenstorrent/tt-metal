@@ -190,9 +190,21 @@ def clear_state_dict_cache(request):
 
 @pytest.fixture(scope="session")
 def hf_config_short(request, hf_config):
+    """
+    Build a shortened DeepSeek config for tests.
+
+    Environment variables:
+        DEEPSEEK_MAX_SEQ_LEN_OVERRIDE: Optional override for `hf_config_short.max_seq_len`.
+            When set (e.g. "32768"), tests that read `hf_config_short.max_seq_len`
+            can exercise longer sequence lengths without modifying code.
+    """
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 128
+    max_seq_len_override = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+    if max_seq_len_override is not None:
+        hf_config_out.max_seq_len = int(max_seq_len_override)
+    else:
+        hf_config_out.max_seq_len = 128
     return hf_config_out
 
 

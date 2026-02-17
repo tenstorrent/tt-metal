@@ -655,3 +655,128 @@ def test_linear_yolov7(
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+
+
+# ============================================================================
+# Sub-device tests: verify ttnn.linear works on a sub-device whose start core
+# is NOT (0, 0).  This exercises the sub_device_start_core offset that was
+# added to the 2-D and 1-D multicast program factories.
+# ============================================================================
+
+
+def _setup_subdevice(device, skip_rows=1):
+    """Create two sub-devices: row(s) 0..skip_rows-1 as a 'dummy' sub-device
+    and the remaining rows as the 'worker' sub-device.  Returns a tuple of
+    (sub_device_manager, worker_sub_device_id, worker_core_grid) that the
+    caller must tear down via _teardown_subdevice().
+    """
+    grid = device.compute_with_storage_grid_size()
+    cols, rows = grid.x, grid.y
+    assert rows > skip_rows, f"Device grid has only {rows} rows; need >{skip_rows} for this sub-device test"
+
+    dummy_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, skip_rows - 1))})
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, skip_rows), ttnn.CoreCoord(cols - 1, rows - 1))})
+
+    dummy_sub_device = ttnn.SubDevice([dummy_crs])
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+
+    dummy_sub_device_id = ttnn.SubDeviceId(0)
+    worker_sub_device_id = ttnn.SubDeviceId(1)
+
+    sub_device_manager = device.create_sub_device_manager([dummy_sub_device, worker_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
+
+    worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
+    return sub_device_manager, worker_sub_device_id, worker_core_grid
+
+
+def _teardown_subdevice(device, sub_device_manager):
+    """Clean up the sub-device manager."""
+    device.reset_sub_device_stall_group()
+    device.clear_loaded_sub_device_manager()
+    device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize("m_size", [128, 384])
+@pytest.mark.parametrize("k_size", [512])
+@pytest.mark.parametrize("n_size", [512])
+@pytest.mark.parametrize("use_bias", [True, False])
+@pytest.mark.parametrize("transpose_b", [False, True])
+def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose_b):
+    """Run ttnn.linear on a sub-device that starts at row 1 (not row 0).
+
+    This is the pattern used when overlapping CCL operations on row 0
+    with matmul compute on the remaining rows.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need at least 2 rows for sub-device test")
+
+    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    try:
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+        torch_bias = torch.randn((1, n_size), dtype=torch.bfloat16) if use_bias else None
+        if transpose_b:
+            torch_output = torch_input_a @ torch_input_b.T
+        else:
+            torch_output = torch_input_a @ torch_input_b
+        if torch_bias is not None:
+            torch_output = torch_output + torch_bias
+
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        bias = (
+            ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            if use_bias
+            else None
+        )
+
+        output = ttnn.linear(
+            input_a,
+            input_b,
+            transpose_b=transpose_b,
+            bias=bias,
+            core_grid=worker_core_grid,
+            sub_device_id=worker_sub_device_id,
+        )
+        output = ttnn.to_torch(output)
+        assert_with_pcc(torch_output, output, 0.999)
+    finally:
+        _teardown_subdevice(device, sub_device_manager)
+
+
+@pytest.mark.parametrize("m_size", [128])
+@pytest.mark.parametrize("k_size", [512])
+@pytest.mark.parametrize("n_size", [512])
+@pytest.mark.parametrize("skip_rows", [1, 2, 5])
+def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, skip_rows):
+    """Verify that the sub-device start core offset works for different
+    starting rows, not just row 1.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= skip_rows:
+        pytest.skip(f"Need at least {skip_rows + 1} rows for this sub-device test")
+
+    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device, skip_rows=skip_rows)
+    try:
+        torch.manual_seed(0)
+        torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        torch_input_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+        torch_output = torch_input_a @ torch_input_b
+
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        output = ttnn.linear(
+            input_a,
+            input_b,
+            core_grid=worker_core_grid,
+            sub_device_id=worker_sub_device_id,
+        )
+        output = ttnn.to_torch(output)
+        assert_with_pcc(torch_output, output, 0.999)
+    finally:
+        _teardown_subdevice(device, sub_device_manager)

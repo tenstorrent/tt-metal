@@ -74,7 +74,10 @@ struct GatedReduce {
             static_assert(tiles_per_k >= 2 && tiles_per_k % 2 == 0, "tiles_per_k must be even and >= 2");
 
             // Init once before the loop
-            binary_op_init_common(args.group1_cb, args.group1_cb, args.intermed_cb);
+            // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
+            // output cb
+            reconfig_data_format<false, true>(args.group1_cb, args.group1_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
             silu_tile_init();
 
             for (uint32_t k = 0; k < k_num_tiles; k++) {
@@ -97,8 +100,7 @@ struct GatedReduce {
                 cb_pop_front(args.group1_cb, tiles_per_k);
                 cb_push_back(args.intermed_cb, 1);
 
-                // Group 2: reduce (re-init add for different CB)
-                add_tiles_init(args.group2_cb, args.group2_cb, true /* acc_to_dest */);
+                // Group 2: reduce (skip re-init add for different CB assuming they're configured the same)
 
                 cb_wait_front(args.group2_cb, tiles_per_k);
                 cb_reserve_back(args.intermed_cb, 1);
@@ -116,10 +118,9 @@ struct GatedReduce {
                 cb_push_back(args.intermed_cb, 1);
 
                 // Multiply: SiLU(g1) * g2
+                mul_tiles_init(args.intermed_cb, args.intermed_cb);
                 cb_wait_front(args.intermed_cb, 2);
                 cb_reserve_back(args.out_cb, 1);
-
-                mul_tiles_init(args.intermed_cb, args.intermed_cb);
 
                 tile_regs_acquire();
                 mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
