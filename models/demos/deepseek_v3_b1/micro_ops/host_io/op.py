@@ -79,12 +79,14 @@ class HostInterface:
         # For real workloads, downstream/upstream cores connect to H2D receiver and D2H sender via D2D sockets
         # NOTE: Downstream and upstream cores must be on the same device as the host I/O core (single-chip constraint)
         if not loopback_mode:
-            downstream_socket_connection = ttnn.SocketConfig(
+            downstream_core = ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, h2d_downstream_core)
+            upstream_core = ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, d2h_upstream_core)
+            downstream_socket_connection = ttnn.SocketConnection(
                 self.mesh_core_coord,
-                ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, h2d_downstream_core),
+                downstream_core,
             )
-            upstream_socket_connection = ttnn.SocketConfig(
-                ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, d2h_upstream_core),
+            upstream_socket_connection = ttnn.SocketConnection(
+                upstream_core,
                 self.mesh_core_coord,
             )
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
@@ -164,7 +166,7 @@ class HostInterface:
             self.d2h_page_size,
             self.loopback_mode,
             # Use a local CB if doing loopback, otherwise communicate with downstream over sockets
-            self.intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[0].get_config_buffer_address(),
+            self.intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[1].get_config_buffer_address(),
         ]
 
         d2h_kernel = ttnn.KernelDescriptor(
