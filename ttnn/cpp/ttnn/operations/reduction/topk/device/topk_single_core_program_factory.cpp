@@ -135,13 +135,6 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
             .set_page_size(output_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, output_ind_cb_config);
 
-    constexpr uint32_t synchronization_cb_index = tt::CBIndex::c_8;
-    constexpr uint32_t synchronization_cb_size = tt::constants::TILE_HW * sizeof(uint8_t);
-    const tt::tt_metal::CircularBufferConfig synchronization_cb_config =
-        tt::tt_metal::CircularBufferConfig(synchronization_cb_size, {{synchronization_cb_index, tt::DataFormat::UInt8}})
-            .set_page_size(synchronization_cb_index, synchronization_cb_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
-
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index,                       // Input values
@@ -192,7 +185,6 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
-        synchronization_cb_index,
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
