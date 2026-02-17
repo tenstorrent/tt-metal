@@ -197,15 +197,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.encoder_ccl_manager,
             parallel_config=self.encoder_parallel_config,
         )
-
-        cache.load_model(
-            self.tt_umt5_encoder,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="text_encoder",
-            parallel_config=self.encoder_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: self.text_encoder.state_dict(),
-        )
+        self.prepare_text_encoder()
 
         if not self.dynamic_load:
             self._load_transformer1()
@@ -366,6 +358,22 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
+
+    # Does nothing if the text encoder is already loaded.
+    def prepare_text_encoder(self):
+        if not self.tt_umt5_encoder.is_loaded():
+            if hasattr(self, "transformer_2"):
+                # Offload text encoder to make space for Encoder. At initialization, we load the text encoder first. So there is no accidental deletion
+                del self.transformer_2
+
+            cache.load_model(
+                self.tt_umt5_encoder,
+                model_name=os.path.basename(self.checkpoint_name),
+                subfolder="text_encoder",
+                parallel_config=self.encoder_parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=lambda: self.text_encoder.state_dict(),
+            )
 
     def _load_transformer2(self):
         self.transformer_2 = WanTransformer3DModel(
@@ -792,6 +800,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # 3. Encode input prompt
         with profiler("encoder", profiler_iteration) if profiler else nullcontext():
+            self.prepare_text_encoder()
             prompt_embeds, negative_prompt_embeds = self.encode_prompt(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -865,6 +874,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     # low-noise stage in wan2.2
                     if self.dynamic_load:
+                        # Encoder does not fit eith th second model.
+                        if self.tt_umt5_encoder.is_loaded():
+                            self.tt_umt5_encoder.deallocate_weights()
                         if hasattr(self, "transformer"):
                             # Offload transformer1 to make space for transformer2
                             del self.transformer
