@@ -52,9 +52,12 @@ jobs:
           - name: Sockets fast unit test
             cmd: |
               ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
-              TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
             timeout: 10
             test-type: fast
+          - name: Host IO fast unit test (viommu only)
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+            timeout: 10
+            test-type: fast-viommu
           - name: cpp fast unit tests (eth, single erisc)
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
@@ -104,12 +107,16 @@ jobs:
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
 
-          # Filter based on fast-only input: when true, only test-type == "fast"
+          # Filter: *-viommu test types run only when runner-label contains viommu; when fast_only, run only fast + fast-viommu (on viommu)
           fast_only="${{ inputs.fast-only }}"
+          runner_label="${{ inputs.runner-label }}"
+          viommu_json="false"
+          if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
+
           if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c '[.[] | select(.["test-type"] == "fast")]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c '.')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
