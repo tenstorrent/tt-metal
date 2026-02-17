@@ -849,13 +849,10 @@ def run_h2d_latency(path):
     h2d_export_csv(df)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PING  (pure signaling round-trip, no data DMA)
-# ══════════════════════════════════════════════════════════════════════════════
+# -- D2H ping ----
 
 
 def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.png"):
-    """Plot iteration-by-iteration latency."""
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
@@ -875,7 +872,6 @@ def ping_plot_timeseries(path="ping_iterations.csv", out="d2h_ping_timeseries.pn
 
 
 def ping_export_csv(path="ping_iterations.csv", out="d2h_ping_summary.csv"):
-    """Export the per-iteration ping data as CSV summary."""
     try:
         df = pd.read_csv(path)
         df.to_csv(out, index=False, float_format="%.4f")
@@ -889,19 +885,84 @@ def run_ping(path):
     ping_export_csv()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CLI
-# ══════════════════════════════════════════════════════════════════════════════
+# -- H2D ping ----
+
+
+def h2d_ping_plot(csv_dir, out="h2d_ping_timeseries.png"):
+    import os
+
+    modes = {"HOST_PUSH": None, "DEVICE_PULL": None}
+    for mode in modes:
+        p = os.path.join(csv_dir, f"h2d_ping_iterations_{mode}.csv")
+        try:
+            modes[mode] = pd.read_csv(p)
+        except FileNotFoundError:
+            print(f"  Warning: {p} not found")
+
+    present = {k: v for k, v in modes.items() if v is not None}
+    if not present:
+        return
+
+    out = os.path.join(csv_dir, out)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for mode, df in present.items():
+        ax.plot(df.iteration, df.latency_us, "o-", ms=3, lw=1, alpha=0.7, label=mode)
+        ax.axhline(
+            df.latency_us.median(),
+            ls="--",
+            lw=1.5,
+            alpha=0.6,
+            label=f"{mode} p50 = {df.latency_us.median():.2f} us",
+        )
+    ax.set(xlabel="Iteration", ylabel="Latency (us)", title="H2D Pure Ping: Per-Iteration Latency")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def h2d_ping_export_csv(csv_dir, out="h2d_ping_summary.csv"):
+    import os
+
+    dfs = []
+    for mode in ["HOST_PUSH", "DEVICE_PULL"]:
+        p = os.path.join(csv_dir, f"h2d_ping_iterations_{mode}.csv")
+        try:
+            df = pd.read_csv(p)
+            df["h2d_mode"] = mode
+            dfs.append(df)
+        except FileNotFoundError:
+            pass
+    if not dfs:
+        print("  Warning: no H2D ping iteration files found")
+        return
+    out = os.path.join(csv_dir, out)
+    combined = pd.concat(dfs, ignore_index=True)
+    combined.to_csv(out, index=False, float_format="%.4f")
+    print(f"  Saved {out} ({len(combined)} rows)")
+
+
+def run_h2d_ping(path):
+    import os
+
+    csv_dir = os.path.dirname(os.path.abspath(path))
+    h2d_ping_plot(csv_dir)
+    h2d_ping_export_csv(csv_dir)
+
+
+# -- CLI ----
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Analyze H2D/D2H benchmark results")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--throughput", action="store_true", help="Analyze D2H throughput benchmark")
-    mode.add_argument("--latency", action="store_true", help="Analyze D2H latency benchmark")
-    mode.add_argument("--h2d-throughput", action="store_true", help="Analyze H2D throughput benchmark")
-    mode.add_argument("--h2d-latency", action="store_true", help="Analyze H2D latency benchmark")
-    mode.add_argument("--ping", action="store_true", help="Analyze D2H pure ping benchmark")
-    p.add_argument("csv", help="Path to benchmark CSV")
+    mode.add_argument("--throughput", action="store_true", help="D2H throughput")
+    mode.add_argument("--latency", action="store_true", help="D2H latency")
+    mode.add_argument("--h2d-throughput", action="store_true", help="H2D throughput")
+    mode.add_argument("--h2d-latency", action="store_true", help="H2D latency")
+    mode.add_argument("--ping", action="store_true", help="D2H pure ping")
+    mode.add_argument("--h2d-ping", action="store_true", help="H2D pure ping")
+    p.add_argument("csv", help="Path to benchmark CSV (or directory for ping modes)")
     args = p.parse_args()
 
     if args.throughput:
@@ -912,5 +973,7 @@ if __name__ == "__main__":
         run_h2d_throughput(args.csv)
     elif args.h2d_latency:
         run_h2d_latency(args.csv)
+    elif args.h2d_ping:
+        run_h2d_ping(args.csv)
     else:
         run_ping(args.csv)
