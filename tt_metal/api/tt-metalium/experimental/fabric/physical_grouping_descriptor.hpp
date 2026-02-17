@@ -89,15 +89,16 @@ public:
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor) const;
 
-    // Validate and populate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor
-    // If groupings already exist, validates they match the physical system
-    // If groupings don't exist, automatically creates TRAY groupings with ASIC locations and HOST groupings with tray
-    // references
-    void validate_and_populate_preformed_groups_from_physical_system(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+    // Validate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor, making sure that they match
+    bool validate_preformed_groups_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
     // Build flattened adjacency graph by instantiating the grouping's adjacency graph and flattening it.
+    // TODO: This is not yet implemented this should use the cardinal adjacnecy graph
     AdjacencyGraph<uint32_t> build_flattened_adjacency_graph(const GroupingInfo& grouping) const;
+
+    // Build flattened adjacency graph forming one uniform mesh
+    AdjacencyGraph<uint32_t> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
 private:
     // Data members
@@ -115,20 +116,32 @@ private:
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
 
-    // Static validation - returns vector of error strings (similar to MeshGraphDescriptor)
-    static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
-
     // Helper to get validation report from error vector
     static std::string get_validation_report(const std::vector<std::string>& errors);
 
     // Population method (called after validation passes)
     void populate();
 
+    // Grouping validation (called after populate)
+    void grouping_validate() const;
+
+    // Instance validation - collects grouping validation errors without throwing (for reporting)
+    void instance_validate(std::vector<std::string>& errors) const;
+
+    // Internal validation helpers (used by grouping_validate)
+    void validate_leaf_groupings(std::vector<std::string>& errors) const;
+    void validate_asic_location_usage(std::vector<std::string>& errors) const;
+    void validate_no_cycles(std::vector<std::string>& errors) const;
+    void validate_instance_counts(std::vector<std::string>& errors) const;
+
     // Helper methods for populate()
     static uint32_t calculate_base_grouping_asic_count(const GroupingInfo& grouping);
     static uint32_t calculate_dependent_grouping_asic_count(
         const GroupingInfo& grouping,
         const std::unordered_map<std::string, std::vector<GroupingInfo>>& groupings_by_name);
+
+    // Static validation - returns vector of error strings (similar to MeshGraphDescriptor)
+    static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
     // Internal validation helpers (used by static_validate)
     static void uniquify_duplicate_names(proto::PhysicalGroupings& proto);

@@ -13,6 +13,7 @@
 #include <queue>
 #include <memory>
 #include <cctype>
+#include <functional>
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
 
@@ -522,13 +523,24 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
     uniquify_duplicate_names(temp_proto);
 
     // Validate the proto
-    const auto errors = static_validate(temp_proto);
+    std::vector<std::string> all_errors = static_validate(temp_proto);
+
     TT_FATAL(
-        errors.empty(), "Failed to validate PhysicalGroupingDescriptor textproto: \n{}", get_validation_report(errors));
+        all_errors.empty(),
+        "Failed to validate PhysicalGroupingDescriptor textproto: \n{}",
+        get_validation_report(all_errors));
 
     proto_ = std::make_shared<proto::PhysicalGroupings>(temp_proto);
 
     populate();
+
+    // Collect grouping validation errors and add to the same error vector
+    instance_validate(all_errors);
+
+    TT_FATAL(
+        all_errors.empty(),
+        "Failed to validate PhysicalGroupingDescriptor textproto: \n{}",
+        get_validation_report(all_errors));
 }
 
 PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::filesystem::path& text_proto_file_path) :
@@ -993,29 +1005,176 @@ void PhysicalGroupingDescriptor::populate() {
         }
     }
 
-    // Step 5: Validate all groupings were processed
-    if (processed.size() != dependencies.size()) {
-        std::vector<std::string> unresolved;
-        for (const auto& [name, _] : dependencies) {
-            if (std::find(processed.begin(), processed.end(), name) == processed.end()) {
-                unresolved.push_back(name);
+    // Step 5: Store resolved groupings
+    // Note: Cycle detection is now handled by validate_no_cycles() in grouping_validate()
+    resolved_groupings_cache_ = std::move(groupings_by_name);
+}
+
+void PhysicalGroupingDescriptor::grouping_validate() const {
+    std::vector<std::string> errors;
+    instance_validate(errors);
+
+    // Throw if any errors found
+    if (!errors.empty()) {
+        std::string error_msg = "Grouping validation failed:\n";
+        for (size_t i = 0; i < errors.size(); ++i) {
+            error_msg += fmt::format("  {}. {}\n", i + 1, errors[i]);
+        }
+        TT_THROW("{}", error_msg);
+    }
+}
+
+void PhysicalGroupingDescriptor::instance_validate(std::vector<std::string>& errors) const {
+    validate_leaf_groupings(errors);
+    validate_asic_location_usage(errors);
+    validate_no_cycles(errors);
+    validate_instance_counts(errors);
+}
+
+void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string>& errors) const {
+    // Build dependency graph and identify leaf vs non-leaf groupings
+    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
+    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
+    std::unordered_set<std::string> all_grouping_types;
+
+    // First pass: identify all groupings and their characteristics
+    for (const auto& [type, groupings] : resolved_groupings_cache_) {
+        all_grouping_types.insert(type);
+        bool has_asic = false;
+        bool has_refs = false;
+
+        for (const auto& grouping : groupings) {
+            for (const auto& item : grouping.items) {
+                if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                    has_asic = true;
+                } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                    has_refs = true;
+                }
             }
         }
-        // Build error message manually
-        std::string unresolved_str;
-        for (size_t i = 0; i < unresolved.size(); ++i) {
-            if (i > 0) {
-                unresolved_str += ", ";
-            }
-            unresolved_str += unresolved[i];
-        }
-        TT_THROW("Circular dependencies detected. Unresolved: {}", unresolved_str);
+
+        has_asic_locations[type] = has_asic;
+        has_grouping_refs[type] = has_refs;
     }
 
-    // Step 6: Store resolved groupings
-    resolved_groupings_cache_ = std::move(groupings_by_name);
+    // Validation: At least one leaf grouping uses ASIC locations
+    // A leaf grouping is one that has ASIC locations and no grouping references
+    bool has_leaf_with_asic = false;
+    for (const auto& type : all_grouping_types) {
+        if (has_asic_locations[type] && !has_grouping_refs[type]) {
+            has_leaf_with_asic = true;
+            break;
+        }
+    }
+    if (!has_leaf_with_asic) {
+        errors.push_back("At least one leaf grouping must use ASIC locations");
+    }
+}
 
-    // Step 7: Final validation - all groupings should have ASIC counts > 0
+void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::string>& errors) const {
+    // Build dependency graph and identify groupings
+    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
+    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
+    std::unordered_set<std::string> all_grouping_types;
+
+    // First pass: identify all groupings and their characteristics
+    for (const auto& [type, groupings] : resolved_groupings_cache_) {
+        all_grouping_types.insert(type);
+        bool has_asic = false;
+        bool has_refs = false;
+
+        for (const auto& grouping : groupings) {
+            for (const auto& item : grouping.items) {
+                if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                    has_asic = true;
+                } else if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                    has_refs = true;
+                }
+            }
+        }
+
+        has_asic_locations[type] = has_asic;
+        has_grouping_refs[type] = has_refs;
+    }
+
+    // Validation: Only leaf groupings should use ASIC locations, others should not
+    // A grouping that has grouping references should not have ASIC locations
+    for (const auto& type : all_grouping_types) {
+        if (has_grouping_refs[type] && has_asic_locations[type]) {
+            errors.push_back(fmt::format(
+                "Grouping '{}' uses ASIC locations but also has grouping references. Only leaf groupings should use "
+                "ASIC locations",
+                type));
+        }
+    }
+}
+
+void PhysicalGroupingDescriptor::validate_no_cycles(std::vector<std::string>& errors) const {
+    // Build dependency graph
+    std::unordered_map<std::string, std::set<std::string>> dependencies;  // grouping -> set of dependencies
+    std::unordered_set<std::string> all_grouping_types;
+
+    for (const auto& [type, groupings] : resolved_groupings_cache_) {
+        all_grouping_types.insert(type);
+        for (const auto& grouping : groupings) {
+            for (const auto& item : grouping.items) {
+                if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
+                    dependencies[type].insert(item.grouping_name);
+                }
+            }
+        }
+    }
+
+    // Use DFS to detect cycles
+    std::unordered_map<std::string, int> color;  // 0 = white (unvisited), 1 = gray (visiting), 2 = black (visited)
+    for (const auto& type : all_grouping_types) {
+        color[type] = 0;
+    }
+
+    std::function<bool(const std::string&)> has_cycle = [&](const std::string& node) -> bool {
+        if (color[node] == 1) {
+            // Gray node - cycle detected
+            return true;
+        }
+        if (color[node] == 2) {
+            // Black node - already processed
+            return false;
+        }
+
+        color[node] = 1;  // Mark as gray (visiting)
+
+        // Check all dependencies
+        auto deps_it = dependencies.find(node);
+        if (deps_it != dependencies.end()) {
+            for (const auto& dep : deps_it->second) {
+                if (all_grouping_types.find(dep) != all_grouping_types.end()) {
+                    if (has_cycle(dep)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        color[node] = 2;  // Mark as black (visited)
+        return false;
+    };
+
+    for (const auto& type : all_grouping_types) {
+        if (color[type] == 0) {
+            if (has_cycle(type)) {
+                errors.push_back(
+                    fmt::format("Circular dependencies detected in grouping hierarchy involving '{}'", type));
+                break;  // Only report one cycle
+            }
+        }
+    }
+}
+
+void PhysicalGroupingDescriptor::validate_instance_counts(std::vector<std::string>& errors) const {
+    // Set of preset names that don't need to exist (can be auto-populated)
+    std::unordered_set<std::string> preset_names = {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4", "HOSTS", "MESH", "meshes"};
+
+    // Validation: all groupings should have ASIC counts > 0
     // Exception: groupings that only reference preset names (which can be auto-populated) may have 0 count
     for (const auto& [name, groupings] : resolved_groupings_cache_) {
         for (const auto& grouping : groupings) {
@@ -1038,7 +1197,7 @@ void PhysicalGroupingDescriptor::populate() {
 
                 // Allow zero count only if grouping only references preset names
                 if (!only_preset_refs || !has_any_refs) {
-                    TT_THROW("Grouping '{}' has zero ASIC count after resolution", name);
+                    errors.push_back(fmt::format("Grouping '{}' has zero ASIC count after resolution", name));
                 }
             }
         }
@@ -1047,9 +1206,6 @@ void PhysicalGroupingDescriptor::populate() {
 
 void PhysicalGroupingDescriptor::validate_required_groupings(
     const proto::PhysicalGroupings& proto, std::vector<std::string>& errors) {
-    // Note: MESH and preset types (TRAY_1, TRAY_2, TRAY_3, TRAY_4, HOSTS) are not required
-    // They can be auto-populated from PhysicalSystemDescriptor if missing
-
     // Validate grouping names are non-empty and types are set
     for (int i = 0; i < proto.groupings_size(); ++i) {
         const auto& grouping = proto.groupings(i);
@@ -1067,6 +1223,80 @@ void PhysicalGroupingDescriptor::validate_required_groupings(
                 name,
                 i));
         }
+    }
+
+    // Count tray preset types and custom "hosts" groupings
+    int tray_1_count = 0;
+    int tray_2_count = 0;
+    int tray_3_count = 0;
+    int tray_4_count = 0;
+    int hosts_count = 0;
+    int meshes_count = 0;
+
+    for (const auto& grouping : proto.groupings()) {
+        if (grouping.has_custom_type()) {
+            std::string custom_type = grouping.custom_type();
+            if (custom_type == "hosts") {
+                hosts_count++;
+            } else if (custom_type == "meshes" || custom_type == "MESH") {
+                meshes_count++;
+            }
+        } else if (grouping.has_preset_type()) {
+            switch (grouping.preset_type()) {
+                case proto::TRAY_1: tray_1_count++; break;
+                case proto::TRAY_2: tray_2_count++; break;
+                case proto::TRAY_3: tray_3_count++; break;
+                case proto::TRAY_4: tray_4_count++; break;
+                case proto::MESH: meshes_count++; break;
+                default: break;
+            }
+        }
+    }
+
+    // Validate exactly one TRAY_1 grouping
+    if (tray_1_count == 0) {
+        errors.push_back("Exactly one grouping with preset_type 'TRAY_1' is required but none are defined");
+    } else if (tray_1_count > 1) {
+        errors.push_back(
+            fmt::format("Exactly one grouping with preset_type 'TRAY_1' is required but {} are defined", tray_1_count));
+    }
+
+    // Validate exactly one TRAY_2 grouping
+    if (tray_2_count == 0) {
+        errors.push_back("Exactly one grouping with preset_type 'TRAY_2' is required but none are defined");
+    } else if (tray_2_count > 1) {
+        errors.push_back(
+            fmt::format("Exactly one grouping with preset_type 'TRAY_2' is required but {} are defined", tray_2_count));
+    }
+
+    // Validate exactly one TRAY_3 grouping
+    if (tray_3_count == 0) {
+        errors.push_back("Exactly one grouping with preset_type 'TRAY_3' is required but none are defined");
+    } else if (tray_3_count > 1) {
+        errors.push_back(
+            fmt::format("Exactly one grouping with preset_type 'TRAY_3' is required but {} are defined", tray_3_count));
+    }
+
+    // Validate exactly one TRAY_4 grouping
+    if (tray_4_count == 0) {
+        errors.push_back("Exactly one grouping with preset_type 'TRAY_4' is required but none are defined");
+    } else if (tray_4_count > 1) {
+        errors.push_back(
+            fmt::format("Exactly one grouping with preset_type 'TRAY_4' is required but {} are defined", tray_4_count));
+    }
+
+    // Validate exactly one "hosts" grouping
+    if (hosts_count == 0) {
+        errors.push_back("Exactly one grouping with custom_type 'hosts' is required but none are defined");
+    } else if (hosts_count > 1) {
+        errors.push_back(
+            fmt::format("Exactly one grouping with custom_type 'hosts' is required but {} are defined", hosts_count));
+    }
+
+    // Validate at least one "meshes" grouping (still required)
+    if (meshes_count == 0) {
+        errors.push_back(
+            "At least one grouping with custom_type 'meshes' or preset_type 'MESH' is required but none are defined");
     }
 }
 
@@ -1139,26 +1369,13 @@ void PhysicalGroupingDescriptor::validate_counts(
         std::string type = get_grouping_type_string(grouping);
         uint32_t instance_count = static_cast<uint32_t>(grouping.instances_size());
 
-        // Validate instance count
-        if (type == "meshes" || type == "MESH") {
-            // Meshes (both custom type and preset type) can have count >= 1
-            if (instance_count < 1) {
-                errors.push_back(fmt::format(
-                    "Grouping '{}' (type '{}') has {} instances; meshes must have at least 1 instance",
-                    name,
-                    type,
-                    instance_count));
-            }
-        } else {
-            // For non-meshes groupings: must have at least 2 instances (unless single instance is explicitly allowed)
-            if (instance_count < 2) {
-                errors.push_back(fmt::format(
-                    "Grouping '{}' (type '{}') has {} instances; groupings other than meshes must have at least 2 "
-                    "instances",
-                    name,
-                    type,
-                    instance_count));
-            }
+        // Validate instance count - all groupings must have at least 1 instance
+        if (instance_count < 1) {
+            errors.push_back(fmt::format(
+                "Grouping '{}' (type '{}') has {} instances; all groupings must have at least 1 instance",
+                name,
+                type,
+                instance_count));
         }
     }
 }
@@ -1300,7 +1517,8 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
                 mesh_flat_adjacency_graph.second,   // global: physical grouping that contains the pattern
                 mgd_grouping_info.adjacency_graph,  // target: MGD mesh pattern to find
                 {},
-                ConnectionValidationMode::STRICT);
+                ConnectionValidationMode::STRICT,
+                true);  // quiet_mode
 
             size_t matched_nodes = mapping_result.target_to_global.size();
             size_t target_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
@@ -1374,965 +1592,11 @@ AdjacencyGraph<uint32_t> PhysicalGroupingDescriptor::build_flattened_adjacency_g
     return {};
 }
 
-void PhysicalGroupingDescriptor::validate_and_populate_preformed_groups_from_physical_system(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    // Get all ASIC descriptors
-    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
-
-    if (asic_descriptors.empty()) {
-        return;  // No ASICs to group
-    }
-
-    // Collect all existing names from resolved_groupings_cache_ to ensure uniqueness
-    std::unordered_set<std::string> existing_names;
-    for (const auto& [type, groupings] : resolved_groupings_cache_) {
-        for (const auto& grouping : groupings) {
-            existing_names.insert(grouping.name);
-        }
-    }
-
-    // Helper function to generate a unique name
-    auto generate_unique_name = [&](const std::string& base_type, uint32_t start_id = 0) -> std::string {
-        uint32_t id = start_id;
-        std::string candidate_name;
-        do {
-            candidate_name = fmt::format("{}_{}", base_type, id);
-            id++;
-        } while (existing_names.find(candidate_name) != existing_names.end());
-
-        // Add the new name to the set to prevent future duplicates
-        existing_names.insert(candidate_name);
-        return candidate_name;
-    };
-
-    // ===== PHASE 1 & 2: Build structure from PSD (needed for both validation and creation) =====
-    // Group ASICs by (hostname, tray_id) to form trays
-    // Map: (hostname, tray_id) -> vector of (asic_id, asic_location)
-    std::map<std::pair<std::string, uint32_t>, std::vector<std::pair<tt::tt_metal::AsicID, tt::tt_metal::ASICLocation>>>
-        trays;
-
-    // Map: (hostname, tray_id) -> set of ASIC IDs in this tray (for building adjacency graph)
-    std::map<std::pair<std::string, uint32_t>, std::unordered_set<tt::tt_metal::AsicID>> tray_asic_id_sets;
-
-    for (const auto& [asic_id, asic_desc] : asic_descriptors) {
-        uint32_t tray_id_value = *asic_desc.tray_id;
-        auto tray_key = std::make_pair(asic_desc.host_name, tray_id_value);
-        trays[tray_key].push_back({asic_id, asic_desc.asic_location});
-        tray_asic_id_sets[tray_key].insert(asic_id);
-    }
-
-    // Group trays by hostname
-    std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> host_trays;
-    for (const auto& [host_tray_pair, asics] : trays) {
-        const auto& [hostname, tray_id] = host_tray_pair;
-        host_trays[hostname].push_back({hostname, tray_id});
-    }
-
-    // Sort trays within each host by tray_id
-    for (auto& [hostname, tray_list] : host_trays) {
-        std::sort(tray_list.begin(), tray_list.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
-    }
-
-    // Map: (hostname, tray_id) -> tray name (TRAY_1, TRAY_2, etc.)
-    std::map<std::pair<std::string, uint32_t>, std::string> tray_name_map;
-
-    // Assign tray names (TRAY_1, TRAY_2, TRAY_3, TRAY_4) for each host
-    for (auto& [hostname, tray_list] : host_trays) {
-        for (size_t i = 0; i < tray_list.size() && i < 4; ++i) {
-            std::string tray_name = "TRAY_" + std::to_string(i + 1);
-            tray_name_map[tray_list[i]] = tray_name;
-        }
-    }
-
-    // Helper function to build adjacency graph for a tray based on ASIC locations
-    // Node IDs in the graph are ASIC location values (1-8)
-    auto build_tray_adjacency_graph =
-        [&](const std::vector<std::pair<tt::tt_metal::AsicID, tt::tt_metal::ASICLocation>>& tray_asics,
-            const std::unordered_set<tt::tt_metal::AsicID>& tray_asic_ids) -> AdjacencyGraph<uint32_t> {
-        std::map<uint32_t, std::vector<uint32_t>> adj_map;
-
-        // Build a map from ASIC location to ASIC ID for quick lookup
-        std::unordered_map<tt::tt_metal::AsicID, uint32_t> asic_id_to_location;
-        for (const auto& [asic_id, asic_location] : tray_asics) {
-            asic_id_to_location[asic_id] = *asic_location;
-        }
-
-        // Build adjacency graph: for each ASIC in the tray, find its neighbors
-        // and add edges between their ASIC locations
-        std::set<std::pair<uint32_t, uint32_t>> processed_edges;
-        for (const auto& [asic_id, asic_location] : tray_asics) {
-            uint32_t src_location = *asic_location;
-            std::vector<tt::tt_metal::AsicID> neighbors = physical_system_descriptor.get_asic_neighbors(asic_id);
-
-            for (const auto& neighbor_id : neighbors) {
-                // Only consider neighbors that are in the same tray
-                if (tray_asic_ids.find(neighbor_id) == tray_asic_ids.end()) {
-                    continue;
-                }
-
-                // Get the neighbor's ASIC location
-                auto neighbor_loc_it = asic_id_to_location.find(neighbor_id);
-                if (neighbor_loc_it == asic_id_to_location.end()) {
-                    continue;
-                }
-
-                uint32_t dst_location = neighbor_loc_it->second;
-
-                // Skip self-loops
-                if (src_location == dst_location) {
-                    continue;
-                }
-
-                // Normalize edge pair to avoid duplicates (treat (A,B) and (B,A) as the same)
-                auto edge_pair = std::minmax(src_location, dst_location);
-
-                // Only add edge if not already processed (prevents duplicates)
-                if (processed_edges.insert(edge_pair).second) {
-                    // Add bidirectional edge (undirected graph)
-                    adj_map[src_location].push_back(dst_location);
-                    adj_map[dst_location].push_back(src_location);
-                }
-            }
-        }
-
-        return AdjacencyGraph<uint32_t>(adj_map);
-    };
-
-    // Helper function to check if two tray groupings are equivalent
-    // (same ASIC locations and same adjacency graph)
-    auto trays_are_equivalent = [](const GroupingInfo& a, const GroupingInfo& b) -> bool {
-        if (a.type != b.type) {
-            return false;
-        }
-        if (a.asic_count != b.asic_count) {
-            return false;
-        }
-        if (a.items.size() != b.items.size()) {
-            return false;
-        }
-
-        // Check that ASIC locations match
-        for (size_t i = 0; i < a.items.size(); ++i) {
-            if (a.items[i].type != GroupingItemInfo::ItemType::ASIC_LOCATION ||
-                b.items[i].type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                return false;
-            }
-            if (a.items[i].asic_location != b.items[i].asic_location) {
-                return false;
-            }
-        }
-
-        // Check that adjacency graphs are equivalent
-        // Compare node sets and edges
-        const auto& a_nodes = a.adjacency_graph.get_nodes();
-        const auto& b_nodes = b.adjacency_graph.get_nodes();
-        if (a_nodes != b_nodes) {
-            return false;
-        }
-
-        // Check edges for each node
-        for (uint32_t node : a_nodes) {
-            const auto& a_neighbors = a.adjacency_graph.get_neighbors(node);
-            const auto& b_neighbors = b.adjacency_graph.get_neighbors(node);
-            std::vector<uint32_t> a_sorted(a_neighbors.begin(), a_neighbors.end());
-            std::vector<uint32_t> b_sorted(b_neighbors.begin(), b_neighbors.end());
-            std::sort(a_sorted.begin(), a_sorted.end());
-            std::sort(b_sorted.begin(), b_sorted.end());
-            if (a_sorted != b_sorted) {
-                return false;
-            }
-        }
-
-        return true;
-    };
-
-    // Helper function to build tray grouping from physical system
-    auto build_tray_info_from_psd =
-        [&](const std::string& tray_type,
-            const std::vector<std::pair<tt::tt_metal::AsicID, tt::tt_metal::ASICLocation>>& tray_asics,
-            const std::unordered_set<tt::tt_metal::AsicID>& tray_asic_ids) -> GroupingInfo {
-        GroupingInfo tray_info;
-        tray_info.type = tray_type;
-        tray_info.asic_count = static_cast<uint32_t>(tray_asics.size());
-
-        // Sort ASICs by location to ensure consistent ordering
-        std::vector<std::pair<tt::tt_metal::AsicID, tt::tt_metal::ASICLocation>> sorted_asics = tray_asics;
-        std::sort(sorted_asics.begin(), sorted_asics.end(), [](const auto& a, const auto& b) {
-            return *a.second < *b.second;
-        });
-
-        // Create items with ASIC locations
-        for (const auto& [asic_id, asic_location] : sorted_asics) {
-            GroupingItemInfo item;
-            item.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
-            item.asic_location = *asic_location;
-            tray_info.items.push_back(item);
-        }
-
-        // Build adjacency graph based on per-tray ASIC locations
-        tray_info.adjacency_graph = build_tray_adjacency_graph(tray_asics, tray_asic_ids);
-
-        // Populate corner orientation for mesh groupings based on row-major mesh structure
-        // Infer mesh dimensions from adjacency graph structure (analyze connectivity patterns)
-        // For a row-major mesh, we can infer dimensions by analyzing the graph structure
-        size_t num_asics = tray_info.items.size();
-        int32_t rows = 0, cols = 0;
-
-        // Try to infer mesh dimensions from adjacency graph structure
-        // For a row-major mesh, corner nodes have degree 2, edge nodes have degree 3, interior nodes have degree 4
-        const auto& nodes = tray_info.adjacency_graph.get_nodes();
-        if (!nodes.empty() && num_asics > 0) {
-            // Count nodes by degree to infer mesh structure
-            std::map<size_t, size_t> degree_count;
-            for (uint32_t node : nodes) {
-                size_t degree = tray_info.adjacency_graph.get_neighbors(node).size();
-                degree_count[degree]++;
-            }
-
-            // Standard configurations based on number of ASICs and degree patterns
-            if (num_asics == 8) {
-                // Standard tray: 2x4 mesh (4 corners with degree 2, 4 edges with degree 3)
-                rows = 2;
-                cols = 4;
-            } else if (num_asics == 4) {
-                // 2x2 mesh (4 corners, all with degree 2)
-                rows = 2;
-                cols = 2;
-            } else if (num_asics == 16) {
-                // 4x4 mesh
-                rows = 4;
-                cols = 4;
-            } else if (num_asics == 32) {
-                // 4x8 mesh
-                rows = 4;
-                cols = 8;
-            }
-            // Add more configurations as needed
-        }
-
-        // If we have valid dimensions, populate corner orientations based on row-major mesh position
-        // For 1D meshes, endpoints can have multiple orientations
-        // For 1x1 mesh, the single item has all 4 orientations
-        if (rows > 0 && cols > 0 && num_asics == static_cast<size_t>(rows * cols)) {
-            if (rows == 1 && cols == 1) {
-                // 1x1 mesh: single item has all 4 orientations
-                if (num_asics == 1) {
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                }
-            } else if (rows == 1) {
-                // 1D row mesh (1xN): first item has NW+SW, last item has NE+SE
-                if (num_asics > 0) {
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                }
-                if (num_asics > 1) {
-                    size_t last_idx = num_asics - 1;
-                    tray_info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                    tray_info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                }
-            } else if (cols == 1) {
-                // 1D column mesh (Nx1): first item has NW+NE, last item has SW+SE
-                if (num_asics > 0) {
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                    tray_info.items[0].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                }
-                if (num_asics > 1) {
-                    size_t last_idx = num_asics - 1;
-                    tray_info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                    tray_info.items[last_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                }
-            } else {
-                // 2D mesh: standard 4 corners
-                size_t nw_idx = 0;
-                size_t ne_idx = static_cast<size_t>(cols - 1);
-                size_t sw_idx = static_cast<size_t>((rows - 1) * cols);
-                size_t se_idx = static_cast<size_t>((rows - 1) * cols + (cols - 1));
-
-                if (nw_idx < num_asics) {
-                    tray_info.items[nw_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NW);
-                }
-                if (ne_idx < num_asics && ne_idx != nw_idx) {
-                    tray_info.items[ne_idx].corners.push_back(GroupingItemInfo::CornerOrientation::NE);
-                }
-                if (sw_idx < num_asics && sw_idx != nw_idx && sw_idx != ne_idx) {
-                    tray_info.items[sw_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SW);
-                }
-                if (se_idx < num_asics && se_idx != nw_idx && se_idx != ne_idx && se_idx != sw_idx) {
-                    tray_info.items[se_idx].corners.push_back(GroupingItemInfo::CornerOrientation::SE);
-                }
-            }
-        }
-
-        return tray_info;
-    };
-
-    // Helper function to check if two host groupings are equivalent
-    // (same tray references in same order)
-    auto hosts_are_equivalent = [](const GroupingInfo& a, const GroupingInfo& b) -> bool {
-        if (a.type != b.type) {
-            return false;
-        }
-        if (a.items.size() != b.items.size()) {
-            return false;
-        }
-
-        // Check that tray references match in order
-        for (size_t i = 0; i < a.items.size(); ++i) {
-            if (a.items[i].type != GroupingItemInfo::ItemType::GROUPING_REF ||
-                b.items[i].type != GroupingItemInfo::ItemType::GROUPING_REF) {
-                return false;
-            }
-            if (a.items[i].grouping_name != b.items[i].grouping_name) {
-                return false;
-            }
-        }
-
-        return true;
-    };
-
-    // Helper function to build host grouping from physical system
-    auto build_host_info_from_psd =
-        [&](const std::string& /* hostname */,
-            const std::vector<std::pair<std::string, uint32_t>>& tray_list) -> GroupingInfo {
-        GroupingInfo host_info;
-        host_info.type = "HOSTS";
-        host_info.asic_count = 0;
-
-        // Create items referencing trays
-        for (const auto& tray_pair : tray_list) {
-            auto tray_name_it = tray_name_map.find(tray_pair);
-            if (tray_name_it == tray_name_map.end()) {
-                continue;
-            }
-
-            const std::string& tray_name = tray_name_it->second;
-
-            GroupingItemInfo item;
-            item.type = GroupingItemInfo::ItemType::GROUPING_REF;
-            item.grouping_name = tray_name;
-            host_info.items.push_back(item);
-
-            // Add ASIC count from tray
-            auto tray_groupings_it = resolved_groupings_cache_.find(tray_name);
-            if (tray_groupings_it != resolved_groupings_cache_.end() && !tray_groupings_it->second.empty()) {
-                host_info.asic_count += tray_groupings_it->second[0].asic_count;
-            }
-        }
-
-        // Build adjacency graph for host based on tray topology
-        // For 4 trays, assume 2x2 grid topology (standard configuration)
-        // Node IDs are instance indices (0, 1, 2, 3) corresponding to tray positions
-        if (host_info.items.size() == 4) {
-            // Build 2x2 row-major mesh: trays arranged as:
-            // TRAY_1 (0)  TRAY_2 (1)
-            // TRAY_3 (2)  TRAY_4 (3)
-            std::vector<uint32_t> instance_ids = {0, 1, 2, 3};
-            std::vector<int32_t> dims = {2, 2};
-            host_info.adjacency_graph = build_row_major_mesh_graph(instance_ids, dims, "");
-        } else {
-            // For other configurations, use empty graph
-            host_info.adjacency_graph = AdjacencyGraph<uint32_t>();
-        }
-
-        return host_info;
-    };
-
-    // ===== PHASE 1: If groupings file definitions already exist, validate them against PSD =====
-    // Check if TRAY_* and HOSTS groupings already exist from file definitions
-    bool has_tray_groupings_from_file = false;
-    bool has_host_groupings_from_file = false;
-
-    for (const std::string& tray_type : {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4"}) {
-        auto it = resolved_groupings_cache_.find(tray_type);
-        if (it != resolved_groupings_cache_.end() && !it->second.empty()) {
-            has_tray_groupings_from_file = true;
-            break;
-        }
-    }
-
-    {
-        auto it = resolved_groupings_cache_.find("HOSTS");
-        if (it != resolved_groupings_cache_.end() && !it->second.empty()) {
-            has_host_groupings_from_file = true;
-        }
-    }
-
-    // If groupings exist from file, validate they match PSD structure
-    if (has_tray_groupings_from_file) {
-        // Validate each tray type that exists in PSD
-        for (const auto& [host_tray_pair, tray_asics] : trays) {
-            auto tray_name_it = tray_name_map.find(host_tray_pair);
-            if (tray_name_it == tray_name_map.end()) {
-                continue;  // Skip if tray name not assigned (more than 4 trays per host)
-            }
-
-            const std::string& tray_type = tray_name_it->second;
-            const auto& tray_asic_ids = tray_asic_id_sets[host_tray_pair];
-
-            // Build expected tray info from PSD
-            GroupingInfo expected_tray_info = build_tray_info_from_psd(tray_type, tray_asics, tray_asic_ids);
-
-            // Check if this tray type exists in cache
-            auto existing_trays_it = resolved_groupings_cache_.find(tray_type);
-            if (existing_trays_it != resolved_groupings_cache_.end() && !existing_trays_it->second.empty()) {
-                // Validate that at least one existing grouping matches expected
-                bool found_match = false;
-                for (const auto& existing_tray : existing_trays_it->second) {
-                    if (trays_are_equivalent(expected_tray_info, existing_tray)) {
-                        found_match = true;
-                        break;
-                    }
-                }
-
-                if (!found_match) {
-                    // Build debug strings showing ASIC locations in order
-                    std::string discovered_locations;
-                    for (size_t i = 0; i < expected_tray_info.items.size(); ++i) {
-                        if (i > 0) {
-                            discovered_locations += ", ";
-                        }
-                        discovered_locations +=
-                            fmt::format("ASIC_LOCATION_{}", expected_tray_info.items[i].asic_location);
-                    }
-
-                    std::string file_locations;
-                    std::string discovered_graph_edges, file_graph_edges;
-                    std::string discovered_node_mapping, file_node_mapping;
-                    if (!existing_trays_it->second.empty()) {
-                        const auto& existing_tray = existing_trays_it->second[0];
-                        for (size_t i = 0; i < existing_tray.items.size(); ++i) {
-                            if (i > 0) {
-                                file_locations += ", ";
-                            }
-                            file_locations += fmt::format("ASIC_LOCATION_{}", existing_tray.items[i].asic_location);
-                        }
-
-                        // Build node ID to ASIC location mappings
-                        // Discovered: node IDs are ASIC locations
-                        const auto& discovered_nodes = expected_tray_info.adjacency_graph.get_nodes();
-                        for (uint32_t node : discovered_nodes) {
-                            if (!discovered_node_mapping.empty()) {
-                                discovered_node_mapping += ", ";
-                            }
-                            discovered_node_mapping += fmt::format("node_{}=ASIC_LOCATION_{}", node, node);
-                        }
-
-                        // File: node IDs are ASIC locations (for tray groupings), find corresponding item
-                        const auto& file_nodes = existing_tray.adjacency_graph.get_nodes();
-                        for (uint32_t node : file_nodes) {
-                            if (!file_node_mapping.empty()) {
-                                file_node_mapping += ", ";
-                            }
-                            // For tray groupings, node IDs are ASIC locations, so find the item with this ASIC location
-                            bool found = false;
-                            for (size_t i = 0; i < existing_tray.items.size(); ++i) {
-                                if (existing_tray.items[i].type == GroupingItemInfo::ItemType::ASIC_LOCATION &&
-                                    existing_tray.items[i].asic_location == node) {
-                                    file_node_mapping += fmt::format("node_{}=ASIC_LOCATION_{}(idx_{})", node, node, i);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                file_node_mapping += fmt::format("node_{}=unknown", node);
-                            }
-                        }
-
-                        // Build adjacency graph edge descriptions
-                        for (uint32_t node : discovered_nodes) {
-                            const auto& neighbors = expected_tray_info.adjacency_graph.get_neighbors(node);
-                            for (uint32_t neighbor : neighbors) {
-                                if (node < neighbor) {  // Avoid duplicate edges
-                                    if (!discovered_graph_edges.empty()) {
-                                        discovered_graph_edges += ", ";
-                                    }
-                                    discovered_graph_edges +=
-                                        fmt::format("ASIC_LOCATION_{}->ASIC_LOCATION_{}", node, neighbor);
-                                }
-                            }
-                        }
-
-                        for (uint32_t node : file_nodes) {
-                            const auto& neighbors = existing_tray.adjacency_graph.get_neighbors(node);
-                            for (uint32_t neighbor : neighbors) {
-                                if (node < neighbor) {  // Avoid duplicate edges
-                                    if (!file_graph_edges.empty()) {
-                                        file_graph_edges += ", ";
-                                    }
-                                    // For tray groupings, node IDs are ASIC locations
-                                    file_graph_edges +=
-                                        fmt::format("ASIC_LOCATION_{}->ASIC_LOCATION_{}", node, neighbor);
-                                }
-                            }
-                        }
-                    }
-
-                    TT_THROW(
-                        "TRAY grouping type '{}' already exists but does not match physical system. "
-                        "Expected {} ASICs with locations matching physical system, but found different configuration. "
-                        "Discovered from PSD (row-major sorted): [{}]. "
-                        "File definition: [{}]. "
-                        "Discovered node mapping (node_id=ASIC_LOCATION): [{}]. "
-                        "File node mapping (instance_id=ASIC_LOCATION): [{}]. "
-                        "Discovered adjacency graph edges: [{}]. "
-                        "File adjacency graph edges: [{}].",
-                        tray_type,
-                        expected_tray_info.asic_count,
-                        discovered_locations,
-                        file_locations,
-                        discovered_node_mapping.empty() ? "none" : discovered_node_mapping,
-                        file_node_mapping.empty() ? "none" : file_node_mapping,
-                        discovered_graph_edges.empty() ? "none" : discovered_graph_edges,
-                        file_graph_edges.empty() ? "none" : file_graph_edges);
-                }
-            }
-        }
-    }
-
-    if (has_host_groupings_from_file) {
-        // Validate host groupings match PSD structure
-        for (const auto& [hostname, tray_list] : host_trays) {
-            if (tray_list.size() > 4) {
-                continue;  // Skip hosts with more than 4 trays (not standard)
-            }
-
-            // Build expected host info from PSD
-            GroupingInfo expected_host_info = build_host_info_from_psd(hostname, tray_list);
-
-            // Check if HOSTS grouping exists in cache
-            auto existing_hosts_it = resolved_groupings_cache_.find("HOSTS");
-            if (existing_hosts_it != resolved_groupings_cache_.end() && !existing_hosts_it->second.empty()) {
-                // For host groupings, check if the number of trays matches first
-                // If the number of trays doesn't match, skip Phase 1 validation and let Phase 3
-                // handle it with topology solver validation (which will catch topology mismatches like 2x3 vs 2x2)
-                bool tray_count_matches = false;
-                for (const auto& existing_host : existing_hosts_it->second) {
-                    if (existing_host.items.size() == expected_host_info.items.size()) {
-                        tray_count_matches = true;
-                        break;
-                    }
-                }
-
-                // Only do strict Phase 1 validation if tray counts match
-                // Otherwise, let Phase 3 topology solver handle the validation
-                if (tray_count_matches) {
-                    // Validate that at least one existing grouping matches expected
-                    bool found_match = false;
-                    for (const auto& existing_host : existing_hosts_it->second) {
-                        if (hosts_are_equivalent(expected_host_info, existing_host)) {
-                            found_match = true;
-                            break;
-                        }
-                    }
-
-                    if (!found_match) {
-                        // Build tray names string for error message
-                        std::string tray_names;
-                        for (size_t i = 0; i < expected_host_info.items.size(); ++i) {
-                            if (i > 0) {
-                                tray_names += ", ";
-                            }
-                            tray_names += expected_host_info.items[i].grouping_name;
-                        }
-                        TT_THROW(
-                            "HOSTS grouping type already exists but does not match physical system. "
-                            "Expected {} trays ({}) but found different configuration.",
-                            expected_host_info.items.size(),
-                            tray_names);
-                    }
-                }
-                // If tray counts don't match, skip Phase 1 validation - Phase 3 will catch it with topology solver
-            }
-        }
-    }
-
-    // ===== PHASE 2: Build grouping info out of physical system descriptor =====
-    // Process each tray: find matching existing grouping or create new one
-    if (!has_tray_groupings_from_file) {
-        for (const auto& [host_tray_pair, tray_asics] : trays) {
-            auto tray_name_it = tray_name_map.find(host_tray_pair);
-            if (tray_name_it == tray_name_map.end()) {
-                continue;  // Skip if tray name not assigned (more than 4 trays per host)
-            }
-
-            const std::string& tray_type = tray_name_it->second;  // e.g., "TRAY_1"
-            const auto& tray_asic_ids = tray_asic_id_sets[host_tray_pair];
-
-            // Build tray info from physical system descriptor
-            GroupingInfo tray_info_from_psd = build_tray_info_from_psd(tray_type, tray_asics, tray_asic_ids);
-
-            // Check if an equivalent tray grouping already exists
-            auto existing_trays_it = resolved_groupings_cache_.find(tray_type);
-            bool found_match = false;
-
-            if (existing_trays_it != resolved_groupings_cache_.end()) {
-                for (const auto& existing_tray : existing_trays_it->second) {
-                    if (trays_are_equivalent(tray_info_from_psd, existing_tray)) {
-                        found_match = true;
-                        break;
-                    }
-                }
-            }
-
-            // If no match found, create a new tray grouping
-            if (!found_match) {
-                tray_info_from_psd.name = generate_unique_name(tray_type);
-                resolved_groupings_cache_[tray_type].push_back(tray_info_from_psd);
-            }
-        }
-    }
-
-    // Process each host: find matching existing grouping or create new one
-    if (!has_host_groupings_from_file) {
-        for (const auto& [hostname, tray_list] : host_trays) {
-            if (tray_list.size() > 4) {
-                continue;  // Skip hosts with more than 4 trays (not standard)
-            }
-
-            // Build host info from physical system descriptor
-            GroupingInfo host_info_from_psd = build_host_info_from_psd(hostname, tray_list);
-
-            // Check if an equivalent host grouping already exists
-            auto existing_hosts_it = resolved_groupings_cache_.find("HOSTS");
-            bool found_match = false;
-
-            if (existing_hosts_it != resolved_groupings_cache_.end()) {
-                for (const auto& existing_host : existing_hosts_it->second) {
-                    if (hosts_are_equivalent(host_info_from_psd, existing_host)) {
-                        found_match = true;
-                        break;
-                    }
-                }
-            }
-
-            // If no match found, create a new host grouping
-            if (!found_match) {
-                host_info_from_psd.name = generate_unique_name("HOSTS");
-                resolved_groupings_cache_["HOSTS"].push_back(host_info_from_psd);
-            }
-        }
-    }
-
-    // ===== PHASE 3: Use topology solver to validate file groupings map onto discovered PSD groupings =====
-    // This phase validates that groupings from file can be mapped onto discovered groupings from PSD
-    // using topology solver with constraints ensuring trays match (ASIC locations)
-    if (has_tray_groupings_from_file) {
-        // For each tray type, validate using topology solver
-        for (const auto& [host_tray_pair, tray_asics] : trays) {
-            auto tray_name_it = tray_name_map.find(host_tray_pair);
-            if (tray_name_it == tray_name_map.end()) {
-                continue;  // Skip if tray name not assigned (more than 4 trays per host)
-            }
-
-            const std::string& tray_type = tray_name_it->second;
-            const auto& tray_asic_ids = tray_asic_id_sets[host_tray_pair];
-
-            // Get file grouping (target) and PSD grouping (global)
-            auto file_tray_it = resolved_groupings_cache_.find(tray_type);
-            if (file_tray_it == resolved_groupings_cache_.end() || file_tray_it->second.empty()) {
-                continue;  // No file grouping to validate
-            }
-
-            // Build PSD grouping for this tray
-            GroupingInfo psd_tray_info = build_tray_info_from_psd(tray_type, tray_asics, tray_asic_ids);
-
-            // Try to map each file grouping onto the PSD grouping
-            for (const auto& file_tray_info : file_tray_it->second) {
-                // Build trait maps for ASIC locations (constraints)
-                // Target nodes = ASIC locations from file grouping
-                // Global nodes = ASIC locations from PSD grouping
-                std::map<uint32_t, uint32_t> target_traits;  // target_node -> asic_location
-                std::map<uint32_t, uint32_t> global_traits;  // global_node -> asic_location
-
-                // Build target traits from file grouping items
-                for (const auto& item : file_tray_info.items) {
-                    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                        // Use ASIC location as both node ID and trait value
-                        uint32_t node_id = item.asic_location;
-                        target_traits[node_id] = item.asic_location;
-                    }
-                }
-
-                // Build global traits from PSD grouping items
-                for (const auto& item : psd_tray_info.items) {
-                    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-                        // Use ASIC location as both node ID and trait value
-                        uint32_t node_id = item.asic_location;
-                        global_traits[node_id] = item.asic_location;
-                    }
-                }
-
-                // Build constraints: ASIC locations must match
-                MappingConstraints<uint32_t, uint32_t> constraints;
-                constraints.add_required_trait_constraint(target_traits, global_traits);
-
-                // Solve mapping: map file grouping (target) onto PSD grouping (global)
-                auto mapping_result = solve_topology_mapping(
-                    file_tray_info.adjacency_graph,  // target: file grouping adjacency graph
-                    psd_tray_info.adjacency_graph,   // global: PSD grouping adjacency graph
-                    constraints,
-                    ConnectionValidationMode::STRICT);
-
-                // Validate that all target nodes are mapped AND all global nodes are used
-                size_t target_nodes = file_tray_info.adjacency_graph.get_nodes().size();
-                size_t global_nodes = psd_tray_info.adjacency_graph.get_nodes().size();
-                size_t mapped_target_nodes = mapping_result.target_to_global.size();
-                size_t used_global_nodes = mapping_result.global_to_target.size();
-
-                if (!mapping_result.success || mapped_target_nodes != target_nodes ||
-                    used_global_nodes != global_nodes) {
-                    TT_THROW(
-                        "TRAY grouping type '{}' from file cannot be mapped onto discovered PSD grouping using "
-                        "topology "
-                        "solver. "
-                        "Target nodes: {} (mapped: {}), Global nodes: {} (used: {}). "
-                        "Error: {}",
-                        tray_type,
-                        target_nodes,
-                        mapped_target_nodes,
-                        global_nodes,
-                        used_global_nodes,
-                        mapping_result.error_message.empty() ? "Mapping failed" : mapping_result.error_message);
-                }
-            }
-        }
-    }
-
-    if (has_host_groupings_from_file) {
-        // For host groupings, validate using topology solver
-        // Host groupings reference trays, so we need to validate tray references match
-        auto file_hosts_it = resolved_groupings_cache_.find("HOSTS");
-        if (file_hosts_it != resolved_groupings_cache_.end() && !file_hosts_it->second.empty()) {
-            // For each host in PSD, build expected host grouping
-            for (const auto& [hostname, tray_list] : host_trays) {
-                if (tray_list.size() > 4) {
-                    continue;  // Skip hosts with more than 4 trays (not standard)
-                }
-
-                // Build PSD host grouping
-                GroupingInfo psd_host_info = build_host_info_from_psd(hostname, tray_list);
-
-                // Try to map each file host grouping onto the PSD host grouping
-                for (const auto& file_host_info : file_hosts_it->second) {
-                    // For host groupings, we validate by checking if tray references match
-                    // Since hosts don't have adjacency graphs (empty), we use a simpler validation:
-                    // Check that the tray reference sequence matches
-
-                    // Build trait maps for tray references (using tray index as trait)
-                    std::map<uint32_t, std::string> target_traits;  // target_node -> tray_name
-                    std::map<uint32_t, std::string> global_traits;  // global_node -> tray_name
-
-                    // Build target traits from file host grouping items
-                    for (size_t i = 0; i < file_host_info.items.size(); ++i) {
-                        const auto& item = file_host_info.items[i];
-                        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                            target_traits[static_cast<uint32_t>(i)] = item.grouping_name;
-                        }
-                    }
-
-                    // Build global traits from PSD host grouping items
-                    for (size_t i = 0; i < psd_host_info.items.size(); ++i) {
-                        const auto& item = psd_host_info.items[i];
-                        if (item.type == GroupingItemInfo::ItemType::GROUPING_REF) {
-                            global_traits[static_cast<uint32_t>(i)] = item.grouping_name;
-                        }
-                    }
-
-                    // Check if tray references match exactly
-                    bool tray_refs_match = false;
-                    if (target_traits.size() == global_traits.size()) {
-                        tray_refs_match = true;
-                        for (const auto& [idx, tray_name] : target_traits) {
-                            auto global_it = global_traits.find(idx);
-                            if (global_it == global_traits.end() || global_it->second != tray_name) {
-                                tray_refs_match = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Get graph sizes
-                    size_t target_nodes = file_host_info.adjacency_graph.get_nodes().size();
-                    size_t global_nodes = psd_host_info.adjacency_graph.get_nodes().size();
-
-                    // For hosts with empty adjacency graphs, validate by tray reference matching
-                    if (target_nodes == 0 && global_nodes == 0) {
-                        if (!tray_refs_match) {
-                            std::string file_trays, psd_trays;
-                            for (const auto& [_, name] : target_traits) {
-                                if (!file_trays.empty()) {
-                                    file_trays += ", ";
-                                }
-                                file_trays += name;
-                            }
-                            for (const auto& [_, name] : global_traits) {
-                                if (!psd_trays.empty()) {
-                                    psd_trays += ", ";
-                                }
-                                psd_trays += name;
-                            }
-                            TT_THROW(
-                                "HOSTS grouping from file cannot be mapped onto discovered PSD grouping. "
-                                "File trays: [{}], PSD trays: [{}]",
-                                file_trays,
-                                psd_trays);
-                        }
-                        // Tray references match, validation passes
-                        continue;
-                    }
-
-                    // If one graph is empty but the other is not, this is an error
-                    // Both should have the same topology specification (both empty or both non-empty)
-                    if ((target_nodes == 0 && global_nodes > 0) || (target_nodes > 0 && global_nodes == 0)) {
-                        std::string file_trays, psd_trays;
-                        for (const auto& [_, name] : target_traits) {
-                            if (!file_trays.empty()) {
-                                file_trays += ", ";
-                            }
-                            file_trays += name;
-                        }
-                        for (const auto& [_, name] : global_traits) {
-                            if (!psd_trays.empty()) {
-                                psd_trays += ", ";
-                            }
-                            psd_trays += name;
-                        }
-                        TT_THROW(
-                            "HOSTS grouping topology mismatch: file grouping has {} nodes, PSD grouping has {} nodes. "
-                            "Both should have the same topology specification. "
-                            "File trays: [{}], PSD trays: [{}]",
-                            target_nodes,
-                            global_nodes,
-                            file_trays,
-                            psd_trays);
-                    }
-
-                    // For non-empty graphs, use topology solver to validate topology matches
-                    // First, check if graphs have the same number of nodes (required for isomorphism)
-                    if (target_nodes != global_nodes) {
-                        std::string file_trays, psd_trays;
-                        for (const auto& [_, name] : target_traits) {
-                            if (!file_trays.empty()) {
-                                file_trays += ", ";
-                            }
-                            file_trays += name;
-                        }
-                        for (const auto& [_, name] : global_traits) {
-                            if (!psd_trays.empty()) {
-                                psd_trays += ", ";
-                            }
-                            psd_trays += name;
-                        }
-                        TT_THROW(
-                            "HOSTS grouping topology mismatch: file grouping has {} nodes, PSD grouping has {} nodes. "
-                            "Both should have the same number of nodes for topology matching. "
-                            "File trays: [{}], PSD trays: [{}]. "
-                            "This indicates the topology in the file (e.g., 2x3=6 nodes) does not match the expected "
-                            "topology "
-                            "from PSD discovery (e.g., 2x2=4 nodes).",
-                            target_nodes,
-                            global_nodes,
-                            file_trays,
-                            psd_trays);
-                    }
-
-                    // Count edges in both graphs to ensure they match (required for isomorphism)
-                    size_t target_edges = 0;
-                    for (uint32_t node : file_host_info.adjacency_graph.get_nodes()) {
-                        target_edges += file_host_info.adjacency_graph.get_neighbors(node).size();
-                    }
-                    target_edges /= 2;  // Divide by 2 since edges are bidirectional
-
-                    size_t global_edges = 0;
-                    for (uint32_t node : psd_host_info.adjacency_graph.get_nodes()) {
-                        global_edges += psd_host_info.adjacency_graph.get_neighbors(node).size();
-                    }
-                    global_edges /= 2;  // Divide by 2 since edges are bidirectional
-
-                    if (target_edges != global_edges) {
-                        std::string file_trays, psd_trays;
-                        for (const auto& [_, name] : target_traits) {
-                            if (!file_trays.empty()) {
-                                file_trays += ", ";
-                            }
-                            file_trays += name;
-                        }
-                        for (const auto& [_, name] : global_traits) {
-                            if (!psd_trays.empty()) {
-                                psd_trays += ", ";
-                            }
-                            psd_trays += name;
-                        }
-                        TT_THROW(
-                            "HOSTS grouping topology mismatch: file grouping has {} edges, PSD grouping has {} edges. "
-                            "Both should have the same number of edges for topology matching. "
-                            "File trays: [{}], PSD trays: [{}]. "
-                            "This indicates the topology in the file (e.g., 2x3 has different edge count) does not "
-                            "match the expected topology "
-                            "from PSD discovery (e.g., 2x2).",
-                            target_edges,
-                            global_edges,
-                            file_trays,
-                            psd_trays);
-                    }
-
-                    // Build constraints: tray references must match (using instance index as trait)
-                    // Note: Instance IDs in adjacency graphs are 0, 1, 2, 3 (tray indices)
-                    MappingConstraints<uint32_t, uint32_t> constraints;
-
-                    // Add trait constraints: instance index -> tray name
-                    // This ensures that tray at position 0 maps to the same tray name, etc.
-                    constraints.add_required_trait_constraint(target_traits, global_traits);
-
-                    // Solve mapping: map file host grouping (target) onto PSD host grouping (global)
-                    auto mapping_result = solve_topology_mapping(
-                        file_host_info.adjacency_graph,  // target: file host grouping adjacency graph
-                        psd_host_info.adjacency_graph,   // global: PSD host grouping adjacency graph
-                        constraints,
-                        ConnectionValidationMode::STRICT);
-
-                    // Validate that all target nodes are mapped AND all global nodes are used
-                    size_t mapped_target_nodes = mapping_result.target_to_global.size();
-                    size_t used_global_nodes = mapping_result.global_to_target.size();
-
-                    if (!mapping_result.success || mapped_target_nodes != target_nodes ||
-                        used_global_nodes != global_nodes) {
-                        std::string file_trays, psd_trays;
-                        for (const auto& [_, name] : target_traits) {
-                            if (!file_trays.empty()) {
-                                file_trays += ", ";
-                            }
-                            file_trays += name;
-                        }
-                        for (const auto& [_, name] : global_traits) {
-                            if (!psd_trays.empty()) {
-                                psd_trays += ", ";
-                            }
-                            psd_trays += name;
-                        }
-                        TT_THROW(
-                            "HOSTS grouping from file cannot be mapped onto discovered PSD grouping using topology "
-                            "solver. "
-                            "Target nodes: {} (mapped: {}), Global nodes: {} (used: {}). "
-                            "File trays: [{}], PSD trays: [{}]. "
-                            "This indicates the topology in the file (e.g., 1x4) does not match the expected topology "
-                            "from PSD discovery (e.g., 2x2). "
-                            "Error: {}",
-                            target_nodes,
-                            mapped_target_nodes,
-                            global_nodes,
-                            used_global_nodes,
-                            file_trays,
-                            psd_trays,
-                            mapping_result.error_message.empty() ? "Mapping failed" : mapping_result.error_message);
-                    }
-                }
-            }
-        }
-    }
+bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
+    (void)physical_system_descriptor;
+    TT_THROW("Not implemented");
+    return false;
 }
 
 }  // namespace tt::tt_fabric

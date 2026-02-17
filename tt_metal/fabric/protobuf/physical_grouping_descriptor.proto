@@ -25,8 +25,7 @@ package tt.tt_fabric.proto;
 //   - GroupingReference.grouping_type MUST reference a grouping type that exists in groupings
 //
 // RULE 4: INSTANCE COUNT VALIDATION (documented in comments, type constraints)
-//   - If Grouping.custom_type == "meshes": at least 1 instance required
-//   - Otherwise: at least 2 instances required
+//   - All groupings: at least 1 instance required
 //   - ENFORCED BY: repeated Instance instances (must be non-empty)
 //
 // RULE 5: GROUPING STRUCTURE (ENFORCED BY SCHEMA STRUCTURE - repeated Instance)
@@ -239,8 +238,7 @@ message Grouping {
     //   - Must be non-empty
     //   - Each instance must have a unique id within this grouping
     //   - Each instance must have exactly one of: asic_location or grouping_ref (enforced by oneof)
-    //   - If custom_type == "meshes": at least 1 instance required
-    //   - Otherwise: at least 2 instances required
+    //   - At least 1 instance required
     // Example for trays: [Instance { id: 0 asic_location: ASIC_LOCATION_1 }, ...]
     // Example for meshes: [Instance { id: 0 grouping_ref { custom_type: "hosts" } }, ...]
     // Example for pods: [Instance { id: 0 grouping_ref { custom_type: "meshes" } }, Instance { id: 1 grouping_ref { custom_type: "meshes" } }]
