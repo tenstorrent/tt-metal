@@ -19,6 +19,9 @@
 
 #include <stdint.h>
 #include "api/debug/dprint.h"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/kernel/kernel_utils.hpp"
+#include "concat_nd_sharded_args.hpp"
 
 void kernel_main() {
     // --- Compile-time: output CB, page size, total number of input tensors ---
@@ -37,6 +40,7 @@ void kernel_main() {
     DPRINT << "destination_shard_pos " << destination_shard_pos << " in_core_idx " << in_core_idx << ENDL();
     DPRINT << "in_tensor_pos " << in_tensor_pos << " shard_pos " << shard_pos << ENDL();
     DPRINT << "shard size " << shard_size << "test_value " << test_value << ENDL();
+    DPRINT << "destination page size " << page_size << ENDL();
 
     // const uint32_t base_l1_write_addr = get_write_ptr(output_cb);
     // uint32_t arg_idx = 2;
@@ -58,7 +62,7 @@ void kernel_main() {
     //     // Copy this input's shard (num_pages pages) into the output region.
     //     noc_async_read_one_packet_set_state(noc_addr_src, page_size);
     //     for (uint32_t page = 0; page < num_pages; ++page) {
-    //         noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr + page * page_size);
+    //             noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr + page * page_size);
     //         l1_read_addr += page_size;
     //     }
     //     noc_async_read_barrier();

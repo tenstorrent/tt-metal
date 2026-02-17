@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "concat_nd_sharded_program_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/concat_nd_sharded_args.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -21,6 +22,13 @@ size_t find_core_index(const CoreCoord& core, const std::vector<CoreCoord>& core
     auto it = std::find(cores.begin(), cores.end(), core);
     return static_cast<size_t>(it - cores.begin());
 }
+
+// struct ReaderParameters
+// {
+//     tt::tt_metal::CoreCoord coresrc; // source core for the data portion
+//     uint32_t dataSize; // how much data on this core
+//     uint32_t bufferAddress; // buffer of the tensor
+// };
 
 }  // namespace
 
@@ -50,8 +58,6 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
 
     Program program = CreateProgram();
 
-    // All inputs and output must share the same aligned page size; the kernels use a single page_size.
-    // (Tensor buffers can have different page sizes when shard shapes or layouts differ.)
     const uint32_t page_size = input_tensors[0].buffer()->aligned_page_size();
     for (uint32_t i = 1; i < num_input_tensors; ++i) {
         TT_FATAL(
@@ -147,8 +153,9 @@ ConcatNDShardedProgramFactory::cached_program_t ConcatNDShardedProgramFactory::c
             pair_tensor_shard.second = pos_shard;
         }
     }
-    // TT_FATAL(total_output_shards == source_shards.size(), "sizes in shards {} must be the same for concat {} {} {}",
-    //     total_output_shards, source_shards.size(), num_input_tensors, input_amount_shards);
+    //    TT_FATAL(total_output_shards == source_shards.size(), "sizes in shards {} must be the same for concat {} {}
+    //    {}",
+    //         total_output_shards, source_shards.size(), num_input_tensors, input_amount_shards);
 
     for (const CoreCoord& core : cores) {
         const size_t core_idx = find_core_index(core, output_dist_spec.cores());
