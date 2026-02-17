@@ -175,83 +175,82 @@ class TestExtractCBNames:
         assert "some_other_arg" not in result
 
 
-class TestSequentialChainBuilderBasic:
-    """Basic tests for SequentialChainBuilder."""
+class TestOpGraphBuilderBasic:
+    """Basic tests for OpGraphBuilder (unified builder for linear and tree topologies)."""
 
     def test_creation(self):
         """Test creating a builder."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
-        assert len(builder.phases) == 0
+        builder = OpGraphBuilder()
+        assert len(builder.stem_phases) == 0
         assert builder._built is False
 
-    def test_add_phase(self):
-        """Test adding phases to the builder."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+    def test_add_stem_phase(self):
+        """Test adding stem phases to the builder."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
+        builder = OpGraphBuilder()
 
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        builder.add_phase(mock_desc)
-        assert len(builder.phases) == 1
-        assert builder.phases[0].phase_idx == 0
+        builder.add_stem_phase(mock_desc)
+        assert len(builder.stem_phases) == 1
 
-        builder.add_phase(mock_desc)
-        assert len(builder.phases) == 2
-        assert builder.phases[1].phase_idx == 1
+        builder.add_stem_phase(mock_desc)
+        assert len(builder.stem_phases) == 2
 
     def test_method_chaining(self):
         """Test that builder methods return self."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
+        builder = OpGraphBuilder()
 
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        result = builder.add_phase(mock_desc).add_phase(mock_desc)
+        result = builder.add_stem_phase(mock_desc).add_stem_phase(mock_desc)
 
         assert result is builder
-        assert len(builder.phases) == 2
+        assert len(builder.stem_phases) == 2
 
     def test_single_phase_returns_original(self):
         """Test that single-phase build returns original descriptor."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
+        builder = OpGraphBuilder()
 
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        builder.add_phase(mock_desc)
-        result = builder.build(device=MagicMock())
+        builder.add_stem_phase(mock_desc)
+        results = builder.build(device=MagicMock())
 
-        assert result is mock_desc
+        assert len(results) == 1
+        assert results[0] is mock_desc
 
     def test_build_empty_raises(self):
         """Test that building empty chain raises ValueError."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
+        builder = OpGraphBuilder()
 
-        with pytest.raises(ValueError, match="no phases"):
+        with pytest.raises(ValueError, match="No phases"):
             builder.build(device=MagicMock())
 
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
-        SequentialChainBuilder = _mock_sequential.SequentialChainBuilder
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        builder = SequentialChainBuilder()
+        builder = OpGraphBuilder()
         mock_desc = MagicMock()
         mock_desc.descriptor = MagicMock(cbs=[])
 
-        builder.add_phase(mock_desc)
+        builder.add_stem_phase(mock_desc)
         builder.build(device=MagicMock())
 
-        with pytest.raises(ValueError, match="already been built"):
+        with pytest.raises(ValueError, match="Already built"):
             builder.build(device=MagicMock())
 
 
@@ -272,7 +271,7 @@ class TestChainDescriptorsConvenience:
         """Test that empty list raises ValueError."""
         chain_descriptors = _mock_sequential.chain_descriptors
 
-        with pytest.raises(ValueError, match="no phases"):
+        with pytest.raises(ValueError, match="No phases"):
             chain_descriptors([], device=MagicMock())
 
 
@@ -675,35 +674,22 @@ class TestMergeNamedCompileTimeArgs:
         assert "phase1_rt_arg_offset" in names
         assert names["phase1_rt_arg_offset"] == 10
 
-    def test_barrier_config_added(self):
-        """Test that barrier config named args are added."""
+    def test_barrier_rt_offset_added(self):
+        """Test that barrier_rt_offset named arg is added."""
         _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
-        BarrierConfig = _mock_sequential.BarrierConfig
 
         phase_kernels = [
             {"reader": MagicMock(named_compile_time_args=[])},
         ]
 
-        bc = BarrierConfig(
-            num_cores=2,
-            core0_phys_x=1,
-            core0_phys_y=1,
-            mcast_start_x=1,
-            mcast_start_y=1,
-            mcast_end_x=2,
-            mcast_end_y=1,
-        )
         result = _merge_named_compile_time_args(
             phase_kernels,
             "reader",
             barrier_rt_offset=10,
-            barrier_config=bc,
         )
         names = dict(result)
         assert "barrier_rt_offset" in names
         assert names["barrier_rt_offset"] == 10
-        assert "num_barrier_cores" in names
-        assert names["num_barrier_cores"] == 2
 
 
 def _make_mock_core_ranges():
@@ -2506,8 +2492,8 @@ class TestOpGraphTopologyValidation:
         with pytest.raises(ValueError, match="overlapping cores"):
             builder._validate_topology()
 
-    def test_empty_leaf_branch_rejected(self):
-        """Leaf branch with no phases should be rejected."""
+    def test_empty_leaf_branch_accepted(self):
+        """Leaf branch with no phases should be accepted (trailing barrier only)."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
         BranchSpec = _mock_sequential.BranchSpec
 
@@ -2521,12 +2507,12 @@ class TestOpGraphTopologyValidation:
             ),
             BranchSpec(
                 core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                phases=[],  # Empty!
+                phases=[],  # Empty leaf — participates via trailing barrier
             ),
         ]
 
-        with pytest.raises(ValueError, match="has no phases"):
-            builder._validate_topology()
+        # Should not raise — empty leaf branches are allowed
+        builder._validate_topology()
 
     def test_valid_topology_accepted(self):
         """Valid 2-branch split should pass validation."""
@@ -2642,6 +2628,61 @@ class TestOpGraphTopologyValidation:
 
         # Should not raise
         builder._validate_topology()
+
+
+class TestStemCoverageValidation:
+    """Tests for stem-vs-leaf core range validation."""
+
+    def _make_stem_op(self, core_ranges):
+        """Create a mock stem OpDescriptor with kernels covering given core ranges."""
+        kernel = MagicMock()
+        kernel.core_ranges = core_ranges
+        descriptor = MagicMock()
+        descriptor.kernels = [kernel]
+        op = MagicMock()
+        op.descriptor = descriptor
+        return op
+
+    def test_stem_wider_than_leaves_rejected(self):
+        """Stem covering more cores than the leaf union should be rejected."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        builder = OpGraphBuilder()
+        # Stem kernel on cores (0,0)-(7,0) = 8 cores
+        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (7, 0))]))]
+        # Leaf union = (0,0)-(5,0) = 6 cores (cores 6,7 missing)
+        union_range = _make_mock_core_range_set([((0, 0), (5, 0))])
+
+        with pytest.raises(ValueError, match="outside the leaf union"):
+            builder._validate_stem_coverage(union_range)
+
+    def test_stem_matches_leaves_accepted(self):
+        """Stem exactly matching the leaf union should pass."""
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        builder = OpGraphBuilder()
+        # Stem covers (0,0)-(3,0) = 4 cores, same as union
+        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (3, 0))]))]
+        union_range = _make_mock_core_range_set([((0, 0), (3, 0))])
+
+        # Should not raise
+        builder._validate_stem_coverage(union_range)
+
+    def test_stem_subset_of_leaves_accepted(self):
+        """Stem covering fewer cores than the leaf union should pass.
+
+        This can happen if the stem op only needs a subset of the cores
+        (e.g. a narrow reduction), while branches spread the result wider.
+        """
+        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+
+        builder = OpGraphBuilder()
+        # Stem on (0,0)-(1,0) = 2 cores, union covers 4
+        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (1, 0))]))]
+        union_range = _make_mock_core_range_set([((0, 0), (3, 0))])
+
+        # Should not raise
+        builder._validate_stem_coverage(union_range)
 
 
 class TestCoDispatchValidation:
@@ -3260,21 +3301,39 @@ class TestSemaphoreInitialValue:
 
         phase_kernels = [{"reader": kernel}, {"reader": kernel}]
 
+        MultiBarrierSpec = _mock_sequential.MultiBarrierSpec
+        BarrierSegment = _mock_sequential.BarrierSegment
+        BarrierConfig = _mock_sequential.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+                mcast_start_x=1,
+                mcast_start_y=1,
+                mcast_end_x=1,
+                mcast_end_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            transition_map={0: (0, 0)},
+        )
+
         result = _generate_fused_riscv0_source(
             phase_kernels,
             "reader",
             phases,
             {0: 0, 1: 0},  # ct_offsets
             [0],  # sweep_cb_indices
-            barrier_config=MagicMock(
-                compute_done_addr=1000,
-                writer_done_addr=2000,
-                global_arrive_addr=3000,
-                global_release_addr=4000,
-                num_barrier_cores=1,
-            ),
             rebind_info={},
             op_semaphore_info=[(3, 5)],  # sem_id=3, initial_value=5
+            multi_barrier=multi_barrier,
         )
 
         assert result is not None
@@ -3303,21 +3362,39 @@ class TestSemaphoreInitialValue:
 
         phase_kernels = [{"reader": kernel}, {"reader": kernel}]
 
+        MultiBarrierSpec = _mock_sequential.MultiBarrierSpec
+        BarrierSegment = _mock_sequential.BarrierSegment
+        BarrierConfig = _mock_sequential.BarrierConfig
+
+        seg = BarrierSegment(
+            config=BarrierConfig(
+                num_cores=1,
+                core0_phys_x=1,
+                core0_phys_y=1,
+                mcast_start_x=1,
+                mcast_start_y=1,
+                mcast_end_x=1,
+                mcast_end_y=1,
+            ),
+            arrive_addr=3000,
+            release_addr=4000,
+        )
+        multi_barrier = MultiBarrierSpec(
+            segments=[seg],
+            compute_done_addr=1000,
+            writer_done_addr=2000,
+            transition_map={0: (0, 0)},
+        )
+
         result = _generate_fused_riscv0_source(
             phase_kernels,
             "reader",
             [phase0, phase1],
             {0: 0, 1: 0},
             [0],
-            barrier_config=MagicMock(
-                compute_done_addr=1000,
-                writer_done_addr=2000,
-                global_arrive_addr=3000,
-                global_release_addr=4000,
-                num_barrier_cores=1,
-            ),
             rebind_info={},
             op_semaphore_info=[(2, 0), (7, 3)],  # sem 2 -> 0, sem 7 -> 3
+            multi_barrier=multi_barrier,
         )
 
         assert result is not None
