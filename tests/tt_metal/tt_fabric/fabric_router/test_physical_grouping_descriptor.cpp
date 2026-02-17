@@ -418,25 +418,213 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
 TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
     const std::string text_proto = wrap_with_required_groupings(R"proto(
         groupings {
-          name: "duplicate_name"
+          name: "tray_1_a"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_1_b"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "hosts" }
+          }]
+        }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Exactly one grouping with preset_type 'TRAY_1' is required but 2 are defined")));
+}
+
+TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenDuplicateHosts) {
+    const std::string text_proto = R"proto(
+        groupings {
+          name: "tray_1"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "hosts_2"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "hosts" }
+          }]
+        }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Exactly one grouping with custom_type 'hosts' is required but 2 are defined")));
+}
+
+TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNoLeafGroupingUsesASICLocations) {
+    // This test is no longer valid because TRAY_1-4 are required and must use ASIC locations,
+    // making them leaf groupings. The validation "at least one leaf grouping must use ASIC locations"
+    // is always satisfied when TRAY_1-4 are present. This test is skipped.
+    GTEST_SKIP() << "Test invalidated: TRAY_1-4 are required and use ASIC locations, so leaf grouping requirement is "
+                    "always satisfied";
+}
+
+TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNonLeafGroupingUsesASICLocations) {
+    // Test that a non-leaf grouping (one with grouping references) cannot also use ASIC locations
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "meshes_required"
           custom_type: "meshes"
           instances:
           [ { id: 0 asic_location: ASIC_LOCATION_1 }]
         }
         groupings {
-          name: "duplicate_name"
+          name: "pods_bad"
           custom_type: "pods"
           instances:
           [ {
             id: 0
             grouping_ref { custom_type: "meshes" }
           }
-            , {
-              id: 1
-              grouping_ref { custom_type: "meshes" }
-            }]
-          all_to_all {}
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
         }
+    )proto");
+    ;
+
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("uses ASIC locations but also has grouping references")));
+}
+
+TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
+    // Create a cycle: pods -> clusters -> pods
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "meshes_required"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "pods_cycle"
+          custom_type: "pods"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "clusters" }
+          }]
+        }
+        groupings {
+          name: "clusters_cycle"
+          custom_type: "clusters"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "pods" }
+          }]
+        }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Circular dependencies detected")));
+}
+
+TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
+    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
+                                                                          name: "duplicate_name"
+                                                                          custom_type: "meshes"
+                                                                          instances:
+                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+                                                                        }
+                                                                        groupings {
+                                                                          name: "duplicate_name"
+                                                                          custom_type: "pods"
+                                                                          instances:
+                                                                          [ {
+                                                                            id: 0
+                                                                            grouping_ref { custom_type: "meshes" }
+                                                                          }
+                                                                            , {
+                                                                              id: 1
+                                                                              grouping_ref { custom_type: "meshes" }
+                                                                            }]
+                                                                          all_to_all {}
+                                                                        }
     )proto");
     ;
 

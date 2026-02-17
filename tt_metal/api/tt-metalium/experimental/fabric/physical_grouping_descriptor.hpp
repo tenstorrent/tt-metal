@@ -132,6 +132,9 @@ public:
     // Returns graph with FlattenedMeshNodeInfo as node type
     AdjacencyGraph<FlattenedMeshNodeInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
+    // Build flattened adjacency graph forming one uniform mesh
+    AdjacencyGraph<uint32_t> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
+
 private:
     // Data members
     std::shared_ptr<const proto::PhysicalGroupings> proto_;

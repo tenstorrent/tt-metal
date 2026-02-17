@@ -1022,6 +1022,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
