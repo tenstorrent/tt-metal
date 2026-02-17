@@ -45,29 +45,11 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def invalidate_vector(test_vector) -> tuple:
-    """
-    Validate test vector (non-mesh related checks).
-
-    Note: Mesh shape filtering happens at runtime in run() function,
-    not during vector generation, since MESH_DEVICE_SHAPE env var
-    is only set during test execution on specific runners.
-
-    Returns:
-        Tuple of (is_invalid: bool, reason: str or None)
-    """
-    # Add any static validation logic here (e.g., parameter constraints)
-    # Mesh filtering is handled in run() function at execution time
-    return False, None
-
-
 def mesh_device_fixture():
     """
     Override default device fixture.
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
     """
-    import ttnn
-
     mesh_shape = get_mesh_shape()
 
     if mesh_shape:
