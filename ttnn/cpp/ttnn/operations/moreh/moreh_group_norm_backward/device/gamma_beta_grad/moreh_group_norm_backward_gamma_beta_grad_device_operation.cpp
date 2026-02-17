@@ -68,11 +68,6 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_mis
     validate_tensors(operation_attributes, tensor_args);
 }
 
-void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_tensors(operation_attributes, tensor_args);
-}
-
 MorehGroupNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

@@ -226,21 +226,25 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+
+    // Track if any transfer actually used pinned memory
+    std::atomic<bool> any_pinned_used = false;
+
+    auto dispatch_lambda = [&shard_data_transfers, &buffer, &any_pinned_used, this](uint32_t shard_idx) {
         const auto& shard_data_transfer = shard_data_transfers[shard_idx];
-        this->write_shard_to_device(
+        bool pinned_used = this->write_shard_to_device(
             *buffer,
             shard_data_transfer.shard_coord(),
             shard_data_transfer.host_data(),
             shard_data_transfer.region(),
             {},
             experimental::ShardDataTransferGetPinnedMemory(shard_data_transfer));
+        if (pinned_used) {
+            any_pinned_used.store(true, std::memory_order_relaxed);
+        }
     };
 
-    bool has_pinned_memory = false;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        has_pinned_memory =
-            has_pinned_memory || experimental::ShardDataTransferGetPinnedMemory(shard_data_transfers[shard_idx]);
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord();
         if (mesh_device_->impl().is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
@@ -252,7 +256,8 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
     if (blocking) {
         this->finish_nolock();
-    } else if (has_pinned_memory) {
+    } else if (any_pinned_used.load(std::memory_order_relaxed)) {
+        // If any transfer used pinned memory, add barrier event to all pinned memory objects
         auto event = this->enqueue_record_event_to_host_nolock();
         for (const auto& shard_data_transfer : shard_data_transfers) {
             if (mesh_device_->is_local(shard_data_transfer.shard_coord())) {

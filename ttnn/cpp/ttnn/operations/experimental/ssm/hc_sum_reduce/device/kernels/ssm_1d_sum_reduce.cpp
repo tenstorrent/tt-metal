@@ -7,8 +7,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
 
 constexpr uint32_t ONE_TILE = 1;
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 
 /**
  * LOOP_COUNT and LOOP_SIZE provide the ability to decide how many cycles this kernel takes.

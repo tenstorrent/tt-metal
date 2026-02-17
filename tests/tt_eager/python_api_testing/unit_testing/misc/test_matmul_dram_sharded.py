@@ -62,6 +62,7 @@ def run_test_matmul_in1_dram_sharded(
     K,
     N,
     fidelity,
+    packer_l1_acc,
     has_bias,
     activation,
     grid_size,
@@ -74,6 +75,7 @@ def run_test_matmul_in1_dram_sharded(
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
         num_banks = 12
+
     N_padded = pad_to_dram_banks(N, num_banks)
 
     in0_shape = [1, 1, M, K]
@@ -151,7 +153,7 @@ def run_test_matmul_in1_dram_sharded(
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     if has_bias:
@@ -195,6 +197,14 @@ def run_test_matmul_in1_dram_sharded(
     ids=["HiFi2", "LoFi"],
 )
 @pytest.mark.parametrize(
+    "packer_l1_acc",
+    [
+        False,
+        True,
+    ],
+    ids=["no_packer_l1_acc", "packer_l1_acc"],
+)
+@pytest.mark.parametrize(
     "has_bias",
     [
         False,
@@ -231,6 +241,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     K,
     N,
     fidelity,
+    packer_l1_acc,
     has_bias,
     activation,
     grid_size,
@@ -249,6 +260,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
             K,
             N,
             fidelity,
+            packer_l1_acc,
             has_bias,
             activation,
             grid_size,

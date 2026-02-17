@@ -34,7 +34,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize(
     "device_params",
@@ -60,7 +59,6 @@ def test_broadcast_rms_fused(
     input_dtype,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
     num_iters,
 ):
     num_devices = mesh_rows * mesh_cols
@@ -74,12 +72,6 @@ def test_broadcast_rms_fused(
 
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
-    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
     # Set up sharded memory config (single core shard like test_ccl_broadcast.py)
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -172,7 +164,6 @@ def test_broadcast_rms_fused(
         semaphores,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
     )
 
     ttnn.synchronize_device(submesh)
@@ -199,9 +190,5 @@ def test_broadcast_rms_fused(
         logger.info(pcc_message)
 
         assert passing, pcc_message
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     logger.info("Broadcast+RMSNorm fused test passed!")
