@@ -167,6 +167,8 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+    // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
+    LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure

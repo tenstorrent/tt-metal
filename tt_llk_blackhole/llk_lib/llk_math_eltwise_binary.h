@@ -119,6 +119,13 @@ template <
 inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    // Broadcast Column: num_faces=1 is not supported on Blackhole (use 2 or 4 faces)
+    if constexpr (src_b_bcast_type == BroadcastType::COL)
+    {
+        LLK_ASSERT(num_faces != 1, "Broadcast Column: num_faces=1 is not supported on Blackhole (use 2 or 4)");
+    }
+
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -259,6 +266,12 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const 
     LLK_ASSERT(
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
+
+    // Broadcast Column: x16 tiles not supported (num_faces=1 implies 16x16)
+    if constexpr (src_b_bcast_type == BroadcastType::COL)
+    {
+        LLK_ASSERT(num_faces != 1, "Broadcast Column: 16x16 tiles not supported in Blackhole");
+    }
 
     constexpr std::uint32_t math_fidelity_increment = 1;
 

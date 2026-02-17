@@ -28,6 +28,24 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
         LLK_ASSERT(num_faces == 4, "num_faces must be 4 when transpose_of_faces is true");
     }
 
+    // Transpose + Broadcast Scalar not supported
+    if constexpr (BType == BroadcastType::SCALAR)
+    {
+        LLK_ASSERT(!transpose_of_faces, "Transpose with Broadcast Scalar not supported");
+    }
+
+    // Broadcast Column: x16 tiles not supported (BH requires num_faces_c_dim == 2 for COL broadcast)
+    if constexpr (BType == BroadcastType::COL)
+    {
+        LLK_ASSERT(!narrow_tile, "Broadcast Column: x16 tiles not supported (BH requires num_faces_c_dim == 2 for COL broadcast)");
+    }
+
+    // Broadcast Row with narrow tile: only 16x16 supported, not 32x16
+    if constexpr (BType == BroadcastType::ROW)
+    {
+        LLK_ASSERT(!(narrow_tile && num_faces == 2), "Broadcast Row with 32x16 narrow tile not supported");
+    }
+
     static constexpr std::uint32_t unpack_srca           = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb           = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -117,6 +135,9 @@ inline void _llk_unpack_AB_reduce_init_(
     const std::uint32_t within_face_16x16_transpose)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM,
+        "face_r_dim must be 1, 2, 4, 8, or 16 for reduce");
 
     if constexpr (enforce_fp32_accumulation)
     {

@@ -54,6 +54,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
 
     if constexpr (BType == BroadcastType::COL)
     {
+        LLK_ASSERT(!(narrow_tile && num_faces == 2), "Broadcast Column with 32x16 narrow tile not supported");
+
         static constexpr std::uint32_t unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
 
         ckernel_template tmp(outerloop, innerloop, srca_op);
@@ -63,6 +65,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
+        LLK_ASSERT(!(narrow_tile && num_faces == 2), "Broadcast Row with 32x16 narrow tile not supported");
+
         static constexpr std::uint32_t unpack_srcb_clear_z  = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);
         static constexpr std::uint32_t unpack_srcb_no_z_inc = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
@@ -116,6 +120,9 @@ inline void _llk_unpack_AB_reduce_init_(
     const std::uint32_t within_face_16x16_transpose)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM,
+        "face_r_dim must be 1, 2, 4, 8, or 16 for reduce");
 
     if constexpr (enforce_fp32_accumulation)
     {

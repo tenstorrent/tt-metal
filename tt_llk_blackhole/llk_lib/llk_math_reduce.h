@@ -32,6 +32,8 @@ template <
 inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
+    LLK_ASSERT(!(narrow_tile && num_faces == 4), "Reduce narrow tile requires num_faces 1 or 2; num_faces=4 is full-width 32x32");
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
