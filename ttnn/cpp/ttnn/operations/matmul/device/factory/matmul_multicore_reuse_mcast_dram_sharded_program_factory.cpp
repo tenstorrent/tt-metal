@@ -114,7 +114,7 @@ create_program_dram_sharded(
     }
 
     uint32_t per_core_N_compute = (N + num_dram_banks - 1) / num_dram_banks;
-    uint32_t per_core_N_in1_sender = per_core_N_compute;
+    uint32_t per_core_N_in1_sender;
 
     // Remove cores assigned to padding-only DRAM banks from the workers category
     uint32_t in1_shard_width_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
