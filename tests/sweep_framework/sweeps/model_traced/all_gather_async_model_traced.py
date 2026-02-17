@@ -14,7 +14,6 @@ from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import (
     device_context,
     get_mem_configs,
-    get_serializable_shard_specs,
     mesh_shape_iterator,
     validate_serializable_shard_spec,
 )

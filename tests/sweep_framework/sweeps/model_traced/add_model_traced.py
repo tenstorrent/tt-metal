@@ -12,7 +12,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
-    get_mesh_shape_from_machine_info,
     mesh_tensor_to_torch,
 )
 
@@ -71,7 +70,6 @@ def mesh_device_fixture():
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
     """
     import ttnn
-    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import get_mesh_shape, create_mesh_device
 
     mesh_shape = get_mesh_shape()
 
