@@ -6,7 +6,6 @@
 
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -63,7 +62,8 @@ SoftmaxBackwardDeviceOperation::create_op_performance_model(
     const auto& softmax_output = tensor_args.softmax_output;
     const auto& upstream_grad = tensor_args.upstream_grad;
     const auto& output_tensor = tensor_return_value;
-    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(softmax_output, output_tensor);
+    // Placeholder; tt-train build does not depend on ttnn data_movement common_tm_bw_model.
+    constexpr int ideal_dev_clock_cycles = 0;
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {softmax_output, upstream_grad}, output_tensor, ideal_dev_clock_cycles);
     return result;
@@ -77,7 +77,7 @@ ttnn::Tensor ttml_softmax_backward(
     const ttnn::Tensor& softmax_output,
     const ttnn::Tensor& upstream_grad,
     uint32_t dim,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using OperationType = ttml::metal::ops::softmax_backward::device::SoftmaxBackwardDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{dim, sub_core_grids};
     auto tensor_args = OperationType::tensor_args_t{softmax_output, upstream_grad};

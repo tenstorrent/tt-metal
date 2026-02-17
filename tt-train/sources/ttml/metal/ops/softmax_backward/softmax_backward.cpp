@@ -14,7 +14,7 @@ ttnn::Tensor softmax_backward(
     const ttnn::Tensor& softmax_output,
     const ttnn::Tensor& grad,
     int32_t dim,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     const auto rank = static_cast<int32_t>(softmax_output.logical_shape().rank());
     int32_t normalized_dim = dim >= 0 ? dim : rank + dim;
     TT_FATAL(
