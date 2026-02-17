@@ -287,7 +287,6 @@ If `--tcp-interface` is specified, it uses `btl_tcp_if_include` instead to expli
 **Tagged Output:** `tt-run` always enables `--tag-output`, which prefixes each output line with rank information (e.g., `[1,0]<stdout>:`). This makes it easier to identify which rank produced each line of output when debugging distributed applications.
 
 **Automatic Environment Setup:** `tt-run` spawns one process per rank and automatically manages per-rank environments:
-- `TT_METAL_CACHE`: Unique cache directory per rank (prevents kernel compilation conflicts when multiple processes compile kernels simultaneously)
 - `TT_MESH_ID`: Mesh identifier from rank binding
 - `TT_MESH_GRAPH_DESC_PATH`: Path to topology descriptor
 - `TT_MESH_HOST_RANK`: Host rank within mesh (if specified)
