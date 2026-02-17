@@ -857,22 +857,19 @@ public:
              cluster_t == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY);
 
         // non-wraparound Ring topology uses perimeter ring
-        if (!is_galaxy && topology_ == Topology::Ring) {
-            for (const auto& src_node : device_ids) {
-                auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
-                if (ring_neighbors.has_value()) {
-                    auto [forward_neighbor, backward_neighbor] = ring_neighbors.value();
-                    if (forward_neighbor != src_node) {
-                        pairs.emplace_back(src_node, forward_neighbor);
-                    }
-                    if (backward_neighbor != src_node) {
-                        pairs.emplace_back(src_node, backward_neighbor);
-                    }
-                }
-            }
-            return pairs;
+        bool use_perimeter_ring_exchange = !is_galaxy && topology_ == Topology::Ring;
+        if (use_perimeter_ring_exchange) {
+            pairs = get_non_wrap_around_ring_pairs(device_ids);
+        } else {
+            pairs = get_directional_neighbor_pairs(device_ids, is_galaxy);
         }
 
+        return pairs;
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_directional_neighbor_pairs(
+        const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const override {
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         const std::vector<RoutingDirection> directions = {
             RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
@@ -926,7 +923,24 @@ public:
                 }
             }
         }
+        return pairs;
+    }
 
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_non_wrap_around_ring_pairs(
+        const std::vector<FabricNodeId>& device_ids) const override {
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+        for (const auto& src_node : device_ids) {
+            auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
+            if (ring_neighbors.has_value()) {
+                auto [forward_neighbor, backward_neighbor] = ring_neighbors.value();
+                if (forward_neighbor != src_node) {
+                    pairs.emplace_back(src_node, forward_neighbor);
+                }
+                if (backward_neighbor != src_node) {
+                    pairs.emplace_back(src_node, backward_neighbor);
+                }
+            }
+        }
         return pairs;
     }
 
