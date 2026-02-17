@@ -34,22 +34,14 @@ ALWI void reduce_tile_to_cb(uint32_t icb0, uint32_t icb_ones, uint32_t ocb, uint
 
 // Multiply two tiles from CBs
 // Note: caller must ensure tiles are available via cb_wait_front before calling
-ALWI void elementwise_multiply(
-    uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t tile_index_0, uint32_t tile_index_1) {
-    tile_regs_acquire();
-    // Multiply src0_cb_id * src1_cb_id
-    mul_tiles(src0_cb_id, src1_cb_id, tile_index_0, tile_index_1, DST_REG_ID);
-    tile_regs_commit();
-    pack_and_push(DST_REG_ID, out_cb_id);
-}
-
-// Create and push a zero tile to the specified circular buffer
-ALWI void push_zero_tile(uint32_t cb_id) {
-    fill_tile_init();
-    tile_regs_acquire();
-    fill_tile(DST_REG_ID, 0.0f);
-    tile_regs_commit();
-    pack_and_push(DST_REG_ID, cb_id);
+ALWI void elementwise_multiply(uint32_t src0_cb_id, uint32_t src1_cb_id, uint32_t out_cb_id, uint32_t block_size) {
+    mul_tiles_init(src0_cb_id, src1_cb_id);
+    for (uint32_t i = 0; i < block_size; ++i) {
+        tile_regs_acquire();
+        mul_tiles(src0_cb_id, src1_cb_id, i, i, DST_REG_ID);
+        tile_regs_commit();
+        pack_and_push(DST_REG_ID, out_cb_id);
+    }
 }
 
 // Add a new value to an accumulator and replace the accumulator with the result
@@ -133,10 +125,7 @@ void kernel_main() {
             cb_wait_front(grad_cb_id, current_block_size);
 
             // Step 1a: Compute y * grad for all tiles in this block (elementwise multiplication)
-            mul_tiles_init(y_cb_id, grad_cb_id);
-            for (uint32_t i = 0; i < current_block_size; ++i) {
-                elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, i, i);
-            }
+            elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, current_block_size);
 
             // Step 1b: Reduce this block to a single sum tile using matmul with ones
             // Write block sum to temporary CB
@@ -158,9 +147,7 @@ void kernel_main() {
         cb_wait_front(sum_reduce_cb_id, ONE_TILE);
 
         for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
-            const uint32_t current_block_size = (block_start + tiles_per_block <= num_tiles_per_row)
-                                                    ? tiles_per_block
-                                                    : (num_tiles_per_row - block_start);
+            const uint32_t current_block_size = std::min(tiles_per_block, num_tiles_per_row - block_start);
 
             if constexpr (!full_row_in_l1) {
                 // Wait for fresh block from reader (pass 2 read)

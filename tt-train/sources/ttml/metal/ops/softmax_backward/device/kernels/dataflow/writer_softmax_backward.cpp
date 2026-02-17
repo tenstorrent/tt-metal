@@ -36,9 +36,7 @@ void kernel_main() {
         // Process tiles in blocks within each row
         for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
             // Calculate block size (handle remainder)
-            const uint32_t current_block_size = (block_start + tiles_per_block <= num_tiles_per_row)
-                                                    ? tiles_per_block
-                                                    : (num_tiles_per_row - block_start);
+            const uint32_t current_block_size = std::min(tiles_per_block, num_tiles_per_row - block_start);
 
             write_tiles_by_row(
                 out_cb_id,

@@ -12,7 +12,7 @@
 namespace ttml::metal::ops::softmax_backward::device {
 
 struct SoftmaxBackwardFactory {
-    using shared_variables_t = shared_variables_t;
+    using shared_variables_t = ttml::metal::ops::softmax_backward::device::shared_variables_t;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

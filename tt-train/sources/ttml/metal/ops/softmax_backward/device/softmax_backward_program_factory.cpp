@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "ttnn/types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -107,9 +106,9 @@ static KernelMode get_kernel_mode(uint32_t width_tiles, uint32_t tile_size, cons
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t memory_needed =
-        (width_tiles * tile_size) * 4 + (1 * tile_size) * 2;  // src0, src1, out, ygrad; sum_reduce, ones
-    const uint32_t tiles_per_block = (memory_needed < available_L1_in_bytes) ? width_tiles : 1;
-    const uint32_t buffering_multiplier = (memory_needed * 2 > available_L1_in_bytes) ? 1 : 2;
+        (width_tiles * tile_size) * 4U + (1U * tile_size) * 2U;  // src0, src1, out, ygrad; sum_reduce, ones
+    const uint32_t tiles_per_block = (memory_needed < available_L1_in_bytes) ? width_tiles : 1U;
+    const uint32_t buffering_multiplier = (memory_needed * 2U > available_L1_in_bytes) ? 1U : 2U;
     return {buffering_multiplier, memory_needed, tiles_per_block};
 }
 
@@ -216,7 +215,7 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     auto c_in1_config = CircularBufferConfig(block_cb_size_in0, {{src1_cb_index, input_data_format}})
                             .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, worker_cores, c_in1_config);
-    auto c_scaler_config = CircularBufferConfig(1 * intermed_tile_size, {{ones_cb_index, intermed_data_format}})
+    auto c_scaler_config = CircularBufferConfig(intermed_tile_size, {{ones_cb_index, intermed_data_format}})
                                .set_page_size(ones_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_scaler_config);
     auto c_out_config = CircularBufferConfig(block_cb_size_out, {{out_cb_index, output_data_format}})
@@ -225,11 +224,10 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
     auto c_ygrad_config = CircularBufferConfig(block_cb_size_intermed0, {{ygrad_cb_index, intermed_data_format}})
                               .set_page_size(ygrad_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_ygrad_config);
-    auto c_sum_reduce_config =
-        CircularBufferConfig(1 * intermed_tile_size, {{sum_reduce_cb_index, intermed_data_format}})
-            .set_page_size(sum_reduce_cb_index, intermed_tile_size);
+    auto c_sum_reduce_config = CircularBufferConfig(intermed_tile_size, {{sum_reduce_cb_index, intermed_data_format}})
+                                   .set_page_size(sum_reduce_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_sum_reduce_config);
-    auto c_block_sum_config = CircularBufferConfig(1 * intermed_tile_size, {{block_sum_cb_index, intermed_data_format}})
+    auto c_block_sum_config = CircularBufferConfig(intermed_tile_size, {{block_sum_cb_index, intermed_data_format}})
                                   .set_page_size(block_sum_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, worker_cores, c_block_sum_config);
 

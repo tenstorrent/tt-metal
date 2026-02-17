@@ -7,8 +7,6 @@
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -40,15 +38,6 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
         "Currently only supporting softmax_backward on last dimension (got dim={}, rank={})",
         attributes.dim,
         rank);
-}
-
-void SoftmaxBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
-    const ttnn::Tensor& softmax_output = tensor_args.softmax_output;
-    const ttnn::Tensor& upstream_grad = tensor_args.upstream_grad;
-    TT_FATAL(
-        softmax_output.logical_shape() == upstream_grad.logical_shape(),
-        "Softmax output and upstream gradient tensors must have the same shape");
 }
 
 SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperation::compute_output_specs(
