@@ -2912,3 +2912,39 @@ def test_from_torch_col_tilize_validation():
     spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
     with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
         ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "K, N",
+    [
+        (32, 64),
+        (128, 256),
+        (64, 512),
+    ],
+)
+def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_threshold, K, N):
+    """Verify that from_torch(..., col_tilize=True) produces the same tensor as
+    manually transposing in torch and then calling from_torch on W^T."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # col_tilize path
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    # Manual transpose path: torch transpose then from_torch
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert (
+        result_col.shape == result_manual.shape
+    ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
+    assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
