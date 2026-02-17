@@ -19,7 +19,7 @@ from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
