@@ -37,18 +37,15 @@ void RunOneTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, {});
-    auto& program = workload.get_programs().at(device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
 
     CoreCoord coord = {0, 0};
     std::vector<uint32_t> compile_args{free};
-    std::vector<std::string> expected;
+    std::vector<std::string> expected{"Stack usage summary:"};
 
     // Helper to add expected message in watcher logs
     auto add_expected_msg = [&](const std::string& cpu) {
-        if (expected.empty()) {
-            expected.push_back("Stack usage summary:");
-        }
         expected.push_back(fmt::format(
             "{} highest stack usage: {} bytes free, on core "
             "* running kernel {} ({})",
@@ -72,7 +69,7 @@ void RunOneTest(
         uint32_t num_kernels = num_dms / dms_per_kernel;
         for (uint32_t i = 0; i < num_kernels; i++) {
             experimental::quasar::CreateKernel(
-                program,
+                program_,
                 path,
                 coord,
                 experimental::quasar::QuasarDataMovementConfig{
@@ -85,7 +82,7 @@ void RunOneTest(
             dm_config.processor = static_cast<DataMovementProcessor>(type_idx);
             dm_config.noc = (type_idx == 1) ? NOC::RISCV_1_default : NOC::RISCV_0_default;
             dm_config.compile_args = compile_args;
-            CreateKernel(program, path, coord, dm_config);
+            CreateKernel(program_, path, coord, dm_config);
         }
     }
     // Add expected messages for all DMs
@@ -96,11 +93,11 @@ void RunOneTest(
     }
 
     // Create compute kernels
-    // TODO: Watcher feature are temporarily skipped on Quasar until basic runtime bring-up is complete
+    // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up for TRISCs is complete
     auto num_processor_classes = hal.get_processor_classes_count(HalProgrammableCoreType::TENSIX);
     if (!is_quasar && num_processor_classes > 1) {
         auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
-        CreateKernel(program, path, coord, ComputeConfig{.compile_args = compile_args});
+        CreateKernel(program_, path, coord, ComputeConfig{.compile_args = compile_args});
         for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
             uint32_t processor_idx =
                 hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
@@ -114,7 +111,7 @@ void RunOneTest(
         // Just pick the first core
         CoreCoord idle_coord = CoreCoord(*inactive_eth_cores.begin());
         CreateKernel(
-            program,
+            program_,
             path,
             idle_coord,
             tt_metal::EthernetConfig{
@@ -122,7 +119,9 @@ void RunOneTest(
                 .noc = tt_metal::NOC::NOC_0,
                 .processor = DataMovementProcessor::RISCV_0,
                 .compile_args = compile_args});
-        add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::IDLE_ETH, 0, false));
+        // TODO: replace string literal "ierisc" with hal.get_processor_class_name() after
+        // unifying all tests + watcher_device_reader::get_riscv_name() with same method
+        add_expected_msg("ierisc");
     }
 
     fixture->RunProgram(mesh_device, workload, true);
@@ -131,46 +130,40 @@ void RunOneTest(
 
 } // namespace
 
-// Standard tests on all archs (Default Quasar uses single kernel with all DMs)
-TEST_F(MeshWatcherFixture, TestWatcherStackcUsage0) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) { RunOneTest(f, d, 0); },
-            mesh_device);
-    }
-}
+struct StackUsageTestParams {
+    std::string test_name;
+    unsigned free_bytes;
+    std::optional<uint32_t> quasar_dms_per_kernel;  // nullopt = default (all DMs), value = multi-kernel mode
+    bool quasar_only;                               // If true, skip on non-Quasar
+};
 
-TEST_F(MeshWatcherFixture, TestWatcherStackUsage16) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) { RunOneTest(f, d, 16); },
-            mesh_device);
-    }
-}
+class StackUsageTest : public MeshWatcherFixture, public ::testing::WithParamInterface<StackUsageTestParams> {};
 
-// Quasar-specific: multi-kernel mode (8 kernels, 1 DM each)
-TEST_F(MeshWatcherFixture, TestWatcherStackUsage0_QuasarMultiKernel) {
-    if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
+TEST_P(StackUsageTest, TestWatcherStackUsage) {
+    const auto& params = GetParam();
+
+    // Skip Quasar-only tests on other architectures
+    if (params.quasar_only && MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Test only applicable to Quasar";
     }
+
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
-                RunOneTest(f, d, 0, 1);  // 1 DM per kernel
+            [&params](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
+                RunOneTest(f, d, params.free_bytes, params.quasar_dms_per_kernel);
             },
             mesh_device);
     }
 }
 
-TEST_F(MeshWatcherFixture, TestWatcherStackUsage16_QuasarMultiKernel) {
-    if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "Test only applicable to Quasar";
-    }
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(
-            [](MeshWatcherFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
-                RunOneTest(f, d, 16, 1);  // 1 DM per kernel
-            },
-            mesh_device);
-    }
-}
+INSTANTIATE_TEST_SUITE_P(
+    WatcherStackUsageTests,
+    StackUsageTest,
+    ::testing::Values(
+        // Standard tests (all architectures, default Quasar uses single kernel with all DMs)
+        StackUsageTestParams{"StackUsage0", 0, std::nullopt, false},
+        StackUsageTestParams{"StackUsage16", 16, std::nullopt, false},
+        // Quasar only: multi-kernel mode (launch 8 kernels in total, each mapped to a unique DM each)
+        StackUsageTestParams{"StackUsage0_QuasarMultiKernel", 0, 1, true},
+        StackUsageTestParams{"StackUsage16_QuasarMultiKernel", 16, 1, true}),
+    [](const ::testing::TestParamInfo<StackUsageTestParams>& info) { return info.param.test_name; });

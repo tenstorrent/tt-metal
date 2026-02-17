@@ -5,7 +5,6 @@
 #pragma once
 
 #include "watcher_common.h"
-#include "core_config.h"
 #include "dev_mem_map.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
@@ -62,13 +61,13 @@ static inline void record_stack_usage(uint32_t stack_free) {
     }
 
     std::uint64_t cpu_index = 0;
+    // TODO: This logic should be moved to an internal get_cpu_idx() API.
+    // Deferred to a follow-up PR
 #if defined(ARCH_QUASAR)
-    // TODO: The below code is recurring on Quasar.
-    // It needs to be in a get_cpu_idx() API for Quasar
 #if defined(COMPILE_FOR_TRISC)
     std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    cpu_index = MaxDMProcessorsPerCoreType + NUM_TRISC_CORES * neo_id + trisc_id;  // after 8 DM cores
+    cpu_index = NUM_DM_CORES + NUM_TRISC_CORES * neo_id + trisc_id;  // after 8 DM cores
 #else
     asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
 #endif
@@ -93,7 +92,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
 #else  // !WATCHER_ENABLED
 
 static inline void mark_stack_usage() {}
-static inline int measure_stack_usage() { return 0; }
+static inline uint32_t measure_stack_usage() { return 0; }
 static inline void record_stack_usage(uint32_t) {}
 
 #endif  // WATCHER_ENABLED
