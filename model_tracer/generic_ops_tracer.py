@@ -6,9 +6,9 @@
 """
 Generic Operations Tracer
 
-Takes any model test path and extracts ttnn operations by running it with tracing enabled.
+Takes any model test path and extracts ttnn operations by running it with --trace-params enabled.
 Automatically detects if it's a pytest test or standalone Python script.
-No model-specific code or device initialization needed.
+Uses the new simple parameter tracer instead of graph tracing.
 
 Usage:
     python generic_ops_tracer.py <test_path> [--output-dir <dir>] [--store]
@@ -28,251 +28,29 @@ import sys
 import os
 import subprocess
 import json
+import hashlib
+from tqdm import tqdm
 import argparse
 from datetime import datetime
-
-
-def fix_unparsed_elements_standalone(obj, depth=0, max_depth=50):
-    """Standalone function to fix UnparsedElements - can be used anywhere"""
-    # Prevent infinite recursion (safety measure)
-    if depth >= max_depth:
-        if depth == max_depth:  # Only print once
-            print(f"⚠️  Warning: Max recursion depth ({max_depth}) reached while fixing unparsed elements")
-        return obj
-
-    if isinstance(obj, dict):
-        # Check if this is an UnparsedElement
-        if "UnparsedElement" in obj:
-            unparsed_data = obj["UnparsedElement"]
-            element_info = unparsed_data.get("element_info", "")
-
-            # Convert to string if needed
-            if not isinstance(element_info, str):
-                element_info = str(element_info)
-
-            # Try to parse with regex fixes
-            if element_info and element_info.startswith("{"):
-                try:
-                    import re
-                    import json as json_module
-
-                    fixed_json_str = element_info
-
-                    # STEP 1: Fix improperly escaped nested JSON strings
-                    # Pattern: {"arg0": "[{\"key\":...}" should be {"arg0": "[{\\\"key\":...}"}
-                    # This happens when the value is a JSON-stringified array/object
-                    # The problem: after "arg0": ", the quotes in the nested JSON are not escaped
-                    #
-                    # Detection: Look for pattern like {"argN": "[{" or {"argN": "{{"
-                    # Solution: Find the string value and properly escape all internal quotes
-
-                    # Use non-greedy quantifier to avoid over-matching with nested quotes
-                    match = re.match(r'\{"(arg\d+)"\s*:\s*"(.+?)"\}$', fixed_json_str)
-                    if match:
-                        # Extract the key and problematic value
-                        arg_key = match.group(1)
-                        inner_value = match.group(2)
-
-                        # Check if it looks like unescaped JSON (starts with [ or {)
-                        if inner_value.startswith("[") or inner_value.startswith("{"):
-                            # This is the problematic case - the inner JSON is not properly escaped
-                            # We need to:
-                            # 1. Fix any C++ formatting issues (like "{32, 32}" -> [32, 32])
-                            # 2. Then parse it as JSON
-
-                            # Apply C++ formatting fixes first
-                            inner_fixed = inner_value
-                            # Fix tile_shape and face_shape patterns: "{32, 32}" -> [32, 32]
-                            inner_fixed = re.sub(
-                                r'"tile_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"tile_shape":[\1, \2]', inner_fixed
-                            )
-                            inner_fixed = re.sub(
-                                r'"face_shape":\s*"\{(\d+),\s*(\d+)\}"', r'"face_shape":[\1, \2]', inner_fixed
-                            )
-
-                            # Now try to parse it
-                            try:
-                                parsed_inner = json_module.loads(inner_fixed)
-
-                                # Success! Now fix any remaining string values in the parsed structure
-                                # (e.g., if tile_shape/face_shape are still strings)
-                                def fix_string_arrays(obj):
-                                    """Fix string values that should be arrays like '{32, 32}' -> [32, 32]"""
-                                    if isinstance(obj, dict):
-                                        for key, value in obj.items():
-                                            if isinstance(value, str):
-                                                # Check if it's a brace-delimited number pair
-                                                match_braces = re.match(r"^\{(\d+),\s*(\d+)\}$", value)
-                                                if match_braces:
-                                                    obj[key] = [int(match_braces.group(1)), int(match_braces.group(2))]
-                                                else:
-                                                    obj[key] = value
-                                            elif isinstance(value, (dict, list)):
-                                                obj[key] = fix_string_arrays(value)
-                                    elif isinstance(obj, list):
-                                        return [fix_string_arrays(item) for item in obj]
-                                    return obj
-
-                                parsed_inner = fix_string_arrays(parsed_inner)
-                                # Reconstruct the outer dict with parsed inner value (using captured key)
-                                result = {arg_key: parsed_inner}
-                                return fix_unparsed_elements_standalone(result, depth + 1, max_depth)
-                            except (json_module.JSONDecodeError, ValueError, TypeError):
-                                # If parsing fails, continue to other fixing strategies
-                                pass
-
-                    # STEP 2: Try normal JSON parsing (in case it's already valid)
-                    try:
-                        first_parse = json_module.loads(fixed_json_str)
-                        if isinstance(first_parse, dict):
-                            # Check if any values are stringified JSON (start with [ or {)
-                            for key, value in first_parse.items():
-                                if isinstance(value, str) and (value.startswith("[") or value.startswith("{")):
-                                    # Try to parse the inner JSON string with fixes
-                                    inner_json = value
-                                    # Apply regex fixes to the inner string
-                                    inner_json = re.sub(r':\s*"\\{(\d+),\s*(\d+)\\}"', r":[\1, \2]", inner_json)
-                                    inner_json = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', inner_json)
-                                    inner_json = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', inner_json)
-                                    inner_json = re.sub(
-                                        r'"tile_shape":"\\{(\d+),\s*(\d+)\\}"', r'"tile_shape":[\1, \2]', inner_json
-                                    )
-                                    inner_json = re.sub(
-                                        r'"face_shape":"\\{(\d+),\s*(\d+)\\}"', r'"face_shape":[\1, \2]', inner_json
-                                    )
-
-                                    try:
-                                        # Try to parse the fixed inner JSON
-                                        parsed_inner = json_module.loads(inner_json)
-                                        first_parse[key] = parsed_inner
-                                    except (json_module.JSONDecodeError, ValueError, TypeError):
-                                        # If inner parsing fails, keep as string
-                                        pass
-
-                            # Recursively fix any nested UnparsedElements
-                            return fix_unparsed_elements_standalone(first_parse, depth + 1, max_depth)
-                    except (json_module.JSONDecodeError, ValueError, TypeError):
-                        # First parse failed, continue with regex fixes
-                        pass
-
-                    # STEP 3: Apply regex fixes for common C++ formatting issues
-                    # Fix unquoted storage_type value: "storage_type":StorageType::DEVICE -> "storage_type":"StorageType::DEVICE"
-                    fixed_json_str = re.sub(r'"storage_type"\s*:\s*(\w+::\w+)', r'"storage_type":"\1"', fixed_json_str)
-                    # Fix patterns like "tile_shape":"{32, 32}" -> "tile_shape":[32, 32]
-                    fixed_json_str = re.sub(r':\s*"\{(\d+),\s*(\d+)\}"', r":[\1, \2]", fixed_json_str)
-                    # Fix patterns like "compute_grid":8,8 -> "compute_grid":[8,8]
-                    fixed_json_str = re.sub(r'"(\w+)":(\d+),(\d+)', r'"\1":[\2,\3]', fixed_json_str)
-                    # Fix remaining ":{...}" patterns
-                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
-                    # Fix grid patterns like "grid":{[...],[...]} -> "grid":[[...],[...]]
-                    fixed_json_str = re.sub(
-                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
-                    )
-                    # Fix range patterns like {8, 8} - {0, 0} -> [8, 8], [0, 0]
-                    fixed_json_str = re.sub(r"(\{[^}]+\})\s*-\s*(\{[^}]+\})", r"\1, \2", fixed_json_str)
-                    # Fix placeholder {...} to null
-                    fixed_json_str = re.sub(r":\{\.\.\.}", r":null", fixed_json_str)
-
-                    # Parse and return the fixed data
-                    parsed_data = json_module.loads(fixed_json_str)
-                    # Recursively fix any nested UnparsedElements
-                    return fix_unparsed_elements_standalone(parsed_data, depth + 1, max_depth)
-                except Exception:
-                    pass
-
-            # If parsing failed, return as-is
-            return obj
-        else:
-            # Recursively fix nested structures - create new dict to avoid circular refs
-            result = {}
-            for k, v in obj.items():
-                result[k] = fix_unparsed_elements_standalone(v, depth + 1, max_depth)
-            return result
-    elif isinstance(obj, list):
-        # Create new list to avoid circular refs
-        return [fix_unparsed_elements_standalone(item, depth + 1, max_depth) for item in obj]
-    else:
-        return obj
-
-
-def extract_tensor_metadata(obj, depth=0, max_depth=50):
-    """
-    Extract layout and storage_type from UnparsedElement strings and add them as proper fields.
-    Handles format in element_info: "layout\":\"Layout::TILE\",\"storage_type\":StorageType::DEVICE
-    """
-    import re
-    import json as json_module
-
-    if depth >= max_depth:
-        return obj
-
-    if isinstance(obj, dict):
-        # Check if this is an UnparsedElement with tensor metadata
-        if "UnparsedElement" in obj:
-            unparsed_data = obj["UnparsedElement"]
-            element_info = unparsed_data.get("element_info", "")
-
-            if isinstance(element_info, str) and ("layout" in element_info or "storage_type" in element_info):
-                # Extract layout and storage_type from the element_info string
-                layout_match = re.search(r'"layout"\s*:\s*\\"(Layout::\w+)\\"', element_info)
-                storage_type_match = re.search(r'"storage_type"\s*:\s*(\w+::\w+)', element_info)
-
-                if layout_match or storage_type_match:
-                    # Try to fix and parse the element_info
-                    fixed_info = element_info
-
-                    # Fix the unquoted storage_type value
-                    if storage_type_match:
-                        storage_type_val = storage_type_match.group(1)
-                        # Add quotes around the storage_type value
-                        fixed_info = re.sub(
-                            r'"storage_type"\s*:\s*' + re.escape(storage_type_val),
-                            f'"storage_type":"\\"{storage_type_val}\\"',
-                            fixed_info,
-                        )
-
-                    try:
-                        # Try parsing the fixed JSON
-                        parsed = json_module.loads(fixed_info)
-                        # If parsing succeeded, return the parsed version
-                        return extract_tensor_metadata(parsed, depth + 1, max_depth)
-                    except (json_module.JSONDecodeError, ValueError):
-                        # If parsing still fails, extract metadata manually
-                        pass
-
-        # Recursively process all dict values
-        result = {}
-        for k, v in obj.items():
-            result[k] = extract_tensor_metadata(v, depth + 1, max_depth)
-        return result
-    elif isinstance(obj, list):
-        return [extract_tensor_metadata(item, depth + 1, max_depth) for item in obj]
-    else:
-        return obj
+from pathlib import Path
 
 
 def get_base_dir():
     """Get the tt-metal base directory from PYTHONPATH or current working directory"""
     pythonpath = os.environ.get("PYTHONPATH", "")
     if pythonpath:
-        # PYTHONPATH might contain multiple paths separated by ':'
         paths = pythonpath.split(":")
         for path in paths:
-            # Look for tt-metal directory
             if "tt-metal" in path:
-                # Extract the tt-metal base directory
                 if path.endswith("tt-metal"):
                     return path
-                # Handle cases like /home/ubuntu/tt-metal/python_env/lib/python3.X/site-packages
                 parts = path.split("tt-metal")
                 if parts:
                     return parts[0] + "tt-metal"
-    # Fallback: assume we're running from within tt-metal and find it
     current_dir = os.getcwd()
     if "tt-metal" in current_dir:
         parts = current_dir.split("tt-metal")
         return parts[0] + "tt-metal"
-    # Last resort: use current directory
     return current_dir
 
 
@@ -280,859 +58,571 @@ BASE_DIR = get_base_dir()
 
 
 def get_machine_info():
-    """
-    Get machine info (board type, device series, and card count) using tt-smi command.
-    Returns a dict with 'board_type', 'device_series', and 'card_count' or None on failure.
-    Gracefully handles command not found or other errors.
-    """
+    """Get machine info (board type, device series, card count, and device count) using tt-smi command."""
     try:
-        # Run tt-smi -ls and parse the output
         result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
-
         if result.returncode != 0 or not result.stdout.strip():
             return None
 
-        # Parse the table output
-        # Look for lines in the "Boards that can be reset" table
-        # Example line: "│ 0      │ Wormhole │ n300              L │"
-        in_table = False
-        machines = {}  # {(board_type, device_series): count}
+        # Parse "All available boards" section for total device count
+        all_devices = []
+        in_all_boards = False
+
+        # Parse "Boards that can be reset" section for card count
+        in_reset_table = False
+        machines = {}
 
         for line in result.stdout.split("\n"):
+            # Track when we enter "All available boards" section
+            if "All available boards on host" in line:
+                in_all_boards = True
+                in_reset_table = False
+                continue
+
+            # Track when we enter "Boards that can be reset" section
             if "Boards that can be reset" in line:
-                in_table = True
+                in_all_boards = False
+                in_reset_table = True
                 continue
 
-            if not in_table:
-                continue
-
-            # Check if this is a table row (starts with │)
-            if line.strip().startswith("│"):
-                # Split by │ and clean up
+            # Parse device rows in "All available boards" section
+            if in_all_boards and line.strip().startswith("│"):
                 parts = [p.strip() for p in line.split("│") if p.strip()]
+                if len(parts) >= 3:
+                    pci_dev_id = parts[0]
+                    board_type = parts[1]
+                    device_series = parts[2].rstrip("LR").strip()  # Remove L/R suffix
+                    if board_type and device_series and board_type != "Board Type" and pci_dev_id != "PCI Dev ID":
+                        all_devices.append((board_type, device_series))
 
-                # We expect: [index, board_type, device_series]
+            # Count cards from "Boards that can be reset" section
+            if in_reset_table and line.strip().startswith("│"):
+                parts = [p.strip() for p in line.split("│") if p.strip()]
                 if len(parts) >= 3:
                     board_type = parts[1]
-                    device_series = parts[2].rstrip("L").strip()  # Remove trailing 'L' and whitespace
-
-                    # Skip header row or empty entries
+                    device_series = parts[2].rstrip("LR").strip()
                     if board_type and device_series and board_type != "Board Type":
                         key = (board_type, device_series)
                         machines[key] = machines.get(key, 0) + 1
 
-        # Return the first (most common) machine configuration
-        if machines:
+        if machines and all_devices:
             (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
-            return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+            # Count total devices from "All available boards" section
+            device_count = len(all_devices)
 
-        return None
-
-    except subprocess.TimeoutExpired:
-        return None
-    except FileNotFoundError:
-        # tt-smi command not found
+            return {
+                "board_type": board_type,
+                "device_series": device_series,
+                "card_count": card_count,
+                "device_count": device_count,
+            }
         return None
     except Exception:
-        # Any other error - silently fail
         return None
 
 
-def create_tracing_plugin(output_dir):
+def load_valid_operations():
+    """Load valid operations from Allops.txt.
+
+    Returns a set of normalized operation names (dot notation) for efficient lookup.
     """
-    Create a pytest plugin that captures operations during test execution.
+    valid_ops = set()
+    allops_file = os.path.join(BASE_DIR, "tests/sweep_framework/Allops.txt")
+
+    try:
+        with open(allops_file, "r") as f:
+            for line in f:
+                op_name = line.strip()
+                if op_name:
+                    # Normalize to dot notation for consistent comparison
+                    normalized = normalize_op_name(op_name)
+                    valid_ops.add(normalized)
+        print(f"📋 Loaded {len(valid_ops)} valid operations from Allops.txt")
+        return valid_ops
+    except FileNotFoundError:
+        print(f"⚠️ Allops.txt not found at {allops_file}, will include all ttnn operations")
+        return None
+    except Exception as e:
+        print(f"⚠️ Error loading Allops.txt: {e}, will include all ttnn operations")
+        return None
+
+
+def normalize_op_name(op_name: str) -> str:
+    """Normalize operation name to use dot notation.
+
+    Converts C++ style (ttnn::op) to Python style (ttnn.op) for consistent comparison.
+    """
+    return op_name.replace("::", ".")
+
+
+def get_excluded_operations():
+    """Operations to exclude from tracing.
+
+    Uses dot notation. Will be normalized during comparison to handle both formats.
+    """
+    return {
+        # Memory management operations
+        "ttnn.allocate_tensor_on_device",
+        "ttnn.deallocate",
+        "ttnn.move",
+        "ttnn.reallocate",
+        "ttnn.copy_host_to_device_tensor",
+        "ttnn.copy_device_to_host_tensor",
+        # Data conversion operations
+        "ttnn.to_device",
+        "ttnn.to_dtype",
+        "ttnn.to_layout",
+        "ttnn.to_memory_config",
+        "ttnn.to_torch",
+        "ttnn.from_device",
+        "ttnn.from_torch",
+        # Utility operations
+        "ttnn.view",
+        "ttnn.dump_tensor",
+        "ttnn.load_tensor",
+        "ttnn.as_tensor",
+        # Other excluded operations
+        "ttnn.unary_chain",
+        "ttnn.pearson_correlation_coefficient",
+        "ttnn.dram_prefetcher",
+        "ttnn.complex_tensor",
+        # Primitive/example operations
+        "ttnn.prim.binary",
+        "ttnn.prim.example",
+        "ttnn.prim.example_multiple_return",
+        "ttnn.composite_example",
+        "ttnn.composite_example_multiple_return",
+    }
+
+
+def is_valid_operation(op_name, valid_operations, excluded_operations):
+    """Check if operation should be included in the trace.
+
+    Normalizes operation names to handle both C++ (::) and Python (.) formats.
 
     Args:
-        output_dir: Directory to save trace outputs
-
-    Returns:
-        str: Path to the created plugin file
+        op_name: Operation name to check (can be :: or . notation)
+        valid_operations: Pre-normalized set of valid operations (dot notation) or None
+        excluded_operations: Set of excluded operations (dot notation)
     """
+    # Normalize the op_name once
+    normalized_op = normalize_op_name(op_name)
 
-    plugin_content = '''
-import pytest
-import ttnn
-from ttnn.graph_tracer_utils import GraphTracerUtils
-import json
-import os
-import subprocess
-from datetime import datetime
+    # Check exclusions first (already normalized)
+    if normalized_op in excluded_operations:
+        return False
 
-BASE_DIR_PLACEHOLDER = "BASE_DIR_VALUE"
+    if valid_operations is None:
+        return op_name.startswith("ttnn::") or op_name.startswith("ttnn.") or op_name.startswith("ttnn::experimental::")
+
+    # valid_operations is already normalized in load_valid_operations(), so direct lookup
+    return normalized_op in valid_operations
 
 
-def get_machine_info():
-    """
-    Get machine info (board type, device series, and card count) using tt-smi command.
-    Returns a dict with 'board_type', 'device_series', and 'card_count' or None on failure.
-    Gracefully handles command not found or other errors.
-    """
+def collect_operation_jsons(trace_dir):
+    """Collect all operation JSON files from the trace directory"""
+    trace_path = Path(trace_dir)
+    if not trace_path.exists():
+        return []
+
+    # Find all JSON files in the operation_parameters directory
+    json_files = sorted(trace_path.glob("*.json"))
+    return json_files
+
+
+def convert_json_to_master_format(json_file, test_source, machine_info):
+    """Convert individual JSON file to master format"""
     try:
-        # Run the bash command to extract machine info with card count
-        cmd = """
-        tt-smi -ls \\
-        | sed 's/│/|/g' \\
-        | awk -F'|' '
-        /Boards that can be reset:/ {in_table=1; next}
-        in_table && $0 ~ /^\\|/ {
-            gsub(/^[ \\t]+|[ \\t]+$/, "", $3)
-            gsub(/^[ \\t]+|[ \\t]+$/, "", $4)
-            sub(/[[:space:]]+L$/, "", $4)
-            if ($3 != "") machines[$3" "$4]++
-        }
-        END {
-            for (m in machines) print m, machines[m], (machines[m] > 1 ? "cards" : "card")
-        }'
-        """
+        with open(json_file, "r") as f:
+            data = json.load(f)
 
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)  # 10 second timeout
+        operation_name = data.get("operation_name", "unknown")
 
-        if result.returncode == 0 and result.stdout.strip():
-            # Parse the output: "Wormhole n300 1 card" or "Blackhole tt-galaxy-bh 32 cards"
-            lines = result.stdout.strip().split("\\n")
-            if lines:
-                # Take the first line (should be the primary board)
-                parts = lines[0].strip().split()
-                if len(parts) >= 3:
-                    board_type = parts[0]  # e.g., "Wormhole" or "Blackhole"
-                    device_series = parts[1]  # e.g., "n300", "n150", "tt-galaxy-bh"
-                    card_count = int(parts[2])  # e.g., 1, 2, 32
-                    return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+        # Convert args format from new tracer to master format
+        arguments = {}
 
-        # If we get here, command didn't produce expected output
-        return None
+        # Track mesh_device info (extracted from args)
+        mesh_device_info = None
 
-    except subprocess.TimeoutExpired:
-        # Command took too long
-        return None
-    except FileNotFoundError:
-        # tt-smi command not found
-        return None
-    except Exception:
-        # Any other error - silently fail
-        return None
+        # Add positional args with arg0, arg1, arg2, etc. labels
+        for arg in data.get("args", []):
+            position = arg.get("position", 0)
+            arg_key = f"arg{position}"
+            arg_value = arg.get("value", {})
 
+            # Extract mesh_device info from tensor arguments
+            if isinstance(arg_value, dict) and "mesh_device" in arg_value:
+                mesh_data = arg_value["mesh_device"]
 
-class OperationsTracingPlugin:
-    def __init__(self):
-        self.trace_active = False
-        self.output_dir = "OUTPUT_DIR_PLACEHOLDER"
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.test_counter = 0  # Counter to make each trace file unique
-        self.valid_operations = self.load_valid_operations()
-        self.current_test_source = None  # Will be set in pytest_runtest_setup
+                # Extract device info (only once, they should all be the same)
+                if mesh_device_info is None:
+                    mesh_device_info = {
+                        "device_ids": mesh_data.get("device_ids", []),
+                        "device_count": len(mesh_data.get("device_ids", [])),
+                        "mesh_device_shape": mesh_data.get("shape", []),
+                    }
 
-        # Get machine info once at initialization and reuse it for all operations
-        self.machine_info = get_machine_info()
+                # Extract tensor placement info and store it per-tensor
+                placements = mesh_data.get("placements", [])
+                distribution_shape = mesh_data.get("distribution_shape", [])
+                mesh_shape = mesh_data.get("shape", [])
 
-        # Operations to exclude from tracing (even if in Allops.txt)
-        self.excluded_operations = {
-            'ttnn::unary_chain',
-            'ttnn::view',
-            'ttnn::pearson_correlation_coefficient',
-            'ttnn::dump_tensor',
-            'ttnn::dram_prefetcher',
-            'ttnn::complex_tensor',
-            'ttnn::as_tensor',
-            'ttnn::allocate_tensor_on_device',
-            'ttnn::to_device',
-            'ttnn::to_dtype',
-            'ttnn::to_layout',
-            'ttnn::to_memory_config',
-            'ttnn::to_torch',
-            'ttnn::prim::binary',
-            'ttnn::prim::example',
-            'ttnn::prim::example_multiple_return',
-            'ttnn::from_device',
-            'ttnn::from_torch',
-            'ttnn::composite_example',
-            'ttnn::composite_example_multiple_return',
-            # Memory/Resource Management
-            'ttnn::deallocate',
-            'ttnn::move',
-            'ttnn::reallocate',
-            # Utility Operations
-            'ttnn::load_tensor'
-        }
+                # Remove mesh_device from the argument value
+                arg_value_clean = {k: v for k, v in arg_value.items() if k != "mesh_device"}
 
-    def load_valid_operations(self):
-        """Load valid operations from Allops.txt"""
-        valid_ops = set()
-        allops_file = os.path.join(BASE_DIR_PLACEHOLDER, "tests/sweep_framework/Allops.txt")
+                # Add per-tensor placement info if it exists
+                if placements:
+                    arg_value_clean["tensor_placement"] = {
+                        "placement": str(placements),
+                        "distribution_shape": str(distribution_shape),
+                        "mesh_device_shape": str(mesh_shape),
+                    }
 
-        try:
-            with open(allops_file, 'r') as f:
-                for line in f:
-                    op_name = line.strip()
-                    if op_name:  # Skip empty lines
-                        # Convert from dot notation (ttnn.add) to double-colon notation (ttnn::add)
-                        op_name_colons = op_name.replace('.', '::')
-                        valid_ops.add(op_name_colons)
+                # Remove redundant shape if it matches original_shape
+                if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
+                    if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
+                        del arg_value_clean["shape"]
 
-            print(f"📋 Loaded {len(valid_ops)} valid operations from Allops.txt")
-            return valid_ops
+                # Remove redundant dtype if it matches original_dtype
+                if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
+                    if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
+                        del arg_value_clean["dtype"]
 
-        except FileNotFoundError:
-            print(f"⚠️ Allops.txt not found at {allops_file}, falling back to prefix filtering")
-            return None
-        except Exception as e:
-            print(f"⚠️ Error loading Allops.txt: {e}, falling back to prefix filtering")
-            return None
-
-    def is_valid_operation(self, op_name):
-        """Check if operation is in the valid operations list and not excluded"""
-        # First check if it's in our exclusion list
-        if op_name in self.excluded_operations:
-            return False
-
-        if self.valid_operations is None:
-            # Fallback to old filtering logic
-            return op_name.startswith('ttnn::') or op_name.startswith('ttnn::experimental::')
-
-        return op_name in self.valid_operations
-
-    def clean_operation_data(self, operation):
-        """Clean operation data to ensure it's JSON serializable"""
-        if not isinstance(operation, dict):
-            return None
-
-        # Aggressive cleaning that serializes everything to JSON string and back
-        # This breaks all circular references by creating new objects
-        def clean_recursive(obj, depth=0, max_depth=20):
-            """Recursively clean objects to ensure JSON serialization"""
-            # Prevent infinite recursion
-            if depth > max_depth:
-                return {"_max_depth_exceeded": True}
-
-            # Base case: primitives are already JSON-serializable
-            if isinstance(obj, (str, int, float, bool)) or obj is None:
-                return obj
-
-            # For dicts and lists, try to serialize them directly first
-            # If they contain circular refs, this will fail
-            if isinstance(obj, (dict, list)):
-                try:
-                    # Try to serialize the whole structure at once
-                    # This will fail on circular refs
-                    json_str = json.dumps(obj, default=str)
-                    # If successful, parse it back to get clean copy
-                    return json.loads(json_str)
-                except (ValueError, TypeError):
-                    # Circular reference or other issue - clean piece by piece
-                    pass
-
-            # If we get here, need to clean recursively
-            if isinstance(obj, dict):
-                cleaned = {}
-                for key, value in obj.items():
-                    cleaned[key] = clean_recursive(value, depth + 1, max_depth)
-                return cleaned
-            elif isinstance(obj, list):
-                return [clean_recursive(item, depth + 1, max_depth) for item in obj]
+                arguments[arg_key] = arg_value_clean
             else:
-                # For non-JSON serializable objects, convert to string
-                return str(obj)
+                # Also clean up non-mesh tensors
+                if isinstance(arg_value, dict):
+                    arg_value_clean = arg_value.copy()
 
-        try:
-            cleaned_op = clean_recursive(operation)
-            # Final test if the entire cleaned operation is JSON serializable
-            json.dumps(cleaned_op)
-            return cleaned_op
-        except (TypeError, ValueError) as e:
-            # If even the cleaned version fails, return a minimal version
-            return {
-                "operation": str(operation.get('operation', 'unknown')),
-                "arguments": [],
-                "error": f"Complete serialization failure: {str(e)}"
-            }
+                    # Remove redundant shape if it matches original_shape
+                    if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
+                        if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
+                            del arg_value_clean["shape"]
 
-    def get_operation_signature(self, operation):
-        """Generate a unique signature for an operation based on name and key arguments"""
-        import hashlib
+                    # Remove redundant dtype if it matches original_dtype
+                    if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
+                        if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
+                            del arg_value_clean["dtype"]
 
-        if not isinstance(operation, dict) or 'operation' not in operation:
-            return None
-
-        # Create signature from operation name and arguments
-        op_name = operation['operation']
-        args_str = str(operation.get('arguments', []))
-
-        # Create hash of operation name + arguments
-        signature = hashlib.md5(f"{op_name}{args_str}".encode()).hexdigest()
-        return signature
-
-    def get_arguments_signature(self, arguments):
-        """Generate a unique signature for arguments only"""
-        import hashlib
-
-        args_str = str(arguments)
-        signature = hashlib.md5(args_str.encode()).hexdigest()
-        return signature
-
-    def _merge_source(self, existing_config, new_source):
-        """
-        Merge source into an existing configuration.
-        Converts single source string to list and appends if not already present.
-        """
-        if 'source' not in existing_config:
-            existing_config['source'] = new_source
-            return
-
-        existing_source = existing_config['source']
-
-        # Convert single string to list
-        if isinstance(existing_source, str):
-            if existing_source == new_source:
-                # Same source, no need to add
-                return
-            existing_config['source'] = [existing_source, new_source]
-        elif isinstance(existing_source, list):
-            # Already a list, append if not present
-            if new_source not in existing_source:
-                existing_source.append(new_source)
-
-    def _merge_machine_info(self, existing_config, new_machine_info):
-        """
-        Merge machine info into an existing configuration.
-
-        Simplified approach to prevent circular references:
-        - Keeps device_series as simple string (not nested lists)
-        - Checks for exact duplicates before adding
-        - Avoids complex list merging that can create circular refs
-        """
-        # Skip if new_machine_info is None
-        if new_machine_info is None:
-            return
-
-        if 'machine_info' not in existing_config:
-            # No existing machine info, just add as list
-            existing_config['machine_info'] = [new_machine_info]
-            return
-
-        existing_machine_info = existing_config['machine_info']
-
-        # Handle legacy single-dict format - convert to list
-        if isinstance(existing_machine_info, dict):
-            existing_machine_info = [existing_machine_info]
-            existing_config['machine_info'] = existing_machine_info
-
-        # Check if we already have this exact machine info
-        # This prevents duplicates AND avoids circular reference issues
-        new_board_type = new_machine_info.get('board_type')
-        new_device_series = new_machine_info.get('device_series')
-        new_card_count = new_machine_info.get('card_count')
-
-        for entry in existing_machine_info:
-            if (entry.get('board_type') == new_board_type and
-                entry.get('device_series') == new_device_series and
-                entry.get('card_count') == new_card_count):
-                # Already exists, don't duplicate
-                return
-
-        # Add as new entry (no complex merging to avoid circular refs)
-        existing_machine_info.append(new_machine_info)
-
-    def update_master_file(self, master_file_path, new_operations, test_name):
-        """Update master file with unique operation configurations grouped by operation name"""
-
-        # Load existing master data with grouped structure
-        master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
-
-        # Load existing master file with retry logic for file locking
-        max_retries = 5
-        retry_delay = 0.1  # 100ms
-
-        if os.path.exists(master_file_path) and os.path.getsize(master_file_path) > 0:
-            for attempt in range(max_retries):
-                try:
-                    with open(master_file_path, 'r') as f:
-                        content = f.read().strip()
-                        if not content:
-                            # Empty file, start fresh silently
-                            master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
-                            break
-                        master_data = json.loads(content)
-                    break  # Success, exit retry loop
-                except (IOError, json.JSONDecodeError) as e:
-                    if attempt < max_retries - 1:
-                        # Wait and retry (another test might be writing)
-                        import time
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        # Last attempt failed, start fresh silently
-                        master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
-                        break
-
-            # Handle legacy format conversion
-            try:
-                if 'content' in master_data and 'operations' not in master_data:
-                    print("🔄 Converting legacy format to grouped format...")
-                    operations_dict = {}
-                    for op in master_data.get('content', []):
-                        op_name = op.get('operation', 'unknown')
-                        if op_name not in operations_dict:
-                            operations_dict[op_name] = {"configurations": []}
-                        # Convert old format (list) to new format (dict with source)
-                        op_args = op.get('arguments', [])
-                        if isinstance(op_args, list) and len(op_args) > 0:
-                            # Check if already in new format
-                            if isinstance(op_args[0], dict) and 'arguments' in op_args[0]:
-                                operations_dict[op_name]["configurations"].extend(op_args)
-                            else:
-                                # Old format - convert to new format with unknown source
-                                operations_dict[op_name]["configurations"].append({
-                                    "arguments": op_args,
-                                    "source": "unknown"
-                                })
-                    master_data = {
-                        "operations": operations_dict,
-                        "metadata": master_data.get('metadata', {"models": [], "total_operations": 0, "unique_operations": 0})
-                    }
-
-                # Convert old format configurations (list) to new format (dict with source)
-                # This handles existing master files that have list format
-                for op_name, op_data in master_data.get('operations', {}).items():
-                    configs = op_data.get('configurations', [])
-                    if configs and isinstance(configs[0], list):
-                        print(f"🔄 Converting {op_name} configurations to new format with source tags...")
-                        converted_configs = []
-                        for config in configs:
-                            if isinstance(config, list):
-                                converted_configs.append({
-                                    "arguments": config,
-                                    "source": "unknown"  # Legacy configs don't have source info
-                                })
-                            elif isinstance(config, dict) and 'arguments' in config:
-                                # Already in new format
-                                converted_configs.append(config)
-                            else:
-                                # Fallback: wrap in new format
-                                converted_configs.append({
-                                    "arguments": config,
-                                    "source": "unknown"
-                                })
-                        master_data['operations'][op_name]['configurations'] = converted_configs
-
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"⚠️ Error processing master file format: {str(e)}. Starting fresh.")
-                master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
-        else:
-            # File doesn't exist, start fresh
-            master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
-
-        # Group new operations by operation name and collect unique configurations
-        new_configs_added = 0
-
-        for operation in new_operations:
-            if operation:
-                op_name = operation.get('operation', 'unknown')
-                op_args = operation.get('arguments', [])
-
-                # Initialize operation entry if not exists
-                if op_name not in master_data['operations']:
-                    master_data['operations'][op_name] = {"configurations": []}
-
-                # Check if this argument configuration already exists
-                arg_signature = self.get_arguments_signature(op_args)
-
-                # Use the machine info that was fetched once at plugin initialization
-                new_machine_info = self.machine_info
-
-                # Find matching configuration to merge machine info
-                matching_config = None
-                for existing_config in master_data['operations'][op_name]["configurations"]:
-                    # Handle both old format (list) and new format (dict with source)
-                    if isinstance(existing_config, list):
-                        existing_args = existing_config
-                    elif isinstance(existing_config, dict) and 'arguments' in existing_config:
-                        existing_args = existing_config['arguments']
-                    else:
-                        existing_args = existing_config
-
-                    existing_sig = self.get_arguments_signature(existing_args)
-                    if existing_sig == arg_signature:
-                        matching_config = existing_config
-                        break
-
-                if matching_config is None:
-                    # New configuration - add it
-                    # Don't serialize/deserialize - it doesn't help and may cause issues
-                    # Just use op_args directly
-                    op_args_clean = op_args
-
-                    config_entry = {
-                        "arguments": op_args_clean,
-                        "source": test_name
-                    }
-
-                    if new_machine_info:
-                        config_entry["machine_info"] = [new_machine_info]
-
-                    master_data['operations'][op_name]["configurations"].append(config_entry)
-                    new_configs_added += 1
+                    arguments[arg_key] = arg_value_clean
                 else:
-                    # Configuration exists - merge machine info and source if needed
-                    if isinstance(matching_config, dict):
-                        # Merge machine info
-                        if new_machine_info:
-                            self._merge_machine_info(matching_config, new_machine_info)
-                        # Merge source
-                        self._merge_source(matching_config, test_name)
+                    arguments[arg_key] = arg_value
 
-        # Update metadata
-        if test_name not in master_data['metadata']['models']:
-            master_data['metadata']['models'].append(test_name)
+        # Add kwargs as named arguments (they come after positional args)
+        kwargs = data.get("kwargs", {})
+        for key, value in kwargs.items():
+            # Also check kwargs for mesh_device info
+            if isinstance(value, dict) and "mesh_device" in value:
+                mesh_data = value["mesh_device"]
 
-        # Calculate statistics from grouped operations
-        total_configurations = sum(len(op_data["configurations"]) for op_data in master_data['operations'].values())
-        unique_operations = len(master_data['operations'])
+                if mesh_device_info is None:
+                    mesh_device_info = {
+                        "device_ids": mesh_data.get("device_ids", []),
+                        "device_count": len(mesh_data.get("device_ids", [])),
+                        "mesh_device_shape": mesh_data.get("shape", []),
+                    }
 
-        master_data['metadata']['unique_operations'] = unique_operations
-        master_data['metadata']['total_configurations'] = total_configurations
-        master_data['metadata']['total_operations'] = master_data['metadata'].get('total_operations', 0) + len(new_operations)
-        master_data['metadata']['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                placements = mesh_data.get("placements", [])
+                distribution_shape = mesh_data.get("distribution_shape", [])
+                mesh_shape = mesh_data.get("shape", [])
 
-        # Count configurations per operation type
-        op_types = {}
-        for op_name, op_data in master_data['operations'].items():
-            op_types[op_name] = len(op_data["configurations"])
+                value_clean = {k: v for k, v in value.items() if k != "mesh_device"}
 
-        master_data['metadata']['operation_types'] = op_types
+                # Add per-tensor placement info if it exists
+                if placements:
+                    value_clean["tensor_placement"] = {
+                        "placement": str(placements),
+                        "distribution_shape": str(distribution_shape),
+                        "mesh_device_shape": str(mesh_shape),
+                    }
 
-        # Save updated master file with file locking to prevent race conditions
-        # Use atomic write (write to temp file, then rename) to prevent corruption
-        import tempfile
-        import shutil
+                # Remove redundant shape if it matches original_shape
+                if "shape" in value_clean and "original_shape" in value_clean:
+                    if value_clean["shape"] == value_clean["original_shape"]:
+                        del value_clean["shape"]
 
+                # Remove redundant dtype if it matches original_dtype
+                if "dtype" in value_clean and "original_dtype" in value_clean:
+                    if value_clean["dtype"] == value_clean["original_dtype"]:
+                        del value_clean["dtype"]
+
+                arguments[key] = value_clean
+            else:
+                # Also clean up non-mesh tensors in kwargs
+                if isinstance(value, dict):
+                    value_clean = value.copy()
+
+                    # Remove redundant shape if it matches original_shape
+                    if "shape" in value_clean and "original_shape" in value_clean:
+                        if value_clean["shape"] == value_clean["original_shape"]:
+                            del value_clean["shape"]
+
+                    # Remove redundant dtype if it matches original_dtype
+                    if "dtype" in value_clean and "original_dtype" in value_clean:
+                        if value_clean["dtype"] == value_clean["original_dtype"]:
+                            del value_clean["dtype"]
+
+                    arguments[key] = value_clean
+                else:
+                    arguments[key] = value
+
+        # Merge mesh_device info into machine_info
+        enhanced_machine_info = machine_info.copy() if machine_info else {}
+
+        if mesh_device_info:
+            enhanced_machine_info.update(mesh_device_info)
+
+        # Note: tensor_placements are now stored per-tensor in the arguments
+        # instead of globally in machine_info, to avoid ambiguity
+
+        return {
+            "operation": operation_name,
+            "arguments": arguments,
+            "source": test_source,
+            "machine_info": enhanced_machine_info,
+        }
+    except Exception as e:
+        print(f"⚠️ Error processing {json_file}: {e}")
+        return None
+
+
+def update_master_file(master_file_path, operations, test_source):
+    """Update master JSON file with operations"""
+    import hashlib
+
+    # Load existing master data
+    master_data = {"operations": {}, "metadata": {"models": [], "unique_operations": 0, "total_configurations": 0}}
+
+    if os.path.exists(master_file_path) and os.path.getsize(master_file_path) > 0:
         try:
-            # Write to temporary file first (atomic operation)
-            temp_file = master_file_path + '.tmp'
+            with open(master_file_path, "r") as f:
+                content = f.read().strip()
+                if content:
+                    master_data = json.loads(content)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load existing master JSON: {e}")
+            print(f"   Starting with empty master data")
 
-            # Custom serializer that recursively converts everything to JSON-safe primitives
-            # This breaks circular references by tracking visited objects
-            def make_json_safe(obj, visited=None, depth=0, max_depth=100):
-                if visited is None:
-                    visited = set()
+    # Find the current max config_id
+    max_config_id = 0
+    for op_data in master_data.get("operations", {}).values():
+        for config in op_data.get("configurations", []):
+            if isinstance(config, dict) and "config_id" in config:
+                max_config_id = max(max_config_id, config["config_id"])
 
-                if depth > max_depth:
-                    return "_max_depth_"
+    # Group operations by operation name
+    new_configs_added = 0
+    next_config_id = max_config_id + 1
 
-                # Check for circular reference
-                obj_id = id(obj)
-                if obj_id in visited:
-                    return "_circular_ref_"
+    print(f"\n💾 Updating master JSON with {len(operations)} operations...")
+    for operation in tqdm(operations, desc="Updating master", unit="op"):
+        if not operation:
+            continue
 
-                # Primitives are already safe
-                if isinstance(obj, (str, int, float, bool)) or obj is None:
-                    return obj
+        op_name = operation.get("operation", "unknown")
+        op_args = operation.get("arguments", [])
 
-                # Track this object
-                if isinstance(obj, (dict, list)):
-                    visited.add(obj_id)
+        # Initialize operation entry if not exists
+        if op_name not in master_data["operations"]:
+            master_data["operations"][op_name] = {"configurations": []}
 
-                try:
-                    if isinstance(obj, dict):
-                        result = {str(k): make_json_safe(v, visited, depth + 1, max_depth) for k, v in obj.items()}
-                        visited.discard(obj_id)
-                        return result
-                    elif isinstance(obj, list):
-                        result = [make_json_safe(item, visited, depth + 1, max_depth) for item in obj]
-                        visited.discard(obj_id)
-                        return result
-                    else:
-                        return str(obj)
-                except:
-                    visited.discard(obj_id)
-                    return str(obj)
+        # Create argument signature for deduplication
+        args_str = json.dumps(op_args, sort_keys=True, default=str)
+        arg_signature = hashlib.md5(args_str.encode()).hexdigest()
 
-            with open(temp_file, 'w') as f:
-                # Apply our custom serializer to break circular references
-                safe_master_data = make_json_safe(master_data)
-                # Now json.dumps should work without circular reference errors
-                json_str = json.dumps(safe_master_data, indent=2)
-                f.write(json_str)
+        # Check if this configuration already exists
+        matching_config = None
+        for existing_config in master_data["operations"][op_name]["configurations"]:
+            if isinstance(existing_config, dict) and "arguments" in existing_config:
+                existing_args = existing_config["arguments"]
+                existing_sig = hashlib.md5(json.dumps(existing_args, sort_keys=True, default=str).encode()).hexdigest()
+                if existing_sig == arg_signature:
+                    matching_config = existing_config
+                    break
 
-            # Atomic rename (replaces existing file atomically)
-            shutil.move(temp_file, master_file_path)
-        except (IOError, TypeError, OSError) as e:
-            print(f"❌ Error saving master file: {e}")
-            # Clean up temp file if it exists
-            temp_file = master_file_path + '.tmp'
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
-            # Try to save without problematic data
-            try:
-                # Create a simplified version if full serialization fails
-                simplified_data = {{
-                    "operations": {},
-                    "metadata": master_data.get('metadata', {})
-                }}
-                temp_file = master_file_path + '.tmp'
-                with open(temp_file, 'w') as f:
-                    json.dump(simplified_data, f, indent=2, default=str)
-                shutil.move(temp_file, master_file_path)
-                print("💾 Saved simplified master file without problematic operations")
-            except Exception as e2:
-                print(f"❌ Failed to save even simplified master file: {e2}")
-                # Clean up temp file
-                temp_file = master_file_path + '.tmp'
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except:
-                        pass
+        if matching_config is None:
+            # New configuration - assign new config_id
+            # Compute config_hash for stable tracking (same logic as load_ttnn_ops_data_v2.py)
+            machine_info = operation.get("machine_info")
 
-        return new_configs_added
+            # Extract hardware tuple
+            hardware = None
+            if machine_info:
+                board_type = machine_info.get("board_type")
+                if board_type:
+                    device_series = machine_info.get("device_series")
+                    if isinstance(device_series, list):
+                        device_series = device_series[0] if device_series else None
+                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
 
-    def pytest_runtest_setup(self, item):
-        """Start tracing before each test"""
-        # Extract test name/path for source tagging
-        # Use nodeid which includes the full path (e.g., "models/demo.py::test_function")
-        nodeid = getattr(item, 'nodeid', item.name)
-        # Clean up the source name for readability
-        if '::' in nodeid:
-            # Extract file path and test name
-            parts = nodeid.split('::')
-            source_path = parts[0] if len(parts) > 0 else item.name
-        else:
-            source_path = nodeid
-
-        # Normalize absolute paths to relative paths (if within BASE_DIR)
-        if os.path.isabs(source_path) and BASE_DIR_PLACEHOLDER in source_path:
-            try:
-                source_path = os.path.relpath(source_path, BASE_DIR_PLACEHOLDER)
-            except ValueError:
-                # If relpath fails, keep original
-                pass
-
-        # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
-        # Only capture for models/tt_transformers/demo/simple_text_demo.py
-        # This helps identify which specific HuggingFace model or Llama directory was used
-        hf_model = None
-        llama_dir = None
-        if 'models/tt_transformers/demo/simple_text_demo.py' in source_path:
-            hf_model = os.environ.get('HF_MODEL', None)
-            llama_dir = os.environ.get('LLAMA_DIR', None)
-
-            # Append whichever environment variables are available
-            env_tags = []
-            if hf_model:
-                env_tags.append(f"[HF_MODEL:{hf_model}]")
-            if llama_dir:
-                env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
-
-            if env_tags:
-                source_path = f"{source_path} {' '.join(env_tags)}"
-
-        self.current_test_source = source_path
-
-        print(f"\\n🔍 Starting operations trace for: {item.name}")
-        print(f"📝 Source tag: {self.current_test_source}")
-        print(f"🔢 Test number: {self.test_counter + 1}")  # Show which test number this is
-        if hf_model:
-            print(f"🤗 HuggingFace Model: {hf_model}")
-        if llama_dir:
-            print(f"🦙 Llama Directory: {llama_dir}")
-        os.makedirs(self.output_dir, exist_ok=True)
-
-        # Begin graph capture
-        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        self.trace_active = True
-
-    def pytest_runtest_teardown(self, item, nextitem):
-        """Capture operations after each test"""
-        if not self.trace_active:
-            return
-
-        try:
-            print("📊 Capturing operations...")
-            captured_graph = ttnn.graph.end_graph_capture()
-            trace_data = GraphTracerUtils.serialize_graph(captured_graph)
-
-            # Filter the trace data to only include TTNN operations
-            if isinstance(trace_data, dict) and 'content' in trace_data:
-                original_operations = trace_data['content']
-                filtered_operations = []
-
-                for op in original_operations:
-                    if isinstance(op, dict) and 'operation' in op:
-                        op_name = op['operation']
-                        # Include only valid operations from Allops.txt
-                        if self.is_valid_operation(op_name):
-                            filtered_operations.append(op)
-
-                # Update trace_data with filtered operations
-                trace_data['content'] = filtered_operations
-                print(f"🎯 Filtered to {len(filtered_operations)} TTNN operations (from {len(original_operations)} total)")
-
-                # Update master JSON file with unique configurations
-                master_file = os.path.join(self.output_dir, 'ttnn_operations_master.json')
-                # Use the source tag we set in pytest_runtest_setup
-                # If current_test_source is None (test skipped before setup), use item.name as fallback
-                test_source = getattr(self, 'current_test_source', None)
-                if test_source is None:
-                    # Fallback: extract source from item.nodeid or use item.name
-                    nodeid = getattr(item, 'nodeid', item.name)
-                    if '::' in nodeid:
-                        parts = nodeid.split('::')
-                        test_source = parts[0] if len(parts) > 0 else item.name
-                    else:
-                        test_source = nodeid
-
-                    # Normalize absolute paths to relative paths (if within BASE_DIR)
-                    if os.path.isabs(test_source) and BASE_DIR_PLACEHOLDER in test_source:
+            # Extract mesh config
+            mesh_config = None
+            if machine_info and "tensor_placements" in machine_info:
+                placements = machine_info.get("tensor_placements", [])
+                if placements:
+                    p = placements[0]
+                    mesh_shape_str = p.get("mesh_device_shape")
+                    if mesh_shape_str:
                         try:
-                            test_source = os.path.relpath(test_source, BASE_DIR_PLACEHOLDER)
-                        except ValueError:
-                            # If relpath fails, keep original
+                            mesh_shape = (
+                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
+                            )
+                            if mesh_shape:
+                                import re
+
+                                placement_str = p.get("placement", "")
+                                shard_dim = None
+                                if "PlacementShard" in placement_str:
+                                    match = re.search(r"PlacementShard\((\d+)\)", placement_str)
+                                    if match:
+                                        shard_dim = int(match.group(1))
+                                mesh_config = {
+                                    "mesh_shape": mesh_shape,
+                                    "placement_type": "shard" if shard_dim is not None else "replicate",
+                                    "shard_dim": shard_dim,
+                                }
+                        except:
                             pass
 
-                    # Check for HF_MODEL and LLAMA_DIR environment variables and append if set (fallback case)
-                    # Only capture for models/tt_transformers/demo/simple_text_demo.py
-                    hf_model = None
-                    llama_dir = None
-                    if 'models/tt_transformers/demo/simple_text_demo.py' in test_source:
-                        hf_model = os.environ.get('HF_MODEL', None)
-                        llama_dir = os.environ.get('LLAMA_DIR', None)
+            # Compute SHA-256 hash
+            normalized = {"operation": op_name, "arguments": op_args, "hardware": hardware, "mesh": mesh_config}
+            config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
-                        # Append whichever environment variables are available
-                        env_tags = []
-                        if hf_model:
-                            env_tags.append(f"[HF_MODEL:{hf_model}]")
-                        if llama_dir:
-                            env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
+            config_entry = {
+                "config_id": next_config_id,
+                "config_hash": config_hash,
+                "arguments": op_args,
+                "executions": [
+                    {
+                        "source": test_source,
+                        "machine_info": machine_info,
+                        "count": operation.get("execution_count", 1),
+                    }
+                ],
+            }
 
-                        if env_tags:
-                            test_source = f"{test_source} {' '.join(env_tags)}"
+            master_data["operations"][op_name]["configurations"].append(config_entry)
+            new_configs_added += 1
+            next_config_id += 1
+        else:
+            # Configuration exists - check if this (source, machine_info) pair exists
+            if isinstance(matching_config, dict):
+                # Get or create executions list
+                if "executions" not in matching_config:
+                    # Migrate old format to new format
+                    old_source = matching_config.get("source", "")
+                    old_machine_info = matching_config.get("machine_info")
+                    old_count = matching_config.get("execution_count", 1)
 
-                new_configs_added = self.update_master_file(master_file, filtered_operations, test_source)
-                print(f"📝 Added {new_configs_added} new unique configurations to master file (source: {test_source})")
-                print(f"   📊 Captured {len(filtered_operations)} operations from this test")
+                    # Handle old format where source could be string or list
+                    if isinstance(old_source, str):
+                        sources = [old_source] if old_source else []
+                    else:
+                        sources = old_source if old_source else []
 
-            # Generate trace filename - sanitize the test name
-            test_name = item.name.replace("[", "_").replace("]", "_").replace(":", "_").replace("/", "_").replace("-", "_")
-            # Limit filename length
-            if len(test_name) > 100:
-                test_name = test_name[:100]
-            # Increment counter for each test to ensure unique filenames
-            self.test_counter += 1
-            trace_file = os.path.join(self.output_dir, f"{test_name}_filtered_ops_{self.timestamp}_{self.test_counter:03d}.json")
-            print(f"📁 Creating trace file #{self.test_counter}: {os.path.basename(trace_file)}")
+                    # Handle old format where machine_info could be dict or list
+                    if isinstance(old_machine_info, dict):
+                        machines = [old_machine_info]
+                    elif isinstance(old_machine_info, list):
+                        machines = old_machine_info
+                    else:
+                        machines = []
 
-            # Save trace data (clean it first to ensure JSON serialization)
-            try:
-                # Clean the trace data the same way we do for master file
-                cleaned_trace_data = trace_data.copy()
-                if 'content' in cleaned_trace_data:
-                    cleaned_operations = []
-                    for op in cleaned_trace_data['content']:
-                        # Clean for JSON serialization
-                        cleaned_op = self.clean_operation_data(op)
-                        if cleaned_op:
-                            cleaned_operations.append(cleaned_op)
-                    cleaned_trace_data['content'] = cleaned_operations
+                    # Create executions from old format (best effort - can't recover exact pairs)
+                    matching_config["executions"] = []
+                    if sources and machines:
+                        # Create all combinations (we lost the original pairing)
+                        for src in sources:
+                            for machine in machines:
+                                matching_config["executions"].append(
+                                    {
+                                        "source": src,
+                                        "machine_info": machine,
+                                        "count": old_count,
+                                    }
+                                )
+                    elif sources:
+                        for src in sources:
+                            matching_config["executions"].append(
+                                {
+                                    "source": src,
+                                    "machine_info": None,
+                                    "count": old_count,
+                                }
+                            )
 
-                with open(trace_file, 'w') as f:
-                    json.dump(cleaned_trace_data, f, indent=2, default=str)
-                print(f"💾 Operations saved to: {trace_file}")
-                file_format = "JSON"
+                    # Remove old fields
+                    matching_config.pop("source", None)
+                    matching_config.pop("machine_info", None)
+                    matching_config.pop("execution_count", None)
 
-            except (TypeError, ValueError) as e:
-                # Fallback to string representation
-                trace_file_txt = trace_file.replace('.json', '_repr.txt')
-                with open(trace_file_txt, 'w') as f:
-                    f.write(str(trace_data))
-                trace_file = trace_file_txt
-                print(f"💾 Operations saved to: {trace_file} (as text)")
-                file_format = "Text"
+                # Check if this (source, machine_info) pair already exists
+                new_source = test_source
+                new_machine_info = operation.get("machine_info")
+                new_count = operation.get("execution_count", 1)
 
-            # Analyze operations
-            if isinstance(trace_data, dict) and 'content' in trace_data:
-                operations = trace_data['content']
-                print(f"📈 Captured {len(operations)} operations")
+                found_execution = None
+                for execution in matching_config["executions"]:
+                    if execution["source"] == new_source:
+                        # Check if machine_info matches
+                        exec_machine = execution.get("machine_info")
+                        if exec_machine is None and new_machine_info is None:
+                            found_execution = execution
+                            break
+                        elif exec_machine and new_machine_info:
+                            # Compare complete machine_info (all fields must match)
+                            # Convert to JSON strings for deep comparison
+                            exec_machine_str = json.dumps(exec_machine, sort_keys=True, default=str)
+                            new_machine_str = json.dumps(new_machine_info, sort_keys=True, default=str)
+                            if exec_machine_str == new_machine_str:
+                                found_execution = execution
+                                break
 
-                # Count operation types and filter relevant operations
-                op_counts = {}
-                filtered_op_counts = {}
-
-                for op in operations:
-                    if isinstance(op, dict) and 'operation' in op:
-                        op_name = op['operation']
-                        op_counts[op_name] = op_counts.get(op_name, 0) + 1
-
-                        # Include only valid operations from Allops.txt
-                        if self.is_valid_operation(op_name):
-                            filtered_op_counts[op_name] = filtered_op_counts.get(op_name, 0) + 1
-
-                print("\\n📋 ALL OPERATIONS:")
-                print("=" * 60)
-                for op_name, count in sorted(op_counts.items(), key=lambda x: x[1], reverse=True):
-                    print(f"{op_name}: {count}x")
-                print("=" * 60)
-
-                print("\\n🎯 VALID OPERATIONS (from Allops.txt):")
-                print("=" * 60)
-                if filtered_op_counts:
-                    for op_name, count in sorted(filtered_op_counts.items(), key=lambda x: x[1], reverse=True):
-                        print(f"{op_name}: {count}x")
+                if found_execution:
+                    # Update existing execution - take max count
+                    found_execution["count"] = max(found_execution.get("count", 1), new_count)
                 else:
-                    print("No valid operations found")
-                print("=" * 60)
+                    # Add new execution entry
+                    matching_config["executions"].append(
+                        {
+                            "source": new_source,
+                            "machine_info": new_machine_info,
+                            "count": new_count,
+                        }
+                    )
 
-                # File info
-                file_size = os.path.getsize(trace_file)
-                print(f"📁 File: {trace_file}")
-                print(f"📊 Size: {file_size:,} bytes ({file_format})")
-                print(f"🔧 Total Operations: {len(operations)}")
-                print(f"📋 All Op Types: {len(op_counts)}")
-                print(f"🎯 Valid Op Types: {len(filtered_op_counts)}") # From Allops.txt
+    # Update metadata
+    if test_source not in master_data["metadata"]["models"]:
+        master_data["metadata"]["models"].append(test_source)
 
-            else:
-                print("⚠️ No operations captured or unexpected format")
+    total_configurations = sum(len(op_data["configurations"]) for op_data in master_data["operations"].values())
+    unique_operations = len(master_data["operations"])
 
-        except Exception as e:
-            print(f"❌ Error capturing operations: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.trace_active = False
+    # Create operation summary with config counts
+    operations_summary = {}
+    for op_name, op_data in sorted(master_data["operations"].items()):
+        config_count = len(op_data["configurations"])
+        operations_summary[op_name] = config_count
 
-def pytest_configure(config):
-    """Register the tracing plugin"""
-    config.pluginmanager.register(OperationsTracingPlugin(), "operations_tracer")
-'''
+    master_data["metadata"]["unique_operations"] = unique_operations
+    master_data["metadata"]["total_configurations"] = total_configurations
+    master_data["metadata"]["operations_summary"] = operations_summary
+    master_data["metadata"]["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Write plugin to tt-metal directory
-    plugin_file = os.path.join(BASE_DIR, "conftest_tracer.py")
-    os.makedirs(output_dir, exist_ok=True)
+    # Save master file
+    try:
+        with open(master_file_path, "w") as f:
+            json.dump(master_data, f, indent=2, default=str)
+    except Exception as e:
+        print(f"❌ Error saving master file: {e}")
 
-    with open(plugin_file, "w") as f:
-        content = plugin_content.replace("OUTPUT_DIR_PLACEHOLDER", output_dir)
-        content = content.replace("BASE_DIR_VALUE", BASE_DIR)
-        f.write(content)
-
-    return plugin_file
+    return new_configs_added
 
 
 def detect_pytest_tests(test_path):
-    """
-    Detect if a file/path contains pytest test cases.
-
-    Args:
-        test_path: Path to test file or test case (e.g., /path/to/test.py or /path/to/test.py::test_function)
-
-    Returns:
-        bool: True if pytest tests are found, False otherwise
-    """
+    """Detect if a file/path contains pytest test cases"""
     try:
         python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
-
-        # Use pytest --collect-only to check if any tests are collected
-        # 60 second timeout to handle TTNN initialization time
         result = subprocess.run(
             [python_cmd, "-m", "pytest", test_path, "--collect-only", "-q"],
             cwd=BASE_DIR,
@@ -1141,52 +631,49 @@ def detect_pytest_tests(test_path):
             timeout=60,
         )
 
-        # Check if any tests were collected
-        # pytest --collect-only will output test names if found
-        # If no tests found, it typically shows "no tests collected" or empty output
         if result.returncode == 0:
             output = result.stdout.lower()
-            # Look for indicators that tests were collected
             if "test" in output or "collected" in output:
-                # Check if it says "no tests collected" or "collected X items"
                 if "no tests collected" in output or "collected 0" in output:
                     return False
                 return True
-
         return False
-
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        # If pytest collect fails, assume it's not a pytest file
+    except Exception:
         return False
 
 
 def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None):
-    """
-    Run test with operations tracing enabled.
-    Automatically detects if it's a pytest test or standalone Python script.
-
-    Args:
-        test_path: Path to test (e.g., /path/to/test.py or /path/to/test.py::test_function)
-        output_dir: Directory to save trace outputs
-        keep_traces: If True, keep individual trace files after adding to master JSON
-        debug_mode: If True, show live test output in terminal (no capture)
-        extra_args: Additional arguments to pass to pytest or standalone script
-
-    Returns:
-        dict: Results of the test run
-    """
+    """Run test with --trace-params flag and collect operation JSONs"""
     extra_args = extra_args or []
 
-    print(f"🚀 Running test with operations tracing...")
-    if debug_mode:
-        print(f"🐛 Debug mode enabled - showing live test output...")
-    plugin_file = create_tracing_plugin(output_dir)
+    print(f"🚀 Running test with parameter tracing...")
 
-    # Use the same python executable that's running this script
-    python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+    # Show deprecation warning if debug flag was used
+    if debug_mode:
+        print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
+
+    # Use python executable from tt-metal environment
+    # Try to find python_env, fall back to system python3 if not found (e.g., in Docker/CI)
+    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
+    if os.path.exists(python_env_path):
+        python_cmd = python_env_path
+    else:
+        # Fallback to system python3 (used in Docker containers)
+        python_cmd = "python3"
+
+    # Create a unique subdirectory for this run based on source name and timestamp
+    # This prevents conflicts with previous runs
+    test_basename = os.path.basename(test_path).replace(".py", "").replace("::", "_")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_subdir = f"{test_basename}_{timestamp}"
+
+    # Trace directory with unique subdirectory
+    trace_dir = os.path.join(BASE_DIR, "generated/ttnn/reports/operation_parameters", unique_subdir)
+    os.makedirs(trace_dir, exist_ok=True)
+
+    print(f"📂 Trace directory: {trace_dir}")
 
     # Detect if this is a pytest test or standalone script
-    # If path contains ::, it's definitely a pytest test case
     is_pytest = "::" in test_path or detect_pytest_tests(test_path)
 
     if is_pytest:
@@ -1194,219 +681,293 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        # In debug mode, don't capture output at all - let it stream directly to terminal
-        # Otherwise, we suppress output for cleaner tracer messages
-        if debug_mode:
-            result = subprocess.run(
-                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
-                cwd=BASE_DIR,
-                text=True,
-            )
-        else:
-            result = subprocess.run(
-                [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"] + extra_args,
-                cwd=BASE_DIR,
-                capture_output=True,
-                text=True,
-            )
+        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
-        # For standalone scripts, we need to inject tracing differently
-        # Import the conftest_tracer module and enable tracing programmatically
+        cmd = [python_cmd, test_path, "--trace-params"] + extra_args
 
-        # Extract the Python file path (remove ::test_name if present)
-        script_path = test_path.split("::")[0] if "::" in test_path else test_path
+    # Set environment variable to specify custom trace directory
+    # The operation_tracer.py checks TTNN_OPERATION_TRACE_DIR env var
+    env = os.environ.copy()
+    env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
 
-        # Create a wrapper script that:
-        # 1. Imports the tracer plugin
-        # 2. Begins graph capture
-        # 3. Runs the target script
-        # 4. Ends graph capture and saves results
-        wrapper_script = f"""
-import sys
-import os
-import ttnn
-from ttnn.graph_tracer_utils import GraphTracerUtils
-import json
-from datetime import datetime
+    # Disable fast runtime mode to enable operation tracing
+    # Fast mode skips the tracing decorator for performance
+    env["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
 
-# Import the tracing plugin
-sys.path.insert(0, '{BASE_DIR}')
-import conftest_tracer
+    # Run the command with custom environment (always show live output now)
+    # Use a custom command wrapper with tee to capture output while showing it live
+    import tempfile
+    import re
 
-# Create plugin instance
-plugin = conftest_tracer.OperationsTracingPlugin()
+    # Create a temp file to capture output
+    tmp_output_fd, tmp_output_path = tempfile.mkstemp(suffix=".log", text=True)
+    os.close(tmp_output_fd)  # Close fd, we'll open as file
 
-# Begin tracing
-print("\\n🔍 Starting operations trace for standalone script")
-os.makedirs(plugin.output_dir, exist_ok=True)
-ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-try:
-    # Run the target script
-    with open('{script_path}', 'r') as f:
-        script_content = f.read()
-
-    # Execute the script in its own namespace
-    script_globals = {{'__name__': '__main__', '__file__': '{script_path}'}}
-    exec(script_content, script_globals)
-
-except Exception as e:
-    print(f"❌ Error running script: {{e}}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-
-finally:
-    # Capture operations after script execution
     try:
-        print("📊 Capturing operations...")
-        captured_graph = ttnn.graph.end_graph_capture()
-        trace_data = GraphTracerUtils.serialize_graph(captured_graph)
+        # Build command with tee to show output live AND save to file
+        # Convert cmd list to properly quoted string for shell
+        cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
+        tee_cmd = f"{cmd_str} 2>&1 | tee {tmp_output_path}"
 
-        # Filter to only include TTNN operations
-        if isinstance(trace_data, dict) and 'content' in trace_data:
-            original_operations = trace_data['content']
-            filtered_operations = []
+        # Run with shell=True to use tee
+        result = subprocess.run(tee_cmd, shell=True, cwd=BASE_DIR, text=True, env=env)
 
-            for op in original_operations:
-                if isinstance(op, dict) and 'operation' in op:
-                    op_name = op['operation']
-                    if plugin.is_valid_operation(op_name):
-                        filtered_operations.append(op)
+        # Read the captured output to parse test statistics
+        with open(tmp_output_path, "r") as f:
+            output_text = f.read()
 
-            trace_data['content'] = filtered_operations
-            print(f"🎯 Filtered to {{len(filtered_operations)}} TTNN operations (from {{len(original_operations)}} total)")
+        # Parse pytest results from output
+        test_stats = {"passed": 0, "failed": 0, "total": 0}
 
-            # Update master JSON file
-            master_file = os.path.join(plugin.output_dir, 'ttnn_operations_master.json')
-            test_source = os.path.relpath('{script_path}', '{BASE_DIR}')
-            new_configs_added = plugin.update_master_file(master_file, filtered_operations, test_source)
-            print(f"📝 Added {{new_configs_added}} new unique configurations to master file (source: {{test_source}})")
-            print(f"   📊 Captured {{len(filtered_operations)}} operations from this script")
-
-            # Save individual trace file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            trace_file = os.path.join(plugin.output_dir, f"standalone_script_ops_{{timestamp}}_001.json")
-
-            cleaned_trace_data = trace_data.copy()
-            if 'content' in cleaned_trace_data:
-                cleaned_operations = []
-                for op in cleaned_trace_data['content']:
-                    cleaned_op = plugin.clean_operation_data(op)
-                    if cleaned_op:
-                        cleaned_operations.append(cleaned_op)
-                cleaned_trace_data['content'] = cleaned_operations
-
-            with open(trace_file, 'w') as f:
-                json.dump(cleaned_trace_data, f, indent=2, default=str)
-            print(f"💾 Operations saved to: {{trace_file}}")
-
-    except Exception as e:
-        print(f"❌ Error capturing operations: {{e}}")
-        import traceback
-        traceback.print_exc()
-"""
-
-        # Write wrapper script to temp file
-        wrapper_file = os.path.join(BASE_DIR, f"_tracer_wrapper_{os.getpid()}.py")
-        with open(wrapper_file, "w") as f:
-            f.write(wrapper_script)
-
+        # Look for pytest summary line like: "1 failed, 1 passed in X.XXs"
+        summary_match = re.search(r"(\d+)\s+failed.*?(\d+)\s+passed", output_text)
+        if summary_match:
+            test_stats["failed"] = int(summary_match.group(1))
+            test_stats["passed"] = int(summary_match.group(2))
+            test_stats["total"] = test_stats["passed"] + test_stats["failed"]
+        else:
+            # Check for only passed
+            passed_match = re.search(r"(\d+)\s+passed", output_text)
+            if passed_match:
+                test_stats["passed"] = int(passed_match.group(1))
+                test_stats["total"] = test_stats["passed"]
+            # Check for only failed
+            failed_match = re.search(r"(\d+)\s+failed", output_text)
+            if failed_match:
+                test_stats["failed"] = int(failed_match.group(1))
+                test_stats["total"] += test_stats["failed"]
+    finally:
+        # Clean up temp file
         try:
-            # In debug mode, don't capture output - let it stream directly to terminal
-            if debug_mode:
-                result = subprocess.run(
-                    [python_cmd, wrapper_file],
-                    cwd=BASE_DIR,
-                    text=True,
-                )
-            else:
-                result = subprocess.run(
-                    [python_cmd, wrapper_file],
-                    cwd=BASE_DIR,
-                    capture_output=True,
-                    text=True,
-                )
-        finally:
-            # Clean up wrapper script
-            try:
-                os.remove(wrapper_file)
-            except:
-                pass
+            os.remove(tmp_output_path)
+        except OSError:
+            # Best-effort cleanup: ignore failures to remove the temp file
+            pass
 
-    # Check for created trace files - get all files from current run
-    # Use timestamp in filename to group files from same run (more reliable than mtime)
-    trace_files = []
-    if os.path.exists(output_dir):
-        import time
-        import re
+    # Collect generated JSON files from the unique subdirectory
+    json_files = collect_operation_jsons(trace_dir)
 
-        current_time = time.time()
-        files_with_timestamp = []
+    print(f"📊 Found {len(json_files)} operation trace files")
 
-        # Extract timestamp from filename pattern: name_filtered_ops_TIMESTAMP_COUNTER.json
-        timestamp_pattern = r"_filtered_ops_(\d{8}_\d{6})_(\d{3})\.(json|txt)$"
+    # Create metadata file with source and machine info
+    # This will be used when importing traces with --load
+    metadata = {
+        "test_source": test_path,
+        "timestamp": datetime.now().isoformat(),
+        "machine_info": get_machine_info(),
+        "trace_count": len(json_files),
+    }
 
-        for f in os.listdir(output_dir):
-            if ("_ops_" in f and (f.endswith(".json") or f.endswith(".txt"))) and f != "conftest.py":
-                file_path = os.path.join(output_dir, f)
-                file_time = os.path.getmtime(file_path)
+    # Check for HF_MODEL and LLAMA_DIR environment variables
+    if "models/tt_transformers/demo/simple_text_demo.py" in test_path:
+        hf_model = os.environ.get("HF_MODEL")
+        llama_dir = os.environ.get("LLAMA_DIR")
+        if hf_model:
+            metadata["HF_MODEL"] = hf_model
+        if llama_dir:
+            metadata["LLAMA_DIR"] = llama_dir
 
-                # Try to extract timestamp from filename
-                match = re.search(timestamp_pattern, f)
-                if match:
-                    file_timestamp_str = match.group(1)  # e.g., "20251120_070439"
-                    file_counter = match.group(2)  # e.g., "001"
-                    files_with_timestamp.append((file_timestamp_str, file_counter, file_time, file_path))
-                else:
-                    # Fallback: use modification time for files without timestamp pattern
-                    # Only include if created in last 60 seconds
-                    if current_time - file_time < 60:
-                        files_with_timestamp.append((None, None, file_time, file_path))
-
-        if files_with_timestamp:
-            # Group files by timestamp (files with same timestamp are from same run)
-            timestamp_groups = {}
-            for ts_str, counter, mtime, file_path in files_with_timestamp:
-                if ts_str:
-                    if ts_str not in timestamp_groups:
-                        timestamp_groups[ts_str] = []
-                    timestamp_groups[ts_str].append((int(counter), mtime, file_path))
-
-            # Get the most recent timestamp group (current run)
-            if timestamp_groups:
-                # Sort by modification time of first file in each group
-                sorted_groups = sorted(
-                    timestamp_groups.items(), key=lambda x: max(f[1] for f in x[1]), reverse=True  # Max mtime in group
-                )
-
-                # Take files from the most recent timestamp group
-                most_recent_timestamp, files_in_group = sorted_groups[0]
-                # Sort by counter to maintain test order
-                files_in_group.sort(key=lambda x: x[0])  # Sort by counter
-                trace_files = [f[2] for f in files_in_group]  # Extract file paths
-                print(f"🔍 Found {len(trace_files)} trace file(s) with timestamp {most_recent_timestamp}")
-            else:
-                # Fallback: use modification time for files without timestamp
-                files_with_time = [(mtime, file_path) for _, _, mtime, file_path in files_with_timestamp]
-                files_with_time.sort(reverse=True)
-                if files_with_time:
-                    most_recent_time = files_with_time[0][0]
-                    trace_files = [
-                        file_path for file_time, file_path in files_with_time if most_recent_time - file_time < 60
-                    ]
+    # Write metadata file
+    metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
+    with open(metadata_file, "w") as f:
+        json.dump(metadata, f, indent=2)
 
     return {
         "success": result.returncode == 0,
         "exit_code": result.returncode,
-        "trace_files": trace_files,
-        "stdout": "",
-        "stderr": "",
-        "plugin_file": plugin_file,
+        "trace_files": json_files,
+        "trace_dir": trace_dir,
         "keep_traces": keep_traces,
         "output_dir": output_dir,
+        "test_stats": test_stats,
     }
+
+
+def parse_shard_spec_string(shard_spec_str):
+    """
+    Parse a ShardSpec string representation into a proper dictionary.
+
+    Handles both correct and malformed ShardSpec strings from C++ operator<<.
+    The C++ bug (missing closing brace) has been fixed, but this handles old traces.
+
+    Example input:
+    'ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":7}}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR}'
+
+    Returns:
+    {
+        "grid": [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}],
+        "shape": [32, 32],
+        "orientation": "ROW_MAJOR"
+    }
+    """
+    import re
+
+    if not isinstance(shard_spec_str, str) or not shard_spec_str.startswith("ShardSpec{"):
+        return shard_spec_str
+
+    try:
+        result = {}
+
+        # Extract grid - find the position and manually parse the JSON array
+        eq_pos = shard_spec_str.find("grid=")
+        if eq_pos != -1:
+            grid_start = eq_pos + 5  # Move to '[' after '='
+            # Find the matching ']' for the grid array by looking for '], shape='
+            # (not '}], shape=' because there might be multiple ranges without } before ])
+            shape_pos = shard_spec_str.find("], shape=", grid_start)
+            if shape_pos != -1:
+                grid_json = shard_spec_str[grid_start : shape_pos + 1]  # +1 to include ']'
+
+                # Fix malformed JSON: if we have unbalanced braces, add missing '}'
+                # This handles old traces where the C++ operator<< had a bug (now fixed in buffer.cpp)
+                open_count = grid_json.count("{")
+                close_count = grid_json.count("}")
+                if open_count > close_count:
+                    # Try to fix by adding missing closing braces
+                    # Common C++ bug: {"end":{"x":7,"y":2}, should be {"end":{"x":7,"y":2}},
+                    # Pattern: "y":<number>} needs an extra } when followed by , or ]
+
+                    # Strategy 1: Smart pattern matching for end coordinates
+                    # Find "y":<number>} followed by either (, {) or (]) and add }
+                    test_json = re.sub(r'("y":\d+)\}(,\s*\{|])', r"\1}}\2", grid_json)
+
+                    try:
+                        result["grid"] = json.loads(test_json)
+                    except json.JSONDecodeError as e:
+                        # Strategy 2: If strategy 1 failed, add all missing braces before final ']'
+                        missing = open_count - close_count
+                        test_json = grid_json[:-1] + ("}" * missing) + grid_json[-1]
+                        try:
+                            result["grid"] = json.loads(test_json)
+                        except json.JSONDecodeError as e2:
+                            # Both strategies failed, log and skip
+                            print(f"⚠️ Warning: Could not fix malformed grid JSON: {e2}")
+                else:
+                    # No missing braces, try to parse normally
+                    try:
+                        result["grid"] = json.loads(grid_json)
+                    except json.JSONDecodeError as e:
+                        # Log warning if parsing fails
+                        print(f"⚠️ Warning: Could not parse grid JSON: {e}")
+
+        # Extract shape - it's an array like [128, 576]
+        shape_match = re.search(r"shape=\[(\d+),\s*(\d+)\]", shard_spec_str)
+        if shape_match:
+            result["shape"] = [int(shape_match.group(1)), int(shape_match.group(2))]
+
+        # Extract orientation
+        orientation_match = re.search(r"orientation=ShardOrientation::(\w+)", shard_spec_str)
+        if orientation_match:
+            result["orientation"] = orientation_match.group(1)
+
+        return result if result else shard_spec_str
+
+    except Exception as e:
+        # Silently return original if parsing fails
+        return shard_spec_str
+
+
+def fix_memory_config_recursive(obj, fixed_count_ref):
+    """
+    Recursively search for memory_config with shard_spec strings and fix them.
+    """
+    if isinstance(obj, dict):
+        # Check if this dict is a memory_config with shard_spec
+        if "shard_spec" in obj and isinstance(obj["shard_spec"], str):
+            if obj["shard_spec"].startswith("ShardSpec{"):
+                parsed = parse_shard_spec_string(obj["shard_spec"])
+                if isinstance(parsed, dict):
+                    obj["shard_spec"] = parsed
+                    fixed_count_ref[0] += 1
+
+        # Recurse into all values
+        for value in obj.values():
+            fix_memory_config_recursive(value, fixed_count_ref)
+
+    elif isinstance(obj, list):
+        # Recurse into all items
+        for item in obj:
+            fix_memory_config_recursive(item, fixed_count_ref)
+
+
+def fix_infinity_in_json_file(json_file):
+    """
+    Pre-process JSON file to fix invalid -Infinity, Infinity, and NaN values.
+    These need to be strings for valid JSON.
+    """
+    import re
+
+    print(f"🔧 Pre-processing JSON to fix infinity/nan values...")
+
+    try:
+        # Read the file as text
+        with open(json_file, "r") as f:
+            content = f.read()
+
+        # Count occurrences (use same patterns as replacements)
+        infinity_count = len(re.findall(r":\s*-Infinity\b", content)) + len(re.findall(r":\s*Infinity\b", content))
+        nan_count = len(re.findall(r":\s*NaN\b", content))
+
+        if infinity_count == 0 and nan_count == 0:
+            print(f"   No infinity/nan values to fix")
+            return 0
+
+        # Replace invalid JSON values with strings
+        # Match patterns like: "value": -Infinity
+        content = re.sub(r":\s*-Infinity\b", ': "-inf"', content)
+        content = re.sub(r":\s*Infinity\b", ': "inf"', content)
+        content = re.sub(r":\s*NaN\b", ': "nan"', content)
+
+        # Write back
+        with open(json_file, "w") as f:
+            f.write(content)
+
+        print(f"✅ Fixed {infinity_count} infinity and {nan_count} NaN values")
+        return infinity_count + nan_count
+
+    except Exception as e:
+        print(f"❌ Error fixing infinity/nan values: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 0
+
+
+def fix_memory_config_in_json(json_file):
+    """
+    Fix memory_config entries in the master JSON file by parsing shard_spec strings.
+    This function modifies the JSON in-place.
+    """
+    print(f"🔧 Fixing memory config entries in {os.path.basename(json_file)}...")
+
+    try:
+        # First, fix any infinity/nan values that would prevent JSON loading
+        fix_infinity_in_json_file(json_file)
+
+        # Now load and process the JSON
+        with open(json_file, "r") as f:
+            data = json.load(f)
+
+        # Use a list to pass by reference for counting
+        fixed_count_ref = [0]
+
+        # Recursively fix all shard_spec entries
+        fix_memory_config_recursive(data, fixed_count_ref)
+
+        # Write back the fixed JSON
+        with open(json_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+        print(f"✅ Fixed {fixed_count_ref[0]} shard_spec entries")
+        return fixed_count_ref[0]
+
+    except Exception as e:
+        print(f"❌ Error fixing memory config: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 0
 
 
 def main():
@@ -1415,336 +976,299 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples (Pytest tests):
-    # Run specific test with pytest -k filter
     python model_tracer/generic_ops_tracer.py test.py -k "test_pow"
-
-    # Run with pytest markers and verbose output
-    python model_tracer/generic_ops_tracer.py test.py -m "slow" -v
-
-    # Debug mode - show live test output in terminal
-    python model_tracer/generic_ops_tracer.py test.py -d
-    python model_tracer/generic_ops_tracer.py test.py --debug -k "test_name"
-
-    # Mix tracer args with pytest args (automatic mode)
-    python model_tracer/generic_ops_tracer.py test.py --store -k "test_name"
-
-    # Explicit separator '--' (left=tracer, right=pytest)
-    python model_tracer/generic_ops_tracer.py test.py -d --store -- -v -k "test"
-    python model_tracer/generic_ops_tracer.py test.py --output-dir ./traces -- -v -s -x
+    python model_tracer/generic_ops_tracer.py test.py --store
 
 Examples (Standalone Python scripts):
-    # Run script with custom arguments
-    python model_tracer/generic_ops_tracer.py model.py --model-name resnet50 --batch 32
+    python model_tracer/generic_ops_tracer.py model.py
+    python model_tracer/generic_ops_tracer.py model.py --store --output-dir ./my_traces
 
-    # With tracer args and debug mode
-    python model_tracer/generic_ops_tracer.py model.py --store --debug --output-dir ./my_traces
-
-    # Explicit separator for standalone scripts
-    python model_tracer/generic_ops_tracer.py model.py -d -- --model-name resnet50 --batch 32
-
-    # Single quoted string (everything in quotes passed to test/script)
-    python model_tracer/generic_ops_tracer.py "demo.py --arg1 val1 --arg2 val2 config.yaml"
-    python model_tracer/generic_ops_tracer.py -d "demo.py --prompts-file file.json config.yaml"
-
-Note: The tracer automatically detects pytest vs standalone scripts.
-      Unknown arguments are automatically passed to pytest or the script.
-      Use -d/--debug to see live test logs in the terminal.
-
-Argument Handling (Three Modes):
-
-      Mode 1 - Automatic (Default):
-      - Tracer-specific flags: -o/--output-dir, --store, -d/--debug
-      - These are consumed by the tracer and NOT passed to pytest/script
-      - All other flags (like -v, -k, -m) are passed through to pytest/script
-      - If a flag name conflicts, the tracer takes precedence (consumed first)
-
-      Mode 2 - Explicit Separator (use '--'):
-      - Everything BEFORE '--' goes to tracer
-      - Everything AFTER '--' goes to pytest/script
-      - Example: python tracer.py test.py -d --store -- -v -k "test"
-                 Tracer gets: test.py, -d, --store
-                 Pytest gets: -v, -k "test"
-
-      Mode 3 - Single Quoted String:
-      - Pass entire command as single quoted string
-      - First token becomes test_path, rest becomes extra_args
-      - Example: python tracer.py "demo.py --arg1 val1 config.yaml"
-                 Test path: demo.py
-                 Extra args: --arg1 val1 config.yaml
-      - Can combine with tracer flags:
-        python tracer.py -d "demo.py --arg1 val1 config.yaml"
+Examples (Import existing traces):
+    python model_tracer/generic_ops_tracer.py --load /path/to/traces
         """,
     )
-    parser.add_argument(
-        "test_path",
-        nargs="?",  # Make optional to handle quoted string case
-        help="Path to test file or script, OR quoted string with full command",
-    )
+    parser.add_argument("test_path", nargs="?", help="Path to test file or script")
     parser.add_argument(
         "--output-dir",
         "-o",
         default="./model_tracer/traced_operations",
-        help="Directory to save trace outputs (default: ./model_tracer/traced_operations)",
+        help="Directory to save master JSON (default: ./model_tracer/traced_operations)",
     )
     parser.add_argument(
-        "--store",
-        "--keep-traces",
-        action="store_true",
-        help="Keep individual trace files after adding to master JSON (default: delete them)",
+        "--store", "--keep-traces", action="store_true", help="Keep individual trace files (default: delete them)"
     )
+    parser.add_argument("-d", "--debug", action="store_true", help="[DEPRECATED] Live output is now always enabled")
     parser.add_argument(
-        "-d",
-        "--debug",
-        action="store_true",
-        help="Show live test output in terminal (debug mode - shows all logs in real-time)",
+        "--load",
+        "--from-trace-dir",
+        type=str,
+        help="Process existing trace directory and add to master JSON (skips test execution). "
+        "Useful for importing traces collected on other machines with --store flag.",
     )
 
-    # Handle explicit separator '--' for explicit argument separation
-    # If '--' is present, split arguments: left side for tracer, right side for pytest/script
-    import sys
-    import shlex
-
-    # MODE 3: Check if we have a single quoted string with spaces (full command in quotes)
-    # This happens when user does: python tracer.py "demo.py --arg1 val1 config.yaml"
-    # In this case, sys.argv might have tracer flags followed by the quoted string
-    # We need to detect and split the quoted string into test_path and extra_args
-
-    # First, check if any argument looks like a full command (contains .py and has spaces/flags)
-    quoted_command_found = False
-    quoted_command_idx = -1
-
-    for idx, arg in enumerate(sys.argv[1:], 1):  # Skip script name
-        # Skip tracer-specific flags
-        if arg in ["-d", "--debug", "--store", "--keep-traces", "-o", "--output-dir"]:
-            continue
-        # Skip values for flags that take arguments
-        if idx > 1 and sys.argv[idx - 1] in ["-o", "--output-dir"]:
-            continue
-
-        # Check if this looks like a full command string
-        # (contains .py and has additional args after it)
-        if ".py" in arg and (" -" in arg or arg.count(" ") > 0):
-            quoted_command_found = True
-            quoted_command_idx = idx
-            break
-
-    if quoted_command_found:
-        # MODE 3: Single quoted string mode
-        quoted_command = sys.argv[quoted_command_idx]
-
-        # Split the quoted command into tokens using shlex (handles nested quotes properly)
-        try:
-            command_tokens = shlex.split(quoted_command)
-        except ValueError:
-            # If shlex fails (unmatched quotes), fall back to simple split
-            command_tokens = quoted_command.split()
-
-        if not command_tokens:
-            print("❌ Error: Empty quoted command string")
-            return 1
-
-        # First token is the test path, rest are extra args
-        test_path = command_tokens[0]
-        extra_args = command_tokens[1:] if len(command_tokens) > 1 else []
-
-        # Parse tracer-specific flags (everything before the quoted string)
-        tracer_argv = sys.argv[1:quoted_command_idx]
-
-        # Create a modified argv for argparse (replace quoted string with just test_path)
-        modified_argv = tracer_argv + [test_path]
-        args = parser.parse_args(modified_argv)
-
-        print("🚀 TTNN Operations Tracer")
-        print("=" * 50)
-        print(f"🔀 Quoted command mode detected")
-        print(f"📁 Test: {test_path}")
-        if extra_args:
-            print(f"📎 Extra args: {' '.join(extra_args)}")
-        if args.store:
-            print(f"💾 Keeping individual trace files")
-        if args.debug:
-            print(f"🐛 Debug mode enabled - showing live test output")
-        print("=" * 50)
-
-    elif "--" in sys.argv:
-        # MODE 2: Explicit separator mode
+    # Handle explicit separator
+    if "--" in sys.argv:
         separator_index = sys.argv.index("--")
-        tracer_argv = sys.argv[1:separator_index]  # Everything before '--'
-        extra_args = sys.argv[separator_index + 1 :]  # Everything after '--'
-
-        # Parse only tracer arguments
+        tracer_argv = sys.argv[1:separator_index]
+        extra_args = sys.argv[separator_index + 1 :]
         args = parser.parse_args(tracer_argv)
-
-        # Validate that test_path was provided
-        if not args.test_path:
-            print("❌ Error: test_path is required")
-            parser.print_help()
-            return 1
-
-        print("🚀 TTNN Operations Tracer")
-        print("=" * 50)
-        print(f"📁 {os.path.basename(args.test_path)}")
-        print(f"🔀 Explicit separator '--' detected")
-        print(f"   Left side (tracer): {' '.join(tracer_argv)}")
-        print(f"   Right side (pytest/script): {' '.join(extra_args)}")
-        if args.store:
-            print(f"💾 Keeping individual trace files")
-        if args.debug:
-            print(f"🐛 Debug mode enabled - showing live test output")
-        print("=" * 50)
-
-        # Assign test_path for consistency
-        test_path = args.test_path
     else:
-        # MODE 1: Default behavior - automatic detection with parse_known_args
         args, extra_args = parser.parse_known_args()
 
-        # Validate that test_path was provided
-        if not args.test_path:
-            print("❌ Error: test_path is required")
-            parser.print_help()
-            return 1
+    # Either test_path or load must be provided
+    if not args.test_path and not args.load:
+        print("❌ Error: Either test_path or --load is required")
+        parser.print_help()
+        return 1
 
-        print("🚀 TTNN Operations Tracer")
-        print("=" * 50)
+    if args.load and args.test_path:
+        print("❌ Error: Cannot specify both test_path and --load")
+        parser.print_help()
+        return 1
+
+    print("🚀 TTNN Operations Tracer (New Simple Tracer)")
+    print("=" * 50)
+
+    # Handle two modes: run test or process existing traces
+    if args.load:
+        print(f"📂 Processing existing traces from: {args.load}")
+        if not os.path.isdir(args.load):
+            print(f"❌ Error: Trace directory not found: {args.load}")
+            return 1
+        trace_dir = args.load
+        # Find all JSON files in the trace directory, excluding metadata
+        trace_files = [
+            os.path.join(trace_dir, f)
+            for f in os.listdir(trace_dir)
+            if f.endswith(".json") and not f.startswith("_trace_")
+        ]
+        if not trace_files:
+            print(f"❌ Error: No JSON trace files found in {args.load}")
+            return 1
+        result = {
+            "success": True,
+            "trace_files": sorted(trace_files),
+            "trace_dir": trace_dir,
+            "keep_traces": True,  # Always keep when processing existing traces
+        }
+        print(f"✅ Found {len(trace_files)} trace files")
+    else:
         print(f"📁 {os.path.basename(args.test_path)}")
         if args.store:
             print(f"💾 Keeping individual trace files")
-        if args.debug:
-            print(f"🐛 Debug mode enabled - showing live test output")
         if extra_args:
-            print(f"📎 Extra arguments passed to pytest/script: {' '.join(extra_args)}")
-            print(f"ℹ️  Note: Tracer flags (-d, --store, -o) are consumed by tracer")
-            print(f"ℹ️  Note: Unknown flags are automatically passed to pytest/script")
-        print("=" * 50)
+            print(f"📎 Extra arguments: {' '.join(extra_args)}")
+        test_source = args.test_path
 
-        # Assign test_path for consistency
-        test_path = args.test_path
+    print("=" * 50)
 
     try:
-        # Use test_path variable (set in all three modes)
-        result = run_test_with_tracing(test_path, args.output_dir, args.store, args.debug, extra_args)
+        # Run test with tracing (unless processing existing traces)
+        if not args.load:
+            result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
 
-        print("\\n" + "=" * 50)
+        print("\n" + "=" * 50)
         print("📋 RESULTS")
         print("=" * 50)
 
-        print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
+        # Display test results if we ran tests (not from existing traces)
+        if not args.load and "test_stats" in result:
+            stats = result["test_stats"]
+            if stats["total"] > 0:
+                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
+            else:
+                # Fallback if we couldn't parse the output
+                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
 
-        # Show all trace files if multiple tests ran
+        print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+
         if result["trace_files"]:
-            total_operations = 0
-            all_op_counts = {}
+            # Load valid operations and excluded operations
+            valid_operations = load_valid_operations()
+            excluded_operations = get_excluded_operations()
+            machine_info = get_machine_info()
 
-            print(f"📊 Found {len(result['trace_files'])} trace file(s) from {len(result['trace_files'])} test(s):")
-
-            # Aggregate operations from all trace files
-            for idx, trace_file in enumerate(result["trace_files"], 1):
-                file_size = os.path.getsize(trace_file)
-                print(f"\n   Test {idx}: {os.path.basename(trace_file)} ({file_size:,} bytes)")
-
-                # Try to show operation count and types
-                if trace_file.endswith(".json"):
+            # Extract test source name and possibly override machine_info from metadata
+            if args.load:
+                # Try to load metadata file if it exists
+                metadata_file = os.path.join(args.load, "_trace_metadata.json")
+                if os.path.exists(metadata_file):
                     try:
-                        with open(trace_file, "r") as f:
-                            data = json.load(f)
-                        if isinstance(data, dict) and "content" in data:
-                            operations = data["content"]
-                            total_operations += len(operations)
+                        with open(metadata_file, "r") as f:
+                            metadata = json.load(f)
 
-                            op_counts = {}
-                            for op in operations:
-                                if isinstance(op, dict) and "operation" in op:
-                                    op_name = op["operation"]
-                                    op_counts[op_name] = op_counts.get(op_name, 0) + 1
-                                    # Aggregate across all tests
-                                    all_op_counts[op_name] = all_op_counts.get(op_name, 0) + op_counts[op_name]
+                        # Use test_source from metadata
+                        test_source = metadata.get("test_source", os.path.basename(os.path.abspath(args.load)))
 
-                            print(f"      📊 Captured: {len(operations)} operations, {len(op_counts)} unique types")
+                        # Convert to relative path if needed
+                        if os.path.isabs(test_source) and BASE_DIR in test_source:
+                            test_source = os.path.relpath(test_source, BASE_DIR)
 
+                        # Append HF_MODEL/LLAMA_DIR from metadata if present
+                        env_tags = []
+                        if "HF_MODEL" in metadata:
+                            env_tags.append(f"[HF_MODEL:{metadata['HF_MODEL']}]")
+                        if "LLAMA_DIR" in metadata:
+                            env_tags.append(f"[LLAMA_DIR:{metadata['LLAMA_DIR']}]")
+                        if env_tags:
+                            test_source = f"{test_source} {' '.join(env_tags)}"
+
+                        # Use machine_info from metadata if present
+                        if "machine_info" in metadata:
+                            machine_info = metadata["machine_info"]
+                            print(f"📋 Loaded metadata from trace directory")
+                            print(f"   Original source: {metadata.get('test_source')}")
+                            if "machine_info" in metadata and metadata["machine_info"]:
+                                machine_desc = (
+                                    metadata["machine_info"][0]
+                                    if isinstance(metadata["machine_info"], list)
+                                    else metadata["machine_info"]
+                                )
+                                if isinstance(machine_desc, dict):
+                                    print(
+                                        f"   Machine: {machine_desc.get('board_type')} {machine_desc.get('device_series')}"
+                                    )
                     except Exception as e:
-                        print(f"      ⚠️ Could not read trace file: {e}")
+                        print(f"⚠️ Could not load metadata file: {e}")
+                        test_source = os.path.basename(os.path.abspath(args.load))
+                else:
+                    # Fallback to directory name if no metadata
+                    test_source = os.path.basename(os.path.abspath(args.load))
+            else:
+                test_source = args.test_path
+                if os.path.isabs(test_source) and BASE_DIR in test_source:
+                    test_source = os.path.relpath(test_source, BASE_DIR)
 
-            # Show aggregated summary if multiple tests
-            if len(result["trace_files"]) > 1:
-                print(f"\n📊 Total across all tests: {total_operations} operations, {len(all_op_counts)} unique types")
+                # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
+                # Only capture for models/tt_transformers/demo/simple_text_demo.py
+                # This helps identify which specific HuggingFace model or Llama directory was used
+                if "models/tt_transformers/demo/simple_text_demo.py" in test_source:
+                    hf_model = os.environ.get("HF_MODEL")
+                    llama_dir = os.environ.get("LLAMA_DIR")
 
-            # Show unique configurations from the last test (or aggregate if multiple)
-            if all_op_counts:
-                print("\n🔧 Unique Configurations:")
-                sorted_ops = sorted(all_op_counts.items(), key=lambda x: x[1], reverse=True)
-                for op_name, exec_count in sorted_ops:
-                    print(f"   • {op_name}: {exec_count}x executed")
+                    # Append whichever environment variables are available
+                    env_tags = []
+                    if hf_model:
+                        env_tags.append(f"[HF_MODEL:{hf_model}]")
+                    if llama_dir:
+                        env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
 
-        if result["success"] and result["trace_files"]:
-            print("\\n✅ Operations extracted successfully!")
+                    if env_tags:
+                        test_source = f"{test_source} {' '.join(env_tags)}"
 
-            # Cleanup individual trace files if --store flag not set
-            if not result["keep_traces"]:
-                print("\\n🧹 Cleaning up individual trace files...")
+            # Convert and filter operations
+            all_operations = []
+            filtered_operations = []
+
+            print(f"\n📝 Processing {len(result['trace_files'])} trace files...")
+            for json_file in tqdm(result["trace_files"], desc="Converting JSONs", unit="file"):
+                operation = convert_json_to_master_format(json_file, test_source, machine_info)
+                if operation:
+                    all_operations.append(operation)
+                    op_name = operation.get("operation", "")
+                    if is_valid_operation(op_name, valid_operations, excluded_operations):
+                        filtered_operations.append(operation)
+
+            print(f"🎯 Filtered to {len(filtered_operations)} valid operations (from {len(all_operations)} total)")
+
+            # Count execution occurrences within this run
+            import hashlib
+
+            execution_counts = {}  # signature -> count
+
+            print("\n🔢 Counting execution frequencies...")
+            for operation in tqdm(filtered_operations, desc="Counting executions", unit="op"):
+                op_name = operation.get("operation", "unknown")
+                op_args = operation.get("arguments", {})
+                args_str = json.dumps(op_args, sort_keys=True, default=str)
+                signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
+                execution_counts[signature] = execution_counts.get(signature, 0) + 1
+
+            # Add execution count to each operation (max count seen in this run)
+            for operation in tqdm(filtered_operations, desc="Adding exec counts", unit="op", leave=False):
+                op_name = operation.get("operation", "unknown")
+                op_args = operation.get("arguments", {})
+                args_str = json.dumps(op_args, sort_keys=True, default=str)
+                signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
+                operation["execution_count"] = execution_counts[signature]
+
+            # Deduplicate operations with same config (keep one with execution count)
+            print("\n🔍 Deduplicating configurations...")
+            unique_operations = {}
+            for operation in tqdm(filtered_operations, desc="Deduplicating", unit="op"):
+                op_name = operation.get("operation", "unknown")
+                op_args = operation.get("arguments", {})
+                args_str = json.dumps(op_args, sort_keys=True, default=str)
+                signature = f"{op_name}::{hashlib.md5(args_str.encode()).hexdigest()}"
+                if signature not in unique_operations:
+                    unique_operations[signature] = operation
+
+            filtered_operations_unique = list(unique_operations.values())
+            print(f"✅ Reduced to {len(filtered_operations_unique)} unique configurations")
+
+            # Fix shard_spec strings in operations BEFORE adding to master JSON
+            # This ensures consistent hashing with existing configs
+            print("\n🔧 Normalizing memory configs in operations...")
+            fixed_count = [0]  # Mutable reference for counting
+            for operation in filtered_operations_unique:
+                if "arguments" in operation:
+                    fix_memory_config_recursive(operation["arguments"], fixed_count)
+            if fixed_count[0] > 0:
+                print(f"   Fixed {fixed_count[0]} shard_spec entries in operations")
+
+            # Update master JSON
+            os.makedirs(args.output_dir, exist_ok=True)
+            master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
+            new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
+
+            print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")
+            print(f"   Source: {test_source}")
+
+            # Cleanup individual trace files and subdirectory if not storing
+            # Never cleanup when processing existing traces (--load)
+            if not args.load and not result["keep_traces"]:
+                print("\n🧹 Cleaning up individual trace files...")
                 cleaned_count = 0
-                for trace_file in result["trace_files"]:
+                for trace_file in tqdm(result["trace_files"], desc="Removing files", unit="file"):
                     try:
-                        # Only delete trace files (not master JSON)
-                        if "ttnn_operations_master.json" not in trace_file:
-                            os.remove(trace_file)
-                            cleaned_count += 1
-                            print(f"   Deleted: {os.path.basename(trace_file)}")
-                    except Exception as e:
-                        print(f"   ⚠️ Could not delete {os.path.basename(trace_file)}: {e}")
-
+                        os.remove(trace_file)
+                        cleaned_count += 1
+                    except OSError:
+                        # Best-effort cleanup: ignore failures
+                        pass
                 if cleaned_count > 0:
                     print(f"✅ Cleaned up {cleaned_count} trace file(s)")
+
+                # Also remove the metadata file and subdirectory
+                trace_dir = result.get("trace_dir")
+                if trace_dir and os.path.exists(trace_dir):
+                    try:
+                        # Remove metadata file if it exists
+                        metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
+                        if os.path.exists(metadata_file):
+                            os.remove(metadata_file)
+
+                        # Check if directory is empty now
+                        if not os.listdir(trace_dir):
+                            os.rmdir(trace_dir)
+                            print(f"✅ Cleaned up trace directory: {os.path.basename(trace_dir)}")
+                        else:
+                            print(f"⚠️ Trace directory not empty, keeping: {os.path.basename(trace_dir)}")
+                    except Exception as e:
+                        print(f"⚠️ Could not remove trace directory: {e}")
+
+                if cleaned_count > 0:
                     print("💡 Tip: Use --store flag to keep individual trace files")
-        elif result["success"] and not result["trace_files"]:
-            print("\\n⚠️ Test passed but no operations captured")
-        else:
-            print("\\n❌ Test failed or operations not captured")
 
-        # POST-PROCESSING: Fix unparsed elements in the master JSON
-        # This is the place where UnparsedElements are converted to proper JSON structures
-        # By doing this after all operations are collected, we ensure efficient single-pass processing
-        try:
-            master_file = os.path.join(result.get("output_dir", "traced_operations"), "ttnn_operations_master.json")
-            if os.path.exists(master_file):
-                print("\\n🔧 Post-processing master JSON (fixing unparsed elements)...")
-                with open(master_file, "r") as f:
-                    master_data = json.load(f)
+            print(f"\n✅ Operations extracted successfully!")
+            print(f"📄 Master file: {master_file}")
 
-                # Check for unparsed elements
-                def has_unparsed(obj):
-                    if isinstance(obj, dict):
-                        if obj.get("__class__") == "UnparsedElement":
-                            return True
-                        return any(has_unparsed(v) for v in obj.values())
-                    elif isinstance(obj, list):
-                        return any(has_unparsed(item) for item in obj)
-                    return False
+            # Fix memory config shard_spec entries in the master JSON
+            fix_memory_config_in_json(master_file)
 
-                unparsed_before = has_unparsed(master_data)
-
-                # Fix all unparsed elements in one pass
-                master_data = fix_unparsed_elements_standalone(master_data)
-
-                # Extract tensor metadata (layout and storage_type)
-                master_data = extract_tensor_metadata(master_data)
-
-                unparsed_after = has_unparsed(master_data)
-
-                # Save the cleaned data
-                with open(master_file, "w") as f:
-                    json.dump(master_data, f, indent=2)
-
-                if not unparsed_before:
-                    print("   ✅ No unparsed elements found")
-                elif unparsed_after:
-                    print("   ⚠️  Warning: Some unparsed elements remain")
-                else:
-                    print("   ✅ All unparsed elements fixed!")
-        except Exception as e:
-            print(f"   ⚠️  Could not perform post-processing: {e}")
-
-        return 0 if result["success"] else 1
+        # Always return 0 (success) as long as we processed traces
+        # Test failures don't affect tracer success
+        return 0
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -1752,19 +1276,6 @@ Argument Handling (Three Modes):
 
         traceback.print_exc()
         return 1
-
-    finally:
-        # Clean up plugin file
-        try:
-            if "result" in locals() and "plugin_file" in result:
-                plugin_file = result["plugin_file"]
-            else:
-                plugin_file = os.path.join(BASE_DIR, "conftest_tracer.py")
-
-            if os.path.exists(plugin_file):
-                os.unlink(plugin_file)
-        except:
-            pass
 
 
 if __name__ == "__main__":
