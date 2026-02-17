@@ -113,19 +113,56 @@ then handles program construction, caching, and buffer address patching on cache
    });
 
    // 2. Declare kernels with compile-time args and config
+   //    Use ReaderConfigDescriptor{} for reader, WriterConfigDescriptor{} for writer,
+   //    and ComputeConfigDescriptor{...} for compute kernels.
    KernelDescriptor reader_desc;
    reader_desc.kernel_source = "path/to/reader_kernel.cpp";
    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
    reader_desc.core_ranges = all_cores;
-   reader_desc.compile_time_args = {cb_id, ...};
+   reader_desc.compile_time_args = {cb_id};
    reader_desc.config = ReaderConfigDescriptor{};
+
+   KernelDescriptor compute_desc;
+   compute_desc.kernel_source = "path/to/compute_kernel.cpp";
+   compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+   compute_desc.core_ranges = all_cores;
+   compute_desc.compile_time_args = {cb_id};
+   compute_desc.config = ComputeConfigDescriptor{
+       .math_fidelity = MathFidelity::HiFi4,
+       .fp32_dest_acc_en = false,
+       .math_approx_mode = false,
+   };
 
    // 3. Add runtime args per core
    reader_desc.runtime_args.emplace_back(
        core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
 
+   // 4. Push kernels — the order matters: kernel index 0, 1, 2, etc.
+   //    If you implement override_runtime_arguments, use the kernel index
+   //    (not a KernelHandle) to access runtime args via GetRuntimeArgs().
    desc.kernels.push_back(std::move(reader_desc));
+   desc.kernels.push_back(std::move(compute_desc));
    return desc;
+
+**``compute_program_hash``:**
+
+If your operation has dynamic fields in its attributes that don't affect program
+compilation (e.g., random seeds), you **must** provide a custom ``compute_program_hash``
+that excludes those fields. Otherwise the cache will miss on every call. Always include
+``type_hash<YourDeviceOperation>`` to prevent collisions with other operations:
+
+.. code-block:: cpp
+
+   static tt::stl::hash::hash_t compute_program_hash(
+       const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+       auto hashable = attrs;
+       hashable.seed = 0;  // Exclude dynamic fields
+       return tt::stl::hash::hash_objects_with_default_seed(
+           tt::stl::hash::type_hash<MyDeviceOperation>, hashable, tensors);
+   }
+
+If all attributes are compile-time deterministic, you can omit ``compute_program_hash``
+and the framework will use a sensible default.
 
 Full example files:
 
