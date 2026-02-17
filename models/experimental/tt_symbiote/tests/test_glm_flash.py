@@ -21,7 +21,7 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.moe_3 import TTNNMoE
+from models.experimental.tt_symbiote.modules.moe import TTNNMoE
 
 assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
 
