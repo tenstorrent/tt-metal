@@ -109,6 +109,12 @@ void WatcherServer::Impl::attach_devices() {
     if (!rtoptions.get_watcher_enabled()) {
         return;
     }
+    // No-poll mode: all device-side instrumentation is enabled via init_devices(),
+    // but we skip the host polling thread, log files, and device readers.
+    // On error, kernel hangs with diagnostic info in L1 mailbox; use tt-triage.
+    if (rtoptions.get_watcher_no_poll()) {
+        return;
+    }
 
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
