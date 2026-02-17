@@ -53,6 +53,7 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
+    // Cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
 
     // CB dataformats
@@ -162,6 +163,8 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
+    // Get the optimal DRAM bank to reader assignment
+    // Workers MUST be on these cores for efficient DRAM reads
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
     get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in1_noc);
@@ -176,6 +179,9 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     uint32_t num_input_storage_cores = input_storage_cores_ordered.size();
     uint32_t num_output_storage_cores = output_storage_cores_ordered.size();
 
+    // Currently, both input and output storage cores must match the number of workers (DRAM banks).
+    // This is because the factory uses a 1:1 mapping: worker[i] reads from input_storage[i] and
+    // writes to output_storage[i]. Supporting different numbers would require more complex mapping.
     TT_FATAL(
         num_input_storage_cores == num_workers,
         "Input storage cores ({}) must match number of workers/DRAM banks ({}). "
@@ -264,7 +270,9 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    uint32_t num_blocks = K / in0_block_w;
+    uint32_t num_blocks = K / in0_block_w;  // Number of inner loop iterations
+    // Only enable packer l1 accumulation when there are spills, otherwise
+    // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -277,14 +285,17 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     // CB sizes
+    // in0: M x in0_block_w tiles per block
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
+    // in1: in0_block_w x N tiles per block
     uint32_t in1_block_tiles = in0_block_w * per_core_N;
     uint32_t in1_CB_tiles = in1_block_tiles * 3;  // triple buffer
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
+    // output: M x N tiles
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
 
@@ -312,6 +323,7 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
         device, in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
     // Tensor stride calculations (bytes per batch)
+    // M, K, N are already in tiles, so stride = num_tiles * tile_size
     uint32_t in0_batch_stride_bytes = per_core_M * K * in0_single_tile_size;
     uint32_t in1_batch_stride_bytes = K * per_core_N * in1_single_tile_size;
     uint32_t out_batch_stride_bytes = per_core_M * per_core_N * output_single_tile_size;
@@ -322,6 +334,12 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     ProgramDescriptor desc;
 
     // -- Circular Buffers --
+    // Create CBs on different core sets:
+    // - CB0, CB1, CB3 (compute buffers): on all cores in bounding box
+    // - CB2 (in0 sharded): backed by in0_buffer, on INPUT storage cores only
+    // - CB4/5 (output/intermediate): on worker cores (not backed by buffer)
+    // - CB6 (output reshard): backed by out_buffer, on OUTPUT storage cores only
+    //
     // CB0: in0 (activations) - on all cores in bounding box
     {
         CBDescriptor cb;
@@ -375,7 +393,8 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
         });
         desc.cbs.push_back(std::move(cb));
     }
-    // CB4 & CB5: output and intermediate - on worker cores
+    // CB4 & CB5: output and intermediate - on worker cores (NOT backed by buffer)
+    // Workers compute locally, then NOC write to output storage cores
     {
         uint32_t output_cb_index = tt::CBIndex::c_4;
         uint32_t interm0_cb_index = tt::CBIndex::c_5;
@@ -472,11 +491,13 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     if (fp32_dest_acc_en) {
         compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
+    // MATMUL_DRAM_SHARDED enables the is_worker_core check in compute kernel
+    // so that idle cores in the bounding box return early instead of waiting for CB data
     compute_defines.emplace_back("MATMUL_DRAM_SHARDED", "1");
-    writer_defines.emplace_back("OUT_SHARDED", "1");
+    writer_defines.emplace_back("OUT_SHARDED", "1");  // Output goes to sharded buffer on storage cores
 
     // -- Compile-time args --
-    // in0 reader
+    // in0 reader: includes info for NOC read from remote input storage cores
     std::vector<uint32_t> in0_reader_compile_args = {
         (uint32_t)in0_block_tiles,                         // in0_block_num_tiles
         (uint32_t)in0_block_tiles * in0_single_tile_size,  // in0_block_size_bytes
@@ -486,7 +507,7 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
         (uint32_t)in2_CB_size,                             // in0_shard_size_bytes (full shard)
     };
 
-    // in1 reader/writer
+    // in1 reader/writer: includes info for NOC write to remote output storage cores
     std::vector<uint32_t> in1_writer_compile_args = {
         (uint32_t)in1_buffer_page_size,
         (uint32_t)in1_buffer_num_pages,
@@ -592,7 +613,7 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     for (uint32_t worker_idx = 0; worker_idx < all_worker_cores_ordered.size(); ++worker_idx) {
         auto core = all_worker_cores_ordered[worker_idx];
 
-        uint32_t bank_id = worker_idx;
+        uint32_t bank_id = worker_idx;  // Worker i reads from DRAM bank i (optimal assignment)
 
         // Calculate VC (virtual channel) to avoid conflicts
         uint32_t vc = bank_id & 0x3;

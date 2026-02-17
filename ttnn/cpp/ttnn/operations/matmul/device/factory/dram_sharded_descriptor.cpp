@@ -52,6 +52,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
+    // Cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
 
     // CB dataformats
@@ -136,6 +137,8 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
+    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = 1;
     uint32_t K = ashape[-1] / in0_tile_shape[1];
     uint32_t N = bshape[-1] / in1_tile_shape[1];
@@ -149,6 +152,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     // ========================================================================
     // Core setup and parameter computation
     // ========================================================================
+    // Currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
     TT_FATAL(
         in1_buffer->shard_spec().orientation() == ShardOrientation::ROW_MAJOR, "Only ROW_MAJOR sharding is supported");
@@ -165,6 +169,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -185,6 +190,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     uint32_t in1_shard_width_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
     uint32_t in1_tensor_padded_width_tiles = in1_shard_width_tiles * num_dram_banks;
 
+    // Remove cores assigned to padding-only DRAM banks from the workers category
     if (in1_tensor_padded_width_tiles > N) {
         uint32_t padding_width_tiles = in1_tensor_padded_width_tiles - N;
         uint32_t only_padding_banks = padding_width_tiles / in1_shard_width_tiles;
@@ -193,6 +199,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
             "Padding banks count {} must be less than workers count {}",
             only_padding_banks,
             all_worker_cores_ordered.size());
+        // Padding is stored in the high DRAM banks
         for (uint32_t i = 0; i < only_padding_banks; ++i) {
             all_worker_cores_ordered.pop_back();
         }
@@ -214,6 +221,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto out_subblock_w = std::get<1>(subblock_hw);
 
     uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
+    // it is bad for compute, pad per_core_N_compute
     if (out_subblock_h == 1 and out_subblock_w < max_subblock_w) {
         uint32_t num_subblock_w_per_core_N = per_core_N_compute / out_subblock_w;
         uint32_t num_iter = max_subblock_w - out_subblock_w;
@@ -233,8 +241,11 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     }
 
     uint32_t num_blocks = K / in0_block_w;
+    // Only enable packer l1 accumulation when there are spills, otherwise
+    // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
@@ -287,6 +298,7 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     // ========================================================================
     // Core partitioning: mcast senders, receivers, idle
     // ========================================================================
+    // Move conflict coord from mcast receiver to mcast sender
     std::vector<CoreCoord> input_all_storage_cores_vec = corerange_to_cores(input_all_storage_cores);
     std::vector<CoreCoord> all_worker_cores_vec = corerange_to_cores(all_worker_cores);
     std::vector<CoreCoord> storage_worker_common;

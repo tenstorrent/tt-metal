@@ -159,6 +159,7 @@ ProgramDescriptor BernoulliDeviceOperation::ProgramFactory::create_descriptor(
         reader_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), tile_offset, units_per_core});
 
+        // Each core has its own seed to increase the number of generated random numbers
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
