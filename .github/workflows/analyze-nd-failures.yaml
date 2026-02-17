@@ -56,7 +56,7 @@ jobs:
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
-          github_token: ${{ secrets.EVAN_PAT }}
+          github_token: ${{ secrets.EVAN_CLASSIC_TOKEN }}
           # slack_token: Slack Bot Token for fetching messages
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
           # channel_id: Slack channel ID to fetch messages from
