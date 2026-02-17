@@ -14,12 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-AllGatherConcatDeviceOperation::program_factory_t AllGatherConcatDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return AllGatherConcatMeshWorkloadFactory{};
-}
-
 void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -92,9 +86,6 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllGatherConcatDeviceOperation>(
         args.dim,
         args.num_links,
@@ -105,8 +96,7 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
         args.use_noc1_only,
         args.cluster_axis,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 Tensor all_gather_concat(

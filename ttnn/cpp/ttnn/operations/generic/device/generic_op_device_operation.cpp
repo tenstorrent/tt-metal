@@ -23,11 +23,6 @@ void verify_no_duplicate_mesh_coord_ranges(
     }
 }
 
-GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::GenericMeshProgramFactory{};
-}
-
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
     verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);

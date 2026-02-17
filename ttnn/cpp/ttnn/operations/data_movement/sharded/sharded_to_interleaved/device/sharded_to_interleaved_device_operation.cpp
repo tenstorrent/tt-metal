@@ -12,11 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-ShardedToInterleavedDeviceOperation::program_factory_t ShardedToInterleavedDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ShardedToInterleavedProgramFactory{};
-}
-
 void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;

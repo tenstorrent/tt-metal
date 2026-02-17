@@ -9,17 +9,10 @@
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {
 void MorehLayerNormBackwardGammaBetaGradOperation::validate_inputs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
-
-MorehLayerNormBackwardGammaBetaGradOperation::program_factory_t
-MorehLayerNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
-};
+}
 
 MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
@@ -33,7 +26,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
         result[1] = tensor_args.beta_grad->tensor_spec();
     }
     return result;
-};
+}
 
 MorehLayerNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(

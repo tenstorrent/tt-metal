@@ -77,11 +77,6 @@ struct PointToPointOp {
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-        return SendReceive{};
-    };
-
     // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

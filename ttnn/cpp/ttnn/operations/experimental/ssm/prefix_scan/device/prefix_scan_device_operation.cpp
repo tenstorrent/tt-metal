@@ -11,12 +11,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-PrefixScanDeviceOperation::program_factory_t PrefixScanDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return PrefixScanProgramFactory{};
-}
-
 void PrefixScanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -71,10 +65,8 @@ tt::stl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.a;
     const auto& a_shape = a.padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<PrefixScanDeviceOperation>(
-        args.math_fidelity, program_factory.index(), a.dtype(), a.memory_config(), a_shape.volume());
+        args.math_fidelity, a.dtype(), a.memory_config(), a_shape.volume());
 
     return hash;
 }

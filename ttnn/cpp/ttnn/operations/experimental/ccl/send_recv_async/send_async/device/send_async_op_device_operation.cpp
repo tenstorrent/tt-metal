@@ -11,12 +11,6 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::experimental::prim {
-
-SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return SendAsyncMeshWorkloadFactory{};
-}
-
 void SendAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;
@@ -43,11 +37,7 @@ tt::stl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& input_tensor = tensor_args;
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(
-        args.mesh_socket, input_tensor, program_factory.index());
+    return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(args.mesh_socket, input_tensor);
 }
 
 }  // namespace ttnn::experimental::prim

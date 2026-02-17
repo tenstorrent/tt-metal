@@ -18,17 +18,12 @@ void MorehClipGradNormStep3Operation::validate_inputs(
     }
 
     ttnn::operations::check_tensor(tensor_args.clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
-};
-
-MorehClipGradNormStep3Operation::program_factory_t MorehClipGradNormStep3Operation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-};
+}
 
 void MorehClipGradNormStep3Operation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
-};
+}
 
 // No output
 MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Operation::compute_output_specs(
@@ -39,7 +34,7 @@ MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Opera
         output_specs.push_back(input.tensor_spec());
     }
     return output_specs;
-};
+}
 
 // No output
 MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Operation::create_output_tensors(
