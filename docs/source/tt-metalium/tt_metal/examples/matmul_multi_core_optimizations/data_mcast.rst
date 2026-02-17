@@ -313,7 +313,7 @@ At this point we can specificy exactly which worker core plays which role for mc
     ...
 
 
-Finally, we push our IDs into our reader and writer kernel handler vectors, and targets our NCRISC (RISCV_0) and BRISC (RISCV_1) processors.  For our master send core (0,0), which initiates data movement for both matrices in0 and in1:
+Finally, we target our NCRISC (RISCV_0) and BRISC (RISCV_1) processors. For our master send core (0,0), which initiates data movement for both matrices in0 and in1:
 
 .. code-block:: cpp
 
