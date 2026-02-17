@@ -14,6 +14,8 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t mm_block_ht,
+    uint32_t mm_block_wt,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -25,8 +27,6 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks) {
     int32_t rank = input_tensor.logical_shape().rank();

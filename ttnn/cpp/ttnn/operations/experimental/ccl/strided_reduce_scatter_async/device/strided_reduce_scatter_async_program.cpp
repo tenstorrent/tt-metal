@@ -405,8 +405,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt,
+    uint32_t mm_block_ht,
+    uint32_t mm_block_wt,
     std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks) {
     auto* mesh_device = input_tensor.device();
@@ -519,13 +519,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             false, "strided_reduce_scatter_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
     }
 
-    // MM blocking parameters - use provided values or defaults
-    uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
-    uint32_t mm_block_ht_val = mm_block_ht.value_or(slice_Ht);
-    uint32_t mm_block_wt_val = mm_block_wt.value_or(slice_Wt);
-    uint32_t mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
-    uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(2);
-    uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
+    // MM blocking parameters
+    const uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
+    const uint32_t mm_block_ht_val = mm_block_ht;
+    const uint32_t mm_block_wt_val = mm_block_wt;
+    const uint32_t mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
+    const uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(1);
+    const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
     uint32_t chunks_per_mm_N_full_block_val =
         (mm_N_full_block_wt_val + chunk_width_in_tiles_val - 1) / chunk_width_in_tiles_val;
 

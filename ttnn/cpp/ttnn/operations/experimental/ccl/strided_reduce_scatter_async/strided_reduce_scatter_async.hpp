@@ -18,6 +18,8 @@ struct ExecuteStridedReduceScatterAsync {
         const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        uint32_t mm_block_ht,
+        uint32_t mm_block_wt,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -29,8 +31,6 @@ struct ExecuteStridedReduceScatterAsync {
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
         std::optional<uint32_t> mm_cores_y = std::nullopt,
-        std::optional<uint32_t> mm_block_ht = std::nullopt,
-        std::optional<uint32_t> mm_block_wt = std::nullopt,
         std::optional<uint32_t> mm_N_full_block_wt = std::nullopt,
         std::optional<uint32_t> chunk_width_in_mm_blocks = std::nullopt);
 };

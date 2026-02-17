@@ -34,6 +34,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
                const int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+               uint32_t mm_block_ht,
+               uint32_t mm_block_wt,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -45,8 +47,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> mm_cores_y,
-               std::optional<uint32_t> mm_block_ht,
-               std::optional<uint32_t> mm_block_wt,
                std::optional<uint32_t> mm_N_full_block_wt,
                std::optional<uint32_t> chunk_width_in_mm_blocks) -> ttnn::Tensor {
                 return self(
@@ -54,6 +54,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                     persistent_output_buffers,
                     dim,
                     multi_device_global_semaphore,
+                    mm_block_ht,
+                    mm_block_wt,
                     barrier_semaphore,
                     num_links,
                     memory_config,
@@ -65,8 +67,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                     num_workers_per_link,
                     num_buffers_per_channel,
                     mm_cores_y,
-                    mm_block_ht,
-                    mm_block_wt,
                     mm_N_full_block_wt,
                     chunk_width_in_mm_blocks);
             },
@@ -75,6 +75,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
+            nb::arg("mm_block_ht"),
+            nb::arg("mm_block_wt"),
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("memory_config") = nb::none(),
@@ -86,8 +88,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("mm_cores_y") = nb::none(),
-            nb::arg("mm_block_ht") = nb::none(),
-            nb::arg("mm_block_wt") = nb::none(),
             nb::arg("mm_N_full_block_wt") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none()});
 }
@@ -120,8 +120,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             num_workers_per_link (Optional[int]): Number of workers per link.
             num_buffers_per_channel (Optional[int]): Number of buffers per channel.
             mm_cores_y (Optional[int]): Number of cores in Y direction for matmul output layout.
-            mm_block_ht (Optional[int]): Matmul block height in tiles.
-            mm_block_wt (Optional[int]): Matmul block width in tiles.
+            mm_block_ht (int): Matmul block height in tiles.
+            mm_block_wt (int): Matmul block width in tiles.
             mm_N_full_block_wt (Optional[int]): Matmul N block width in tiles.
             chunk_width_in_mm_blocks (Optional[int]): Chunk width in matmul blocks.
 

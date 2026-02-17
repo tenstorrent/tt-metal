@@ -57,8 +57,8 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
-        std::optional<uint32_t> mm_block_ht,
-        std::optional<uint32_t> mm_block_wt,
+        uint32_t mm_block_ht,
+        uint32_t mm_block_wt,
         std::optional<uint32_t> mm_N_full_block_wt,
         std::optional<uint32_t> chunk_width_in_mm_blocks);
 
