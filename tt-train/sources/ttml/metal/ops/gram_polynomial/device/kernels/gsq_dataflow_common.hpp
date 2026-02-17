@@ -149,6 +149,44 @@ void read_g_block_sync(
 }
 
 /**
+ * Async version of read_g_block: issues DRAM reads but does NOT barrier.
+ * Caller must call noc_async_read_barrier() before using the data.
+ * This allows G[i,j] reads to overlap with the K-block loop:
+ *   - Injector cores: flushed by the first read_in0_block_sync barrier
+ *   - Receiver cores: complete in background during semaphore waits
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_g_block_async(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t write_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t m_start,
+    uint32_t m_end,
+    uint32_t n_start,
+    uint32_t n_end) {
+    ASSERT(m_end > m_start);
+    ASSERT(n_end > n_start);
+
+    for (uint32_t i = m_start; i < m_end; i++) {
+        if (i >= shape.logical_d0) {
+            break;
+        }
+        for (uint32_t j = n_start; j < n_end; j++) {
+            if (j < shape.logical_d1) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            } else {
+                fill_zeros_async(write_ptr, tile_size_bytes);
+            }
+            write_ptr += tile_size_bytes;
+        }
+        write_ptr += (N_block_tiles - (n_end - n_start)) * tile_size_bytes;
+    }
+    // No barrier — reads complete asynchronously
+}
+
+/**
  * Write a block of output to a potentially padded tensor.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>

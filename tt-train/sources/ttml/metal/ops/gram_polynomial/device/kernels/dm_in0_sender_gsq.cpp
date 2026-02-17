@@ -104,13 +104,13 @@ void kernel_main() {
             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
-            // Read G[i,j] block into c_4 before the K-block loop starts.
-            // This provides the bG term to the compute epilogue.
+            // Issue G[i,j] DRAM reads asynchronously — they overlap with the K-block loop.
+            // Injector cores: flushed by the first read_in0_block_sync's noc_async_read_barrier.
+            // Receiver cores: complete in background during semaphore waits (different NOC path).
             cb_reserve_back(cb_id_g_input, out_block_num_tiles);
             uint32_t g_write_ptr = get_write_ptr(cb_id_g_input);
-            read_g_block_sync<M_block_tiles, N_block_tiles>(
+            read_g_block_async<M_block_tiles, N_block_tiles>(
                 in0_reader, out_shape, g_write_ptr, in0_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
-            cb_push_back(cb_id_g_input, out_block_num_tiles);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
@@ -169,6 +169,14 @@ void kernel_main() {
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
             }
+
+            // G[i,j] reads were issued before the K-loop. For injector cores, they
+            // completed during the first read_in0_block_sync barrier. For receiver
+            // cores, they completed in background during semaphore waits. Barrier
+            // here is a formality (already complete), then push to make available
+            // to compute's epilogue.
+            noc_async_read_barrier();
+            cb_push_back(cb_id_g_input, out_block_num_tiles);
 
             k_forward = !k_forward;
             reuse_block = true;
