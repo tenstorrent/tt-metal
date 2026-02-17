@@ -266,7 +266,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wo_dram_memory_config,
-                    (0, 0, 256, 0),  # Pad n from 896 to 1152 (multiple of 384)
+                    (0, 0, 0, 256),  # Pad n from 896 to 1152 (multiple of 384)
                 ),
             },
         }
@@ -293,7 +293,7 @@ class MLA1D(AbstractModule):
 
         # Create DRAM WIDTH sharded memory config for wq_kv_a
         # wq_kv_a: k=dim, n=q_lora_rank+kv_lora_rank+qk_rope_head_dim
-        qkv_a_k = dim  # 896
+        qkv_a_k = dim // mesh_device.shape[1]  # 896
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
         qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
         qkv_a_shard_shape = [qkv_a_k, qkv_a_n_padded // num_dram_banks]
@@ -315,7 +315,7 @@ class MLA1D(AbstractModule):
                     (0, -2),  # Shard along input dim
                     mesh_device,
                     qkv_a_dram_memory_config,
-                    (0, 0, 192, 0),  # Pad n from 2112 to 2304 (multiple of 384)
+                    (0, 0, 0, 192),  # Pad n from 2112 to 2304 (multiple of 384)
                 ),
             },
         }
@@ -414,12 +414,28 @@ class MLA1D(AbstractModule):
     ) -> SavedWeight:
         if padding_needed != (0, 0, 0, 0):
             pad_extra, pad_depth, pad_width, pad_height = padding_needed
-            torch_metaweight = torch.nn.functional.pad(
-                torch_metaweight,
-                (0, pad_extra, 0, pad_depth, 0, pad_width, 0, pad_height),
-                mode="constant",
-                value=0,
-            )
+            if pad_extra == 0:
+                if pad_depth == 0:
+                    torch_metaweight = torch.nn.functional.pad(
+                        torch_metaweight,
+                        (0, pad_width, 0, pad_height),
+                        mode="constant",
+                        value=0,
+                    )
+                else:
+                    torch_metaweight = torch.nn.functional.pad(
+                        torch_metaweight,
+                        (0, pad_depth, 0, pad_width, 0, pad_height),
+                        mode="constant",
+                        value=0,
+                    )
+            else:
+                torch_metaweight = torch.nn.functional.pad(
+                    torch_metaweight,
+                    (0, pad_extra, 0, pad_depth, 0, pad_width, 0, pad_height),
+                    mode="constant",
+                    value=0,
+                )
         return shard_and_save(
             path,
             torch_metaweight.transpose(-2, -1),
@@ -657,13 +673,10 @@ class MLA1D(AbstractModule):
         # qkv_a (wq_kv_a): m=32, k=896, n=2112 (pads to 2304)
         # in0_core_grid=(7,1), out_core_grid=(8,1), WIDTH sharding
         # =====================================================================
-        qkv_a_k = dim  # 896
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
         qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
         qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
         qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
-        qkv_a_num_in0_cores = 7
-        qkv_a_num_out_cores = 8
 
         # Program config for qkv_a
         qkv_a_in0_block_w = 4  # 896 // 7 // 32 = 4
