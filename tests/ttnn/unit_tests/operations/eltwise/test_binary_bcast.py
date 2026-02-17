@@ -1694,142 +1694,103 @@ class TestBinaryRowMajor:
         pytest.param((2, 3, 33, 64), id="multi_nc_multi_row"),
         pytest.param((1, 1, 3, 1025), id="wide_over_1024"),
         pytest.param((1, 1, 1025, 32), id="tall_over_1024"),
-        pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
         pytest.param((1, 1, 1, 1), id="tiny"),
+        pytest.param((1, 1, 1, 1024), id="width_eq_stride"),
+        pytest.param((1, 1, 1, 1025), id="width_gt_stride_remainder"),
+        pytest.param((1, 1, 1, 2048), id="two_full_chunks"),
+        pytest.param((1, 1, 1, 2049), id="two_full_chunks_remainder"),
+        pytest.param((1, 1, 1, 4096), id="extreme_row_width"),
         pytest.param((1, 1, 2, 1, 1, 3, 1025), id="rank7_weird_wide"),
+    ]
+
+    DTYPE_CASES = [
+        pytest.param(torch.bfloat16, ttnn.bfloat16, id="bfloat16"),
+        pytest.param(torch.float32, ttnn.float32, id="float32"),
+        pytest.param(torch.int32, ttnn.int32, id="int32"),
+        pytest.param(torch.uint32, ttnn.uint32, id="uint32"),
     ]
 
     BROADCAST_CASES = [
         pytest.param("native", "b", id="native"),
-        pytest.param("scalar", "b", id="scalar"),
-        pytest.param("row", "b", id="row_b"),
+        pytest.param("scalar", "b", id="scalar_b"),
         pytest.param("row", "a", id="row_a"),
-        pytest.param("col", "b", id="col_b"),
+        pytest.param("row", "b", id="row_b"),
         pytest.param("col", "a", id="col_a"),
+        pytest.param("col", "b", id="col_b"),
+        pytest.param("mixed", "a", id="mixed_row_a_col_b"),
+        pytest.param("mixed", "b", id="mixed_col_a_row_b"),
     ]
 
     MEMORY_CONFIG_CASES = [
+        pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, id="default"),
         pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="dram_dram_dram"),
         pytest.param(ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="l1_l1_l1"),
         pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="dram_l1_dram"),
         pytest.param(ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="l1_dram_l1"),
     ]
 
-    @pytest.fixture(autouse=True)
-    def _fixed_seed(self):
-        torch.manual_seed(0)
-
-    # Helpers to map strings to types and create tensors
-    def _get_dtypes(self, s):
-        if s == "bfloat16":
-            return (torch.bfloat16, ttnn.bfloat16)
-        if s == "float32":
-            return (torch.float32, ttnn.float32)
-        if s == "int32":
-            return (torch.int32, ttnn.int32)
-        if s == "uint32":
-            return (torch.uint32, ttnn.uint32)
-        raise ValueError(f"Unsupported dtype_str: {s}")
-
-    def _broadcast_shape(self, shape, mode):
-        if mode == "native":
-            return tuple(shape)
-        if mode == "scalar":
-            return (1,) * len(shape)
-        if mode == "row":
-            return tuple(shape[:-2]) + (1, shape[-1])
-        if mode == "col":
-            return tuple(shape[:-2]) + (shape[-2], 1)
-        raise ValueError(f"Unsupported mode: {mode}")
-
-    def _make_tensor(self, device, shape, dt_pt, dt_tt, memory_config):
-        if dt_pt in (torch.bfloat16, torch.float32):
-            host = torch.randn(shape, dtype=dt_pt)
-        elif dt_pt == torch.int32:
-            host = torch.randint(-1000, 1000, shape, dtype=dt_pt)
-        elif dt_pt == torch.uint32:
-            host = torch.randint(0, 1000, shape, dtype=torch.int64).to(torch.uint32)
-        else:
-            raise ValueError(f"Unsupported torch dtype: {dt_pt}")
-        tt = ttnn.from_torch(
-            host,
-            dtype=dt_tt,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=memory_config,
-        )
-        return host, tt
-
-    def _assert_binary_add(self, out_tt_torch, pt_a, pt_b, dtype_str):
-        if dtype_str == "uint32":
-            ref = torch.add(pt_a.to(torch.int64), pt_b.to(torch.int64)).to(out_tt_torch.dtype)
-            assert torch.equal(out_tt_torch, ref)
-        elif dtype_str == "int32":
-            assert torch.equal(out_tt_torch, torch.add(pt_a, pt_b))
-        else:
-            assert_with_pcc(out_tt_torch, torch.add(pt_a, pt_b))
-
-    def _input_shapes(self, shape, mode, bcast_on):
-        bcast_shape = self._broadcast_shape(shape, mode)
-        if bcast_on == "a":
-            return bcast_shape, tuple(shape)
-        if bcast_on == "b":
-            return tuple(shape), bcast_shape
-        raise ValueError(f"Unsupported bcast_on: {bcast_on}")
-
     @pytest.mark.parametrize("shape", SHAPES)
-    @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32", "int32", "uint32"])
-    @pytest.mark.parametrize("mode,bcast_on", BROADCAST_CASES)
-    def test_binary_row_major_broadcasts(self, device, shape, dtype_str, mode, bcast_on):
-        dt_pt, dt_tt = self._get_dtypes(dtype_str)
-        a_shape, b_shape = self._input_shapes(shape, mode, bcast_on)
-
-        pt_a, tt_a = self._make_tensor(device, a_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-        pt_b, tt_b = self._make_tensor(device, b_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-
-        with ttnn.manage_config("throw_exception_on_fallback", True):
-            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
-        tt_out = ttnn.to_torch(tt_out)
-        self._assert_binary_add(tt_out, pt_a, pt_b, dtype_str)
-
-    @pytest.mark.parametrize("shape", SHAPES)
-    @pytest.mark.parametrize("dtype_str", ["bfloat16", "int32"])
+    @pytest.mark.parametrize("dtype_pt,dtype_tt", DTYPE_CASES)
     @pytest.mark.parametrize("mode,bcast_on", BROADCAST_CASES)
     @pytest.mark.parametrize("a_config,b_config,out_config", MEMORY_CONFIG_CASES)
-    def test_binary_row_major_broadcasts_memory_configs(
-        self, device, shape, dtype_str, mode, bcast_on, a_config, b_config, out_config
-    ):
-        dt_pt, dt_tt = self._get_dtypes(dtype_str)
-        a_shape, b_shape = self._input_shapes(shape, mode, bcast_on)
+    def test_binary_row_major(self, device, shape, dtype_pt, dtype_tt, mode, bcast_on, a_config, b_config, out_config):
+        torch.manual_seed(0)
 
-        pt_a, tt_a = self._make_tensor(device, a_shape, dt_pt, dt_tt, a_config)
-        pt_b, tt_b = self._make_tensor(device, b_shape, dt_pt, dt_tt, b_config)
+        if mode == "mixed":
+            row_shape = tuple(shape[:-2]) + (1, shape[-1])
+            col_shape = tuple(shape[:-2]) + (shape[-2], 1)
+            a_shape, b_shape = (row_shape, col_shape) if bcast_on == "a" else (col_shape, row_shape)
+        else:
+            if mode == "native":
+                bcast_shape = tuple(shape)
+            elif mode == "scalar":
+                bcast_shape = (1,) * len(shape)
+            elif mode == "row":
+                bcast_shape = tuple(shape[:-2]) + (1, shape[-1])
+            else:
+                bcast_shape = tuple(shape[:-2]) + (shape[-2], 1)
+            a_shape, b_shape = (bcast_shape, tuple(shape)) if bcast_on == "a" else (tuple(shape), bcast_shape)
+
+        if dtype_pt in (torch.bfloat16, torch.float32):
+            pt_a = torch.randn(a_shape, dtype=dtype_pt)
+            pt_b = torch.randn(b_shape, dtype=dtype_pt)
+        elif dtype_pt == torch.int32:
+            pt_a = torch.randint(-1000, 1000, a_shape, dtype=dtype_pt)
+            pt_b = torch.randint(-1000, 1000, b_shape, dtype=dtype_pt)
+        else:
+            pt_a = torch.randint(0, 1000, a_shape, dtype=torch.int64).to(torch.uint32)
+            pt_b = torch.randint(0, 1000, b_shape, dtype=torch.int64).to(torch.uint32)
+
+        tt_a = ttnn.from_torch(
+            pt_a,
+            dtype=dtype_tt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=a_config,
+        )
+        tt_b = ttnn.from_torch(
+            pt_b,
+            dtype=dtype_tt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=b_config,
+        )
+
+        add_kwargs = {"use_legacy": None}
+        if out_config is not None:
+            add_kwargs["memory_config"] = out_config
 
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            tt_out = ttnn.add(tt_a, tt_b, memory_config=out_config, use_legacy=None)
-        tt_out = ttnn.to_torch(tt_out)
-        self._assert_binary_add(tt_out, pt_a, pt_b, dtype_str)
+            tt_out = ttnn.add(tt_a, tt_b, **add_kwargs)
 
-    @pytest.mark.parametrize("shape", SHAPES)
-    @pytest.mark.parametrize("dtype_str", ["bfloat16", "int32"])
-    def test_binary_row_major_mixed_row_col_bcast(self, device, shape, dtype_str):
-        dt_pt, dt_tt = self._get_dtypes(dtype_str)
-        row_shape = tuple(shape[:-2]) + (1, shape[-1])
-        col_shape = tuple(shape[:-2]) + (shape[-2], 1)
-
-        pt_a, tt_a = self._make_tensor(device, row_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-        pt_b, tt_b = self._make_tensor(device, col_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-        with ttnn.manage_config("throw_exception_on_fallback", True):
-            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
         tt_out = ttnn.to_torch(tt_out)
-        self._assert_binary_add(tt_out, pt_a, pt_b, dtype_str)
-
-        pt_a, tt_a = self._make_tensor(device, col_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-        pt_b, tt_b = self._make_tensor(device, row_shape, dt_pt, dt_tt, ttnn.DRAM_MEMORY_CONFIG)
-        with ttnn.manage_config("throw_exception_on_fallback", True):
-            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
-        tt_out = ttnn.to_torch(tt_out)
-        self._assert_binary_add(tt_out, pt_a, pt_b, dtype_str)
+        if dtype_pt == torch.uint32:
+            reference = torch.add(pt_a.to(torch.int64), pt_b.to(torch.int64)).to(tt_out.dtype)
+            assert torch.equal(tt_out, reference)
+        elif dtype_pt == torch.int32:
+            assert torch.equal(tt_out, torch.add(pt_a, pt_b))
+        else:
+            assert_with_pcc(tt_out, torch.add(pt_a, pt_b))
 
 
 @pytest.mark.parametrize(

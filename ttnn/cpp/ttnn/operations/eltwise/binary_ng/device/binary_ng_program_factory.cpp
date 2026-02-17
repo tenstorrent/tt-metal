@@ -110,7 +110,7 @@ std::optional<AllShardSpecs> get_shard_specs(
 bool should_use_row_major_path(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const std::optional<Tensor>& b,
-    bool has_sharding) {
+    const bool has_sharding) {
     if (operation_attributes.input_layout_a != Layout::ROW_MAJOR ||
         operation_attributes.output_layout != Layout::ROW_MAJOR || has_sharding) {
         return false;
@@ -294,13 +294,13 @@ void set_or_update_runtime_arguments(
     uint32_t writer_stride_size_bytes = 0;
 
     if (row_major_inputs) {
-        uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-        uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-        uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+        const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
+        const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
+        const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
 
-        uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
-        uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
-        uint32_t b_row_width_elements_aligned =
+        const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
+        const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
+        const uint32_t b_row_width_elements_aligned =
             b.has_value() ? (b_aligned_page_size / b->element_size()) : a_row_width_elements_aligned;
 
         // Use the smallest aligned row width among non-broadcast inputs to avoid over-read.
@@ -314,18 +314,18 @@ void set_or_update_runtime_arguments(
         common_row_width_elements = std::max<uint32_t>(1u, common_row_width_elements);
 
         num_rows_per_tile = std::max<uint32_t>(1u, tile_hw / common_row_width_elements);
-        bool aligned_for_a =
+        const bool aligned_for_a =
             (aWt_r == cWt_r) ? ((common_row_width_elements * a.element_size()) == a_aligned_page_size) : true;
-        bool aligned_for_b = (b.has_value() && bWt_r == cWt_r)
-                                 ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
-                                 : true;
-        bool aligned_for_c = (common_row_width_elements * c.element_size()) == c_aligned_page_size;
+        const bool aligned_for_b = (b.has_value() && bWt_r == cWt_r)
+                                       ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
+                                       : true;
+        const bool aligned_for_c = (common_row_width_elements * c.element_size()) == c_aligned_page_size;
         if (!aligned_for_a || !aligned_for_b || !aligned_for_c) {
             num_rows_per_tile = 1;
         }
 
         row_blocks_per_channel = tt::div_up(cHt_r, num_rows_per_tile);
-        uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
+        const uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
         tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
         const uint32_t a_tile_bytes = tile_hw * a.element_size();
         const uint32_t a_row_width_bytes = common_row_width_elements * a.element_size();
