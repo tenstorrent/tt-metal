@@ -24,88 +24,6 @@
 
 namespace tt::tt_metal {
 
-// Fixture for single-galaxy pipeline tests (4 ranks; stage 4 loopback co-located with stage 0 on rank 0).
-// Uses MeshDeviceExaboxFixture which auto-detects the system topology.
-// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to bh_galaxy_4x2_mesh_graph_descriptor.textproto when running.
-class MeshDeviceSingleGalaxyPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
-
-// Fixture for Superpod 4 pipeline tests (16 ranks; 17 stages with loopback on rank 0).
-// Requires 16 processes and mesh graph with 16 mesh IDs.
-// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the superpod 4 mesh graph when running.
-class MeshDeviceSuperpod4PipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
-public:
-    void SetUp() override {
-        if (not system_supported()) {
-            GTEST_SKIP() << "Skipping: Superpod 4 pipeline requires 16 ranks and matching mesh graph.";
-        }
-        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
-    }
-
-    void TearDown() override {
-        if (system_supported()) {
-            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
-        }
-    }
-
-    bool system_supported() {
-        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
-            return false;
-        }
-        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 16u;
-    }
-};
-
-// Fixture for Superpod 2-pod pipeline tests (32 ranks; 32 stages).
-// Requires 32 processes and mesh graph with 32 mesh IDs.
-// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the superpod 2-pod mesh graph when running.
-class MeshDeviceSuperpod2PodPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
-public:
-    void SetUp() override {
-        if (not system_supported()) {
-            GTEST_SKIP() << "Skipping: Superpod 2-pod pipeline requires 32 ranks and matching mesh graph.";
-        }
-        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
-    }
-
-    void TearDown() override {
-        if (system_supported()) {
-            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
-        }
-    }
-
-    bool system_supported() {
-        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
-            return false;
-        }
-        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 32u;
-    }
-};
-
-// Fixture for Superpod 4-pod pipeline tests (64 ranks; 64 stages).
-// Requires 64 processes and mesh graph with 64 mesh IDs.
-class MeshDeviceSuperpod4PodPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
-public:
-    void SetUp() override {
-        if (not system_supported()) {
-            GTEST_SKIP() << "Skipping: Superpod 4-pod pipeline requires 64 ranks and matching mesh graph.";
-        }
-        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
-    }
-
-    void TearDown() override {
-        if (system_supported()) {
-            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
-        }
-    }
-
-    bool system_supported() {
-        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
-            return false;
-        }
-        return *tt::tt_metal::MetalContext::instance().global_distributed_context().size() == 64u;
-    }
-};
-
 // Pipeline config structs.
 
 // User builds a pipeline in physical space (Host Ranks, Tray IDs, ASIC Locations)
@@ -185,18 +103,58 @@ enum class PipelineType {
     SINGLE_GALAXY,  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
     DUAL_GALAXY,
     QUAD_GALAXY,
-    SUPERPOD_4,
+    SINGLE_POD,
     SUPERPOD_2_POD,
-    SUPERPOD_4_POD
+    SUPERPOD_4
+};
+
+// Maps number of processes (distributed context size) to pipeline config.
+// 4 -> Single Galaxy, 16 -> Single Pod (Superpod 4), 32 -> Superpod 2 Pod, 64 -> Superpod 4 Pod.
+inline std::optional<PipelineType> pipeline_type_from_num_ranks(size_t num_ranks) {
+    switch (num_ranks) {
+        case 4u: return PipelineType::SINGLE_GALAXY;
+        case 16u: return PipelineType::SINGLE_POD;
+        case 32u: return PipelineType::SUPERPOD_2_POD;
+        case 64u: return PipelineType::SUPERPOD_4;
+        default: return std::nullopt;
+    }
+}
+
+// Universal pipeline fixture: selects config (Single Galaxy, Single Pod, Superpod 2 Pod, Superpod 4 Pod)
+// based on distributed context size. Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the matching mesh graph.
+class BlitzDecodePipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping: pipeline requires 4, 16, 32, or 64 ranks and matching mesh graph.";
+        }
+        tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        if (not tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture::system_supported()) {
+            return false;
+        }
+        return pipeline_type_from_num_ranks(*tt::tt_metal::MetalContext::instance().global_distributed_context().size())
+            .has_value();
+    }
 };
 
 // Get physical pipeline stage configs for the specified pipeline type.
-// SINGLE_GALAXY: 5 stages. Stage 0 entry (T1D2) is the sender; stage 4 is the loop-back (T1D4 -> T1D2).
-// Last stage exit and first stage entry are the same ASIC on the same tray (full loopback).
-std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineType type) {
+// When enable_loopback is true, returns the full path including the loopback/wrap-around stage where defined.
+// When enable_loopback is false, returns a linear path (loopback stage removed or replaced with linear endpoint).
+// SINGLE_GALAXY: 5 stages with loopback; 4 stages linear. SUPERPOD_2_POD has no loopback config (linear only).
+std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineType type, bool enable_loopback = true) {
+    std::vector<PhysicalPipelineStageConfig> config;
     switch (type) {
         case PipelineType::SINGLE_GALAXY:
-            return {
+            config = {
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
                  .entry_node_asic_location = 2,
@@ -218,8 +176,87 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
                  .entry_node_asic_location = 4,
                  .exit_node_asic_location = 2},
             };
-        case PipelineType::SUPERPOD_4:
-            return {
+            break;
+        case PipelineType::SINGLE_POD:
+            config = {
+                // First Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Second Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Third Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1},
+                // Fourth Tray
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 4,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Wrap-around
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 1},
+            };
+            break;
+        // SUPERPOD_2_POD: 32 stages (linear only; no loopback config).
+        case PipelineType::SUPERPOD_2_POD:
+            config = {
                 // First Pod
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
@@ -288,16 +325,80 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
                  .exit_node_tray_id = 2,
                  .entry_node_asic_location = 6,
                  .exit_node_asic_location = 5},
-                // Wrap-around
+                // Fifth Pod
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
                  .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 1},
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Sixth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Seventh Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                // Eighth Pod
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
             };
-        // SUPERPOD_4_POD: 65 stages (16+16+16+16+1). Order: Pod1 (trays 1,2) -> Pod4 (trays 1,2) -> Pod3 (trays 1,2) ->
+            break;
+        // SUPERPOD_4: 65 stages (16+16+16+16+1). Order: Pod1 (trays 1,2) -> Pod4 (trays 1,2) -> Pod3 (trays 1,2) ->
         // Pod2 (trays 3,4) -> wrap-around to Pod1.
-        case PipelineType::SUPERPOD_4_POD:
-            return {
+        case PipelineType::SUPERPOD_4:
+            config = {
                 {.entry_node_tray_id = 2,
                  .exit_node_tray_id = 2,
                  .entry_node_asic_location = 2,
@@ -563,8 +664,29 @@ std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineTy
                  .entry_node_asic_location = 6,
                  .exit_node_asic_location = 2},
             };
+            break;
         default: return {};
     }
+    // No loopback config for SUPERPOD_2_POD (linear-only topology).
+    if (type == PipelineType::SUPERPOD_2_POD && enable_loopback) {
+        return {};
+    }
+    if (enable_loopback) {
+        return config;
+    }
+    // Linear pipeline: remove or replace loopback stage.
+    switch (type) {
+        case PipelineType::SUPERPOD_4:
+            config.pop_back();
+            config.push_back(
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6});
+            break;
+        default: break;
+    }
+    return config;
 }
 
 // Overloaded build_pipeline that accepts an external physical pipeline config.
@@ -865,229 +987,32 @@ void run_single_galaxy_pipeline(
     }
 }
 
-TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
+TEST_F(BlitzDecodePipelineFixture, SendRecvPipeline) {
     constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+    auto num_ranks = *MetalContext::instance().global_distributed_context().size();
+    auto pipeline_type = pipeline_type_from_num_ranks(num_ranks);
+    ASSERT_TRUE(pipeline_type.has_value()) << "Unsupported rank count";
+    // SendRecv (loopback) config is not defined for SUPERPOD_2_POD (32 ranks).
+    if (*pipeline_type == PipelineType::SUPERPOD_2_POD) {
+        GTEST_SKIP() << "SendRecv not configured for 32-rank (SUPERPOD_2_POD).";
+    }
+    run_single_galaxy_pipeline(mesh_device_, *pipeline_type, NUM_ITERATIONS, /*enable_correctness_check=*/false);
 }
 
-TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxyWithCorrectnessCheck) {
+TEST_F(BlitzDecodePipelineFixture, SendRecvPipelineWithCorrectnessCheck) {
     constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/true);
-}
-
-// SUPERPOD_4: 17 stages (4 pods × 4 stages + 1 wrap-around), 16 ranks; loopback stage on rank 0.
-TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4) {
-    constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/false);
-}
-
-TEST_F(MeshDeviceSuperpod4PipelineFixture, SendRecvPipelineSuperpod4WithCorrectnessCheck) {
-    constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/true);
-}
-
-// SUPERPOD_4_POD: 65 stages (16+16+16+16+1), 64 ranks; loopback stage on rank 0.
-TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4Pod) {
-    constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
-}
-
-TEST_F(MeshDeviceSuperpod4PodPipelineFixture, SendRecvPipelineSuperpod4PodWithCorrectnessCheck) {
-    constexpr uint32_t NUM_ITERATIONS = 500;
-    run_single_galaxy_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
+    auto num_ranks = *MetalContext::instance().global_distributed_context().size();
+    auto pipeline_type = pipeline_type_from_num_ranks(num_ranks);
+    ASSERT_TRUE(pipeline_type.has_value()) << "Unsupported rank count";
+    if (*pipeline_type == PipelineType::SUPERPOD_2_POD) {
+        GTEST_SKIP() << "SendRecv not configured for 32-rank (SUPERPOD_2_POD).";
+    }
+    run_single_galaxy_pipeline(mesh_device_, *pipeline_type, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 
 // ─── Rate (throughput) pipeline test ─────────────────────────────────────────
 // Linear pipeline (no loopback): data flows one-way through pipeline stages.
 // Measures sustained pipeline throughput by pushing data for many iterations.
-
-// Get physical pipeline config for rate testing (linear, no loopback).
-// Uses 4 stages across 4 trays; last stage does NOT loop back to the first.
-std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config_rate(PipelineType type) {
-    switch (type) {
-        case PipelineType::SINGLE_GALAXY:
-            return {
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 4},
-            };
-        case PipelineType::SUPERPOD_4: {
-            // Rate: same as full pipeline but without wrap-around stage (64 stages, linear).
-            auto config = get_physical_pipeline_config(PipelineType::SUPERPOD_4);
-            return config;
-        }
-        case PipelineType::SUPERPOD_2_POD:
-            return {
-                // First Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Second Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Third Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 1},
-                // Fourth Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 1,
-                 .exit_node_asic_location = 2},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 3,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                // Fifth Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                // Sixth Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                // Seventh Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-                // Eighth Pod
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 8},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 8,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 5},
-            };
-        case PipelineType::SUPERPOD_4_POD: {
-            // Rate: same as full pipeline but without the wrap-around stage (64 stages, linear).
-            auto config = get_physical_pipeline_config(PipelineType::SUPERPOD_4_POD);
-            config.pop_back();
-            config.push_back(
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 5,
-                 .exit_node_asic_location = 6});
-            return config;
-        }
-        default: return {};
-    }
-}
 
 // Multi-host rate pipeline test helper.
 // 4 stages, 4 ranks: sender on rank 0, fwd on ranks 1-2, receiver on rank 3.
@@ -1110,14 +1035,12 @@ void run_single_galaxy_rate_pipeline(
     auto physical_system_descriptor = create_physical_system_descriptor();
     auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
 
-    auto physical_config = get_physical_pipeline_config_rate(pipeline_type);
+    auto physical_config = get_physical_pipeline_config(pipeline_type, false);
     auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
 
     // Linear pipeline: stage i is on rank i. No loopback.
-    const uint32_t downstream_stage = my_rank + 1;
-    const uint32_t upstream_stage = my_rank - 1;  // wraps for rank 0, but unused there
     const uint32_t downstream_rank = my_rank + 1;
-    const uint32_t upstream_rank = my_rank - 1;
+    const uint32_t upstream_rank = my_rank - 1;  // wraps for rank 0, but unused there
 
     const auto& global_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
@@ -1152,7 +1075,7 @@ void run_single_galaxy_rate_pipeline(
     if (is_pipeline_start) {
         // Sender: start_coord -> my_exit (local), then my_exit -> downstream_entry (cross-mesh)
         auto start_coord = my_entry;
-        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_stage);
+        auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_rank, downstream_rank);
 
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_sender);
 
@@ -1220,7 +1143,7 @@ void run_single_galaxy_rate_pipeline(
             rate_gbps * 1e3);
     } else if (is_pipeline_end) {
         // Receiver: upstream_exit -> my_entry (cross-mesh), then my_entry -> end_coord (local)
-        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
+        auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
         auto end_coord = my_exit;
 
         const tt::tt_fabric::MeshId upstream_mesh_id =
@@ -1272,8 +1195,8 @@ void run_single_galaxy_rate_pipeline(
             rate_gbps * 1e3);
     } else {
         // Intermediate: upstream_exit -> my_entry (cross-mesh), local forward, my_exit -> downstream_entry (cross-mesh)
-        auto upstream_exit = pipeline_stages[upstream_stage].exit_node_coord;
-        auto downstream_entry = pipeline_stages[downstream_stage].entry_node_coord;
+        auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
+        auto downstream_entry = pipeline_stages[downstream_rank].entry_node_coord;
 
         const tt::tt_fabric::MeshId upstream_mesh_id =
             std::get<0>(global_bindings.at(distributed::multihost::Rank(upstream_rank)));
@@ -1309,53 +1232,21 @@ void run_single_galaxy_rate_pipeline(
     }
 }
 
-TEST_F(MeshDeviceSingleGalaxyPipelineFixture, RatePipelineSingleGalaxy) {
-    constexpr uint32_t NUM_ITERATIONS = 100000;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/false);
+TEST_F(BlitzDecodePipelineFixture, RatePipeline) {
+    constexpr uint32_t NUM_ITERATIONS_BASE = 10000000;
+    auto num_ranks = *MetalContext::instance().global_distributed_context().size();
+    auto pipeline_type = pipeline_type_from_num_ranks(num_ranks);
+    ASSERT_TRUE(pipeline_type.has_value()) << "Unsupported rank count";
+    // SUPERPOD_4 (64 ranks) uses a larger iteration count for timing.
+    uint32_t num_iterations = (*pipeline_type == PipelineType::SUPERPOD_4) ? 10000000u : NUM_ITERATIONS_BASE;
+    run_single_galaxy_rate_pipeline(mesh_device_, *pipeline_type, num_iterations, /*enable_correctness_check=*/false);
 }
 
-TEST_F(MeshDeviceSingleGalaxyPipelineFixture, RatePipelineSingleGalaxyWithCorrectnessCheck) {
+TEST_F(BlitzDecodePipelineFixture, RatePipelineWithCorrectnessCheck) {
     constexpr uint32_t NUM_ITERATIONS = 100;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SINGLE_GALAXY, NUM_ITERATIONS, /*enable_correctness_check=*/true);
-}
-
-// SUPERPOD_4 rate tests: 16 stages (4 pods × 4 stages), 16 ranks; linear pipeline (no loopback).
-TEST_F(MeshDeviceSuperpod4PipelineFixture, RatePipelineSuperpod4) {
-    constexpr uint32_t NUM_ITERATIONS = 100000;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/false);
-}
-
-TEST_F(MeshDeviceSuperpod4PipelineFixture, RatePipelineSuperpod4WithCorrectnessCheck) {
-    constexpr uint32_t NUM_ITERATIONS = 100;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4, NUM_ITERATIONS, /*enable_correctness_check=*/true);
-}
-
-TEST_F(MeshDeviceSuperpod2PodPipelineFixture, RatePipelineSuperpod2Pod) {
-    constexpr uint32_t NUM_ITERATIONS = 100000;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_2_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
-}
-
-TEST_F(MeshDeviceSuperpod2PodPipelineFixture, RatePipelineSuperpod2PodWithCorrectnessCheck) {
-    constexpr uint32_t NUM_ITERATIONS = 100;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_2_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
-}
-
-// SUPERPOD_4_POD rate tests: 64 stages (full pipeline minus wrap-around), 64 ranks.
-TEST_F(MeshDeviceSuperpod4PodPipelineFixture, RatePipelineSuperpod4Pod) {
-    constexpr uint32_t NUM_ITERATIONS = 100000;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/false);
-}
-
-TEST_F(MeshDeviceSuperpod4PodPipelineFixture, RatePipelineSuperpod4PodWithCorrectnessCheck) {
-    constexpr uint32_t NUM_ITERATIONS = 100;
-    run_single_galaxy_rate_pipeline(
-        mesh_device_, PipelineType::SUPERPOD_4_POD, NUM_ITERATIONS, /*enable_correctness_check=*/true);
+    auto num_ranks = *MetalContext::instance().global_distributed_context().size();
+    auto pipeline_type = pipeline_type_from_num_ranks(num_ranks);
+    ASSERT_TRUE(pipeline_type.has_value()) << "Unsupported rank count";
+    run_single_galaxy_rate_pipeline(mesh_device_, *pipeline_type, NUM_ITERATIONS, /*enable_correctness_check=*/true);
 }
 }  // namespace tt::tt_metal

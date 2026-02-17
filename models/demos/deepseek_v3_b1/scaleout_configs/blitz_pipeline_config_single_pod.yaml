@@ -50,6 +50,6 @@ stage_to_slice_mapping:
     host: bh-glx-d06u08
     slice: 3
 
-mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor.textproto
-rank_binding_file: blitz_decode_pipeline_rank_binding.yaml
-rank_file: blitz_decode_pipeline_rank_file
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+rank_binding_file: blitz_decode_pipeline_rank_binding_single_pod.yaml
+rank_file: blitz_decode_pipeline_rank_file_single_pod

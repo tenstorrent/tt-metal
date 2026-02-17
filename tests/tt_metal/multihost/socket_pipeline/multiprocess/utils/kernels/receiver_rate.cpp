@@ -62,6 +62,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_elems; j++) {
                 if (data_ptr[j] != j) {
                     // Hang on mismatch to signal correctness failure
+                    // TODO: log an error code to L1 memory and terminate early.
                     while (true);
                 }
             }

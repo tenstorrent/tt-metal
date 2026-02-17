@@ -203,6 +203,7 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     channels { count: 8 policy: RELAXED }
   }
+  # no loop-back connection, this is not currently supported for this configuration.
 }
 
 # --- Instantiation ----------------------------------------------------------

@@ -228,6 +228,8 @@ tt::tt_metal::Program create_socket_forward_rate_program(
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
     // Notify upstream every half buffer to increase fabric utilization
+    // The goal is to send a cumulative ack to the sender each time half of the socket buffer is processed.
+    // This ensures higher fabric utilization by avoiding handshaking for each packet being exchanged.
     uint32_t socket_fifo_size_in_pages =
         send_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;
     uint32_t notify_sender_every_n_iterations = socket_fifo_size_in_pages / 2;
@@ -357,7 +359,8 @@ tt::tt_metal::Program create_recv_async_rate_program(
 }  // namespace
 
 // ─── Public API ──────────────────────────────────────────────────────────────
-
+// TODO: modify the workloads to be persistent/want to skip calling the create program function for iterations > 1
+// so we don't need to re-create the program between the warmup iteration.
 void send_async_rate(
     distributed::MeshDevice* mesh_device,
     const Buffer* input_buffer,
