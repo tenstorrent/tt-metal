@@ -72,6 +72,14 @@ struct GraphIndexData {
     std::vector<CardinalConstraintIdx> target_cardinal_constraints;
     std::vector<CardinalConstraintIdx> global_cardinal_constraints;
 
+    // Acceleration: [constraint_idx][node_idx] -> 0: none, 1: group A, 2: group B
+    std::vector<std::vector<uint8_t>> target_cardinal_group_membership;
+    std::vector<std::vector<uint8_t>> global_cardinal_group_membership;
+
+    // Acceleration: [node_idx] -> list of constraint indices
+    std::vector<std::vector<size_t>> target_node_to_constraints;
+    std::vector<std::vector<size_t>> global_node_to_constraints;
+
     size_t n_target = 0;
     size_t n_global = 0;
 
@@ -351,6 +359,43 @@ struct ConsistencyChecker {
     template <typename TargetNode, typename GlobalNode>
     static bool check_global_cardinal_capacity(
         const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data);
+
+    /**
+     * @brief Incrementally update cardinal connection usage and check capacity
+     *
+     * Updates cardinal_link_usage based on new edges formed by assigning target_idx.
+     * Returns false if any capacity is exceeded (and reverts changes).
+     *
+     * @param target_idx Index of newly assigned target node
+     * @param graph_data Indexed graph data
+     * @param mapping Current partial mapping (must include target_idx assignment)
+     * @param cardinal_link_usage Usage counters to update
+     * @return true if capacity limits are respected, false otherwise
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static bool update_cardinal_capacity(
+        size_t target_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const std::vector<int>& mapping,
+        std::vector<size_t>& cardinal_link_usage);
+
+    /**
+     * @brief Revert cardinal connection usage updates
+     *
+     * Undoes changes made by update_cardinal_capacity for a specific target node.
+     * Used during backtracking.
+     *
+     * @param target_idx Index of target node being unassigned
+     * @param graph_data Indexed graph data
+     * @param mapping Current partial mapping (must still include target_idx assignment)
+     * @param cardinal_link_usage Usage counters to update
+     */
+    template <typename TargetNode, typename GlobalNode>
+    static void revert_cardinal_capacity(
+        size_t target_idx,
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const std::vector<int>& mapping,
+        std::vector<size_t>& cardinal_link_usage);
 };
 
 template <typename TargetNode, typename GlobalNode>
@@ -379,6 +424,7 @@ public:
     struct SearchState {
         std::vector<int> mapping;                    // mapping[target_idx] = global_idx or -1 (best found so far)
         std::vector<bool> used;                      // used[global_idx] = true if assigned
+        std::vector<size_t> cardinal_link_usage;     // Track current usage of each cardinal connection
         std::unordered_set<uint64_t> failed_states;  // Memoization cache of failed states
         size_t dfs_calls = 0;                        // Number of DFS calls made
         size_t backtrack_count = 0;                  // Number of backtracks performed

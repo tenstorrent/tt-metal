@@ -14,6 +14,7 @@
 #include <cstddef>   // For SIZE_MAX
 #include <sstream>
 #include <unordered_set>
+#include <cstdint>     // For uint8_t
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -152,6 +153,36 @@ GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
         }
         if (!idx_conn.group_a_indices.empty() && !idx_conn.group_b_indices.empty()) {
             global_cardinal_constraints.push_back(std::move(idx_conn));
+        }
+    }
+
+    // Build acceleration structures for target graph
+    target_cardinal_group_membership.resize(target_cardinal_constraints.size(), std::vector<uint8_t>(n_target, 0));
+    target_node_to_constraints.resize(n_target);
+    for (size_t c_idx = 0; c_idx < target_cardinal_constraints.size(); ++c_idx) {
+        const auto& conn = target_cardinal_constraints[c_idx];
+        for (size_t node_idx : conn.group_a_indices) {
+            target_cardinal_group_membership[c_idx][node_idx] = 1;
+            target_node_to_constraints[node_idx].push_back(c_idx);
+        }
+        for (size_t node_idx : conn.group_b_indices) {
+            target_cardinal_group_membership[c_idx][node_idx] = 2;
+            target_node_to_constraints[node_idx].push_back(c_idx);
+        }
+    }
+
+    // Build acceleration structures for global graph
+    global_cardinal_group_membership.resize(global_cardinal_constraints.size(), std::vector<uint8_t>(n_global, 0));
+    global_node_to_constraints.resize(n_global);
+    for (size_t c_idx = 0; c_idx < global_cardinal_constraints.size(); ++c_idx) {
+        const auto& conn = global_cardinal_constraints[c_idx];
+        for (size_t node_idx : conn.group_a_indices) {
+            global_cardinal_group_membership[c_idx][node_idx] = 1;
+            global_node_to_constraints[node_idx].push_back(c_idx);
+        }
+        for (size_t node_idx : conn.group_b_indices) {
+            global_cardinal_group_membership[c_idx][node_idx] = 2;
+            global_node_to_constraints[node_idx].push_back(c_idx);
         }
     }
 }
@@ -379,14 +410,16 @@ bool has_global_cardinal_connection(
     size_t u_idx,
     size_t v_idx,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
-    for (const auto& conn : graph_data.global_cardinal_constraints) {
-        bool u_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), u_idx) != conn.group_a_indices.end();
-        bool v_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), v_idx) != conn.group_b_indices.end();
-        if (u_in_a && v_in_b) return true;
+    // Optimized check using pre-computed constraint membership
+    for (size_t c_idx : graph_data.global_node_to_constraints[u_idx]) {
+        // u is in group A or B (we know this because c_idx is in u's list)
+        uint8_t u_group = graph_data.global_cardinal_group_membership[c_idx][u_idx];
+        uint8_t v_group = graph_data.global_cardinal_group_membership[c_idx][v_idx];
 
-        bool u_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), u_idx) != conn.group_b_indices.end();
-        bool v_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), v_idx) != conn.group_a_indices.end();
-        if (u_in_b && v_in_a) return true;
+        // If v is in a group and it's different from u's group, they are connected
+        if (v_group != 0 && u_group != v_group) {
+            return true;
+        }
     }
     return false;
 }
@@ -396,11 +429,7 @@ template <typename TargetNode, typename GlobalNode>
 bool is_part_of_any_global_cardinal_connection(
     size_t u_idx,
     const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
-     for (const auto& conn : graph_data.global_cardinal_constraints) {
-        if (std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), u_idx) != conn.group_a_indices.end()) return true;
-        if (std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), u_idx) != conn.group_b_indices.end()) return true;
-    }
-    return false;
+     return !graph_data.global_node_to_constraints[u_idx].empty();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -533,34 +562,21 @@ int SearchHeuristic::compute_candidate_cost(
     // For target nodes in cardinal constraints, prefer candidates with more connections to
     // (a) already-mapped nodes in the other group, (b) unused nodes (potential for other group)
     int cardinal_connectivity_bonus = 0;
-    for (const auto& constraint : graph_data.target_cardinal_constraints) {
-        const auto& group_a = constraint.group_a_indices;
-        const auto& group_b = constraint.group_b_indices;
-        bool in_a = false;
-        bool in_b = false;
-        // Search the smaller group first to reduce average comparisons
-        if (group_a.size() <= group_b.size()) {
-            auto it_a = std::find(group_a.begin(), group_a.end(), target_idx);
-            if (it_a != group_a.end()) {
-                in_a = true;
-            } else {
-                in_b = std::find(group_b.begin(), group_b.end(), target_idx) != group_b.end();
-            }
-        } else {
-            auto it_b = std::find(group_b.begin(), group_b.end(), target_idx);
-            if (it_b != group_b.end()) {
-                in_b = true;
-            } else {
-                in_a = std::find(group_a.begin(), group_a.end(), target_idx) != group_a.end();
-            }
+    for (size_t c_idx : graph_data.target_node_to_constraints[target_idx]) {
+        const auto& constraint = graph_data.target_cardinal_constraints[c_idx];
+        uint8_t target_group = graph_data.target_cardinal_group_membership[c_idx][target_idx];
+
+        const std::vector<size_t>* other_group = nullptr;
+        if (target_group == 1) { // Group A
+            other_group = &constraint.group_b_indices;
+        } else if (target_group == 2) { // Group B
+            other_group = &constraint.group_a_indices;
         }
-        if (!in_a && !in_b) {
-            continue;
-        }
-        const std::vector<size_t>& other_group =
-            in_a ? constraint.group_b_indices : constraint.group_a_indices;
+
+        if (!other_group) continue;
+
         size_t conn_to_other = 0;
-        for (size_t other_idx : other_group) {
+        for (size_t other_idx : *other_group) {
             int m = mapping[other_idx];
             if (m != -1) {
                 size_t other_global = static_cast<size_t>(m);
@@ -868,33 +884,19 @@ bool ConsistencyChecker::check_forward_consistency(
 
         // If no viable candidate found in explicit neighbors, check cardinal connections
         if (!has_viable_candidate) {
-            for (const auto& conn : graph_data.global_cardinal_constraints) {
-                // Check if global_idx is in group_a, then candidates are in group_b
-                bool global_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), global_idx) != conn.group_a_indices.end();
-                bool global_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), global_idx) != conn.group_b_indices.end();
+            for (size_t c_idx : graph_data.global_node_to_constraints[global_idx]) {
+                const auto& conn = graph_data.global_cardinal_constraints[c_idx];
+                uint8_t global_group = graph_data.global_cardinal_group_membership[c_idx][global_idx];
 
-                if (global_in_a) {
-                    for (size_t candidate_global : conn.group_b_indices) {
-                        if (used[candidate_global]) {
-                            continue;  // Already used, skip
-                        }
+                const std::vector<size_t>* candidates = nullptr;
+                if (global_group == 1) { // Group A -> candidates in Group B
+                    candidates = &conn.group_b_indices;
+                } else if (global_group == 2) { // Group B -> candidates in Group A
+                    candidates = &conn.group_a_indices;
+                }
 
-                        // Check if candidate satisfies hard constraints for neighbor
-                        if (!SearchHeuristic::check_hard_constraints(
-                                neighbor, candidate_global, graph_data, constraint_data, mapping, validation_mode)) {
-                            continue;  // Doesn't satisfy hard constraints
-                        }
-
-                        // Check local consistency for neighbor -> candidate_global
-                        temp_mapping[neighbor] = static_cast<int>(candidate_global);
-
-                        if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
-                            has_viable_candidate = true;
-                            break;  // Found at least one viable candidate
-                        }
-                    }
-                } else if (global_in_b) {
-                    for (size_t candidate_global : conn.group_a_indices) {
+                if (candidates) {
+                    for (size_t candidate_global : *candidates) {
                         if (used[candidate_global]) {
                             continue;  // Already used, skip
                         }
@@ -1109,6 +1111,114 @@ bool ConsistencyChecker::check_global_cardinal_capacity(
     return true;
 }
 
+template <typename TargetNode, typename GlobalNode>
+bool ConsistencyChecker::update_cardinal_capacity(
+    size_t target_idx,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const std::vector<int>& mapping,
+    std::vector<size_t>& cardinal_link_usage) {
+    size_t global_idx = static_cast<size_t>(mapping[target_idx]);
+    std::vector<std::pair<size_t, size_t>> increments;
+    bool capacity_ok = true;
+
+    // Check edges to already-mapped neighbors
+    for (size_t neighbor : graph_data.target_adj_idx[target_idx]) {
+        int mapped_neighbor = mapping[neighbor];
+        if (mapped_neighbor == -1) {
+            continue;
+        }
+        size_t neighbor_global = static_cast<size_t>(mapped_neighbor);
+
+        // Check if explicit edge exists
+        bool explicit_exists = std::binary_search(
+            graph_data.global_adj_idx[global_idx].begin(),
+            graph_data.global_adj_idx[global_idx].end(),
+            neighbor_global);
+
+        if (!explicit_exists) {
+            // Must use cardinal connection(s)
+            for (size_t c_idx : graph_data.global_node_to_constraints[global_idx]) {
+                uint8_t u_group = graph_data.global_cardinal_group_membership[c_idx][global_idx];
+                uint8_t v_group = graph_data.global_cardinal_group_membership[c_idx][neighbor_global];
+
+                if (u_group != 0 && v_group != 0 && u_group != v_group) {
+                    // Found connecting constraint. Increment usage.
+                    size_t amount = 1;
+                    auto it = graph_data.target_conn_count[target_idx].find(neighbor);
+                    if (it != graph_data.target_conn_count[target_idx].end()) {
+                        amount = it->second;
+                    }
+
+                    cardinal_link_usage[c_idx] += amount;
+                    increments.push_back({c_idx, amount});
+
+                    if (cardinal_link_usage[c_idx] > graph_data.global_cardinal_constraints[c_idx].num_connections) {
+                        capacity_ok = false;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!capacity_ok) {
+        // Revert increments made in this call
+        for (const auto& p : increments) {
+            cardinal_link_usage[p.first] -= p.second;
+        }
+        return false;
+    }
+
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void ConsistencyChecker::revert_cardinal_capacity(
+    size_t target_idx,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const std::vector<int>& mapping,
+    std::vector<size_t>& cardinal_link_usage) {
+    size_t global_idx = static_cast<size_t>(mapping[target_idx]);
+
+    // Check edges to already-mapped neighbors
+    for (size_t neighbor : graph_data.target_adj_idx[target_idx]) {
+        int mapped_neighbor = mapping[neighbor];
+        if (mapped_neighbor == -1) {
+            continue;
+        }
+        size_t neighbor_global = static_cast<size_t>(mapped_neighbor);
+
+        // Check if explicit edge exists
+        bool explicit_exists = std::binary_search(
+            graph_data.global_adj_idx[global_idx].begin(),
+            graph_data.global_adj_idx[global_idx].end(),
+            neighbor_global);
+
+        if (!explicit_exists) {
+            // Must use cardinal connection(s)
+            for (size_t c_idx : graph_data.global_node_to_constraints[global_idx]) {
+                uint8_t u_group = graph_data.global_cardinal_group_membership[c_idx][global_idx];
+                uint8_t v_group = graph_data.global_cardinal_group_membership[c_idx][neighbor_global];
+
+                if (u_group != 0 && v_group != 0 && u_group != v_group) {
+                    // Found connecting constraint. Decrement usage.
+                    size_t amount = 1;
+                    auto it = graph_data.target_conn_count[target_idx].find(neighbor);
+                    if (it != graph_data.target_conn_count[target_idx].end()) {
+                        amount = it->second;
+                    }
+
+                    if (cardinal_link_usage[c_idx] >= amount) {
+                        cardinal_link_usage[c_idx] -= amount;
+                    } else {
+                        // Should not happen if logic is correct
+                        cardinal_link_usage[c_idx] = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // DFSSearchEngine Implementation
 // ============================================================================
@@ -1232,12 +1342,20 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
         state_.mapping[target_idx] = static_cast<int>(global_idx);
         state_.used[global_idx] = true;
 
-        // Recursive call
-        if (dfs_recursive(pos + 1, graph_data, constraint_data, validation_mode)) {
-            return true;  // Success!
+        // INCREMENTAL CHECK: Verify cardinal connection capacity
+        if (ConsistencyChecker::update_cardinal_capacity(
+                target_idx, graph_data, state_.mapping, state_.cardinal_link_usage)) {
+            // Recursive call
+            if (dfs_recursive(pos + 1, graph_data, constraint_data, validation_mode)) {
+                return true;  // Success!
+            }
+
+            // Backtrack: revert cardinal usage
+            ConsistencyChecker::revert_cardinal_capacity(
+                target_idx, graph_data, state_.mapping, state_.cardinal_link_usage);
         }
 
-        // Backtrack
+        // Backtrack: unassign
         state_.mapping[target_idx] = -1;
         state_.used[global_idx] = false;
         state_.backtrack_count++;
@@ -1259,6 +1377,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    state_.cardinal_link_usage.resize(graph_data.global_cardinal_constraints.size(), 0);
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
