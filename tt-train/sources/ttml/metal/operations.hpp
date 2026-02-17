@@ -7,6 +7,7 @@
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/gram_matmul/gram_matmul.hpp"
+#include "ops/gram_polynomial/gram_polynomial.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
