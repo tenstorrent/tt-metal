@@ -176,6 +176,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
+        self.t1_load_compliment = []
+        self.t2_load_compliment = []
+        self.text_encoder_load_compliment = []
+        self.vae_compliment = []
 
         # Load TT text encoder
         umt5_config = UMT5Config(
@@ -197,11 +201,45 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.encoder_ccl_manager,
             parallel_config=self.encoder_parallel_config,
         )
-        self.prepare_text_encoder()
 
-        if not self.dynamic_load:
-            self._load_transformer1()
-            self._load_transformer2()
+        self.transformer = WanTransformer3DModel(
+            patch_size=self.torch_transformer.config.patch_size,
+            num_heads=self.torch_transformer.config.num_attention_heads,
+            dim=self.torch_transformer.config.num_attention_heads * self.torch_transformer.config.attention_head_dim,
+            in_channels=self.torch_transformer.config.in_channels,
+            out_channels=self.torch_transformer.config.out_channels,
+            text_dim=self.torch_transformer.config.text_dim,
+            freq_dim=self.torch_transformer.config.freq_dim,
+            ffn_dim=self.torch_transformer.config.ffn_dim,
+            cross_attn_norm=self.torch_transformer.config.cross_attn_norm,
+            eps=self.torch_transformer.config.eps,
+            rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.dit_ccl_manager,
+            parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
+            model_type=self.model_type,
+        )
+
+        self.transformer_2 = WanTransformer3DModel(
+            patch_size=self.torch_transformer_2.config.patch_size,
+            num_heads=self.torch_transformer_2.config.num_attention_heads,
+            dim=self.torch_transformer_2.config.num_attention_heads
+            * self.torch_transformer_2.config.attention_head_dim,
+            in_channels=self.torch_transformer_2.config.in_channels,
+            out_channels=self.torch_transformer_2.config.out_channels,
+            text_dim=self.torch_transformer_2.config.text_dim,
+            freq_dim=self.torch_transformer_2.config.freq_dim,
+            ffn_dim=self.torch_transformer_2.config.ffn_dim,
+            cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
+            eps=self.torch_transformer_2.config.eps,
+            rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.dit_ccl_manager,
+            parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
+            model_type=self.model_type,
+        )
 
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
@@ -217,14 +255,18 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        cache.load_model(
-            self.tt_vae,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae",
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: self.vae.state_dict(),
-        )
+        # setup dynamic loading. Transformer1, VAE, and Text Encoder can coexist on device for all currently supported configuration
+        self._prepare_text_encoder()
+        self._prepare_transformer1()
+        self._prepare_vae()
+        if self.dynamic_load:
+            # setup models that cannot be loaded together with the corresponding models
+            self.t1_load_compliment.extend([self.transformer_2])
+            self.t2_load_compliment.extend([self.transformer, self.tt_umt5_encoder])
+            self.text_encoder_load_compliment.extend([self.transformer_2])
+            self.vae_compliment.extend([])  # All models currently load fine with VAE loaded. Here for completeness
+        else:
+            self._prepare_transformer2()
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
@@ -330,41 +372,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name=checkpoint_name,
         )
 
-    def _load_transformer1(self):
-        self.transformer = WanTransformer3DModel(
-            patch_size=self.torch_transformer.config.patch_size,
-            num_heads=self.torch_transformer.config.num_attention_heads,
-            dim=self.torch_transformer.config.num_attention_heads * self.torch_transformer.config.attention_head_dim,
-            in_channels=self.torch_transformer.config.in_channels,
-            out_channels=self.torch_transformer.config.out_channels,
-            text_dim=self.torch_transformer.config.text_dim,
-            freq_dim=self.torch_transformer.config.freq_dim,
-            ffn_dim=self.torch_transformer.config.ffn_dim,
-            cross_attn_norm=self.torch_transformer.config.cross_attn_norm,
-            eps=self.torch_transformer.config.eps,
-            rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
-        )
+        # Does nothing if the text encoder is already loaded.
 
-        cache.load_model(
-            self.transformer,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="transformer",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
-        )
-
-    # Does nothing if the text encoder is already loaded.
-    def prepare_text_encoder(self):
+    def _prepare_text_encoder(self):
         if not self.tt_umt5_encoder.is_loaded():
-            if hasattr(self, "transformer_2"):
-                # Offload text encoder to make space for Encoder. At initialization, we load the text encoder first. So there is no accidental deletion
-                del self.transformer_2
+            for model in self.text_encoder_load_compliment:
+                model.deallocate_weights()
 
             cache.load_model(
                 self.tt_umt5_encoder,
@@ -375,35 +388,47 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 get_torch_state_dict=lambda: self.text_encoder.state_dict(),
             )
 
-    def _load_transformer2(self):
-        self.transformer_2 = WanTransformer3DModel(
-            patch_size=self.torch_transformer_2.config.patch_size,
-            num_heads=self.torch_transformer_2.config.num_attention_heads,
-            dim=self.torch_transformer_2.config.num_attention_heads
-            * self.torch_transformer_2.config.attention_head_dim,
-            in_channels=self.torch_transformer_2.config.in_channels,
-            out_channels=self.torch_transformer_2.config.out_channels,
-            text_dim=self.torch_transformer_2.config.text_dim,
-            freq_dim=self.torch_transformer_2.config.freq_dim,
-            ffn_dim=self.torch_transformer_2.config.ffn_dim,
-            cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
-            eps=self.torch_transformer_2.config.eps,
-            rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
-        )
+    def _prepare_transformer1(self):
+        if not self.transformer.is_loaded():
+            for model in self.t1_load_compliment:
+                model.deallocate_weights()
 
-        cache.load_model(
-            self.transformer_2,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="transformer_2",
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
-        )
+            cache.load_model(
+                self.transformer,
+                model_name=os.path.basename(self.checkpoint_name),
+                subfolder="transformer",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
+            )
+
+    def _prepare_transformer2(self):
+        if not self.transformer_2.is_loaded():
+            for model in self.t2_load_compliment:
+                model.deallocate_weights()
+
+            cache.load_model(
+                self.transformer_2,
+                model_name=os.path.basename(self.checkpoint_name),
+                subfolder="transformer_2",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
+            )
+
+    def _prepare_vae(self):
+        if not self.tt_vae.is_loaded():
+            for model in self.vae_compliment:
+                model.deallocate_weights()
+
+            cache.load_model(
+                self.tt_vae,
+                model_name=os.path.basename(self.checkpoint_name),
+                subfolder="vae",
+                parallel_config=self.vae_parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=lambda: self.vae.state_dict(),
+            )
 
     def _get_t5_prompt_embeds(
         self,
@@ -800,7 +825,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # 3. Encode input prompt
         with profiler("encoder", profiler_iteration) if profiler else nullcontext():
-            self.prepare_text_encoder()
+            self._prepare_text_encoder()
             prompt_embeds, negative_prompt_embeds = self.encode_prompt(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -862,26 +887,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self._current_timestep = t
 
                 if boundary_timestep is None or t >= boundary_timestep:
-                    if self.dynamic_load:
-                        if hasattr(self, "transformer_2"):
-                            del self.transformer_2
-                        if not hasattr(self, "transformer"):
-                            self._load_transformer1()
+                    self._prepare_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
                     # low-noise stage in wan2.2
-                    if self.dynamic_load:
-                        # Encoder does not fit eith th second model.
-                        if self.tt_umt5_encoder.is_loaded():
-                            self.tt_umt5_encoder.deallocate_weights()
-                        if hasattr(self, "transformer"):
-                            # Offload transformer1 to make space for transformer2
-                            del self.transformer
-                        if not hasattr(self, "transformer_2"):
-                            self._load_transformer2()
+                    self._prepare_transformer2()
                     current_model = self.transformer_2
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
@@ -994,6 +1007,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 },
             )
             with profiler("vae", profiler_iteration) if profiler else nullcontext():
+                self._prepare_vae()
                 tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
