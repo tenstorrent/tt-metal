@@ -6,7 +6,7 @@ transformer_config:
   dropout_prob: 0.0
   num_blocks: 22
   vocab_size: 32000
-  max_sequence_length: 2048
-  runner_type: memory_efficient
+  max_sequence_length: 4096
+  runner_type: default
   theta: 10000.0
   weight_tying: "disabled"
