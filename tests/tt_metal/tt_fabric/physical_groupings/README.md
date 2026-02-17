@@ -49,8 +49,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 4]
-      dim_types: [LINE, RING]
-      num_connections: 2
     }
   }
 }
@@ -62,7 +60,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -76,8 +74,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [3, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -89,7 +85,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
   connections {
-    custom { src_instance: 0 dst_instance: 1 num_connections: 2 }
+    custom { src_instance: 0 dst_instance: 1 }
   }
 }
 
@@ -112,8 +108,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -162,8 +156,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -239,8 +231,6 @@ groupings {
   # connections {
   #   row_major_mesh {
   #     dims: [2, 4]
-  #     dim_types: [LINE, RING]
-  #     num_connections: 2
   #   }
   # }
 }
@@ -255,8 +245,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -294,7 +282,7 @@ groupings {
     # { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }  # All instances connect to all others with 2 connections
+    all_to_all { }  # All instances connect to all others (always uses 1 connection per edge)
   }
 }
 ```
@@ -314,8 +302,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [3, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -334,7 +320,7 @@ groupings {
     # OR mix: { id: 0 grouping_ref { custom_name: "superpods" } }, { id: 1 grouping_ref { preset_name: MESH } }, { id: 2 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    custom { src_instance: 0 dst_instance: 1 num_connections: 2 }  # Explicit connection from instance 0 to instance 1
+    custom { src_instance: 0 dst_instance: 1 }  # Explicit connection from instance 0 to instance 1 (always uses 1 connection per edge)
   }
 }
 ```
@@ -353,7 +339,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }  # Each pair of instances has 2 connections
+    all_to_all { }  # Each pair of instances has 1 connection
   }
 }
 ```
@@ -374,18 +360,13 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 3]              # 2x3 grid of instances
-      dim_types: [LINE, RING]   # First dimension is LINE, second is RING
-      num_connections: 2         # 2 connections per edge
     }
   }
 }
 ```
 
 - `dims`: Dimensions of the mesh (e.g., `[2, 3]` for a 2x3 grid)
-- `dim_types`: Per-dimension connectivity type (`LINE` or `RING`) - these enum values are nested within `RowMajorMeshConnection` and can only be used in this context
-  - `LINE`: No wrap-around (endpoints not connected)
-  - `RING`: Wrap-around (endpoints connected, forming a ring)
-- `num_connections`: Number of connections per edge in the mesh
+- Always uses LINE connectivity (no wrap-around) and 1 connection per edge
 
 **3. Custom Connections**: Explicit connections between specific instances.
 
@@ -397,18 +378,18 @@ groupings {
     { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
   connections {
-    custom { src_instance: 0 dst_instance: 1 num_connections: 2 }  # Instance 0 -> Instance 1 with 2 connections
+    custom { src_instance: 0 dst_instance: 1 }  # Instance 0 -> Instance 1 (always uses 1 connection per edge)
   }
   # Can have multiple custom connections
   connections {
-    custom { src_instance: 1 dst_instance: 0 num_connections: 2 }  # Instance 1 -> Instance 0 with 2 connections
+    custom { src_instance: 1 dst_instance: 0 }  # Instance 1 -> Instance 0 (always uses 1 connection per edge)
   }
 }
 ```
 
 - `src_instance`: Source instance index (0-based, refers to instances list)
 - `dst_instance`: Destination instance index (0-based, refers to instances list)
-- `num_connections`: Number of connections from source to destination
+- Always uses 1 connection per edge
 
 ### Custom Groupings
 
@@ -466,9 +447,9 @@ groupings {
   - A grouping reference: `{ id: 0 grouping_ref { custom_name: "hosts" } }` or `{ id: 0 grouping_ref { preset_name: TRAY_1 } }`
 
 **Connections**: Separate `connections` section (distinct from `instances`) defines how instances connect and their topology:
-- `all_to_all`: Every instance connects to every other instance
-- `row_major_mesh`: Instances arranged in a grid with mesh connectivity (defines topology with dims and dim_types)
-- `custom`: Explicit connections between specific instances (references instance IDs)
+- `all_to_all`: Every instance connects to every other instance (always uses 1 connection per edge)
+- `row_major_mesh`: Instances arranged in a grid with mesh connectivity (defines topology with dims, always uses LINE connectivity and 1 connection per edge)
+- `custom`: Explicit connections between specific instances (references instance IDs, always uses 1 connection per edge)
 
 **Important**: Topology (mesh dimensions, dimension types) is defined in the `connections` section, not on individual instances.
 
@@ -533,8 +514,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 4]
-      dim_types: [LINE, RING]
-      num_connections: 2
     }
   }
 }
@@ -546,7 +525,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -560,8 +539,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [3, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -573,7 +550,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
   connections {
-    custom { src_instance: 0 dst_instance: 1 num_connections: 2 }
+    custom { src_instance: 0 dst_instance: 1 }
   }
 }
 ```
@@ -601,7 +578,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -615,8 +592,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [3, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -628,7 +603,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
   connections {
-    custom { src_instance: 0 dst_instance: 1 num_connections: 2 }
+    custom { src_instance: 0 dst_instance: 1 }
   }
 }
 ```
@@ -654,7 +629,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 ```
@@ -680,7 +655,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -694,8 +669,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [3, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -722,7 +695,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -739,8 +712,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [2, 3]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -767,7 +738,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -782,7 +753,7 @@ groupings {
     { id: 5 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -800,8 +771,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [7, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }
@@ -837,8 +806,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [4, 4]
-      dim_types: [LINE, RING]
-      num_connections: 2
     }
   }
 }
@@ -917,7 +884,7 @@ groupings {
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -930,7 +897,7 @@ groupings {
     { id: 3 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
-    all_to_all { num_connections: 2 }
+    all_to_all { }
   }
 }
 
@@ -948,8 +915,6 @@ groupings {
   connections {
     row_major_mesh {
       dims: [7, 1]
-      dim_types: [LINE, LINE]
-      num_connections: 2
     }
   }
 }

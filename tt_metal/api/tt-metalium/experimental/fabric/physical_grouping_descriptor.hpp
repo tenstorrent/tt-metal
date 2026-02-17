@@ -33,10 +33,13 @@ enum AsicLocation : int;
 // Grouping item information
 struct GroupingItemInfo {
     enum class ItemType { ASIC_LOCATION, GROUPING_REF };
+    enum class CornerOrientation { NW, NE, SW, SE };  // Corner orientation for mesh groupings
 
     ItemType type;
     uint32_t asic_location = 0;  // Only valid if type == ASIC_LOCATION
     std::string grouping_name;   // Only valid if type == GROUPING_REF
+    std::vector<CornerOrientation>
+        corners;  // Corner orientations (can have multiple, e.g., 1D endpoints have 2, 1x1 has all 4)
     // Note: Counts are represented by having multiple items. Use items.size() to get the count.
 };
 
@@ -50,6 +53,7 @@ struct GroupingInfo {
     // Adjacency graph representing the topology/connections between instances
     // Node IDs are instance IDs (uint32_t) from the grouping's instances list
     // Empty graph if no connection type is specified
+    // Always uses 1 connection per edge (bidirectional)
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
 
