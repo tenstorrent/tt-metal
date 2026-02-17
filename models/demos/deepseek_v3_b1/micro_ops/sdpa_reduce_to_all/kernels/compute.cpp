@@ -192,6 +192,12 @@ ALWI void sdpa_tail_streaming_conditional(
         return;
     }
 
+    // Just copy local data as fallback
+    if (!neighbor_valid && !local_valid) {
+        forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
+        return;
+    }
+
     // Both valid - perform normal SDPA reduction
     sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, num_l_chunks, vector_mode>(
         cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);

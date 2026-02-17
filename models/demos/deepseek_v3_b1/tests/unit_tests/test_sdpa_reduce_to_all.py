@@ -123,7 +123,7 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device, scatter_enabled, position_vector)
     ms_data_per_device = [torch.randn(ms_shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_devices)]
 
     position_mask = torch.tensor(position_vector, dtype=torch.bfloat16)
-    final_reduction = position_mask.sum() > 1.0
+    final_reduction = (position_mask.sum() > 1.0).item()
 
     m_data_per_device = []
     s_data_per_device = []

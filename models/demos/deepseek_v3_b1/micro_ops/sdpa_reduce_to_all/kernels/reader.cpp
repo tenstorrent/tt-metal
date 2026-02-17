@@ -126,7 +126,6 @@ void kernel_main() {
 
     if constexpr (position_enabled) {
         // Get r2_neighbor_r1_neighbor_idx from runtime args
-        uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
         uint32_t r1_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
         uint32_t r2_neighbor_device_idx = get_arg_val<uint32_t>(arg_idx++);
         uint32_t r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(arg_idx++);

@@ -133,7 +133,6 @@ class SdpaReduceToAll:
             r1_01_valid = (position_mask[0].item() > 0.5) or (position_mask[1].item() > 0.5)
             r1_23_valid = (position_mask[2].item() > 0.5) or (position_mask[3].item() > 0.5)
 
-            # Always normalize in R2 (simplest approach)
             l_final, s_final, m_final = compute_reduction(
                 l_r1_01,
                 s_r1_01,
@@ -717,7 +716,6 @@ class SdpaReduceToAll:
 
                             reader_rt_args[core.x][core.y].extend(
                                 [
-                                    device_idx,
                                     r1_neighbor_device_idx,
                                     r2_neighbor_device_idx,
                                     r2_neighbor_r1_neighbor_idx,
