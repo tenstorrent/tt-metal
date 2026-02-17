@@ -37,7 +37,7 @@ FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
 }
 
 FORCE_INLINE void get_next_tile_coordinates(
-    uint32_t& tile_row_in_mm_M_block,
+    uint32_t& tile_row_in_mm_M_unit_block,
     uint32_t& chunk_col_in_tiles,
     uint32_t& mm_core_idx,
     uint32_t advance_by_tiles,
@@ -67,24 +67,24 @@ FORCE_INLINE void get_next_tile_coordinates(
 
     if (advance_by_tiles >= chunk_width_in_tiles) {
         const uint32_t move_by_rows = advance_by_tiles / chunk_width_in_tiles;
-        const uint32_t new_row = tile_row_in_mm_M_block + move_by_rows;
+        const uint32_t new_row = tile_row_in_mm_M_unit_block + move_by_rows;
         advance_by_tiles -= move_by_rows * chunk_width_in_tiles;
 
         if (new_row >= mm_block_unit_ht) {
             mm_core_idx += 1;
-            tile_row_in_mm_M_block = new_row - mm_block_unit_ht;
+            tile_row_in_mm_M_unit_block = new_row - mm_block_unit_ht;
         } else {
-            tile_row_in_mm_M_block = new_row;
+            tile_row_in_mm_M_unit_block = new_row;
         }
     }
 
     uint32_t new_col = chunk_col_in_tiles + advance_by_tiles;
     if (new_col >= chunk_width_in_tiles) {
-        tile_row_in_mm_M_block += 1;
+        tile_row_in_mm_M_unit_block += 1;
         new_col -= chunk_width_in_tiles;
-        if (tile_row_in_mm_M_block >= mm_block_unit_ht) {
+        if (tile_row_in_mm_M_unit_block >= mm_block_unit_ht) {
             mm_core_idx += 1;
-            tile_row_in_mm_M_block = 0;
+            tile_row_in_mm_M_unit_block = 0;
         }
     }
 
@@ -92,7 +92,7 @@ FORCE_INLINE void get_next_tile_coordinates(
 }
 
 FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
-    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t tile_row_in_mm_M_unit_block,
     const uint32_t chunk_col_in_tiles,
     const uint32_t mm_core_idx,
     const uint32_t advance_by_tiles,
@@ -105,7 +105,7 @@ FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
     if (mm_core_idx > last_mm_core_idx) {
         return 0;
     }
-    const uint32_t current_tile_offset = tile_row_in_mm_M_block * chunk_width_in_tiles + chunk_col_in_tiles;
+    const uint32_t current_tile_offset = tile_row_in_mm_M_unit_block * chunk_width_in_tiles + chunk_col_in_tiles;
     const uint32_t current_block_tiles_remaining = subchunk_size - current_tile_offset - 1;
     const uint32_t future_blocks_tiles = (last_mm_core_idx - mm_core_idx) * subchunk_size;
     const uint32_t all_tiles = current_block_tiles_remaining + future_blocks_tiles;
@@ -113,7 +113,7 @@ FORCE_INLINE uint32_t how_many_tiles_to_read_formula(
 }
 
 FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_slice_coordinates(
-    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t tile_row_in_mm_M_unit_block,
     const uint32_t chunk_col_in_tiles,
     const uint32_t mm_core_idx,
     const uint32_t N_full_block_idx,
@@ -125,7 +125,7 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_slice_coordinates(
     const uint32_t chunk_width_in_tiles) {
     const uint32_t rows_before_this_core = mm_core_idx * tiles_ht_per_core;
     const uint32_t rows_before_piece = M_block_idx * mm_block_unit_ht;
-    const uint32_t slice_row = rows_before_this_core + rows_before_piece + tile_row_in_mm_M_block;
+    const uint32_t slice_row = rows_before_this_core + rows_before_piece + tile_row_in_mm_M_unit_block;
     const uint32_t slice_col =
         N_full_block_idx * N_full_block_wt + chunk_idx * chunk_width_in_tiles + chunk_col_in_tiles;
 
@@ -148,7 +148,7 @@ FORCE_INLINE uint32_t slice_coordinates_to_global_tile_index(
 }
 
 FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_tile_indices(
-    const uint32_t tile_row_in_mm_M_block,
+    const uint32_t tile_row_in_mm_M_unit_block,
     const uint32_t chunk_col_in_tiles,
     const uint32_t mm_core_idx,
     const uint32_t N_full_block_idx,
@@ -162,7 +162,7 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_tile_indices(
     const uint32_t slice_Wt,
     const uint32_t input_tensor_Wt) {
     const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
-        tile_row_in_mm_M_block,
+        tile_row_in_mm_M_unit_block,
         chunk_col_in_tiles,
         mm_core_idx,
         N_full_block_idx,

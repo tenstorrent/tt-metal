@@ -8,7 +8,6 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
-#include <utility>
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 
@@ -27,7 +26,6 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
 constexpr uint32_t slice_C = get_compile_time_arg_val(11);
@@ -48,9 +46,9 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     // Load the input tensor spec
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
@@ -195,7 +193,7 @@ void kernel_main() {
                                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
                                 l1_write_addr += page_size;
                                 if (do_reduce) {
-                                    uint64_t intermediate_noc_read_addr =
+                                    const uint64_t intermediate_noc_read_addr =
                                         get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
                                     noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
                                     intermediate_l1_write_addr += page_size;
