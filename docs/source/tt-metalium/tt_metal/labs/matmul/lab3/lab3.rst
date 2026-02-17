@@ -876,7 +876,7 @@ slabs of tiles of ``A`` and ``B`` differently depending on their role:
 
 * **Top row B-source cores** (blue background) with coordinates ``(x, 0)``, where ``x > 0``:
   Each of these cores:
-  
+
   * Reads slabs of ``B`` it needs for its own computation from DRAM and multicasts them down their column ``x``.
   * Receives slabs of ``A`` from the leftmost core in its row via multicast.
 
