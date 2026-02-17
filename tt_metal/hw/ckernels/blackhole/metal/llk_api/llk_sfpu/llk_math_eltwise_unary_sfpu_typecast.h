@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-26 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -138,6 +138,20 @@ inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode
             ckernel::sfpu::calculate_typecast_uint_to_uint8<APPROXIMATE, 8, (in_format == DataFormat::UInt16)>,
             dst_index,
             vector_mode);
+    } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::Float32) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_uint32_to_fp32<APPROXIMATE, 8>, dst_index, vector_mode);
+    } else if constexpr (
+        in_format == DataFormat::UInt8 &&
+        (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_uint32_to_fp16b<APPROXIMATE, 8>, dst_index, vector_mode);
+    } else if constexpr (
+        in_format == DataFormat::UInt8 && (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32)) {
+        // No SFPU kernel needed.
+    } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_uint32_to_uint16<APPROXIMATE, 8>, dst_index, vector_mode);
     }
 }
 
@@ -200,6 +214,17 @@ inline void llk_math_eltwise_unary_sfpu_typecast_init() {
         out_format == DataFormat::UInt8) {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
             ckernel::sfpu::init_typecast_uint_to_uint8<APPROXIMATE>);
+    } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::Float32) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_uint32_to_fp32<APPROXIMATE>);
+    } else if constexpr (
+        in_format == DataFormat::UInt8 &&
+        (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_uint32_to_fp16b<APPROXIMATE>);
+    } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_uint32_to_uint16<APPROXIMATE>);
     } else {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>();
     }

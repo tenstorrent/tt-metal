@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025-26 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ inline Tensor typecast_impl(
         (input_dtype == DataType::FLOAT32) or
         (output_dtype == DataType::UINT8 and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
                                               input_dtype == DataType::BFLOAT4_B)) or
-        (input_dtype == DataType::UINT16 and output_dtype == DataType::UINT8);
+        (input_dtype == DataType::UINT16 and output_dtype == DataType::UINT8) or input_dtype == DataType::UINT8;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
