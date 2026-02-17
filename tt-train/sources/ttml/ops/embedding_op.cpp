@@ -23,7 +23,6 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     auto batch_size = embeddings_shape[0];
     auto sentence_size = embeddings_shape[1];
     auto embedding_dim = embeddings_shape[2];
-
     embeddings = ttnn::reshape(embeddings, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}));
     auto out = autograd::create_tensor(embeddings);
 

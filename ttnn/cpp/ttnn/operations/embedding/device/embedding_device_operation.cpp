@@ -50,7 +50,6 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         "First two dimensions for the weights must be 1 but got {} and {}",
         weights.padded_shape()[0],
         weights.padded_shape()[1]);
-
     if (operation_attributes.tilized) {
         TT_FATAL(
             a.padded_shape()[-1] % TILE_HEIGHT == 0,
