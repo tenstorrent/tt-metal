@@ -2958,13 +2958,17 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
 @pytest.mark.parametrize(
     "shape",
     [
-        (64, 32),  # 2D
+        (64, 32),  # 2D, tile-aligned
         (2, 64, 32),  # 3D with batch
         (2, 3, 64, 32),  # 4D with batch
+        (48, 80),  # 2D, non-tile-aligned
+        (1, 1, 50, 70),  # 4D, non-tile-aligned K and N
+        (3, 33, 65),  # 3D, odd non-tile-aligned dims
     ],
 )
 def test_from_torch_col_tilize_batched(weight_dtype, shape):
-    """Verify col_tilize works correctly for tensors of various ranks (2D through 4D)."""
+    """Verify col_tilize works correctly for tensors of various ranks and shapes,
+    including non-tile-aligned dimensions that exercise the padding path."""
     torch.manual_seed(0)
     torch_W = torch.randn(shape, dtype=torch.bfloat16)
 
