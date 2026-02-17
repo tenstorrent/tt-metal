@@ -646,10 +646,8 @@ target_link_libraries(
     PRIVATE
         TTNN::Core
         TTNN::Ops::Bernoulli
-        TTNN::Ops::BernoulliNew
         TTNN::Ops::CCL
         TTNN::Ops::Conv
-        TTNN::Ops::Conv2dNew
         TTNN::Ops::Core
         TTNN::Ops::DataMovement
         TTNN::Ops::Eltwise::Binary
@@ -696,7 +694,6 @@ target_link_libraries(
         TTNN::Ops::KvCache
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
-        TTNN::Ops::MatmulNew
         TTNN::Ops::Moreh
         TTNN::Ops::Prefetcher
         TTNN::Ops::Reduction
@@ -891,10 +888,8 @@ set(FixmeOpIncDirs
 )
 
 add_subdirectory(cpp/ttnn/operations/bernoulli)
-add_subdirectory(cpp/ttnn/operations/bernoulli_new)
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)
-add_subdirectory(cpp/ttnn/operations/conv2d_new)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
 add_subdirectory(cpp/ttnn/operations/debug)
@@ -943,7 +938,6 @@ add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)
 add_subdirectory(cpp/ttnn/operations/matmul)
-add_subdirectory(cpp/ttnn/operations/matmul_new)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/point_to_point)

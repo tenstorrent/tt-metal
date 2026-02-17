@@ -9,7 +9,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 // MeshWorkloadFactoryConcept factory that uses ProgramDescriptor for clean
 // program construction (cache miss) while having efficient runtime-arg
@@ -40,4 +40,4 @@ struct MultiCoreDescriptorFactory {
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

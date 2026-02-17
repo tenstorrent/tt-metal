@@ -25,7 +25,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
@@ -159,8 +159,8 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     // ========================================================================
     // Core setup and parameter computation
     // ========================================================================
-    NOC in1_noc = detail::preferred_noc_for_dram_read(device->arch());
-    NOC in0_noc = detail::preferred_noc_for_dram_write(device->arch());
+    NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
@@ -641,4 +641,4 @@ tt::tt_metal::ProgramDescriptor BatchedHSDRAMShardedDescriptorFactory::create_de
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

@@ -7,13 +7,13 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
-struct ReuseMcast2DDescriptorFactory {
+struct ReuseMcast1DDescriptorFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const MatmulParams& operation_attributes,
         const MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

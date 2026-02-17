@@ -27,7 +27,7 @@ using namespace tt::constants;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 namespace {
 
@@ -2283,4 +2283,4 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

@@ -4,14 +4,18 @@
 #pragma once
 
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/multicore_descriptor.hpp"
+#include "ttnn/operations/matmul/device/factory/reuse_optimized_descriptor.hpp"
+#include "ttnn/operations/matmul/device/factory/reuse_mcast_1d_descriptor.hpp"
+#include "ttnn/operations/matmul/device/factory/reuse_mcast_2d_descriptor.hpp"
+#include "ttnn/operations/matmul/device/factory/dram_sharded_descriptor.hpp"
+#include "ttnn/operations/matmul/device/factory/batched_hs_dram_sharded_descriptor.hpp"
+// Legacy factory headers kept for external consumers (CCL, sparse matmul)
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -22,12 +26,12 @@ struct MatmulDeviceOperation {
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<
-        MatmulMeshWorkloadMultiCoreFactory,
-        MatmulMeshWorkloadMultiCoreReuseOptimizedProgramFactory,
-        MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory,
-        MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory,
-        MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory,
-        MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory>;
+        matmul_detail::MultiCoreDescriptorFactory,
+        matmul_detail::ReuseOptimizedDescriptorFactory,
+        matmul_detail::ReuseMcast2DDescriptorFactory,
+        matmul_detail::ReuseMcast1DDescriptorFactory,
+        matmul_detail::DRAMShardedDescriptorFactory,
+        matmul_detail::BatchedHSDRAMShardedDescriptorFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
