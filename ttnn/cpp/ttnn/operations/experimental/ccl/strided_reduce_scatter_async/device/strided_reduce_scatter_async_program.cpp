@@ -8,6 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation_types.hpp"
@@ -499,25 +500,17 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             ? operations::experimental::ccl::strided_reduce_scatter_async::detail::map_2d_to_4d(dim)
             : operations::experimental::ccl::strided_reduce_scatter_async::detail::map_nd_to_4d(
                   input_tensor_shape, dim);
+    TT_FATAL(
+        normalized_dim == 3,
+        "strided_reduce_scatter_async ring implementation only supports scattering on dim 3 (width), but got {}",
+        normalized_dim);
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
-    uint32_t slice_B = input_tensor_B;
-    uint32_t slice_C = input_tensor_C;
-    uint32_t slice_Ht = input_tensor_Ht;
-    uint32_t slice_Wt = input_tensor_Wt;
-    if (normalized_dim == 0) {
-        slice_B /= ring_size;
-    } else if (normalized_dim == 1) {
-        slice_C /= ring_size;
-    } else if (normalized_dim == 2) {
-        slice_Ht /= ring_size;
-    } else if (normalized_dim == 3) {
-        slice_Wt /= ring_size;
-    } else {
-        TT_FATAL(
-            false, "strided_reduce_scatter_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
-    }
+    const uint32_t slice_B = input_tensor_B;
+    const uint32_t slice_C = input_tensor_C;
+    const uint32_t slice_Ht = input_tensor_Ht;
+    const uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     // MM blocking parameters
     const uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
@@ -526,8 +519,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const uint32_t mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
     const uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(1);
     const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
-    uint32_t chunks_per_mm_N_full_block_val =
-        (mm_N_full_block_wt_val + chunk_width_in_tiles_val - 1) / chunk_width_in_tiles_val;
+    const uint32_t chunks_per_mm_N_full_block_val = tt::div_up(mm_N_full_block_wt_val, chunk_width_in_tiles_val);
 
     // Introduce checks for current assumptions
     TT_FATAL(
@@ -548,10 +540,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         slice_Wt,
         mm_N_full_block_wt_val);
     uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
-
-    TT_FATAL(
-        !(fuse_op && normalized_dim == 0),
-        "strided_reduce_scatter_async ring implementation can't be fused with matmul when scattering on dim 0");
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
