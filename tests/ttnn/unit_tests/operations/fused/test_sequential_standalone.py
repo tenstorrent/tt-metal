@@ -176,131 +176,48 @@ class TestExtractCBNames:
 
 
 class TestOpGraphBuilderBasic:
-    """Basic tests for OpGraphBuilder (unified builder for linear and tree topologies)."""
+    """Basic tests for OpGraphBuilder."""
+
+    def _make_mock_op(self):
+        """Create a mock OpDescriptor with realistic kernel core ranges."""
+        mock_desc = MagicMock()
+        mock_desc.descriptor = MagicMock(cbs=[])
+        kernel = MagicMock()
+        kernel.core_ranges = _make_mock_core_ranges()
+        mock_desc.descriptor.kernels = [kernel]
+        return mock_desc
 
     def test_creation(self):
         """Test creating a builder."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        assert len(builder.stem_phases) == 0
+        mock_desc = self._make_mock_op()
+        builder = OpGraphBuilder(OpNode(mock_desc))
         assert builder._built is False
 
-    def test_add_stem_phase(self):
-        """Test adding stem phases to the builder."""
+    def test_single_node_returns_original(self):
+        """Test that single-node build returns original descriptor."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        builder.add_stem_phase(mock_desc)
-        assert len(builder.stem_phases) == 1
-
-        builder.add_stem_phase(mock_desc)
-        assert len(builder.stem_phases) == 2
-
-    def test_method_chaining(self):
-        """Test that builder methods return self."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        result = builder.add_stem_phase(mock_desc).add_stem_phase(mock_desc)
-
-        assert result is builder
-        assert len(builder.stem_phases) == 2
-
-    def test_single_phase_returns_original(self):
-        """Test that single-phase build returns original descriptor."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        builder.add_stem_phase(mock_desc)
-        results = builder.build(device=MagicMock())
+        mock_desc = self._make_mock_op()
+        results = OpGraphBuilder(OpNode(mock_desc)).build(device=MagicMock())
 
         assert len(results) == 1
         assert results[0] is mock_desc
 
-    def test_build_empty_raises(self):
-        """Test that building empty chain raises ValueError."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-
-        with pytest.raises(ValueError, match="No phases"):
-            builder.build(device=MagicMock())
-
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        builder.add_stem_phase(mock_desc)
+        mock_desc = self._make_mock_op()
+        builder = OpGraphBuilder(OpNode(mock_desc))
         builder.build(device=MagicMock())
 
         with pytest.raises(ValueError, match="Already built"):
             builder.build(device=MagicMock())
-
-
-class TestChainDescriptorsConvenience:
-    """Tests for the chain_descriptors convenience function."""
-
-    def test_single_descriptor(self):
-        """Test that single descriptor returns it unchanged."""
-        chain_descriptors = _mock_sequential.chain_descriptors
-
-        mock_desc = MagicMock()
-        mock_desc.descriptor = MagicMock(cbs=[])
-
-        result = chain_descriptors([mock_desc], device=MagicMock())
-        assert result is mock_desc
-
-    def test_empty_list_raises(self):
-        """Test that empty list raises ValueError."""
-        chain_descriptors = _mock_sequential.chain_descriptors
-
-        with pytest.raises(ValueError, match="No phases"):
-            chain_descriptors([], device=MagicMock())
-
-
-class TestParallelChainsStandalone:
-    """Standalone tests for parallel chain functions."""
-
-    def test_create_parallel_chain_empty(self):
-        """Test creating parallel chains with empty list."""
-        create_parallel_chain_descriptors = _mock_sequential.create_parallel_chain_descriptors
-
-        result = create_parallel_chain_descriptors([], device=MagicMock())
-        assert result == []
-
-    def test_create_parallel_chain_single_ops(self):
-        """Test creating parallel chains with single-op chains."""
-        create_parallel_chain_descriptors = _mock_sequential.create_parallel_chain_descriptors
-
-        mock_desc1 = MagicMock()
-        mock_desc1.descriptor = MagicMock(cbs=[])
-        mock_desc2 = MagicMock()
-        mock_desc2.descriptor = MagicMock(cbs=[])
-
-        chains = [[mock_desc1], [mock_desc2]]
-        result = create_parallel_chain_descriptors(chains, device=MagicMock())
-
-        # Single-op chains should return original descriptors
-        assert len(result) == 2
-        assert result[0] is mock_desc1
-        assert result[1] is mock_desc2
 
 
 class TestSourceTransformations:
@@ -2408,281 +2325,163 @@ def _make_mock_core_range_set(coord_ranges):
     return crs
 
 
+def _make_op_with_cores(core_range_set):
+    """Create a mock OpDescriptor whose kernels use the given core ranges.
+
+    The returned mock has .descriptor.kernels[0].core_ranges set to the
+    provided CoreRangeSet, matching the structure expected by
+    _get_node_core_range().
+    """
+    kernel = MagicMock()
+    kernel.core_ranges = core_range_set
+    descriptor = MagicMock()
+    descriptor.kernels = [kernel]
+    op = MagicMock()
+    op.descriptor = descriptor
+    return op
+
+
+# Monkeypatch _get_node_core_range: the real implementation round-trips through
+# _coords_to_core_range_set (which uses mocked ttnn.CoreRange/CoreRangeSet,
+# producing unusable MagicMock objects).  Since each test mock op has exactly
+# one kernel, returning that kernel's core_ranges directly is equivalent and
+# keeps the mock CoreRangeSet that _core_range_set_to_coords can iterate.
+_mock_sequential._get_node_core_range = lambda node: node.op.descriptor.kernels[0].core_ranges
+
+
 class TestOpGraphTopologyValidation:
     """Tests for OpGraph topology validation."""
 
     def test_overlapping_siblings_rejected(self):
-        """Two top-level branches with overlapping core ranges should be rejected."""
+        """Two children of root with overlapping core ranges should be rejected."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        # Root covers (0,0)-(3,0); children overlap at (1,0) and (2,0)
+        root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (2, 0))])))
+        child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((1, 0), (3, 0))])))
+        root = OpNode(root_op, children=[child_a, child_b])
 
-        # Branches overlap: (0,0)-(2,0) and (1,0)-(3,0) share core (1,0) and (2,0)
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (2, 0))]),
-                phases=[MagicMock()],
-            ),
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((1, 0), (3, 0))]),
-                phases=[MagicMock()],
-            ),
-        ]
-
+        builder = OpGraphBuilder(root)
         with pytest.raises(ValueError, match="overlapping cores"):
             builder._validate_topology()
 
     def test_child_outside_parent_rejected(self):
-        """Child range that extends beyond parent should be rejected."""
+        """Child range that extends beyond its parent should be rejected."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        # Intermediate parent covers (0,0)-(3,0), but one child extends to (5,0)
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (5, 0))])))
+        parent_node = OpNode(parent_op, children=[leaf_a, leaf_b])
 
-        # Parent is (0,0)-(3,0), child extends to (5,0)
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-                phases=[MagicMock()],
-                children=[
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((2, 0), (5, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                ],
-            ),
-        ]
+        # Root covers the full superset so the parent is valid under root
+        root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
+        root = OpNode(root_op, children=[parent_node])
 
+        builder = OpGraphBuilder(root)
         with pytest.raises(ValueError, match="outside parent range"):
             builder._validate_topology()
 
     def test_overlapping_children_rejected(self):
         """Sibling children with overlapping ranges should be rejected."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        # Parent covers (0,0)-(5,0), children overlap at (2,0) and (3,0)
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
+        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))])))
+        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (5, 0))])))
+        root = OpNode(parent_op, children=[leaf_a, leaf_b])
 
-        # Children overlap within parent
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
-                phases=[MagicMock()],
-                children=[
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((2, 0), (5, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                ],
-            ),
-        ]
-
+        builder = OpGraphBuilder(root)
         with pytest.raises(ValueError, match="overlapping cores"):
             builder._validate_topology()
 
-    def test_empty_leaf_branch_accepted(self):
-        """Leaf branch with no phases should be accepted (trailing barrier only)."""
+    def test_leaf_nodes_accepted(self):
+        """Leaf nodes (children with no further descendants) should be accepted."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        root = OpNode(root_op, children=[child_a, child_b])
 
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                phases=[MagicMock()],
-            ),
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                phases=[],  # Empty leaf — participates via trailing barrier
-            ),
-        ]
-
-        # Should not raise — empty leaf branches are allowed
+        builder = OpGraphBuilder(root)
+        # Should not raise
         builder._validate_topology()
 
     def test_valid_topology_accepted(self):
         """Valid 2-branch split should pass validation."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        root = OpNode(root_op, children=[child_a, child_b])
 
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                phases=[MagicMock()],
-            ),
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                phases=[MagicMock()],
-            ),
-        ]
-
+        builder = OpGraphBuilder(root)
         # Should not raise
         builder._validate_topology()
 
     def test_valid_nested_topology_accepted(self):
         """Valid nested branching should pass validation."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        # Tree: root(0-5) -> mid(0-3, children=[leaf(0-1), leaf(2-3)]), leaf(4-5)
+        leaf_0_1 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        leaf_2_3 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        mid_0_3 = OpNode(
+            _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))])),
+            children=[leaf_0_1, leaf_2_3],
+        )
+        leaf_4_5 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((4, 0), (5, 0))])))
+        root_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
+        root = OpNode(root_op, children=[mid_0_3, leaf_4_5])
 
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-                phases=[MagicMock()],
-                children=[
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                ],
-            ),
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((4, 0), (5, 0))]),
-                phases=[MagicMock()],
-            ),
-        ]
-
+        builder = OpGraphBuilder(root)
         # Should not raise
         builder._validate_topology()
 
     def test_partial_coverage_accepted(self):
         """Children that don't fully tile the parent should be accepted.
 
-        Unused parent cores simply don't participate in branch phases.
+        Unused parent cores simply don't participate in child phases.
         """
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
-
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        OpNode = _mock_sequential.OpNode
 
         # Parent covers (0,0)-(5,0) = 6 cores, but children only use 4
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
-                phases=[MagicMock()],
-                children=[
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    # Cores (4,0)-(5,0) intentionally unused
-                ],
-            ),
-        ]
+        parent_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))]))
+        child_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        child_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        # Cores (4,0)-(5,0) intentionally unused
+        root = OpNode(parent_op, children=[child_a, child_b])
 
-        # Should not raise — partial coverage is allowed
+        builder = OpGraphBuilder(root)
+        # Should not raise -- partial coverage is allowed
         builder._validate_topology()
 
-    def test_intermediate_branch_no_phases_accepted(self):
-        """Intermediate branch (has children) with no phases is valid — just a grouping node."""
+    def test_intermediate_node_with_children_accepted(self):
+        """Intermediate node (has children) is valid -- it runs its op then branches."""
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
 
-        builder = OpGraphBuilder()
-        builder.stem_phases = [MagicMock()]
+        # Intermediate node has an op AND children -- every OpNode has exactly one op
+        mid_op = _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))]))
+        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        root = OpNode(mid_op, children=[leaf_a, leaf_b])
 
-        builder.branches = [
-            BranchSpec(
-                core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-                phases=[],  # No phases — just a grouping node
-                children=[
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                    BranchSpec(
-                        core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                        phases=[MagicMock()],
-                    ),
-                ],
-            ),
-        ]
-
+        builder = OpGraphBuilder(root)
         # Should not raise
         builder._validate_topology()
-
-
-class TestStemCoverageValidation:
-    """Tests for stem-vs-leaf core range validation."""
-
-    def _make_stem_op(self, core_ranges):
-        """Create a mock stem OpDescriptor with kernels covering given core ranges."""
-        kernel = MagicMock()
-        kernel.core_ranges = core_ranges
-        descriptor = MagicMock()
-        descriptor.kernels = [kernel]
-        op = MagicMock()
-        op.descriptor = descriptor
-        return op
-
-    def test_stem_wider_than_leaves_rejected(self):
-        """Stem covering more cores than the leaf union should be rejected."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-        # Stem kernel on cores (0,0)-(7,0) = 8 cores
-        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (7, 0))]))]
-        # Leaf union = (0,0)-(5,0) = 6 cores (cores 6,7 missing)
-        union_range = _make_mock_core_range_set([((0, 0), (5, 0))])
-
-        with pytest.raises(ValueError, match="outside the leaf union"):
-            builder._validate_stem_coverage(union_range)
-
-    def test_stem_matches_leaves_accepted(self):
-        """Stem exactly matching the leaf union should pass."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-        # Stem covers (0,0)-(3,0) = 4 cores, same as union
-        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (3, 0))]))]
-        union_range = _make_mock_core_range_set([((0, 0), (3, 0))])
-
-        # Should not raise
-        builder._validate_stem_coverage(union_range)
-
-    def test_stem_subset_of_leaves_accepted(self):
-        """Stem covering fewer cores than the leaf union should pass.
-
-        This can happen if the stem op only needs a subset of the cores
-        (e.g. a narrow reduction), while branches spread the result wider.
-        """
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
-
-        builder = OpGraphBuilder()
-        # Stem on (0,0)-(1,0) = 2 cores, union covers 4
-        builder.stem_phases = [self._make_stem_op(_make_mock_core_range_set([((0, 0), (1, 0))]))]
-        union_range = _make_mock_core_range_set([((0, 0), (3, 0))])
-
-        # Should not raise
-        builder._validate_stem_coverage(union_range)
 
 
 class TestCoDispatchValidation:
@@ -2791,67 +2590,48 @@ class TestCoDispatchValidation:
 class TestEffectiveLeafRange:
     """Tests for OpGraphBuilder._effective_leaf_range."""
 
-    def test_leaf_branch_returns_own_range(self):
-        """Leaf branch should return its own core coords."""
-        BranchSpec = _mock_sequential.BranchSpec
+    def test_leaf_node_returns_own_range(self):
+        """Leaf node should return its own core coords."""
+        OpNode = _mock_sequential.OpNode
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        branch = BranchSpec(
-            core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-            phases=[MagicMock()],
-        )
+        node = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
 
-        result = OpGraphBuilder._effective_leaf_range(branch)
+        result = OpGraphBuilder._effective_leaf_range(node)
         assert result == {(0, 0), (1, 0)}
 
-    def test_intermediate_branch_returns_leaf_union(self):
-        """Intermediate branch should return union of all descendant leaf ranges."""
-        BranchSpec = _mock_sequential.BranchSpec
+    def test_intermediate_node_returns_leaf_union(self):
+        """Intermediate node should return union of all descendant leaf ranges."""
+        OpNode = _mock_sequential.OpNode
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        branch = BranchSpec(
-            core_range=_make_mock_core_range_set([((0, 0), (5, 0))]),
-            phases=[MagicMock()],
-            children=[
-                BranchSpec(
-                    core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                    phases=[MagicMock()],
-                ),
-                BranchSpec(
-                    core_range=_make_mock_core_range_set([((4, 0), (5, 0))]),
-                    phases=[MagicMock()],
-                ),
-                # Gap at (2,0)-(3,0)
-            ],
+        leaf_a = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        leaf_b = OpNode(_make_op_with_cores(_make_mock_core_range_set([((4, 0), (5, 0))])))
+        # Gap at (2,0)-(3,0)
+        node = OpNode(
+            _make_op_with_cores(_make_mock_core_range_set([((0, 0), (5, 0))])),
+            children=[leaf_a, leaf_b],
         )
 
-        result = OpGraphBuilder._effective_leaf_range(branch)
+        result = OpGraphBuilder._effective_leaf_range(node)
         assert result == {(0, 0), (1, 0), (4, 0), (5, 0)}
-        # Cores (2,0) and (3,0) NOT included — they're unused
+        # Cores (2,0) and (3,0) NOT included -- they're unused
 
     def test_nested_effective_range(self):
         """Deeply nested tree should return only the leaf-level core coords."""
-        BranchSpec = _mock_sequential.BranchSpec
+        OpNode = _mock_sequential.OpNode
         OpGraphBuilder = _mock_sequential.OpGraphBuilder
 
-        # Tree: root(0-7) -> mid(0-3, children=[leaf(0-1), leaf(2-3)]), leaf(6-7)
-        # Effective = {0,1,2,3,6,7} — no 4,5
-        branch_a = BranchSpec(
-            core_range=_make_mock_core_range_set([((0, 0), (3, 0))]),
-            phases=[],
-            children=[
-                BranchSpec(
-                    core_range=_make_mock_core_range_set([((0, 0), (1, 0))]),
-                    phases=[MagicMock()],
-                ),
-                BranchSpec(
-                    core_range=_make_mock_core_range_set([((2, 0), (3, 0))]),
-                    phases=[MagicMock()],
-                ),
-            ],
+        # Tree: mid(0-3) -> [leaf(0-1), leaf(2-3)]
+        # Effective = {0,1,2,3}
+        leaf_0_1 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((0, 0), (1, 0))])))
+        leaf_2_3 = OpNode(_make_op_with_cores(_make_mock_core_range_set([((2, 0), (3, 0))])))
+        mid = OpNode(
+            _make_op_with_cores(_make_mock_core_range_set([((0, 0), (3, 0))])),
+            children=[leaf_0_1, leaf_2_3],
         )
 
-        result = OpGraphBuilder._effective_leaf_range(branch_a)
+        result = OpGraphBuilder._effective_leaf_range(mid)
         assert result == {(0, 0), (1, 0), (2, 0), (3, 0)}
 
 
