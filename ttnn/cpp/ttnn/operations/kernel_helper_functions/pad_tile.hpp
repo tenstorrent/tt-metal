@@ -26,9 +26,9 @@ enum class NeutralPolicy : uint32_t {
 /**
  * @brief Get the neutral fill value for a given data format and policy.
  *
- * @tparam data_format The data format (Float32, Bfloat16, etc.)
+ * @tparam data_format The data format (Float32, Float16_b, etc.)
  * @tparam policy The neutral value policy
- * @return The appropriate fill value as a uint32_t (for Float32) or uint16_t (for Bfloat16)
+ * @return The appropriate fill value as a uint32_t (for Float32) or uint16_t (for Float16_b)
  */
 template <DataFormat data_format, NeutralPolicy policy>
 constexpr auto get_neutral_value() {
@@ -41,7 +41,7 @@ constexpr auto get_neutral_value() {
             return POS_INF_FLOAT32;
         }
     } else {
-        // Default to Bfloat16 for all other formats
+        // Default to Float16_b for all other formats
         if constexpr (policy == NeutralPolicy::Zero) {
             return static_cast<uint16_t>(0);
         } else if constexpr (policy == NeutralPolicy::NegInf) {
@@ -232,7 +232,7 @@ void pad_last_ktile(uint32_t l1_write_addr_in0) {
  * This function handles padding for the last tile in the width dimension of a reduction operation.
  * It applies the appropriate neutral value based on the data format and neutral policy.
  *
- * @tparam data_format The data format of the input tensor (Float32 or Bfloat16)
+ * @tparam data_format The data format of the input tensor (Float32 or Float16_b)
  * @tparam last_tile_w The unpadded width of the last tile (1 to TILE_WIDTH)
  * @tparam policy The neutral value policy (Zero for sum/mean, NegInf for max, PosInf for min)
  * @param l1_write_addr The L1 memory address where the padding should be written
@@ -244,7 +244,7 @@ void pad_last_wtile(uint32_t l1_write_addr) {
         constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint32_t, last_tile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(l1_write_addr, fill_value);
     } else {
-        // Default to Bfloat16 for all other formats
+        // Default to Float16_b for all other formats
         constexpr uint16_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint16_t, last_tile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(l1_write_addr, fill_value);
     }
@@ -256,7 +256,7 @@ void pad_last_wtile(uint32_t l1_write_addr) {
  * This function handles padding for the last tile in the height dimension of a reduction operation.
  * It applies the appropriate neutral value based on the data format and neutral policy.
  *
- * @tparam data_format The data format of the input tensor (Float32 or Bfloat16)
+ * @tparam data_format The data format of the input tensor (Float32 or Float16_b)
  * @tparam last_tile_h The unpadded height of the last tile (1 to TILE_HEIGHT)
  * @tparam policy The neutral value policy (Zero for sum/mean, NegInf for max, PosInf for min)
  * @param l1_write_addr The L1 memory address where the padding should be written
@@ -268,7 +268,7 @@ void pad_last_htile(uint32_t l1_write_addr) {
         constexpr uint32_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint32_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
     } else {
-        // Default to Bfloat16 for all other formats
+        // Default to Float16_b for all other formats
         constexpr uint16_t fill_value = get_neutral_value<data_format, policy>();
         fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
     }
@@ -280,15 +280,15 @@ void pad_last_htile(uint32_t l1_write_addr) {
  * This is a helper function that eliminates repeated if-constexpr blocks in reader kernels.
  * It dispatches to pad_last_wtile with the correct data format type.
  *
- * @tparam IN_DF The input data format as uint32_t (cast of tt::DataFormat)
+ * @tparam IN_DF The input data format as uint32_t (cast of DataFormat)
  * @tparam LAST_W The unpadded width of the last tile
  * @tparam policy The neutral value policy
  * @param l1_write_addr The L1 memory address where the padding should be written
  */
 template <uint32_t IN_DF, uint32_t LAST_W, NeutralPolicy policy>
 void apply_width_padding(uint32_t l1_write_addr) {
-    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Bfloat16)) {
-        pad_last_wtile<DataFormat::Bfloat16, LAST_W, policy>(l1_write_addr);
+    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Float16_b)) {
+        pad_last_wtile<DataFormat::Float16_b, LAST_W, policy>(l1_write_addr);
     } else {
         pad_last_wtile<DataFormat::Float32, LAST_W, policy>(l1_write_addr);
     }
@@ -300,15 +300,15 @@ void apply_width_padding(uint32_t l1_write_addr) {
  * This is a helper function that eliminates repeated if-constexpr blocks in reader kernels.
  * It dispatches to pad_last_htile with the correct data format type.
  *
- * @tparam IN_DF The input data format as uint32_t (cast of tt::DataFormat)
+ * @tparam IN_DF The input data format as uint32_t (cast of DataFormat)
  * @tparam LAST_H The unpadded height of the last tile
  * @tparam policy The neutral value policy
  * @param l1_write_addr The L1 memory address where the padding should be written
  */
 template <uint32_t IN_DF, uint32_t LAST_H, NeutralPolicy policy>
 void apply_height_padding(uint32_t l1_write_addr) {
-    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Bfloat16)) {
-        pad_last_htile<DataFormat::Bfloat16, LAST_H, policy>(l1_write_addr);
+    if constexpr (IN_DF == static_cast<uint32_t>(DataFormat::Float16_b)) {
+        pad_last_htile<DataFormat::Float16_b, LAST_H, policy>(l1_write_addr);
     } else {
         pad_last_htile<DataFormat::Float32, LAST_H, policy>(l1_write_addr);
     }
