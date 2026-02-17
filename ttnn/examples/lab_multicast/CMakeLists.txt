@@ -9,7 +9,7 @@ find_package(TT-NN REQUIRED)
 
 target_link_libraries(
     ttnn_example_lab_multicast
-    PUBLIC
+    PRIVATE
         TT::Metalium
         TTNN::TTNN
 )
