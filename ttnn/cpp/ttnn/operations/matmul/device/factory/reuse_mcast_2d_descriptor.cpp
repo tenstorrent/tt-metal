@@ -98,13 +98,20 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     uint32_t N = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
     // -- Derived parameters --
+    // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     uint32_t num_blocks = K / in0_block_w;
+
+    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer.
+    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload.
     bool packer_l1_acc_en = packer_l1_acc && (((bias_buffer != nullptr) && num_blocks > 1) || (num_blocks > 2));
 
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
@@ -193,6 +200,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
 
     if (in0_block_sharded) {
         CoreCoord in0_shard_grid = in0_buffer->shard_spec().grid().bounding_box().grid_size();
+        // in0 shard grid already accounts for transpose_mcast
+        // ie. If transpose_mcast, in0 width is along y
         in0_sender_num_cores_along_width = transpose_mcast ? in0_shard_grid.y : in0_shard_grid.x;
         if (in0_sender_num_cores_along_width > num_blocks_x) {
             in0_mcast_cores_without_work_and_not_in_receiver_grid =
@@ -223,6 +232,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
                 in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }
+        // Set in0 sender/receiver cores to be maximum
         if (transpose_mcast) {
             num_cores_r = std::max(num_cores_r, in0_sender_num_cores_along_width);
         } else {
@@ -230,25 +240,30 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         }
     }
 
+    // Used for setting up CBs and semaphores by both in0 interleaved or sharded
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
     const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
 
     // in0 sender (interleaved) / in1 sender core ranges
+    // Left column
     CoreRange in0_sender_interleaved(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1});
+    // Top row
     CoreRange in1_sender(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y});
 
+    // Left column except corner
     std::optional<CoreRange> in0_sender_in1_receiver;
     if (num_cores_with_work_r > 1) {
         in0_sender_in1_receiver = {
             {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
             {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
+    // Top row except corner
     std::optional<CoreRange> in0_receiver_in1_sender;
     if (num_cores_with_work_c > 1) {
         in0_receiver_in1_sender = {
@@ -260,6 +275,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
     }
 
+    // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
+    // TODO: Experiment with different splits?
     bool split_half = num_cores_with_work_c > 2 && num_cores_with_work_r > 1 && !in0_is_sharded;
     uint32_t half_core = split_half ? (num_cores_with_work_c) / 2 : num_cores_with_work_c - 1;
 
@@ -564,6 +581,27 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     KernelDescriptor::Defines in1_receiver_writer_other_noc_defines = in1_receiver_writer_defines;
 
     // Intermediate CB read workaround for Blackhole
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    -> CB L1 Address 0   (64-byte aligned)
+    - Tile 1: DRAM Bank 1, Address 64    -> CB L1 Address 544 (not 64-byte aligned)
+
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
     bool in0_needs_intermediate_cb_read = false;
     bool in1_needs_intermediate_cb_read = false;
     if (device->arch() == tt::ARCH::BLACKHOLE) {
@@ -577,6 +615,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         }
     }
 
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -896,10 +935,10 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     }
 
     // -- DRAM sharded weights stride params --
-    uint32_t worker_core_stride = 0;
-    uint32_t storage_core_stride = 0;
-    uint32_t curr_worker_core = 0;
-    uint32_t curr_storage_core = 0;
+    uint32_t worker_core_stride = 0;   // stride in the worker core
+    uint32_t storage_core_stride = 0;  // stride in the dram bank
+    uint32_t curr_worker_core = 0;     // current worker core
+    uint32_t curr_storage_core = 0;    // current read dram bank
     uint32_t vc = 0;
 
     uint32_t in0_end_idx = num_blocks_y - 1;

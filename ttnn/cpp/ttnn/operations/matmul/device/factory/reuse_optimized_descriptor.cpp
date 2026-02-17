@@ -68,18 +68,27 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
 
     // ---- Derived parameters ----
+    // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
+    // batch_scale_factor
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
+
+    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
 
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
+    // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
+    // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -98,7 +107,7 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     if (in0_is_sharded) {
         in0_CB_tiles = per_core_M * K;
     } else {
-        in0_CB_tiles *= 2;
+        in0_CB_tiles *= 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_num_tiles = per_core_N * in0_block_w;
@@ -106,11 +115,11 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     if (in1_is_sharded) {
         in1_CB_tiles *= num_blocks * batch_scale_factor;
     } else {
-        in1_CB_tiles *= 2;
+        in1_CB_tiles *= 2;  // double buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
-    uint32_t out_CB_tiles = out_block_tiles;
+    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
@@ -243,6 +252,22 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
         }
     }
     // Intermediate CB read workaround for Blackhole alignment
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
     bool in0_needs_intermediate_cb_read = false;
     bool in1_needs_intermediate_cb_read = false;
     if (device->arch() == tt::ARCH::BLACKHOLE) {
@@ -470,10 +495,19 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 
+    // Work can be split in two ways:
+    // (a) by batch: each core processes all M,N dimensions of b number of batches
+    // (b) by M dimension: each core processes a subset of M dimension within batches
+    // In the general case, some cores may have work split by batch while others have work
+    // split over the M dimension. We compute each core's start tile based on its global
+    // position in the work distribution.
+
+    // Compute the number of M and N blocks per batch
     uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
 
+    // Strides for computing start tile IDs
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
     uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
@@ -484,11 +518,13 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
         uint32_t num_output_blocks_per_core =
             i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
+        // Compute starting batch and position within batch based on global block position
         uint32_t start_batch = num_blocks_written / blocks_per_batch;
         uint32_t block_within_batch = num_blocks_written % blocks_per_batch;
         uint32_t start_m_block = block_within_batch / n_blocks_per_batch;
         uint32_t start_n_block = block_within_batch % n_blocks_per_batch;
 
+        // Compute start tile IDs based on batch and block position
         uint32_t in0_start_tile_id = (start_batch * in0_batch_stride) + (start_m_block * in0_m_block_stride);
         uint32_t in1_start_tile_id =
             (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);

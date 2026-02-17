@@ -211,6 +211,7 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
+    // TODO: For bfp16, check if its divisible by 8 not 16.
     TT_FATAL(input_channels_padded % 16 == 0, "Expected input channels to be padded for 16 byte alignment in L1");
 
     ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
@@ -243,7 +244,10 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
 
+    // TODO: Move all these TT_FATALs/checks to validate?
+
     if (has_bias) {
+        // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
         TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
@@ -340,6 +344,7 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
         tt::constants::TILE_HEIGHT * input_num_cores);
 
     // writer of conv op partially removes padding on the width
+    // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width =
         tt::round_up(output_channels, output_num_cores * tt::constants::TILE_WIDTH);
     TT_FATAL(
@@ -451,6 +456,8 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     // Adjust READER_INDICES CB page size based on config tensor buffer
     if (config_tensor_buffer != nullptr) {
         if (config_tensors_in_dram) {
+            // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as
+            // the maximum possible size.
             TT_FATAL(
                 access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
                     config_tensor_buffer->page_size(),
@@ -556,8 +563,11 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     // ---------------------------------------------------------------
     // NOC selection
     // ---------------------------------------------------------------
+    // Select preferred NoCs for DRAM operations based on architecture
+    // Must be done early to use in multicast coordinate setup
     // weights_kernel (RISCV_1) reads weights/bias from DRAM -> use preferred read NoC
     // act_kernel (RISCV_0) primarily does L1 reads and multicasts -> use preferred write NoC
+    // This optimizes NoC bandwidth by separating DRAM reads from L1/multicast operations
     tt::tt_metal::NOC weights_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt::tt_metal::NOC act_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
@@ -577,6 +587,7 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
 
     // Swap multicast coordinates if using NOC_1 for proper addressing
+    // NOC_0 and NOC_1 have inverted coordinate systems on some architectures
     if (act_noc == tt::tt_metal::NOC::NOC_1) {
         std::swap(act_mcast_start, act_mcast_end);
         log_debug(

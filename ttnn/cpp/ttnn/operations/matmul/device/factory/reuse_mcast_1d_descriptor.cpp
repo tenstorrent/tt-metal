@@ -36,6 +36,10 @@ uint32_t get_preferred_noc(
     const ttnn::CoreCoord dst,
     const tt_metal::IDevice* device,
     const bool use_dedicated_noc = false) {
+    /*
+        NOC0: Preferred +x -> +y
+        NOC1: Preferred -y -> -x
+    */
     uint32_t src_x = src.x, src_y = src.y;
     uint32_t dst_x = dst.x, dst_y = dst.y;
 
@@ -260,10 +264,13 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         uint32_t gather_in0_block_w = Kt_pad / num_cores;
 
         uint32_t num_blocks = Kt_pad / gather_in0_block_w;
+        // Only enable packer l1 accumulation when there are spills, otherwise
+        // unnecessary overhead for reconfigs are added
         bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
         bool use_global_cb = global_cb.has_value();
 
+        // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
         tt::DataFormat interm0_data_format =
             packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
@@ -877,12 +884,16 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         bool bias_is_sharded = bias.has_value() ? bias->memory_config().is_sharded() : false;
         bool output_is_sharded = output.memory_config().is_sharded();
 
+        // currently only support transpose of the full tile
         bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
         bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
         uint32_t num_blocks = K / in0_block_w;
+        // Only enable packer l1 accumulation when there are spills, otherwise
+        // unnecessary overhead for reconfigs are added
         bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
+        // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
         tt::DataFormat interm0_data_format =
             packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
@@ -1220,12 +1231,36 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         if (output_is_sharded) {
             mm_kernel_in1_sender_writer_defines.emplace_back("OUT_SHARDED", "1");
         }
+        // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic
+        // already works without skipping. We can use this flag to turn off unnecessary mcast overhead
+        // if necessary.
         if (in0_mcast_receiver_num_cores == 1) {
             mm_kernel_in0_sender_writer_defines.emplace_back("SKIP_MCAST", "1");
         }
         mm_kernel_in1_sender_writer_defines.emplace_back("SKIP_MCAST", "1");
 
         // Intermediate CB read (Blackhole alignment workaround)
+        /*
+        Blackhole architecture alignment issue workaround for tiny tiles:
+
+        Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+        issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+        addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+
+        Example scenario:
+        - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+        - CB configured with size=2 to hold both tiles
+
+        Result:
+        - Tile 0: DRAM Bank 0, Address 64    -> CB L1 Address 0   (64-byte aligned)
+        - Tile 1: DRAM Bank 1, Address 64    -> CB L1 Address 544 (not 64-byte aligned)
+
+        Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+        the intermediate CB first, then copy to the destination CB. This ensures proper
+        alignment at the cost of additional memory bandwidth overhead.
+
+        Note: This workaround should only be used for this specific alignment issue case.
+        */
         bool in0_needs_intermediate_cb_read = false;
         bool in1_needs_intermediate_cb_read = false;
         if (device->arch() == tt::ARCH::BLACKHOLE) {
@@ -1239,6 +1274,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             }
         }
 
+        // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
         tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
         tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -1651,12 +1687,18 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         bool in0_is_sharded = a.memory_config().is_sharded();
         bool output_is_sharded = output.memory_config().is_sharded();
 
+        // currently only support transpose of the full tile
         bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
         bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
         uint32_t num_blocks = K / in0_block_w;
+        // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
+        // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
+        // does a spill and reload, so need more than 2 blocks to use l1 acc for packer.
+        // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload.
         bool packer_l1_acc_en = packer_l1_acc && (((bias_buffer != nullptr) && num_blocks > 1) || (num_blocks > 2));
 
+        // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
         tt::DataFormat interm0_data_format =
             packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
@@ -1686,6 +1728,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
         const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
         const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
+        // When in0 is sharded, check if we need to extract sub-blocks from the shard.
+        // This is needed when the shard width spans multiple in0_block_w-sized blocks.
         bool extract_shard_sub_blocks = false;
         uint32_t in0_shard_height_in_tiles = 0;
         uint32_t in0_shard_width_in_tiles = 0;
@@ -1925,6 +1969,8 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             mm_kernel_in1_sender_writer_defines.emplace_back("SKIP_MCAST", "1");
         }
 
+        // Intermediate CB read (Blackhole alignment workaround)
+        // See detailed comment in MCAST_IN0 path above for explanation of the alignment issue.
         bool in0_needs_intermediate_cb_read = false;
         bool in1_needs_intermediate_cb_read = false;
         if (device->arch() == tt::ARCH::BLACKHOLE) {
@@ -1938,6 +1984,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast1DDescriptorFactory::create_descriptor
             }
         }
 
+        // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
         tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
         tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 

@@ -32,8 +32,10 @@ using ttnn::operations::conv::calculate_output_image_size;
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        // Use width sharded implementation
         return conv2d_detail::Conv2dWidthShardedDescriptorFactory{};
     }
+    // Use regular sharded implementation
     return conv2d_detail::Conv2dShardedDescriptorFactory{};
 }
 
