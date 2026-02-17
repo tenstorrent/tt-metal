@@ -98,8 +98,12 @@ std::vector<uint32_t> factor_cores_into_dims(uint32_t num_cores, size_t num_dims
         while (factor > 1 && remaining % factor != 0) {
             factor--;
         }
-        if (factor == 1 && remaining > 1) {
+        if (factor <= 1 && remaining > 1) {
             factor = remaining;  // Use all remaining if no good factor found
+        }
+        // Ensure factor is at least 1 to prevent division by zero
+        if (factor == 0) {
+            factor = 1;
         }
 
         factors[d] = factor;
