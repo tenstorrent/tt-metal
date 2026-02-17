@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "pcie_noc_utils.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -50,7 +51,7 @@ void kernel_main() {
         }
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
-            noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+            noc_async_wide_read_any_len_with_state(
                 NOC_INDEX,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + receiver_socket.read_ptr -
@@ -59,6 +60,7 @@ void kernel_main() {
                 page_size);
             noc_async_read_barrier();
         }
+
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
@@ -66,8 +68,8 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_push_back(downstream_interface_index, 1);
         } else {
-            socket_reserve_pages(sender_socket, 1);
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+            socket_reserve_pages(sender_socket, 1);
             noc_async_write(
                 receiver_socket.read_ptr,
                 get_noc_addr(
@@ -92,5 +94,4 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    DPRINT << "End H2D Main Loop" << ENDL();
 }

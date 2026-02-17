@@ -942,7 +942,8 @@ inline void noc_async_write_multicast(
         noc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet<false>(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
+        noc_async_write_multicast_one_packet<false>(
+            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, noc);
     } else {
         WAYPOINT("NMWW");
         NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
