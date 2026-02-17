@@ -155,19 +155,23 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
     };
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
-    for (uint32_t input_page_id = 0, core_id = 0; core_id < cores.size();
-         ++core_id, input_page_id += num_pages_per_core_group_1) {
+    uint32_t g1_num_cores = core_group_1.num_cores();
+    uint32_t input_page_id = 0;
+    for (uint32_t core_id = 0; core_id < cores.size(); ++core_id) {
         const CoreCoord& core = cores[core_id];
+        uint32_t num_of_pages = core_id < g1_num_cores ? num_pages_per_core_group_1 : num_pages_per_core_group_2;
 
         reader_runtime_args.input_page_id = input_page_id;
-        reader_runtime_args.num_of_pages = num_pages_per_core_group_1;
+        reader_runtime_args.num_of_pages = num_of_pages;
         tt::tt_metal::SetRuntimeArgs(
             program, reader_kernel_id, core, ttnn::kernel_utils::to_vector(reader_runtime_args));
 
         writer_runtime_args.input_page_id = input_page_id;
-        writer_runtime_args.num_of_pages = num_pages_per_core_group_1;
+        writer_runtime_args.num_of_pages = num_of_pages;
         tt::tt_metal::SetRuntimeArgs(
             program, writer_kernel_id, core, ttnn::kernel_utils::to_vector(writer_runtime_args));
+
+        input_page_id += num_of_pages;
     }
 
     return cached_program_t{

@@ -681,3 +681,106 @@ def test_nd_sharded_embedding(
     assert output_tensor.shape == output_shape
     assert_with_pcc(output_tensor, torch_output_tensor)
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape",
+    [
+        ((199,), (1,)),  # 1d: 199 pages (prime, exceeds any device core count)
+        ((10, 20), (2, 1)),  # 2d: 200 pages
+        ((5, 6, 7), (1, 2, 1)),  # 3d: 210 pages
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_core_grid",
+    [
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),  # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),  # 4x4 grid
+    ],
+)
+@pytest.mark.parametrize("tensors_nd_sharded", ["input_only", "input_and_output"])
+def test_nd_sharded_embedding_uneven_work_split(
+    device,
+    input_shape,
+    input_shard_shape,
+    shard_core_grid,
+    tensors_nd_sharded,
+):
+    """Test ND-sharded embedding where num_input_pages is not evenly divisible by the
+    device compute grid, exercising the num_pages_per_core_group_2 code path in
+    embeddings_nd_sharded_program_factory.cpp (split_work_to_cores uneven division)."""
+    torch.manual_seed(1234)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    compute_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
+    )
+    if not compute_grid.contains(shard_core_grid):
+        pytest.skip(f"Need {shard_core_grid} grid size to run this test but core grid is {compute_grid}")
+
+    max_compute_cores = compute_grid_size.x * compute_grid_size.y
+    index_elems_per_page = input_shard_shape[-1]
+    num_input_pages = int(np.prod(input_shape)) // index_elems_per_page
+    if num_input_pages <= max_compute_cores or num_input_pages % max_compute_cores == 0:
+        pytest.skip(
+            f"num_input_pages ({num_input_pages}) does not exercise core_group_2 "
+            f"on this device with {max_compute_cores} compute cores"
+        )
+
+    vocabulary_size = 32
+    hidden_embedding_dim = 16
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+    weights_shape = (vocabulary_size, hidden_embedding_dim)
+    output_shape = input_shape + (weights_shape[-1],)
+    out_shard_shape = input_shard_shape + (hidden_embedding_dim,)
+
+    numel = int(np.prod(input_shape))
+    torch_input_tensor = (torch.arange(numel, dtype=torch.long) % weights_shape[0]).reshape(input_shape)
+
+    numel = int(np.prod(weights_shape))
+    torch_weights = torch.arange(numel, dtype=torch.int16).reshape(weights_shape).to(torch.bfloat16)
+
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+
+    if tensors_nd_sharded in ("input_only", "input_and_output"):
+        in_mem_config = ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(input_shard_shape, shard_core_grid, shard_orientation),
+        )
+    else:
+        in_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if tensors_nd_sharded in ("output_only", "input_and_output"):
+        output_mem_config = ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(
+                out_shard_shape,
+                shard_core_grid,
+                shard_orientation,
+            ),
+        )
+    else:
+        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=in_mem_config
+    )
+
+    weights = ttnn.as_tensor(
+        torch_weights,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+    output_tensor.deallocate(True)
+    output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == output_shape
+    assert_with_pcc(output_tensor, torch_output_tensor)
+    assert device.num_program_cache_entries() == 1
