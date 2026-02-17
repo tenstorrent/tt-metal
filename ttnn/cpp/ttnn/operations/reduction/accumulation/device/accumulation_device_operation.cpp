@@ -60,11 +60,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
 }
 
-void AccumulationDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
-}
-
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.opt_output.has_value()) {

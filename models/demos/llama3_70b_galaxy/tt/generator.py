@@ -6,23 +6,23 @@ import ttnn
 import torch
 from loguru import logger
 from typing import List
+
 from collections import defaultdict
 from dataclasses import fields, replace
 
-from llama_models.llama3.api.datatypes import (
-    InterleavedTextMedia,
-    StopReason,
-)
-
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,
     get_block_size,
+    InterleavedTextMedia,
 )
+
+from models.common.llama_models import (
+    StopReason,
+    ChatPrediction,
+    CompletionPrediction,
+)
+
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 

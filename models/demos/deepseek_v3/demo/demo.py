@@ -253,6 +253,7 @@ def run_demo(
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
+    force_recalculate: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -351,6 +352,7 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
             )
         # Build the prompt list
         pre_tokenized_prompts = None

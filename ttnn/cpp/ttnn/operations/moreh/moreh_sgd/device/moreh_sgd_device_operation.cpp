@@ -42,11 +42,6 @@ void MorehSgdOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehSgdOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor_shape = tensor_args.param_in.logical_shape();

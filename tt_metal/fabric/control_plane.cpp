@@ -70,23 +70,51 @@ namespace {
 // Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
 // This is a performance optimization to ensure that MGD mapping does not bisect a device.
 //
-// * o o o < Top left corner pinned with *
+// * o o * < Corners pinned with *
 // o o o o
 // o o o o
 // o o o o
 // o o o o
 // o o o o
 // o o o o
-// o o o * < Bottom right corner pinned with *
-std::vector<std::pair<AsicPosition, FabricNodeId>> get_galaxy_fixed_asic_position_pinnings(size_t board_size) {
-    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
-    // Top left corner: index 0
-    fixed_asic_position_pinnings.push_back(
-        {AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}}, FabricNodeId(MeshId{0}, 0)});
-    // Bottom right corner: last device index
-    fixed_asic_position_pinnings.push_back(
-        {AsicPosition{tt::tt_metal::TrayID{4}, tt::tt_metal::ASICLocation{1}},
-         FabricNodeId(MeshId{0}, board_size - 1)});
+// * o o * < Corners pinned with *
+// Generate fixed ASIC position pinnings for UBB galaxy systems during auto-discovery.
+// This function is only called during auto-discovery (when no manual mapping is provided).
+// For UBB galaxy runs with 32 chips, it can optionally hard pin fabric node id 0 to asic 1 tray 1.
+// If MGD pinnings are provided for fabric node id 0, MGD pinnings take precedence and hard pinning is skipped.
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
+    const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    // Get all 4 possible corners ASIC positions
+    std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
+    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
+    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
+    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
+
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
+    }
+
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested
+        // This is only used when MGD pinnings are not provided for fabric node id 0
+        if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0} && hard_pin_node_0) {
+            fixed_asic_position_pinnings.emplace_back(
+                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            continue;
+        }
+
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
     return fixed_asic_position_pinnings;
 }
 
@@ -458,28 +486,22 @@ void ControlPlane::init_control_plane(
             topology_mapping_timeout);
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
-
-        // TODO: Remove this when preferred pinnings are supported
-        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
-        // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
-        // bisect a device.
+        // Generate corner pinning for full host galaxy systems
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
-        const size_t board_size = cluster.get_unique_chip_ids().size();
-        const size_t distributed_size = *distributed_context->size();
+        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+        const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-        // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
-        // multi-host machines should be limited via rank bindings so should be ok
-        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
-            distributed_size == 1) {  // Using full board size for UBB Galaxy
-            fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
+        if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
+            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, false);
+            fixed_asic_position_pinnings.insert(
+                fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
         }
 
         // Add MGD pinnings to the topology mapper
         const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
         for (const auto& [pos, fabric_node] : pinnings) {
-            fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
+            fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -556,7 +578,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
         topology_mapping_timeout = std::chrono::duration<float>(60.0f);
@@ -566,15 +587,17 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // bisect a device.
     const bool is_1d =
         this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
-    const size_t board_size = cluster.get_unique_chip_ids().size();
-    const size_t distributed_size = *distributed_context->size();
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-    // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
-    // multi-host machines should be limited via rank bindings so should be ok
-    if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
-        distributed_size == 1) {  // Using full board size for UBB Galaxy
-        fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
+    // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
+    if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
+        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, true);
+        // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
+        fixed_asic_position_pinnings.insert(
+            fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
     }
+
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
         this->cluster_.get(),
         this->distributed_context_.get(),

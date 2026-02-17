@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
@@ -231,6 +231,17 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
+
+    if (
+        is_blackhole()
+        and is_watcher_enabled()
+        and N == 1
+        and H == 512
+        and W == 512
+        and num_groups == 32
+        and (C, num_splits) in [(256, 8), (512, 16)]
+    ):
+        pytest.skip("Skipping test on Blackhole with watcher enabled, see issue #37645")
 
     grid_size = ttnn.CoreGrid(y=8, x=8)
 

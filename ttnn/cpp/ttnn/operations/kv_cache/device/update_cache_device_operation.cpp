@@ -148,11 +148,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-void UpdateKVCacheOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 TensorSpec UpdateKVCacheOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.

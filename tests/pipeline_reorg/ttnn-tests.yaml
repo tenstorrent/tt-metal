@@ -103,6 +103,15 @@ tests:
     ttsim: true
 
   # ---------------------------------------------------------------------------
+  # SDPA / MLA operation tests
+  # ---------------------------------------------------------------------------
+  - name: "ttnn sdpa group"
+    cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
+    merge_gate: false
+    ttsim: false  # SDPA tests require device
+
+  # ---------------------------------------------------------------------------
   # Reduce and misc operation tests
   # ---------------------------------------------------------------------------
   - name: "ttnn reduce and misc ops group"
