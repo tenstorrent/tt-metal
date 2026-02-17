@@ -368,47 +368,47 @@ def test_mlp_fused(device):
     mcast_grid = r["ttnn_mcast_output"].memory_config().shard_spec.grid
     s = create_shared_expert_tensors(device, M, K, mcast_grid)
 
-    # ── Run fused MLP op ──
+    # ── Run fused MLP op (looping inside kernel) ──
     num_iterations = 100
-    for iteration in range(num_iterations):
-        ttnn_result_final = MlpOp.op(
-            r["ttnn_rmsnorm_output"],
-            r["ttnn_mcast_output"],
-            r["gate_proj_weights"],
-            r["gate_proj_output"],
-            r["up_proj_weights"],
-            r["up_proj_mm_out_tensor"],
-            r["fused_output_tensor"],
-            r["down_proj_gather_output_tensor"],
-            r["down_proj_mcast_output_tensor"],
-            r["down_proj_weights"],
-            r["down_proj_output"],
-            s["ttnn_output_mcast_dst"],  # fused_add_tensor (shared expert output)
-            r["final_output_tensor"],
-            r["gate_proj_in1_buf_tensor"],
-            r["down_proj_in1_buf_tensor"],
-            # RMSNorm gamma
-            rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
-            # Shared expert tensors
-            shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
-            shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
-            shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
-            shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
-            shared_down_weights_tensor=s["ttnn_down_weights"],
-            shared_output_tensor=s["ttnn_output"],
-            # Shared expert tensor-backed CB tensors
-            shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
-            shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
-            shared_gu_out_tensor=s["ttnn_gu_out"],
-            shared_intermed_tensor=s["ttnn_intermed"],
-            shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
-            shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
-            shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
-            shared_k_parallel=s["k_parallel"],
-            shared_n_parallel=s["n_parallel"],
-        )
+    ttnn_result_final = MlpOp.op(
+        r["ttnn_rmsnorm_output"],
+        r["ttnn_mcast_output"],
+        r["gate_proj_weights"],
+        r["gate_proj_output"],
+        r["up_proj_weights"],
+        r["up_proj_mm_out_tensor"],
+        r["fused_output_tensor"],
+        r["down_proj_gather_output_tensor"],
+        r["down_proj_mcast_output_tensor"],
+        r["down_proj_weights"],
+        r["down_proj_output"],
+        s["ttnn_output_mcast_dst"],  # fused_add_tensor (shared expert output)
+        r["final_output_tensor"],
+        r["gate_proj_in1_buf_tensor"],
+        r["down_proj_in1_buf_tensor"],
+        # RMSNorm gamma
+        rmsnorm_gamma_tensor=r["ttnn_rmsnorm_gamma"],
+        # Shared expert tensors
+        shared_residual_mcast_src_tensor=r["ttnn_residual_mcast_src"],
+        shared_gate_up_weights_tensor=s["ttnn_gate_up_weights"],
+        shared_residual_mcast_dst_tensor=r["ttnn_residual_mcast_dst"],
+        shared_down_mcast_dst_tensor=s["ttnn_down_mcast_dst"],
+        shared_down_weights_tensor=s["ttnn_down_weights"],
+        shared_output_tensor=s["ttnn_output"],
+        # Shared expert tensor-backed CB tensors
+        shared_ag_gather_dst_tensor=s["ttnn_ag_gather_dst"],
+        shared_bg_gather_dst_tensor=s["ttnn_bg_gather_dst"],
+        shared_gu_out_tensor=s["ttnn_gu_out"],
+        shared_intermed_tensor=s["ttnn_intermed"],
+        shared_down_mcast_src_tensor=s["ttnn_down_mcast_src"],
+        shared_down_matmul_out_tensor=s["ttnn_down_matmul_out"],
+        shared_residual_add_out_tensor=s["ttnn_residual_add_out"],
+        shared_k_parallel=s["k_parallel"],
+        shared_n_parallel=s["n_parallel"],
+        num_iterations=num_iterations,
+    )
     ttnn.synchronize_device(device)
-    logger.info(f"Fused MLP: {num_iterations} iterations completed")
+    logger.info(f"Fused MLP: {num_iterations} iterations completed (looped inside kernel)")
 
     # ── Read back and validate ──
     output_final_torch = ttnn.to_torch(ttnn_result_final)
