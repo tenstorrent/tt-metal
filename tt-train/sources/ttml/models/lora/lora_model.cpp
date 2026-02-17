@@ -126,7 +126,6 @@ void LoraModel::freeze_base_model_weights() {
     uint64_t frozen_params = 0;
     uint64_t trainable_params = 0;
 
-    fmt::print("###\n");
     for (auto& [name, tensor_ptr] : params) {
         auto tensor = tensor_ptr->get_value();
         uint64_t num_params = tensor.logical_volume();

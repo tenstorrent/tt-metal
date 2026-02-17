@@ -59,8 +59,7 @@ ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& i
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
     autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
-    auto links = autograd::get_links(a);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
 

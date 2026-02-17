@@ -409,13 +409,15 @@ int main(int argc, char **argv) {
     DeviceConfig device_config = parse_device_config(yaml_config);
     // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
     auto training_config_path = std::filesystem::path(training_config_name).parent_path();
-    std::string model_config_path =
-        (training_config_path.parent_path().parent_path() / training_config.model_config).string();
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_path));
+    auto resolve_config_path = [&training_config_path](const std::filesystem::path &path) {
+        return (training_config_path.parent_path().parent_path() / path).string();
+    };
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(resolve_config_path(training_config.model_config)));
 
     std::optional<ttml::models::LoRAConfig> lora_config;
     if (training_config.lora_config_path.has_value()) {
-        lora_config = ttml::models::LoRAConfig::from_yaml(YAML::LoadFile(*training_config.lora_config_path));
+        lora_config = ttml::models::LoRAConfig::from_yaml(
+            YAML::LoadFile(resolve_config_path(training_config.lora_config_path.value())));
     }
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage

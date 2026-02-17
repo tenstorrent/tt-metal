@@ -767,9 +767,7 @@ autograd::TensorPtr mul(
     };
 
     // 4. Register in computation graph
-    auto links = autograd::get_links(a, b);
-    // Note: add_backward_node returns std::optional<NodeId> (nullopt if grads disabled)
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
 
     return out;
 }
