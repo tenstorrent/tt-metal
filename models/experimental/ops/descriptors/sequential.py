@@ -42,7 +42,6 @@ from typing import List, Optional, Dict, Tuple, Set, Any
 import logging
 import re
 import os
-import uuid
 
 import ttnn
 from ttnn._ttnn.program_descriptor import UnpackToDestMode
@@ -2404,11 +2403,14 @@ class OpGraphBuilder:
         self._root = root
         self._built = False
 
-    def build(self, device: Any) -> List[OpDescriptor]:
-        """Build fused descriptors for all root-to-leaf paths.
+    def build(self, device: Any) -> OpDescriptor:
+        """Build a fused descriptor from the tree.
 
-        Returns a list of OpDescriptors, one per path, suitable for
-        ``composite.launch()``.
+        Returns a single self-contained OpDescriptor.  For branching trees,
+        path ProgramDescriptors are merged internally so the result can be
+        dispatched as one unit via ``composite.launch([result])``.
+
+        Output tensors are ordered by leaf in left-to-right DFS order.
         """
         if self._built:
             raise ValueError("Already built")
@@ -2416,7 +2418,7 @@ class OpGraphBuilder:
 
         # Single node with no children = nothing to fuse
         if not self._root.children:
-            return [self._root.op]
+            return self._root.op
 
         # Validate tree topology before doing any device allocation
         self._validate_topology()
@@ -2446,10 +2448,6 @@ class OpGraphBuilder:
                     segment_cache[key] = _create_barrier_segment_config(device, core_range)
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
-        # Assign co-dispatch group for barrier safety validation.
-        num_paths = len(paths)
-        group_id = f"opgraph_{uuid.uuid4().hex[:8]}"
-
         fused_ops = []
         for path in paths:
             # Save CB descriptor state before building each path.
@@ -2468,16 +2466,41 @@ class OpGraphBuilder:
                 all_sem_refs,
                 segment_cache,
             )
-
-            # Tag with co-dispatch group
-            fused = fused._replace(co_dispatch_group=(group_id, num_paths))
             fused_ops.append(fused)
 
             # Restore original state so the next path sees uncorrupted indices
             _restore_cb_state(saved_cb_state)
             _verify_cb_restore(saved_cb_state)
 
-        return fused_ops
+        # Single path = return directly
+        if len(fused_ops) == 1:
+            return fused_ops[0]
+
+        # Multiple paths: merge into one self-contained descriptor
+        merged_desc = ttnn.merge_program_descriptors([op.descriptor for op in fused_ops])
+
+        # Deduplicate input tensors (shared root inputs appear in every path)
+        all_inputs: List = []
+        seen_ids: Set[int] = set()
+        for op in fused_ops:
+            for t in op.input_tensors:
+                tid = id(t)
+                if tid not in seen_ids:
+                    all_inputs.append(t)
+                    seen_ids.add(tid)
+
+        # Output tensors: one per leaf, left-to-right DFS order
+        all_outputs = [t for op in fused_ops for t in op.output_tensors]
+
+        # Union keepalive refs (semaphores, etc.)
+        all_keepalive = tuple(ref for op in fused_ops for ref in op.keepalive)
+
+        return OpDescriptor(
+            descriptor=merged_desc,
+            input_tensors=all_inputs,
+            output_tensors=all_outputs,
+            keepalive=all_keepalive,
+        )
 
     def _trace_paths(self) -> List[List[Tuple[Any, List[OpDescriptor]]]]:
         """Trace all root-to-leaf paths through the tree.
@@ -2728,8 +2751,8 @@ def build_op_graph(
     root_phases: List[OpDescriptor],
     children: List[OpNode],
     device: Any,
-) -> List[OpDescriptor]:
-    """Build fused descriptors for a tree topology.
+) -> OpDescriptor:
+    """Build a fused descriptor for a tree topology.
 
     Convenience wrapper around :class:`OpGraphBuilder`.  Converts
     ``root_phases`` into a chain of nodes, attaches ``children`` to
@@ -2742,8 +2765,8 @@ def build_op_graph(
         device: The device for GlobalSemaphore allocation.
 
     Returns:
-        One OpDescriptor per root-to-leaf path, suitable for
-        ``composite.launch()``.
+        A single self-contained OpDescriptor suitable for
+        ``composite.launch([result])``.
     """
     if not root_phases:
         raise ValueError("root_phases cannot be empty")

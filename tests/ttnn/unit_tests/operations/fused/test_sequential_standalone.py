@@ -202,10 +202,9 @@ class TestOpGraphBuilderBasic:
         OpNode = _mock_sequential.OpNode
 
         mock_desc = self._make_mock_op()
-        results = OpGraphBuilder(OpNode(mock_desc)).build(device=MagicMock())
+        result = OpGraphBuilder(OpNode(mock_desc)).build(device=MagicMock())
 
-        assert len(results) == 1
-        assert results[0] is mock_desc
+        assert result is mock_desc
 
     def test_build_twice_raises(self):
         """Test that building twice raises ValueError."""
@@ -2482,109 +2481,6 @@ class TestOpGraphTopologyValidation:
         builder = OpGraphBuilder(root)
         # Should not raise
         builder._validate_topology()
-
-
-class TestCoDispatchValidation:
-    """Tests for co-dispatch group validation in composite.launch."""
-
-    def _make_op_descriptor(self, co_dispatch_group=None):
-        """Create a mock OpDescriptor with optional co-dispatch group."""
-        OpDescriptor = _mock_sequential.OpDescriptor
-        return OpDescriptor(
-            descriptor=MagicMock(),
-            input_tensors=[MagicMock()],
-            output_tensors=[MagicMock()],
-            keepalive=(),
-            co_dispatch_group=co_dispatch_group,
-        )
-
-    def test_missing_co_dispatch_member_rejected(self):
-        """Launching with a subset of a co-dispatch group should raise ValueError."""
-        # Import _validate_co_dispatch_groups from composite module using mock
-        # We need to import composite under mock too
-        _modules_before = set(sys.modules)
-        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
-        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
-        for k in _ttnn_mocked_keys:
-            sys.modules[k] = MagicMock()
-        try:
-            import models.experimental.ops.descriptors.composite as _mock_composite
-
-            validate_fn = _mock_composite._validate_co_dispatch_groups
-        finally:
-            for k in set(sys.modules) - _modules_before:
-                del sys.modules[k]
-            for k in _ttnn_mocked_keys:
-                if _ttnn_originals[k] is not None:
-                    sys.modules[k] = _ttnn_originals[k]
-                else:
-                    sys.modules.pop(k, None)
-
-        # Group expects 3 members but only 2 provided
-        ops = [
-            self._make_op_descriptor(co_dispatch_group=("grp1", 3)),
-            self._make_op_descriptor(co_dispatch_group=("grp1", 3)),
-        ]
-
-        with pytest.raises(ValueError, match="expected 3 ops but got 2"):
-            validate_fn(ops)
-
-    def test_co_dispatch_with_independent_ops_accepted(self):
-        """Group ops + independent ops (no group) should be accepted."""
-        _modules_before = set(sys.modules)
-        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
-        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
-        for k in _ttnn_mocked_keys:
-            sys.modules[k] = MagicMock()
-        try:
-            import models.experimental.ops.descriptors.composite as _mock_composite
-
-            validate_fn = _mock_composite._validate_co_dispatch_groups
-        finally:
-            for k in set(sys.modules) - _modules_before:
-                del sys.modules[k]
-            for k in _ttnn_mocked_keys:
-                if _ttnn_originals[k] is not None:
-                    sys.modules[k] = _ttnn_originals[k]
-                else:
-                    sys.modules.pop(k, None)
-
-        ops = [
-            self._make_op_descriptor(co_dispatch_group=("grp1", 2)),
-            self._make_op_descriptor(co_dispatch_group=("grp1", 2)),
-            self._make_op_descriptor(),  # Independent op, no group
-        ]
-
-        # Should not raise
-        validate_fn(ops)
-
-    def test_no_co_dispatch_group_accepted(self):
-        """All ops without groups should be accepted (existing behavior)."""
-        _modules_before = set(sys.modules)
-        _ttnn_mocked_keys = ["ttnn", "ttnn._ttnn", "ttnn._ttnn.program_descriptor"]
-        _ttnn_originals = {k: sys.modules.get(k) for k in _ttnn_mocked_keys}
-        for k in _ttnn_mocked_keys:
-            sys.modules[k] = MagicMock()
-        try:
-            import models.experimental.ops.descriptors.composite as _mock_composite
-
-            validate_fn = _mock_composite._validate_co_dispatch_groups
-        finally:
-            for k in set(sys.modules) - _modules_before:
-                del sys.modules[k]
-            for k in _ttnn_mocked_keys:
-                if _ttnn_originals[k] is not None:
-                    sys.modules[k] = _ttnn_originals[k]
-                else:
-                    sys.modules.pop(k, None)
-
-        ops = [
-            self._make_op_descriptor(),
-            self._make_op_descriptor(),
-        ]
-
-        # Should not raise
-        validate_fn(ops)
 
 
 class TestEffectiveLeafRange:
