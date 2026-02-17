@@ -186,8 +186,6 @@ jobs:
             fi
           } > /tmp/prompt.txt
 
-          cat /tmp/prompt.txt
-
           # Run Copilot
           BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
 
