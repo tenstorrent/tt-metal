@@ -54,7 +54,7 @@ def init_kv_cache(config, device, max_seq_len, weights_mesh_mapper, n_layers=Non
 
     kv_cache_per_batch_size = defaultdict(lambda: None)
     cross_attn_cache_per_batch_size = defaultdict(lambda: None)
-    for batch_size in [1, 2]:
+    for batch_size in [1, WHISPER_BATCH_SIZE]:
         kv_cache = []
         cross_attn_cache = []
         if n_layers is None:

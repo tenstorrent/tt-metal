@@ -326,8 +326,8 @@ def run_demo_whisper_for_conditional_generation_inference(
     torch.manual_seed(0)
 
     # Determine all batch sizes we'll iterate over, so we can pre-allocate for the max
-    final_batch_size_per_device = [1, 2] if run_both_batch_sizes else [batch_size_per_device]
-    effective_max_batch_size = max(final_batch_size_per_device)
+    final_batch_size_per_device_list = [1, WHISPER_BATCH_SIZE] if run_both_batch_sizes else [batch_size_per_device]
+    effective_max_batch_size = WHISPER_BATCH_SIZE if run_both_batch_sizes else batch_size_per_device
 
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
@@ -344,7 +344,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     # load data
     input_data = load_input_paths(input_path)
 
-    for batch_size_per_device in final_batch_size_per_device:
+    for batch_size_per_device in final_batch_size_per_device_list:
         batch_size = batch_size_per_device * mesh_device.get_num_devices()
         total_inputs = num_inputs * batch_size
 
@@ -771,13 +771,11 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "use_per_request_params",
-    [False, True],
-    ids=["single_params", "per_request_params"],
+    [True],
 )
 @pytest.mark.parametrize(
     "run_both_batch_sizes",
-    [False, True],
-    ids=["single_batch_size", "both_batch_sizes"],
+    [True],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(

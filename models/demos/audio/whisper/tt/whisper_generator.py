@@ -132,7 +132,7 @@ class WhisperGenerator:
         # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
         encoder_seq_len = 1500
         self.encoder_hidden_states_per_size = defaultdict(lambda: None)
-        for batch_size in [1, 2]:
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
             self.encoder_hidden_states_per_size[batch_size] = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([batch_size, 1, encoder_seq_len, config.d_model]),
                 ttnn.bfloat16,
@@ -143,7 +143,7 @@ class WhisperGenerator:
 
         # Pre-allocated device tensor for current decode position
         self.current_decode_pos_per_size = defaultdict(lambda: None)
-        for batch_size in [1, 2]:
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
             self.current_decode_pos_per_size[batch_size] = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([batch_size]),
                 ttnn.int32,
@@ -163,16 +163,16 @@ class WhisperGenerator:
         """Invalidate cross-attention cache for new generation."""
         self.cross_attn_cache_valid = False
 
-    def _reset_decode_pos(self, value, unpadded_batch_size):
+    def _reset_decode_pos(self, value, global_batch_size):
         """Reset current_decode_pos to a specific value in-place
 
         Args:
             value: The position value to set (integer)
-            unpadded_batch_size: Total batch size across all devices
+            global_batch_size: Total batch size across all devices
         """
-        pos_host = torch.full((unpadded_batch_size,), value, dtype=torch.int32)
+        pos_host = torch.full((global_batch_size,), value, dtype=torch.int32)
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
-        trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+        trace_key = self._get_batch_size_per_device(global_batch_size)
         ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key])
 
     def _release_decoder_trace(self):
