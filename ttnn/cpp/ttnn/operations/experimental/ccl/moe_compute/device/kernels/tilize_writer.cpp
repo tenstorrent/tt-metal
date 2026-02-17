@@ -628,6 +628,7 @@ void kernel_main() {
                         initial_gather_noc_addr,
                         tiles_per_local_chunk * tilize_output_page_size,
                         noc_index);
+                    noc_async_write_barrier(noc_index);
 
                     // == 4a ==
                     // signal to our initial mcast gather core that we've delivered our sub-chunk
@@ -675,6 +676,7 @@ void kernel_main() {
                         drain_gather_noc_addr,
                         tiles_per_local_chunk * tilize_output_page_size,
                         noc_index);
+                    noc_async_write_barrier(noc_index);
 
                     // == 4b ==
                     // signal to global mcast gather core that we've delivered our sub-chunk
