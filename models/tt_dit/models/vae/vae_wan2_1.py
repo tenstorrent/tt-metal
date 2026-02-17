@@ -126,15 +126,13 @@ class WanAttentionBlock(Module):
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         """
-        x_BTHWC: (B, T, H, W, C) fractured on H and W
+        x_BTHWC: (B, T, H, W, C) fractured on H and W, TILE layout
 
-        returns: (B, T, H, W, C) fractured on H and W
+        returns: (B, T, H, W, C) fractured on H and W, TILE layout
         """
         assert len(x_BTHWC.shape) == 5
-        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT
         residual_BTHWC = x_BTHWC
-
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
 
         # Gather height and width for replicated attention
         if self.parallel_config.height_parallel.factor > 1:
@@ -226,7 +224,8 @@ class WanAttentionBlock(Module):
                 out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
             )
 
-        return out_BTHWC + residual_BTHWC
+        out_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.TILE_LAYOUT)
+        return ttnn.add(out_BTHWC, residual_BTHWC)
 
 
 class WanCausalConv3d(Module):
@@ -538,13 +537,12 @@ class WanResidualBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
-            self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+            self.conv_shortcut(x_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
-            else x_tile_BTHWC
+            else x_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
+        x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -590,8 +588,7 @@ class WanResidualBlock(Module):
         # Add residual
         x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        return x_BTHWC
+        return x_tile_BTHWC
 
 
 class WanMidBlock(Module):
@@ -1038,8 +1035,9 @@ class WanUpBlock(Module):
             x_res_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
             x_BTHWC = x_res_BTHWC
         if self.upsamplers is not None:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
             x_upsampled_BTHWC, logical_h = self.upsamplers(x_BTHWC, logical_h, feat_cache, feat_idx)
-            x_BTHWC = x_upsampled_BTHWC
+            x_BTHWC = ttnn.to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
         return x_BTHWC, logical_h
 
 
@@ -1175,6 +1173,8 @@ class WanDecoder3d(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
@@ -1183,8 +1183,7 @@ class WanDecoder3d(Module):
             x_BTHWC, logical_h = up_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
+        x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -1490,10 +1489,14 @@ class WanEncoder3D(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+
         ## downsamples
         for down_block in self.down_blocks:
             if isinstance(down_block, WanResample):
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
                 x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             elif isinstance(down_block, WanResidualBlock):
                 x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanAttentionBlock):
@@ -1505,8 +1508,7 @@ class WanEncoder3D(Module):
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
+        x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
         x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
