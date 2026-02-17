@@ -12,23 +12,26 @@ sys.path.append(str(Path(__file__).resolve().parents[6]))
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoTokenizer
 from transformers.models.umt5.configuration_umt5 import UMT5Config as HF_UMT5Config
 from transformers.models.umt5.modeling_umt5 import UMT5EncoderModel
-from transformers import AutoTokenizer
+
 import ttnn
-from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config, UMT5Encoder as TT_UMT5Encoder
-from models.tt_dit.encoders.t5.model_t5 import (
-    TokenEmbeddings as TT_UMT5TokenEmbeddings,
-    RelativePositionEmbeddings as TT_UMT5RelativePositionEmbeddings,
-)
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_dit.encoders.t5.model_t5 import RelativePositionEmbeddings as TT_UMT5RelativePositionEmbeddings
+from models.tt_dit.encoders.t5.model_t5 import TokenEmbeddings as TT_UMT5TokenEmbeddings
+from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config as TT_UMT5Config
+from models.tt_dit.encoders.umt5.model_umt5 import UMT5Encoder as TT_UMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 @pytest.mark.parametrize(
-    "mesh_device,submesh_shape", [[(2, 4), (1, 4)], [(4, 8), (1, 8)]], ids=["t3k", "glx"], indirect=["mesh_device"]
+    "mesh_device,submesh_shape, num_links",
+    [[(2, 4), (1, 4), 1], [(4, 8), (1, 8), 4], [(4, 8), (1, 8), 2]],
+    ids=["t3k", "glx", "bh_glx"],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params, topology",
@@ -40,6 +43,7 @@ def test_umt5_embeddings(
     mesh_device: ttnn.Device,
     submesh_shape: ttnn.MeshShape,
     topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
     parent_mesh_shape = tuple(mesh_device.shape)
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
@@ -52,8 +56,8 @@ def test_umt5_embeddings(
     )
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
-        num_links=4,
-        topology=ttnn.Topology.Linear,
+        num_links=num_links,
+        topology=topology,
     )
 
     model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
@@ -73,7 +77,7 @@ def test_umt5_embeddings(
     logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
-    max_prompt_length = 256
+    max_prompt_length = 512
     torch.manual_seed(0)
     tokens = torch.randint(hf_model.config.vocab_size, [1, max_prompt_length])
 
@@ -157,8 +161,8 @@ def test_umt5_embeddings(
 )
 @pytest.mark.parametrize(
     "mesh_device,submesh_shape, num_links",
-    [[(2, 4), (1, 4), 1], [(4, 8), (1, 8), 4]],
-    ids=["t3k", "glx"],
+    [[(2, 4), (1, 4), 1], [(4, 8), (1, 8), 4], [(4, 8), (1, 8), 2]],
+    ids=["t3k", "wh_glx", "bh_glx"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -186,7 +190,7 @@ def test_umt5_encoder(
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
 
     model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
