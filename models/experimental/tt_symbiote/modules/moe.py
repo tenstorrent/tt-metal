@@ -871,7 +871,8 @@ class TTNNMoERouterDecode(TTNNModule):
             expert_ids: [num_tokens, experts_per_token] TILE uint16
             expert_weights: [num_tokens, experts_per_token] TILE bf16
         """
-
+        if logits.layout != ttnn.TILE_LAYOUT:
+            logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Sigmoid
         probabilities = ttnn.sigmoid(logits)
         probabilities = ttnn.unsqueeze(probabilities, 0)
@@ -1077,6 +1078,14 @@ class TTNNExperts(TTNNModule):
         # Store original num_tokens for unpadding later
         original_num_tokens = batch_size_per_device * seq_len
 
+        if topk_experts_indices.dtype != ttnn.uint16:
+            if topk_experts_indices.layout != ttnn.TILE_LAYOUT:
+                topk_experts_indices = ttnn.to_layout(
+                    topk_experts_indices,
+                    ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
         # Pad to nearest multiple of SPARSITY_BLOCK_SIZE if needed
         num_tokens = original_num_tokens
         pad_amount = 0
@@ -1313,8 +1322,7 @@ class TTNNMoE(TTNNModule):
         self.num_experts_per_device = even_int_div(self.config.n_routed_experts, self.num_devices)
         # Store original input for shared experts
         residual = x
-        # 2. MoE gate routing
-        router_logits = self.gate(x)
+
         # 1. All-gather to revert tensor parallelism
         x = ttnn.experimental.all_gather_async(
             x,
@@ -1324,6 +1332,9 @@ class TTNNMoE(TTNNModule):
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
+
+        # 2. MoE gate routing
+        router_logits = self.gate(residual)
 
         # Route tokens to experts
         topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
