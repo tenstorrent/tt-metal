@@ -347,6 +347,10 @@ struct ConsistencyChecker {
     template <typename TargetNode, typename GlobalNode>
     static bool check_cardinal_constraints(
         const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data);
+
+    template <typename TargetNode, typename GlobalNode>
+    static bool check_global_cardinal_capacity(
+        const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data);
 };
 
 template <typename TargetNode, typename GlobalNode>

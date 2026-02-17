@@ -373,6 +373,36 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 // SearchHeuristic Implementation
 // ============================================================================
 
+// Helper to check if two global nodes are connected via a cardinal connection
+template <typename TargetNode, typename GlobalNode>
+bool has_global_cardinal_connection(
+    size_t u_idx,
+    size_t v_idx,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+    for (const auto& conn : graph_data.global_cardinal_constraints) {
+        bool u_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), u_idx) != conn.group_a_indices.end();
+        bool v_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), v_idx) != conn.group_b_indices.end();
+        if (u_in_a && v_in_b) return true;
+
+        bool u_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), u_idx) != conn.group_b_indices.end();
+        bool v_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), v_idx) != conn.group_a_indices.end();
+        if (u_in_b && v_in_a) return true;
+    }
+    return false;
+}
+
+// Helper to check if a global node is part of any cardinal connection
+template <typename TargetNode, typename GlobalNode>
+bool is_part_of_any_global_cardinal_connection(
+    size_t u_idx,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+     for (const auto& conn : graph_data.global_cardinal_constraints) {
+        if (std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), u_idx) != conn.group_a_indices.end()) return true;
+        if (std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), u_idx) != conn.group_b_indices.end()) return true;
+    }
+    return false;
+}
+
 template <typename TargetNode, typename GlobalNode>
 bool SearchHeuristic::check_hard_constraints(
     size_t target_idx,
@@ -396,15 +426,24 @@ bool SearchHeuristic::check_hard_constraints(
                 graph_data.global_adj_idx[global_idx].begin(),
                 graph_data.global_adj_idx[global_idx].end(),
                 mapped_global_idx);
+
+            // If explicit edge doesn't exist, check if a cardinal connection exists
             if (!edge_exists) {
-                return false;
+                if (!has_global_cardinal_connection(global_idx, mapped_global_idx, graph_data)) {
+                    return false;
+                }
             }
         }
     }
 
     // 3. Check degree
     if (graph_data.global_deg[global_idx] < graph_data.target_deg[target_idx]) {
-        return false;
+        // If degree check fails, allow if node is part of a cardinal connection (which adds implicit degree)
+        // We allow nodes in cardinal connections to pass the degree check, and rely on the final
+        // cardinal constraint validation to ensure the mapping is valid
+        if (!is_part_of_any_global_cardinal_connection(global_idx, graph_data)) {
+            return false;
+        }
     }
 
     // 4. Check channel counts (strict mode)
@@ -413,10 +452,14 @@ bool SearchHeuristic::check_hard_constraints(
             int mapped_global = mapping[neighbor];
             if (mapped_global != -1) {
                 size_t mapped_global_idx = static_cast<size_t>(mapped_global);
-                size_t required = graph_data.target_conn_count[target_idx].at(neighbor);
-                auto it = graph_data.global_conn_count[global_idx].find(mapped_global_idx);
-                if (it == graph_data.global_conn_count[global_idx].end() || it->second < required) {
-                    return false;
+                // If this is a cardinal connection, skip channel count check (cardinal capacity is validated separately)
+                bool is_cardinal = has_global_cardinal_connection(global_idx, mapped_global_idx, graph_data);
+                if (!is_cardinal) {
+                    size_t required = graph_data.target_conn_count[target_idx].at(neighbor);
+                    auto it = graph_data.global_conn_count[global_idx].find(mapped_global_idx);
+                    if (it == graph_data.global_conn_count[global_idx].end() || it->second < required) {
+                        return false;
+                    }
                 }
             }
         }
@@ -758,15 +801,22 @@ bool ConsistencyChecker::check_local_consistency(
             mapped_global_idx);
 
         if (!edge_exists) {
-            return false;  // Edge doesn't exist, inconsistent
+            // If explicit edge doesn't exist, check if a cardinal connection exists
+            if (!has_global_cardinal_connection(global_idx, mapped_global_idx, graph_data)) {
+                return false;  // Edge doesn't exist and no cardinal connection, inconsistent
+            }
         }
 
-        // In STRICT mode, also check channel counts
+        // In STRICT mode, also check channel counts (but skip for cardinal connections)
         if (validation_mode == ConnectionValidationMode::STRICT) {
-            size_t required = graph_data.target_conn_count[target_idx].at(neighbor);
-            auto it = graph_data.global_conn_count[global_idx].find(mapped_global_idx);
-            if (it == graph_data.global_conn_count[global_idx].end() || it->second < required) {
-                return false;  // Insufficient channels in strict mode
+            // If this is a cardinal connection, skip channel count check (cardinal capacity is validated separately)
+            bool is_cardinal = has_global_cardinal_connection(global_idx, mapped_global_idx, graph_data);
+            if (!is_cardinal) {
+                size_t required = graph_data.target_conn_count[target_idx].at(neighbor);
+                auto it = graph_data.global_conn_count[global_idx].find(mapped_global_idx);
+                if (it == graph_data.global_conn_count[global_idx].end() || it->second < required) {
+                    return false;  // Insufficient channels in strict mode
+                }
             }
         }
     }
@@ -794,6 +844,7 @@ bool ConsistencyChecker::check_forward_consistency(
         std::vector<int> temp_mapping = mapping;
         bool has_viable_candidate = false;
 
+        // First check explicit neighbors
         for (size_t candidate_global : graph_data.global_adj_idx[global_idx]) {
             if (used[candidate_global]) {
                 continue;  // Already used, skip
@@ -812,6 +863,61 @@ bool ConsistencyChecker::check_forward_consistency(
             if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
                 has_viable_candidate = true;
                 break;  // Found at least one viable candidate
+            }
+        }
+
+        // If no viable candidate found in explicit neighbors, check cardinal connections
+        if (!has_viable_candidate) {
+            for (const auto& conn : graph_data.global_cardinal_constraints) {
+                // Check if global_idx is in group_a, then candidates are in group_b
+                bool global_in_a = std::find(conn.group_a_indices.begin(), conn.group_a_indices.end(), global_idx) != conn.group_a_indices.end();
+                bool global_in_b = std::find(conn.group_b_indices.begin(), conn.group_b_indices.end(), global_idx) != conn.group_b_indices.end();
+
+                if (global_in_a) {
+                    for (size_t candidate_global : conn.group_b_indices) {
+                        if (used[candidate_global]) {
+                            continue;  // Already used, skip
+                        }
+
+                        // Check if candidate satisfies hard constraints for neighbor
+                        if (!SearchHeuristic::check_hard_constraints(
+                                neighbor, candidate_global, graph_data, constraint_data, mapping, validation_mode)) {
+                            continue;  // Doesn't satisfy hard constraints
+                        }
+
+                        // Check local consistency for neighbor -> candidate_global
+                        temp_mapping[neighbor] = static_cast<int>(candidate_global);
+
+                        if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
+                            has_viable_candidate = true;
+                            break;  // Found at least one viable candidate
+                        }
+                    }
+                } else if (global_in_b) {
+                    for (size_t candidate_global : conn.group_a_indices) {
+                        if (used[candidate_global]) {
+                            continue;  // Already used, skip
+                        }
+
+                        // Check if candidate satisfies hard constraints for neighbor
+                        if (!SearchHeuristic::check_hard_constraints(
+                                neighbor, candidate_global, graph_data, constraint_data, mapping, validation_mode)) {
+                            continue;  // Doesn't satisfy hard constraints
+                        }
+
+                        // Check local consistency for neighbor -> candidate_global
+                        temp_mapping[neighbor] = static_cast<int>(candidate_global);
+
+                        if (ConsistencyChecker::check_local_consistency(neighbor, candidate_global, graph_data, temp_mapping, validation_mode)) {
+                            has_viable_candidate = true;
+                            break;  // Found at least one viable candidate
+                        }
+                    }
+                }
+
+                if (has_viable_candidate) {
+                    break;  // Found viable candidate in this cardinal connection
+                }
             }
         }
 
@@ -932,6 +1038,77 @@ bool ConsistencyChecker::check_cardinal_constraints(
     return true;
 }
 
+// Check that global cardinal constraints are not exceeded
+template <typename TargetNode, typename GlobalNode>
+bool ConsistencyChecker::check_global_cardinal_capacity(
+    const std::vector<int>& mapping,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+    for (const auto& g_constraint : graph_data.global_cardinal_constraints) {
+        // Count how many edges in the target graph are mapped to use this cardinal connection
+        size_t connections_used = 0;
+
+        // Find all target nodes mapped to group_a and group_b
+        std::unordered_set<size_t> mapped_group_a;
+        std::unordered_set<size_t> mapped_group_b;
+
+        for (size_t i = 0; i < mapping.size(); ++i) {
+            if (mapping[i] == -1) continue;
+            size_t global_idx = static_cast<size_t>(mapping[i]);
+
+            bool in_a = std::find(g_constraint.group_a_indices.begin(),
+                                 g_constraint.group_a_indices.end(),
+                                 global_idx) != g_constraint.group_a_indices.end();
+            bool in_b = std::find(g_constraint.group_b_indices.begin(),
+                                 g_constraint.group_b_indices.end(),
+                                 global_idx) != g_constraint.group_b_indices.end();
+
+            if (in_a) {
+                mapped_group_a.insert(i);
+            }
+            if (in_b) {
+                mapped_group_b.insert(i);
+            }
+        }
+
+        // Count edges between mapped_group_a and mapped_group_b that don't have explicit edges
+        for (size_t a_target : mapped_group_a) {
+            for (size_t b_target : mapped_group_b) {
+                // Check if there's an edge in target graph
+                bool has_target_edge = std::find(
+                    graph_data.target_adj_idx[a_target].begin(),
+                    graph_data.target_adj_idx[a_target].end(),
+                    b_target) != graph_data.target_adj_idx[a_target].end();
+
+                if (has_target_edge) {
+                    // Check if there's an explicit edge in global graph
+                    size_t global_a = static_cast<size_t>(mapping[a_target]);
+                    size_t global_b = static_cast<size_t>(mapping[b_target]);
+                    bool has_explicit_edge = std::binary_search(
+                        graph_data.global_adj_idx[global_a].begin(),
+                        graph_data.global_adj_idx[global_a].end(),
+                        global_b);
+
+                    if (!has_explicit_edge) {
+                        // This edge must use the cardinal connection
+                        size_t conn_count = 1;
+                        auto it = graph_data.target_conn_count[a_target].find(b_target);
+                        if (it != graph_data.target_conn_count[a_target].end()) {
+                            conn_count = it->second;
+                        }
+                        connections_used += conn_count;
+                    }
+                }
+            }
+        }
+
+        // Check if we exceeded the capacity
+        if (connections_used > g_constraint.num_connections) {
+            return false;  // Exceeded cardinal connection capacity
+        }
+    }
+    return true;
+}
+
 // ============================================================================
 // DFSSearchEngine Implementation
 // ============================================================================
@@ -966,7 +1143,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
     // Base case: all target nodes assigned
     if (pos >= graph_data.n_target) {
         // Validate cardinal constraints before accepting mapping
-        if (ConsistencyChecker::check_cardinal_constraints(state_.mapping, graph_data)) {
+        if (ConsistencyChecker::check_cardinal_constraints(state_.mapping, graph_data) &&
+            ConsistencyChecker::check_global_cardinal_capacity(state_.mapping, graph_data)) {
             return true;
         }
         return false;  // Cardinal constraints not satisfied, backtrack
@@ -1262,6 +1440,11 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
             // Get actual channel count
             auto it = graph_data.global_conn_count[global_idx].find(neighbor_global_idx);
             if (it == graph_data.global_conn_count[global_idx].end()) {
+                // Edge doesn't exist in explicit channel counts - check if it's a cardinal connection
+                if (has_global_cardinal_connection(global_idx, neighbor_global_idx, graph_data)) {
+                    // This is a cardinal connection - channel count validation is handled separately
+                    continue;
+                }
                 // Edge doesn't exist - this should have been caught earlier, but handle gracefully
                 if (validation_mode == ConnectionValidationMode::STRICT) {
                     std::string error_msg = fmt::format(
@@ -1372,30 +1555,34 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
             const TargetNode& neighbor_target = graph_data.target_nodes[neighbor];
             const GlobalNode& neighbor_global = graph_data.global_nodes[neighbor_global_idx];
 
-            // Check if edge exists in global graph
+            // Check if edge exists in global graph (explicit or via cardinal connection)
             bool edge_exists = std::binary_search(
                 graph_data.global_adj_idx[global_idx].begin(),
                 graph_data.global_adj_idx[global_idx].end(),
                 neighbor_global_idx);
 
+            // If explicit edge doesn't exist, check if a cardinal connection exists
             if (!edge_exists) {
-                std::string error_msg = fmt::format(
-                    "Mapping validation failed: target graph has edge from node {} to {}, "
-                    "but global graph does not have corresponding edge from {} to {}. "
-                    "This indicates the mapping violates graph isomorphism requirements.",
-                    target_node,
-                    neighbor_target,
-                    global_node,
-                    neighbor_global);
-                if (quiet_mode) {
-                    log_debug(tt::LogFabric, "{}", error_msg);
-                } else {
-                    log_error(tt::LogFabric, "{}", error_msg);
+                if (!has_global_cardinal_connection(global_idx, neighbor_global_idx, graph_data)) {
+                    std::string error_msg = fmt::format(
+                        "Mapping validation failed: target graph has edge from node {} to {}, "
+                        "but global graph does not have corresponding edge from {} to {} "
+                        "(neither explicit nor cardinal connection). "
+                        "This indicates the mapping violates graph isomorphism requirements.",
+                        target_node,
+                        neighbor_target,
+                        global_node,
+                        neighbor_global);
+                    if (quiet_mode) {
+                        log_debug(tt::LogFabric, "{}", error_msg);
+                    } else {
+                        log_error(tt::LogFabric, "{}", error_msg);
+                    }
+                    if (warnings != nullptr) {
+                        warnings->push_back(error_msg);
+                    }
+                    return false;
                 }
-                if (warnings != nullptr) {
-                    warnings->push_back(error_msg);
-                }
-                return false;
             }
         }
     }
@@ -1405,6 +1592,22 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
         std::string error_msg =
             "Mapping validation failed: cardinal constraint(s) not satisfied. "
             "Total connections between mapped groups in global graph is insufficient.";
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", error_msg);
+        } else {
+            log_error(tt::LogFabric, "{}", error_msg);
+        }
+        if (warnings != nullptr) {
+            warnings->push_back(error_msg);
+        }
+        return false;
+    }
+
+    // Validate global cardinal constraint capacity limits
+    if (!ConsistencyChecker::check_global_cardinal_capacity(mapping, graph_data)) {
+        std::string error_msg =
+            "Mapping validation failed: global cardinal connection capacity exceeded. "
+            "The mapping uses more connections through a cardinal connection than its capacity allows.";
         if (quiet_mode) {
             log_debug(tt::LogFabric, "{}", error_msg);
         } else {
