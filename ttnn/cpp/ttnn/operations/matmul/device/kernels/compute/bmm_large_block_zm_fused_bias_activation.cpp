@@ -231,9 +231,9 @@ void kernel_main() {
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
+                    bool last_out = block == (num_blocks_inner_dim - 1);
                     {
                         DeviceZoneScopedN("MATH-BLOCK");
-                        bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {

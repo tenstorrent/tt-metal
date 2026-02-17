@@ -607,11 +607,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), cores.size(), mm_kernel_defines, throttle_level);
     // get env var and convert to bool
-    const bool mm_super_sync_enabled = std::stoi(std::getenv("TT_MM_SUPER_SYNC_ENABLED")) == 1;
-    if (mm_super_sync_enabled) {
+    const char* mm_super_sync_enabled = std::getenv("TT_MM_SUPER_SYNC_ENABLED");
+    if (mm_super_sync_enabled && std::stoi(mm_super_sync_enabled) == 1) {
         mm_kernel_defines["MM_SUPER_SYNC_ENABLED"] = "1";
         mm_kernel_in1_sender_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
-        mm_kernel_in1_receiver_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
         log_info(tt::LogOp, "Super sync enabled for matmul");
     }
 

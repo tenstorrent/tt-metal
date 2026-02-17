@@ -1921,8 +1921,8 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
  * | val       | The target value of the semaphore      | uint32_t | Any uint32_t value | True     |
  */
 // clang-format on
-template <bool print = false>
-FORCE_INLINE void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+FORCE_INLINE
+void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
 
     WAYPOINT("NSW");
