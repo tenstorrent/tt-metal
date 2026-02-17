@@ -881,8 +881,8 @@ class MoeRoutedExpertOp:
         gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_proj_cb_index, expert_index_tensor)
         index_tile = expert_index_tensor.get_tile()
         index_tile_size = index_tile.get_tile_size(expert_index_tensor.dtype)
-        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
-        index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+        index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id  # Reuse sender sem 0 (read-only VALID source)
+        index_mcast_receiver_semaphore_id = 14  # Dedicated (avoid reuse of sem 1)
         index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
 
@@ -979,7 +979,7 @@ class MoeRoutedExpertOp:
             dst_cb=down_proj_mcast_dst_cb,
             dst_tensor=down_proj_mcast_output_tensor,
             sender_semaphore_id=mcast_data_sender_semaphore_id,
-            receiver_semaphore_id=mcast_data_receiver_semaphore_id,
+            receiver_semaphore_id=15,  # Dedicated (avoid reuse of sem 1)
             data_size_bytes=down_proj_mcast_data_size_bytes,
         )
 
@@ -2831,6 +2831,17 @@ class MoeOp:
             ),
             ttnn.SemaphoreDescriptor(
                 id=routed_ctx.residual_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            # Dedicated mcast receiver semaphores (avoid reuse of sem 1)
+            ttnn.SemaphoreDescriptor(
+                id=routed_ctx.index_mcast_receiver_semaphore_id,
+                core_ranges=routed_ctx.full_device_grid,
+                initial_value=0,
+            ),
+            ttnn.SemaphoreDescriptor(
+                id=routed_ctx.down_proj_mcast_params["receiver_semaphore_id"],
                 core_ranges=routed_ctx.full_device_grid,
                 initial_value=0,
             ),
