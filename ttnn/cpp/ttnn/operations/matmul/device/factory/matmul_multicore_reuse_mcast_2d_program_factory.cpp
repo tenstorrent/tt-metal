@@ -611,6 +611,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     if (mm_super_sync_enabled && std::stoi(mm_super_sync_enabled) == 1) {
         mm_kernel_defines["MM_SUPER_SYNC_ENABLED"] = "1";
         mm_kernel_in1_sender_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        mm_kernel_in1_receiver_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
         log_info(tt::LogOp, "Super sync enabled for matmul");
     }
 
