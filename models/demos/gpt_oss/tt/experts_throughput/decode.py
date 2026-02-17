@@ -256,8 +256,8 @@ def decode_forward(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
-    mesh_config,
-    ccl_manager,
+    mesh_config=None,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """Decode forward pass with all_to_all dispatch and combine.
 
