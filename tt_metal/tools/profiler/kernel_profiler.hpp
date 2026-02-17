@@ -7,7 +7,7 @@
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
 #include "risc_common.h"
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/tensor/tensor_accessor.h"

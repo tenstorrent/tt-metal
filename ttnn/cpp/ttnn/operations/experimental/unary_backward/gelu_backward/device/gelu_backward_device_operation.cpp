@@ -17,11 +17,6 @@ GeluBackwardDeviceOperation::program_factory_t GeluBackwardDeviceOperation::sele
     return GeluBackwardProgramFactory{};
 }
 
-void GeluBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;

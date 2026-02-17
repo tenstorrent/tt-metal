@@ -29,6 +29,7 @@ struct LayerNormInputs {
     std::optional<Tensor> weight;                 // gamma
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
+    std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
 };
 
 }  // namespace ttnn::prim

@@ -455,7 +455,7 @@ class RotarySetup(LightweightModule):
                 return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
 
         self.batch_grid = get_batch_grid(
-            self.doubled_batch_size,
+            self.batch_size_per_device_group,
             self.core_grid,
             self.start_core,
             self.batch_size_per_device_group,

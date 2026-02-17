@@ -29,11 +29,6 @@ RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::se
     return RingJointSDPAProgramFactory{};
 }
 
-void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;

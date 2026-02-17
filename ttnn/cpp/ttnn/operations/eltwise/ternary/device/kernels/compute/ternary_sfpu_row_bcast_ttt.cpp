@@ -17,6 +17,7 @@
 #include "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/lerp.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 

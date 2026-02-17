@@ -17,11 +17,6 @@ GroupAttnMatmulDeviceOperation::program_factory_t GroupAttnMatmulDeviceOperation
     return GroupAttnMatmulProgramFactory{};
 }
 
-void GroupAttnMatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]

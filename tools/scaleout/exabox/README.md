@@ -167,6 +167,11 @@ The script parses the test log and provides:
 - **Recommendations**: Actionable next steps including escalation paths for persistent issues
 - **Final Test Result**: Clear pass/fail indication with appropriate exit code
 
+
+**Important: Host Ordering Matters for 4x32 Clusters**
+
+For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**
@@ -175,22 +180,33 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 ## Quick Health Check (For Developers)
 
-For day-to-day use when you just need to verify a cluster is working. Unlike the Docker-based qualification scripts above, these run directly on the host, so you need a local build:
+For day-to-day use when you just need to verify a cluster is working.
 
+**Important: These scripts require a local build!**
+
+Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
+
+| Script Type | Requires Build? | Uses Docker? |
+|-------------|----------------|--------------|
+| `recover_*.sh` | **Yes** | No |
+| `run_validation.sh` | No | Yes |
+| `run_fabric_tests.sh` | No | Yes |
+
+**Build first:**
 ```bash
 ./create_venv.sh
 source python_env/bin/activate
 ./build_metal.sh --build-metal-tests
 ```
 
-Then run:
+**Then run:**
 ```bash
 ./tools/scaleout/exabox/recover_8x16.sh <hosts>
 # or
 ./tools/scaleout/exabox/recover_4x32.sh <hosts>
 ```
 
-Look for `All Detected Links are healthy` in the output.
+Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).
 
 ## Troubleshooting
 

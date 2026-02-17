@@ -28,11 +28,6 @@ void UniformDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void UniformDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
 TensorSpec UniformDeviceOperation::compute_output_specs(
     const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t& tensor_args) {
     return tensor_args.input.tensor_spec();

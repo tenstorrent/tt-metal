@@ -160,7 +160,7 @@
     { "job-name-component": "t3k resnet tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
     { "job-name-component": "t3000-frequent-tests / t3k sd35_large tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
     { "job-name-component": "t3000-frequent-tests / t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
-    { "job-name-component": "blackhole-multi-card-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "job-name-component": "blackhole-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "llama3.1-8b BH-LLMBox performance", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
     { "job-name-component": "llama3.1-8b BH-LLMBox data-parallel", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "llama3.1-8b BH-LLMBox stress", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
@@ -181,7 +181,7 @@
     { "job-name-component": "Galaxy SentenceBert demo tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
     { "job-name-component": "galaxy-demo-tests / Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
     { "job-name-component": "Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
-    { "job-name-component": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": [
+    { "job-name-component": "blackhole-multi-card-fast-unit-tests / ttnn ops fast unit tests (ccl, DRAM prefetcher)", "owner": [
       { "id": "U0883RN6CRE", "name": "William Ly" },
       { "id": "S09QQRK1CF8", "name": "ops-data-movement" }
     ] },
@@ -574,10 +574,6 @@
     { "job-name-component": "Galaxy Wan2.2 demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "job-name-component": "Galaxy Mochi demo tests", "owner": { "id": "U09ELB03XRU", "name": "Stephen Osborne" } },
     { "job-name-component": "Galaxy DeepSeek v3 demo tests", "owner": { "id": "U08H32XUS9W", "name": "Yousef Al Rawwash" } },
-    { "job-name-component": "ops-sanity-tests / example test", "owner": { "id": "U08DEGUJY3H", "name": "Rose Li" } },
-    { "job-name-component": "example test", "owner": { "id": "U08DEGUJY3H", "name": "Rose Li" } },
-    { "job-name-component": "ops-sanity-tests / example test BH", "owner": { "id": "U08DEGUJY3H", "name": "Rose Li" } },
-    { "job-name-component": "example test BH", "owner": { "id": "U08DEGUJY3H", "name": "Rose Li" } },
     { "job-name-component": "t3000-demo-tests / t3k sd35 large tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "job-name-component": "t3k sd35 large tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "job-name-component": "t3000-demo-tests / t3k gpt oss tests", "owner": { "id": "U08TJ70UFRT", "name": "Harry Andrews" } },

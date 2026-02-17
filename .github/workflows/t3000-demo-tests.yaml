@@ -33,10 +33,6 @@ on:
           - wan22
           - mochi
           - gpt-oss
-      extra-tag:
-        required: true
-        type: string
-        default: "in-service"
       platform:
         required: false
         type: choice
@@ -75,11 +71,6 @@ on:
         required: false
         type: string
         default: "all"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
-        description: "Extra tag for runner selection"
       platform:
         required: false
         type: string
@@ -120,6 +111,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: "wh_llmbox_perf"
       model: ${{ inputs.model || 'all' }}
-      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

@@ -138,7 +138,7 @@ run_t3000_ttnn_udm_tests() {
 }
 
 run_t3000_tt_metal_multiprocess_tests() {
-  local mpi_args="--allow-run-as-root --tag-output"
+  local mpi_args="--allow-run-as-root"
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_strict_connection_multi_process_rank_bindings.yaml  ./build/test/tt_metal/multi_host_fabric_tests
@@ -154,7 +154,7 @@ run_t3000_tt_metal_multiprocess_tests() {
 }
 
 run_t3000_ttnn_multiprocess_tests() {
-  local mpi_args="--allow-run-as-root --tag-output"
+  local mpi_args="--allow-run-as-root"
 
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
 
@@ -674,6 +674,7 @@ run_t3000_tttv2_fast_unit_tests() {
   pytest models/common/tests/modules/mlp/test_mlp_1d.py \
     -m "not slow" \
     --tb=short \
+    --durations=10 \
     --cov=models.common.modules.mlp.mlp_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
@@ -684,7 +685,18 @@ run_t3000_tttv2_fast_unit_tests() {
   pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
     -m "not slow" \
     --tb=short \
+    --durations=10 \
     --cov=models.common.modules.rmsnorm.rmsnorm_1d \
+    --cov-report=term-missing \
+    --cov-config=models/common/tests/setup.cfg ; fail+=$?
+
+  # Run Attention1D tests
+  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
+  pytest models/common/tests/modules/attention/test_attention_1d.py \
+    -m "not slow" \
+    --tb=short \
+    --durations=10 \
+    --cov=models.common.modules.attention.attention_1d \
     --cov-report=term-missing \
     --cov-config=models/common/tests/setup.cfg ; fail+=$?
 
