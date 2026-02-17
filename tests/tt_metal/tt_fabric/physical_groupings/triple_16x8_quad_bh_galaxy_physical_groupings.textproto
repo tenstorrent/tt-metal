@@ -50,8 +50,8 @@ groupings {
     { id: 0 asic_location: ASIC_LOCATION_1 },
     { id: 1 asic_location: ASIC_LOCATION_2 },
     { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_5 },
-    { id: 4 asic_location: ASIC_LOCATION_4 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
     { id: 5 asic_location: ASIC_LOCATION_6 },
     { id: 6 asic_location: ASIC_LOCATION_7 },
     { id: 7 asic_location: ASIC_LOCATION_8 }

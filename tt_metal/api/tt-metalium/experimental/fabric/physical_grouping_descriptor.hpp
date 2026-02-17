@@ -151,15 +151,16 @@ public:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Validate and populate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor
-    // If groupings already exist, validates they match the physical system
-    // If groupings don't exist, automatically creates TRAY groupings with ASIC locations and HOST groupings with tray
-    // references
-    void validate_and_populate_preformed_groups_from_physical_system(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+    // Validate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor, making sure that they match
+    bool validate_preformed_groups_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
     // Build flattened adjacency graph by instantiating the grouping's adjacency graph and flattening it.
+    // TODO: This is not yet implemented this should use the cardinal adjacnecy graph
     AdjacencyGraph<uint32_t> build_flattened_adjacency_graph(const GroupingInfo& grouping) const;
+
+    // Build flattened adjacency graph forming one uniform mesh
+    AdjacencyGraph<uint32_t> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
 private:
     // Data members

@@ -347,22 +347,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentG
     EXPECT_THAT(
         ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references non-existent grouping")));
-
-    // But preset names should pass validation and population even if not defined
-    const std::string text_proto_preset = R"proto(
-        groupings {
-          name: "meshes_21"
-          custom_type: "meshes"
-          instances:
-          [ {
-            id: 0
-            grouping_ref { preset_type: TRAY_1 }
-          }]
-        }
-    )proto";
-
-    // Should not throw - preset names are skipped during dependency resolution
-    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto_preset); });
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingHasNoInstances) {
@@ -2261,18 +2245,18 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_BaseGrouping) {
-    const std::string text_proto = R"proto(
-        groupings {
-          name: "meshes_28"
-          custom_type: "meshes"
-          instances:
-          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-            , { id: 1 asic_location: ASIC_LOCATION_2 }
-            , { id: 2 asic_location: ASIC_LOCATION_3 }
-            , { id: 3 asic_location: ASIC_LOCATION_4 }]
-          row_major_mesh { dims: [ 2, 2 ] }
-        }
-    )proto";
+    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
+                                                                          name: "meshes_28"
+                                                                          custom_type: "meshes"
+                                                                          instances:
+                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+                                                                            , { id: 1 asic_location: ASIC_LOCATION_2 }
+                                                                            , { id: 2 asic_location: ASIC_LOCATION_3 }
+                                                                            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+                                                                          row_major_mesh { dims: [ 2, 2 ] }
+                                                                        }
+    )proto");
+    ;
 
     PhysicalGroupingDescriptor desc(text_proto);
     auto meshes = desc.get_groupings_by_name("meshes");
@@ -2281,7 +2265,7 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_BaseGrouping) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
-    const std::string text_proto = R"proto(
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
         groupings {
           name: "trays_3"
           custom_type: "trays"
@@ -2297,8 +2281,8 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
           row_major_mesh { dims: [ 2, 4 ] }
         }
         groupings {
-          name: "hosts_1"
-          custom_type: "hosts"
+          name: "pods_nested"
+          custom_type: "pods"
           instances:
           [ {
             id: 0
@@ -2324,20 +2308,20 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
           instances:
           [ {
             id: 0
-            grouping_ref { custom_type: "hosts" }
+            grouping_ref { custom_type: "pods" }
           }]
         }
-    )proto";
+    )proto");
 
     PhysicalGroupingDescriptor desc(text_proto);
     auto trays = desc.get_groupings_by_name("trays");
-    auto hosts = desc.get_groupings_by_name("hosts");
+    auto pods = desc.get_groupings_by_name("pods");
     auto meshes = desc.get_groupings_by_name("meshes");
     ASSERT_EQ(trays.size(), 1);
-    ASSERT_EQ(hosts.size(), 1);
+    ASSERT_EQ(pods.size(), 1);
     ASSERT_EQ(meshes.size(), 1);
     EXPECT_EQ(trays[0].asic_count, 8u);
-    EXPECT_EQ(hosts[0].asic_count, 32u);   // 4 * 8
+    EXPECT_EQ(pods[0].asic_count, 32u);    // 4 * 8
     EXPECT_EQ(meshes[0].asic_count, 32u);  // 1 * 32
 }
 
@@ -2345,352 +2329,51 @@ TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_NestedGroupings) {
 // GET_VALID_GROUPINGS_FOR_MGD TESTS (unchanged - use file-based configs)
 // ============================================================================
 
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_32x4Quad) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 32x4 = 128 ASICs with host_topology [4, 1] (1x4 linear), should match "4x32_Mesh" (dims [1, 4])
-            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "32x4 mesh should match 128 ASIC grouping";
-            EXPECT_EQ(assigned_grouping.name, "4x32_Mesh")
-                << "32x4 mesh with host_topology [4, 1] should be assigned to 4x32_Mesh (dims [1, 4]), got: "
-                << assigned_grouping.name;
-            // Verify connections: 4x32_Mesh has 4 instances with row_major_mesh connections (dims [1, 4])
-            EXPECT_GE(assigned_grouping.items.size(), 4u)
-                << "Grouping " << assigned_grouping.name << " should have at least 4 items (instances) for connections";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleBHGalaxy) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 8x4 = 32 ASICs with host_topology [1, 1] (single host), should match "4x8_Mesh" (1 instance)
-            EXPECT_EQ(assigned_grouping.asic_count, 32u) << "8x4 mesh should match 32 ASIC grouping";
-            EXPECT_EQ(assigned_grouping.name, "4x8_Mesh")
-                << "8x4 mesh with host_topology [1, 1] should be assigned to 4x8_Mesh (single instance), got: "
-                << assigned_grouping.name;
-            // Verify connections: 4x8_Mesh has 1 instance, so adjacency graph should be empty or have 1 node
-            EXPECT_LE(assigned_grouping.adjacency_graph.get_nodes().size(), 1u)
-                << "Grouping 4x8_Mesh should have at most 1 node in adjacency graph (single instance)";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_16x8QuadBHGalaxy) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 16x8 = 128 ASICs with host_topology [2, 2] (2x2 grid), should match "8x16_Mesh" (dims [2, 2])
-            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "16x8 mesh should match 128 ASIC grouping";
-            EXPECT_EQ(assigned_grouping.name, "8x16_Mesh")
-                << "16x8 mesh with host_topology [2, 2] should be assigned to 8x16_Mesh (dims [2, 2]), got: "
-                << assigned_grouping.name;
-            // Verify connections: 8x16_Mesh has 4 instances with row_major_mesh connections (dims [2, 2])
-            EXPECT_EQ(assigned_grouping.adjacency_graph.get_nodes().size(), 4u)
-                << "Grouping 8x16_Mesh should have 4 nodes in adjacency graph";
-            // Verify that connections exist by checking that at least one node has neighbors
-            bool has_connections = false;
-            for (const auto& node : assigned_grouping.adjacency_graph.get_nodes()) {
-                if (!assigned_grouping.adjacency_graph.get_neighbors(node).empty()) {
-                    has_connections = true;
-                    break;
-                }
-            }
-            EXPECT_TRUE(has_connections)
-                << "Grouping 8x16_Mesh should have connections (4 instances with row_major_mesh)";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Triple16x8QuadGalaxy) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/triple_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 16x8 = 128 ASICs with host_topology [2, 2] (2x2 grid), should match "8x16_Mesh" (dims [2, 2])
-            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "16x8 mesh should match 128 ASIC grouping";
-            EXPECT_EQ(assigned_grouping.name, "8x16_Mesh")
-                << "16x8 mesh with host_topology [2, 2] should be assigned to 8x16_Mesh (dims [2, 2]), got: "
-                << assigned_grouping.name;
-            // Verify connections: 8x16_Mesh has 4 instances with row_major_mesh connections (dims [2, 2])
-            EXPECT_EQ(assigned_grouping.adjacency_graph.get_nodes().size(), 4u)
-                << "Grouping 8x16_Mesh should have 4 nodes in adjacency graph";
-            // Verify that connections exist by checking that at least one node has neighbors
-            bool has_connections = false;
-            for (const auto& node : assigned_grouping.adjacency_graph.get_nodes()) {
-                if (!assigned_grouping.adjacency_graph.get_neighbors(node).empty()) {
-                    has_connections = true;
-                    break;
-                }
-            }
-            EXPECT_TRUE(has_connections)
-                << "Grouping 8x16_Mesh should have connections (4 instances with row_major_mesh)";
-        }
-    }
-
-    // Verify that graph instances are matched (if any)
-    for (const auto& [type, name_map] : valid_groupings) {
-        if (type != "MESH") {
-            EXPECT_FALSE(name_map.empty()) << "Graph type " << type << " should have matched groupings";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_QuadGalaxyTopologyMatching) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-
-    // Print out all valid groupings
-    std::cout << "\n=== Valid Groupings for Quad Galaxy MGD ===" << std::endl;
-    for (const auto& [type, name_map] : valid_groupings) {
-        std::cout << "Type: " << type << std::endl;
-        for (const auto& [instance_name, grouping] : name_map) {
-            std::cout << "  Instance: " << instance_name << std::endl;
-            std::cout << "    Grouping Name: " << grouping.name << std::endl;
-            std::cout << "    ASIC Count: " << grouping.asic_count << std::endl;
-            std::cout << "    Adjacency Graph Nodes: " << grouping.adjacency_graph.get_nodes().size() << std::endl;
-            std::cout << "    Items Count: " << grouping.items.size() << std::endl;
-        }
-    }
-    std::cout << "==========================================\n" << std::endl;
-
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 8x16 = 128 ASICs with host_topology [1, 4] (1x4 linear), should match a 128 ASIC grouping
-            // Based on topology matching, should match either 4x32_Mesh or 8x16_Mesh
-            EXPECT_EQ(assigned_grouping.asic_count, 128u) << "8x16 mesh should match 128 ASIC grouping";
-
-            // Verify that the matched grouping is one of the valid 128 ASIC groupings
-            EXPECT_TRUE(assigned_grouping.name == "4x32_Mesh" || assigned_grouping.name == "8x16_Mesh")
-                << "8x16 mesh with host_topology [1, 4] should match either 4x32_Mesh or 8x16_Mesh based on topology, "
-                   "got: "
-                << assigned_grouping.name;
-
-            // Verify that the grouping has an adjacency graph (for topology matching)
-            EXPECT_GT(assigned_grouping.adjacency_graph.get_nodes().size(), 0u)
-                << "Matched grouping should have nodes in adjacency graph for topology matching";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BHGalaxyPipeline) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_pipeline.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("MESH") != mesh_groupings.end());
-        if (mesh_groupings.find("MESH") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("MESH");
-            // 2x4 = 8 ASICs with host_topology [1, 1] (single host), should match "2x4_Mesh" (single instance)
-            EXPECT_EQ(assigned_grouping.asic_count, 8u) << "2x4 mesh should match 8 ASIC grouping";
-            EXPECT_EQ(assigned_grouping.name, "2x4_Mesh")
-                << "2x4 mesh with host_topology [1, 1] should be assigned to 2x4_Mesh (single instance), got: "
-                << assigned_grouping.name;
-            // Verify connections: 2x4_Mesh has 1 instance, so adjacency graph should be empty or have 1 node
-            EXPECT_LE(assigned_grouping.adjacency_graph.get_nodes().size(), 1u)
-                << "Grouping 2x4_Mesh should have at most 1 node in adjacency graph (single instance)";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_4x4) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 4x4 = 16 ASICs, should match "4x4_Mesh", "2x8_Mesh" (first), or "2x8_Mesh" (second) - all are 16 ASICs
-            EXPECT_EQ(assigned_grouping.asic_count, 16u) << "4x4 mesh should match 16 ASIC grouping";
-            EXPECT_TRUE(assigned_grouping.name == "4x4_Mesh" || assigned_grouping.name == "2x8_Mesh")
-                << "4x4 mesh should be assigned to 4x4_Mesh or 2x8_Mesh, got: " << assigned_grouping.name;
-            // Verify connections: all these groupings have 2 instances with row_major_mesh connections
-            // Connections are defined in textproto: row_major_mesh topology connecting the 2 instances
-            // The adjacency graph represents the topology between the 2 instances
-            EXPECT_GE(assigned_grouping.items.size(), 2u)
-                << "Grouping " << assigned_grouping.name << " should have at least 2 items (instances) for connections";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x2) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    const std::filesystem::path mgd_file_path =
-        "tt_metal/fabric/mesh_graph_descriptors/bh_8x2_mesh_graph_descriptor.textproto";
-    MeshGraphDescriptor mgd(mgd_file_path);
-
-    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
-    EXPECT_FALSE(valid_groupings.empty());
-
-    // Verify that mesh type is matched
-    EXPECT_TRUE(valid_groupings.find("MESH") != valid_groupings.end());
-    if (valid_groupings.find("MESH") != valid_groupings.end()) {
-        const auto& mesh_groupings = valid_groupings.at("MESH");
-        EXPECT_TRUE(mesh_groupings.find("M0") != mesh_groupings.end());
-        if (mesh_groupings.find("M0") != mesh_groupings.end()) {
-            const auto& assigned_grouping = mesh_groupings.at("M0");
-            // 8x2 = 16 ASICs, should match "4x4_Mesh", "2x8_Mesh" (first), or "2x8_Mesh" (second) - all are 16 ASICs
-            EXPECT_EQ(assigned_grouping.asic_count, 16u) << "8x2 mesh should match 16 ASIC grouping";
-            EXPECT_TRUE(assigned_grouping.name == "4x4_Mesh" || assigned_grouping.name == "2x8_Mesh")
-                << "8x2 mesh should be assigned to 4x4_Mesh or 2x8_Mesh, got: " << assigned_grouping.name;
-            // Verify connections: all these groupings have 2 instances with row_major_mesh connections
-            // Connections are defined in textproto: row_major_mesh topology connecting the 2 instances
-            // The adjacency graph represents the topology between the 2 instances
-            EXPECT_GE(assigned_grouping.items.size(), 2u)
-                << "Grouping " << assigned_grouping.name << " should have at least 2 items (instances) for connections";
-        }
-    }
-}
-
-TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyGraph_8x16Mesh_WithCardinalConnections) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test with 8x16_Mesh: 4 HOSTS instances arranged in 2x2 grid
-    // Note: get_groupings_by_name searches by type, so we need to search all groupings by name
-    auto all_groupings = pgd.get_all_groupings();
-    auto mesh_it = std::find_if(
-        all_groupings.begin(), all_groupings.end(), [](const GroupingInfo& g) { return g.name == "8x16_Mesh"; });
-    ASSERT_NE(mesh_it, all_groupings.end()) << "8x16_Mesh grouping should exist";
-    const auto& mesh_grouping = *mesh_it;
-
-    // Build flattened adjacency graph
-    auto flattened_graph = pgd.build_flattened_adjacency_graph(mesh_grouping);
-}
-
-TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyGraph_4x4Mesh_WithConcreteEdges) {
-    GTEST_SKIP() << "Temporarily skipped";
-    const std::filesystem::path pgd_file_path =
-        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
-    PhysicalGroupingDescriptor pgd(pgd_file_path);
-
-    // Test with 4x4_Mesh: 2 TRAY instances - leaf level should have concrete edges
-    // Note: get_groupings_by_name searches by type, so we need to search all groupings by name
-    auto all_groupings = pgd.get_all_groupings();
-    auto tray_mesh_it = std::find_if(
-        all_groupings.begin(), all_groupings.end(), [](const GroupingInfo& g) { return g.name == "4x4_Mesh"; });
-    ASSERT_NE(tray_mesh_it, all_groupings.end()) << "4x4_Mesh grouping should exist";
-    const auto& tray_mesh_grouping = *tray_mesh_it;
-
-    auto tray_flattened_graph = pgd.build_flattened_adjacency_graph(tray_mesh_grouping);
-}
-
 TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     // Test corner orientation assignment for various mesh configurations
     const std::string text_proto_2x4 = R"proto(
         groupings {
-          name: "tray_2x4"
+          name: "tray_1"
           preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2x4"
+          custom_type: "tray_2x4"
           instances:
           [ { id: 0 asic_location: ASIC_LOCATION_1 }
             , { id: 1 asic_location: ASIC_LOCATION_2 }
@@ -2705,7 +2388,7 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     )proto";
 
     PhysicalGroupingDescriptor desc_2x4(text_proto_2x4);
-    auto trays_2x4 = desc_2x4.get_groupings_by_name("TRAY_1");
+    auto trays_2x4 = desc_2x4.get_groupings_by_name("tray_2x4");
     ASSERT_EQ(trays_2x4.size(), 1u) << "Should have one TRAY_1 grouping";
     const auto& tray_2x4 = trays_2x4[0];
 
@@ -2730,6 +2413,45 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
 
     // Test 1x4 mesh: endpoints should have 2 corners each
     const std::string text_proto_1x4 = R"proto(
+        groupings {
+          name: "tray_1"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
         groupings {
           name: "mesh_1x4"
           custom_type: "mesh"
@@ -2779,6 +2501,45 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     // Test 4x1 mesh (column): endpoints should have 2 corners each
     const std::string text_proto_4x1 = R"proto(
         groupings {
+          name: "tray_1"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
           name: "mesh_4x1"
           custom_type: "mesh"
           instances:
@@ -2823,6 +2584,39 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
     // Test 1x1 mesh: single item should have all 4 corners
     // Note: Using MESH preset type to allow single instance
     const std::string text_proto_1x1 = R"proto(
+        groupings {
+          name: "tray_1"
+          preset_type: TRAY_1
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_2"
+          preset_type: TRAY_2
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_3"
+          preset_type: TRAY_3
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "tray_4"
+          preset_type: TRAY_4
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "hosts_1"
+          custom_type: "hosts"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
         groupings {
           name: "mesh_1x1"
           preset_type: MESH
