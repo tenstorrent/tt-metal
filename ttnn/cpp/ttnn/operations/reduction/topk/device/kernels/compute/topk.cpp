@@ -131,6 +131,77 @@ void kernel_main() {
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
         uint32_t ktiles_saved = 0;
 
+        /*
+        ================================================================================================
+        TOPK ALGORITHM IMPLEMENTATION - INSERTION SORT WITH DOUBLE BUFFERING
+        ================================================================================================
+
+        This kernel implements TopK using an insertion sort algorithm that maintains a sliding window
+        of the K largest/smallest elements across all input tiles. The algorithm processes input
+        tiles row by row (height dimension) and maintains sorted results in a double-buffered format.
+
+        KEY CONCEPTS:
+        - output_tiles = ceil(K/32): Number of tiles needed to store K elements
+        - Each tile contains 32 elements, so for K=128, we need output_tiles=4
+        - Double buffering: result_prep buffers have size 2*output_tiles for efficient insertion
+        - ktiles_saved: Tracks how many output tiles currently contain valid sorted data
+
+        ALGORITHM PHASES:
+
+        PHASE 1: INITIALIZATION (First iteration, count=1)
+        - Read first TWO input tiles (2 x values + 2 x indices)
+        - Transpose from WH to HW format for processing
+        - Sort these 64 elements using topk_local_sort
+        - Store sorted results in result_prep buffer
+        - Set ktiles_saved = 2 (consumed 2 tiles worth of sorted data)
+
+        PHASE 2: INCREMENTAL INSERTION (count=2 to Wt-1)
+        - Read ONE input tile at a time (32 new elements)
+        - For each of the output_tiles positions, perform insertion sort:
+          * Compare new tile with existing sorted tile at that position
+          * Merge using topk_local_sort (keeping K largest/smallest)
+          * Store result back to result_prep buffer
+
+        PHASE 3: BUFFER MANAGEMENT STRATEGY
+        Three distinct cases based on current state:
+
+        Case A: FIRST SORT (ktiles_saved == 0)
+        - Process initial two transposed tiles
+        - No existing sorted data to merge with
+        - Increment: output_tiles (jump to next buffer half)
+        - Result: ktiles_saved = 2
+
+        Case B: GROWING PHASE (index >= ktiles_saved-1 && ktiles_saved < output_tiles)
+        - Still building up the sorted buffer
+        - Insert new tile at the next available position
+        - Each insertion increases ktiles_saved by 1
+        - Increment: output_tiles - index (adaptive positioning)
+
+        Case C: STEADY STATE (ktiles_saved == output_tiles)
+        - Buffer is full with K best elements
+        - New tiles compete with existing worst elements
+        - Only better elements replace existing ones
+        - Increment: 1 (simple linear processing)
+
+        PHASE 4: DOUBLE BUFFERING MECHANICS
+        - result_prep buffer alternates between two halves of size output_tiles
+        - After each insertion, we flip between reading from one half and writing to the other
+        - This prevents data corruption during the merge operation
+        - The 'incr' variable controls how far to advance buffer pointers
+
+        PHASE 5: OUTPUT GENERATION
+        - After processing all Wt input tiles, result_prep contains the K best elements
+        - Transpose results back from HW to WH format
+        - Pack final results into output circular buffers
+
+        EXAMPLE (K=128, output_tiles=4):
+        Initial: [ ][ ][ ][ ] (4 empty slots)
+        After 2 tiles: [64 elements][sorted][ ][ ] (ktiles_saved=2)
+        After 3 tiles: [32 elements][32 elements][32 elements][ ] (ktiles_saved=3)
+        After 4 tiles: [32][32][32][32] (ktiles_saved=4, buffer full)
+        Subsequent tiles compete with existing elements, replacing worse ones
+        */
+
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
         for (uint32_t count = 1; count < Wt; count++) {
