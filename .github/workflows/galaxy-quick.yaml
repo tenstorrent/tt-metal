@@ -42,8 +42,7 @@ on:
 run-name: >
   ${{ 
     (github.event_name == 'schedule' || github.inputs.arch == 'blackhole') && '(BH Galaxy) Quick' || 
-    (github.event_name == 'push' || github.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick' || 
-    '(Galaxy) Quick' 
+    (github.event_name == 'push' || github.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick'
   }}
 permissions:
   packages: write
