@@ -10,6 +10,8 @@
 
 #include "sfpi.h"
 
+#include "api/debug/dprint.h"
+
 using namespace sfpi;
 
 namespace ckernel {
@@ -29,9 +31,26 @@ inline void calculate_typecast_fp32_to_uint8() {
         sfpi::vInt exponent = sfpi::exexp(in);
         mantissa >>= (23 - exponent - 1);
         mantissa = (mantissa + 1) >> 1;
-        mantissa += 256;
-        mantissa &= 0xff;
+        mantissa += 256;  // Handle negative numbers
+        mantissa &= 0xFF;
         sfpi::dst_reg[0] = mantissa;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
+inline void calculate_typecast_uint_to_uint8() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vUInt in;
+        if constexpr (u16) {
+            TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+            in = sfpi::l_reg[sfpi::LRegs::LReg0];
+        } else {
+            in = sfpi::dst_reg[0];
+        }
+        in += 256;
+        sfpi::dst_reg[0] = in & 0xFF;
         sfpi::dst_reg++;
     }
 }
@@ -143,6 +162,9 @@ inline void init_typecast_fp32_to_uint16() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_uint_to_uint8() {}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_uint16() {
