@@ -65,7 +65,7 @@ void matmul_multicore_reuse_mcast(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     /*
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
