@@ -1185,8 +1185,6 @@ class PreSDPA:
 
                 # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
                 # at offset 64 B. This CB is consumed before SDPA runs.
-                # Must be allocated on union of matmul cores and rmsnorm core for gather to get write_ptr.
-                # Tensor-backing on full device grid is a superset, so this is satisfied.
                 rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_input_cb,
                     sdpa_out_interm_tensor_device,
