@@ -272,6 +272,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     // Mcast args
     auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto super_sync_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto super_sync_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -414,6 +416,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_sender_semaphore_id);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)super_sync_receiver_semaphore_id);
+    // super_sync: core that collects incs and multicasts response (must be in grid)
+    auto start_core_noc_coord = device->worker_core_from_logical_core(start_core);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.x);  // super_sync_core_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.y);  // super_sync_core_y
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.x);  // mcast_start_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)start_core_noc_coord.y);  // mcast_start_y
+    auto end_core_noc_coord = device->worker_core_from_logical_core(bottom_right_core);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)end_core_noc_coord.x);  // mcast_end_x
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)end_core_noc_coord.y);  // mcast_end_y
+    // super_sync_core does not inc itself; noc_semaphore_set_multicast excludes source
+    in1_sender_writer_compile_time_args.push_back(
+        (std::uint32_t)(in0_mcast_receiver_num_cores - 1));  // num_cores_super_sync
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -472,6 +488,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         device->arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    // get env var and convert to bool
+    const bool mm_super_sync_enabled = std::stoi(std::getenv("TT_MM_SUPER_SYNC_ENABLED")) == 1;
+    if (mm_super_sync_enabled) {
+        mm_kernel_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        mm_kernel_in1_sender_writer_defines["MM_SUPER_SYNC_ENABLED"] = "1";
+        log_info(tt::LogOp, "Super sync enabled for matmul");
+    }
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -847,6 +870,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         const auto& core = cores[i];
         uint32_t output_idx_x = i % num_blocks_x;
         uint32_t output_idx_y = i / num_blocks_x;
+        auto core_physical = device->worker_core_from_logical_core(core);
 
         if (in0_is_sharded) {
             std::vector<uint32_t> mm_in0_sender_args;
@@ -925,6 +949,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
+                (std::uint32_t)core_physical.x,
+                (std::uint32_t)core_physical.y,
                 // in1 tensor args
                 (std::uint32_t)in1_buffer->address(),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id

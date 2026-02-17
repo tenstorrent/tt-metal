@@ -473,6 +473,8 @@ void kernel_main() {
                             in1_mcast_receiver_semaphore_noc_addr,
                             in1_mcast_num_cores);
 
+#endif  // SKIP_MCAST
+
 #ifdef MM_SUPER_SYNC_ENABLED
                         if (is_super_sync_core) {
                             noc_semaphore_wait(super_sync_sender_semaphore_addr_ptr, num_cores_super_sync);
@@ -489,8 +491,6 @@ void kernel_main() {
                             ckernel::wait(cycles_to_wait);
                         }
 #endif  // MM_SUPER_SYNC_ENABLED
-
-#endif  // SKIP_MCAST
 
 #ifndef IN1_SHARDED
                         cb_push_back(cb_id_in1, in1_block_num_tiles);
