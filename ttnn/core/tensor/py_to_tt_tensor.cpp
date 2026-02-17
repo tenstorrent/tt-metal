@@ -251,7 +251,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         for (size_t b = 0; b < batch_size; ++b) {
             for (size_t i = 0; i < static_cast<size_t>(N); ++i) {
                 for (size_t j = 0; j < static_cast<size_t>(K); ++j) {
-                    transposed[b * N * K + i * K + j] = src[b * K * N + j * N + i];
+                    transposed[(b * N * K) + (i * K) + j] = src[(b * K * N) + (j * N) + i];
                 }
             }
         }
@@ -259,6 +259,7 @@ Tensor convert_python_tensor_to_tt_tensor(
 
         // Build transposed shape: swap last two dims
         std::vector<uint32_t> new_dims;
+        new_dims.reserve(rank);
         for (size_t i = 0; i < rank - 2; ++i) {
             new_dims.push_back(tensor_shape[i]);
         }
