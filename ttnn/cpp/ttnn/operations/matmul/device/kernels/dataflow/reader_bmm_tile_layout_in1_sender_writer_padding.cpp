@@ -19,15 +19,6 @@ void kernel_main() {
     constexpr uint32_t super_sync_core_y = get_compile_time_arg_val(35);
     const bool is_super_sync_core = (bool)(core_x == super_sync_core_x && core_y == super_sync_core_y);
 
-    // DPRINT << "is_super_sync_core: " << (uint32_t)is_super_sync_core << ENDL();
-    // DPRINT << "core_x: " << core_x << ENDL();
-    // DPRINT << "core_y: " << core_y << ENDL();
-    // print x and y distance from super sync core as well as x and y coordiates of this core
-    // DPRINT << "x coordinate of this core: " << (uint32_t)core_x << ENDL();
-    // DPRINT << "y coordinate of this core: " << (uint32_t)core_y << ENDL();
-    // DPRINT << "x distance from super sync core: " << (uint32_t)(core_x - super_sync_core_x) << ENDL();
-    // DPRINT << "y distance from super sync core: " << (uint32_t)(core_y - super_sync_core_y) << ENDL();
-
     // based on the distance from the super sync core, calculate the number of cycles to wait
     // the farther away, the less cycles to wait (200 - distance * 1)
     const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
@@ -472,7 +463,6 @@ void kernel_main() {
                             in1_mcast_receiver_semaphore_addr,
                             in1_mcast_receiver_semaphore_noc_addr,
                             in1_mcast_num_cores);
-
 #endif  // SKIP_MCAST
 
 #ifdef MM_SUPER_SYNC_ENABLED

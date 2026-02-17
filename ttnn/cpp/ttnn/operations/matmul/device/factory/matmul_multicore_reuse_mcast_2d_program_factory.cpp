@@ -745,7 +745,6 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_receiver.num_cores() > 0) {
-        log_info(LogOp, "here2");
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -1489,8 +1488,8 @@ void override_runtime_arguments_impl(
     auto& sender_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
     for (const auto& core : in1_sender_cores) {
         auto& writer_runtime_args = sender_writer_runtime_args_by_core[core.x][core.y];
-        writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[7] = dst_buffer->address();
+        writer_runtime_args[2] = src_buffer_b->address();
+        writer_runtime_args[9] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             writer_runtime_args[18] = (*bias_buffer)->address();
         }
@@ -1500,7 +1499,7 @@ void override_runtime_arguments_impl(
     auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
     for (const auto& core : in1_receiver_cores) {
         auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-        writer_runtime_args[2] = dst_buffer->address();
+        writer_runtime_args[4] = dst_buffer->address();
     }
     if (mm_kernel_in1_receiver_writer_id != mm_kernel_in1_receiver_writer_other_noc_setup_id) {
         auto& receiver_writer_runtime_args_by_core =

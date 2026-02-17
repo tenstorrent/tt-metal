@@ -19,19 +19,10 @@ void kernel_main() {
     constexpr uint32_t super_sync_core_y = get_compile_time_arg_val(22);
     const bool is_super_sync_core = (bool)(core_x == super_sync_core_x && core_y == super_sync_core_y);
 
-    // DPRINT << "x coordinate of this core: " << (uint32_t)core_x << ENDL();
-    // DPRINT << "y coordinate of this core: " << (uint32_t)core_y << ENDL();
-    // DPRINT << "x distance from super sync core: " << (uint32_t)(core_x - super_sync_core_x) << ENDL();
-    // DPRINT << "y distance from super sync core: " << (uint32_t)(core_y - super_sync_core_y) << ENDL();
-
     // based on the distance from the super sync core, calculate the number of cycles to wait
     // the farther away, the less cycles to wait (200 - distance * 1)
     const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
     const uint32_t cycles_to_wait = 220 - distance_from_super_sync_core * 9;
-
-    // DPRINT << "is_super_sync_core: " << (uint32_t)is_super_sync_core << ENDL();
-    // DPRINT << "core_x: " << core_x << ENDL();
-    // DPRINT << "core_y: " << core_y << ENDL();
 
     // in1 mcast args
     const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);

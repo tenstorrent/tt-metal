@@ -2666,8 +2666,8 @@ static void override_mcast_in0_program_parameters(
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
         // in1 sender
-        writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[7] = dst_buffer->address();
+        writer_runtime_args[2] = src_buffer_b->address();
+        writer_runtime_args[9] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             writer_runtime_args[18] = (*bias_buffer)->address();
         }
