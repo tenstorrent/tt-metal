@@ -14,23 +14,24 @@ from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import (
     device_context,
     get_mem_configs,
+    get_serializable_shard_specs,
     mesh_shape_iterator,
     validate_serializable_shard_spec,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 
 NUM_DEVICES = ttnn.get_num_devices()
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::all_gather_async", all_cases=False)
+model_traced_params = loader.get_suite_parameters("ttnn.experimental.all_gather_async")
 
 FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
@@ -215,17 +216,24 @@ def run(
     shard_specs=None,
     num_iters=None,
     topology=None,
-    # Model traced parameters
+    # Model traced parameters (V2 format)
+    input_a_shape=None,
     input_a_dtype=None,
     input_a_layout=None,
     input_a_memory_config=None,
-    output_memory_config=None,
+    input_a_tensor_placement=None,
+    memory_config=None,  # output memory_config
+    persistent_output_buffer=None,
+    barrier_semaphore=None,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
     *,
     device,  # unused
     **kwargs,
 ) -> list:
-    # Check if this is a model_traced run (has input_a_memory_config)
-    is_model_traced = input_a_memory_config is not None
+    # Check if this is a model_traced run (V2 format has input_a_shape)
+    is_model_traced = input_a_shape is not None
 
     if is_model_traced:
         # Model traced format - use defaults for multi-device setup
@@ -233,61 +241,49 @@ def run(
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
 
-        # Use defaults for model_traced
-        mesh_shape = (2, 1)
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
-        dim = 3  # Default dim
-        cluster_axis = 0  # Default cluster_axis
-        num_links = 1
-        num_iters = 1
-        topology = ttnn.Topology.Linear
-
-        # Convert model_traced parameters to generality format
+        # V2 format: use input_a_shape directly
+        input_shape = input_a_shape
         input_dtype = input_a_dtype
         layout = input_a_layout
+        input_memory_config = input_a_memory_config
+        output_memory_config = memory_config  # V2 uses 'memory_config' for output
+
+        # Use defaults if not provided in traced config
+        if num_links is None:
+            num_links = 1
+        if num_iters is None:
+            num_iters = 1
+        if topology is None:
+            topology = ttnn.Topology.Linear
+
+        # Determine mesh_shape from tensor_placement or default to (1, 2)
+        if input_a_tensor_placement:
+            mesh_device_shape = input_a_tensor_placement.get("mesh_device_shape")
+            if mesh_device_shape and isinstance(mesh_device_shape, (list, tuple)):
+                mesh_shape = tuple(mesh_device_shape)
+            else:
+                mesh_shape = (1, 2)  # Default
+        else:
+            mesh_shape = (1, 2)  # Default
+
+        # Determine cluster_axis and fabric_config from mesh_shape
+        # If 1D mesh (one dimension is 1), use FABRIC_1D
+        if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D
+            cluster_axis = 0 if mesh_shape[0] > 1 else 1
+        else:
+            # 2D mesh
+            fabric_config = ttnn.FabricConfig.FABRIC_2D
+            cluster_axis = 1  # Default to axis 1 for 2D
+
+        # Use dim from traced config (required parameter)
+        if dim is None:
+            raise ValueError("dim is required for all_gather_async")
 
         # Create reference output
         replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
         torch_input = torch.rand(input_shape).bfloat16()
         torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
-
-        # Use provided memory configs directly
-        input_memory_config = input_a_memory_config
-
-        # Ensure output_memory_config is a MemoryConfig object
-        # It might come as a string from JSON serialization, so parse it if needed
-        if output_memory_config is None:
-            raise ValueError("output_memory_config is None - required parameter missing")
-        elif isinstance(output_memory_config, str):
-            # Parse the string representation back to a MemoryConfig
-            import ast
-
-            # Try to parse as dict (might be a string representation of dict)
-            mem_config_dict = ast.literal_eval(output_memory_config)
-            if not isinstance(mem_config_dict, dict):
-                raise ValueError(
-                    f"Failed to parse output_memory_config string: expected dict, got {type(mem_config_dict)}"
-                )
-            # Use the loader's parse_memory_config to convert dict to MemoryConfig
-            from tests.sweep_framework.master_config_loader import MasterConfigLoader
-
-            loader = MasterConfigLoader()
-            # Output shape is input shape with width doubled
-            output_shape = input_shape.copy() if input_shape else []
-            if len(output_shape) >= 4:
-                output_shape[3] = output_shape[3] * 2
-            output_memory_config = loader.parse_memory_config(mem_config_dict, output_shape)
-        elif isinstance(output_memory_config, dict):
-            # It's a dict, convert to MemoryConfig
-            from tests.sweep_framework.master_config_loader import MasterConfigLoader
-
-            loader = MasterConfigLoader()
-            output_shape = input_shape.copy() if input_shape else []
-            if len(output_shape) >= 4:
-                output_shape[3] = output_shape[3] * 2
-            output_memory_config = loader.parse_memory_config(output_memory_config, output_shape)
-        elif not isinstance(output_memory_config, ttnn.MemoryConfig):
-            raise ValueError(f"output_memory_config is not a MemoryConfig (type: {type(output_memory_config)})")
     else:
         # Original generality/lead_model format
         # Create reference output
@@ -307,14 +303,28 @@ def run(
             return False, device_err, None, None
 
         if is_model_traced:
-            # Create input tensor directly with provided memory config
-            tt_input = ttnn.from_torch(
-                torch_input,
-                layout=layout,
-                memory_config=input_memory_config,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                device=device,
-            )
+            # V2 format: Create input tensor with mesh support if tensor_placement is provided
+            if input_a_tensor_placement:
+                # Import mesh utilities for V2 format
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import create_tensor_on_mesh
+
+                tt_input = create_tensor_on_mesh(
+                    torch_input,
+                    device,
+                    input_dtype,
+                    layout,
+                    input_memory_config,
+                    input_a_tensor_placement,
+                )
+            else:
+                # Fallback: Create input tensor directly with provided memory config
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    layout=layout,
+                    memory_config=input_memory_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    device=device,
+                )
         else:
             # Use _get_tensors helper for generality format
             tt_input, torch_reference, output_memory_config = _get_tensors(
