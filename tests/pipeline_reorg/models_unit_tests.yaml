@@ -1,0 +1,30 @@
+# This file defines the test matrix for the Models Unit Tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Llama 3.1-8B unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 600 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+  model: llama3.1-8b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+    wh_n150_civ2:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models

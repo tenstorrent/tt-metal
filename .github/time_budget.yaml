@@ -100,6 +100,8 @@ models:
     wh_llmbox: 150
   unit:
     wh_llmbox: 295
+    wh_llmbox_perf: 30
+    wh_n150_civ2: 30
   integration:
     wh_llmbox: 422
   perf:
