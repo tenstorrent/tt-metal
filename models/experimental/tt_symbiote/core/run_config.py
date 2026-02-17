@@ -86,6 +86,9 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
+                print(
+                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Try overriding set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                )
                 return None
         return self.tensor_config
 
@@ -398,7 +401,7 @@ def get_default_distributed_tensor_config(mesh_device=None, torch_tensor=None, m
             DeviceInit.DEVICE_TO_STATE_DICT.get(mesh_device) is not None
         ), f"Device {mesh_device} not found in DeviceInit.DEVICE_TO_STATE_DICT, cannot set distributed config for mesh device."
         state = DeviceInit.DEVICE_TO_STATE_DICT[mesh_device]
-    elif DeviceInit.DEVICE_TO_STATE_DICT is not None and len(DeviceInit.DEVICE_TO_STATE_DICT) == 1:
+    elif DeviceInit.DEVICE_TO_STATE_DICT is not None and len(DeviceInit.DEVICE_TO_STATE_DICT) >= 1:
         state = next(iter(DeviceInit.DEVICE_TO_STATE_DICT.values()))
     if state is None:
         return None
@@ -449,7 +452,9 @@ class NormalRun:
         # ...the real tensor is held as an element on the tensor.
         r.ttnn_tensor = ttnn_tensor  # Initialize ttnn_tensor
         r.elem = elem if not delete_elem else None
-        distributed_tensor_config = get_default_distributed_tensor_config(torch_tensor=elem)
+        distributed_tensor_config = get_default_distributed_tensor_config(
+            torch_tensor=elem, module_name=DispatchManager.current_module_name
+        )
         r.set_distributed_tensor_config(distributed_tensor_config)
         assert isinstance(r.elem, torch.Tensor) or isinstance(
             ttnn_tensor, ttnn.Tensor
