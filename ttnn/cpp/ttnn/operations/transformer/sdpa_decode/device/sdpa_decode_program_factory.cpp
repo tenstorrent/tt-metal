@@ -212,6 +212,17 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
     //// recalculate num_cores_per_batch based on num_active_cores
     num_cores_per_batch = num_active_cores / B;
+    // Calculate tree reduction parameters
+    uint32_t num_tree_reduction_rounds = ceil_log2(num_cores_per_head);
+    log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
+
+    TT_FATAL(
+        num_tree_reduction_rounds <= MAX_TREE_REDUCTION_ROUNDS,
+        "Flash Decode utilizes tree reduction for softmax calculation with a maximum of {} rounds, hence each KV head "
+        "can parallelize with a maximum of {} cores, but got {} cores per head.",
+        MAX_TREE_REDUCTION_ROUNDS,
+        1 << MAX_TREE_REDUCTION_ROUNDS,
+        num_cores_per_head);
 
     TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
@@ -715,7 +726,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     log_debug(tt::LogOp, "reduction_group_core_xs: {}", reduction_group_core_xs);
     log_debug(tt::LogOp, "reduction_group_core_ys: {}", reduction_group_core_ys);
 
-    // Create core ggroups for output cores
+    // Create core groups for output cores
     std::vector<uint32_t> output_core_physical_xs;
     std::vector<uint32_t> output_core_physical_ys;
     uint32_t output_core_noc_x{};
@@ -800,11 +811,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         reader_compile_time_args_common.push_back(0);
     }
 
-    // Calculate tree reduction parameters
-    // num_tree_reduction_rounds = ceil(log2(num_cores_per_head))
-    uint32_t num_tree_reduction_rounds = ceil_log2(num_cores_per_head);
-    log_debug(tt::LogOp, "Tree reduction enabled: num_tree_reduction_rounds: {}", num_tree_reduction_rounds);
-
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
         PNHt,
@@ -867,7 +873,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         use_half_tile,
         scale_union.u,
         sliding_window_size.value_or(0),
-        num_tree_reduction_rounds,  // New: number of rounds for tree reduction
+        num_tree_reduction_rounds,
     };
 
     // Determine granularity for compute loops
@@ -1015,7 +1021,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
-        // writer runtime args - now includes tree reduction parameters
+        // writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             out_addr,
             worker_id_for_reduce,
@@ -1084,15 +1090,17 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         for (auto core : core_group_idle) {
             log_debug(tt::LogOp, "Setting core {} to idle", core);
 
-            // reader runtime args
-            std::vector<uint32_t> reader_rt_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            // Reader runtime args
+            // Base args (15)
+            std::vector<uint32_t> reader_rt_args(15, 0);
 
-            // writer runtime args - need to match the size with tree reduction params
-            // Base args (16) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords (2*num_cores_per_head)
+            // Writer runtime args - need to match the size with tree reduction params
+            // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
+            // (2*num_cores_per_head)
             // + reducer coords + output coords
-            std::vector<uint32_t> writer_rt_args(16 + MAX_TREE_REDUCTION_ROUNDS + 2 * num_cores_per_head, 0);
+            std::vector<uint32_t> writer_rt_args(10 + 6 + MAX_TREE_REDUCTION_ROUNDS + 2 * num_cores_per_head, 0);
 
-            // compute runtime args - 65 indicates idle core
+            // Compute runtime args - 65 indicates idle core
             // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
             std::vector<uint32_t> compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
             compute_rt_args[0] = 65;  // Idle marker

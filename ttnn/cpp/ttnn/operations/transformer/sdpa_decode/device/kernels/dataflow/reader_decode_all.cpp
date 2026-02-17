@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <vector>
-#include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -156,7 +155,7 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // Read Q entirely - always read into cb_q_in
-    // When tilize_q is true, compute will tilize in-place back to cb_q_in
+    // When tilize_q is true, compute will tilize back to cb_q_in
     // When tilize_q is false, Q is already tilized
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
