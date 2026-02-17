@@ -15,14 +15,14 @@ void kernel_main() {
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
     constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
-    constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(6);
-    constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(7);
+    constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(6);
+    constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(7);
     constexpr uint32_t mm_block_ht = get_compile_time_arg_val(8);
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(11);
+    constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(11);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
-    constexpr uint32_t mm_N_block_wt = get_compile_time_arg_val(13);
+    constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
 
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
@@ -41,14 +41,15 @@ void kernel_main() {
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < batch_size; b++) {
-        for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
-            for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+        for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
+            for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                 const uint32_t effective_chunk_width_in_tiles =
-                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_block_wt);
+                    get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
 
                 for (uint32_t i = 1; i < ring_size; i++) {
-                    for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                    for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
+                         chunk_piece_idx++) {
                         uint32_t first_tile_row_in_mm_M_block = 0;
                         uint32_t first_chunk_col_in_tiles = 0;
                         uint32_t first_mm_core_idx = 0;

@@ -36,7 +36,7 @@ class ReduceScatterTestConfig:
     mm_cores_y: object = None  # Optional[int]
     mm_block_ht: object = None  # Optional[int]
     mm_block_wt: object = None  # Optional[int]
-    mm_N_block_wt: object = None  # Optional[int]
+    mm_N_full_block_wt: object = None  # Optional[int]
     chunk_width_in_mm_blocks: object = None  # Optional[int]
     num_workers_per_link: object = None  # Optional[int]
 
@@ -77,7 +77,7 @@ def run_reduce_scatter_impl(
     mm_cores_y=None,
     mm_block_ht=None,
     mm_block_wt=None,
-    mm_N_block_wt=None,
+    mm_N_full_block_wt=None,
     chunk_width_in_mm_blocks=None,
 ):
     use_sub_devices = False
@@ -216,7 +216,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=mm_cores_y,
                 mm_block_ht=mm_block_ht,
                 mm_block_wt=mm_block_wt,
-                mm_N_block_wt=mm_N_block_wt,
+                mm_N_full_block_wt=mm_N_full_block_wt,
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
             )
         elif use_new:
@@ -374,7 +374,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_N_block_wt=2,
+                mm_N_full_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_minimal_2x2",
@@ -398,7 +398,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_N_block_wt=2,
+                mm_N_full_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_toy_4x2",
@@ -422,7 +422,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_N_block_wt=4,
+                mm_N_full_block_wt=4,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_toy_2x4",
@@ -446,7 +446,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_N_block_wt=4,
+                mm_N_full_block_wt=4,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_toy_4x4",
@@ -470,7 +470,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_N_block_wt=2,
+                mm_N_full_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_4x4_2x8_mm_grid",
@@ -495,7 +495,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_N_block_wt=8,
+                mm_N_full_block_wt=8,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x8_2x8_mm_grid_chunk_2_mm_blocks_wide_multi_iter",
@@ -520,7 +520,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_N_block_wt=8,
+                mm_N_full_block_wt=8,
                 chunk_width_in_mm_blocks=2,
                 num_workers_per_link=3,
             ),
@@ -546,7 +546,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=8,
                 mm_block_wt=2,
-                mm_N_block_wt=8,
+                mm_N_full_block_wt=8,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x8_asymmetric_tall_narrow_8x2_blocks",
@@ -571,7 +571,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=4,
                 mm_block_ht=2,
                 mm_block_wt=8,
-                mm_N_block_wt=8,
+                mm_N_full_block_wt=8,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_16x8_asymmetric_short_wide_2x8_blocks",
@@ -597,7 +597,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_N_block_wt=10,
+                mm_N_full_block_wt=10,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_16x10_partial_last_chunk_4x4_blocks",
@@ -624,7 +624,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=3,
                 mm_block_wt=3,
-                mm_N_block_wt=6,
+                mm_N_full_block_wt=6,
                 chunk_width_in_mm_blocks=1,
             ),
             id="experimental_strided_24x12_3x3_blocks_2_N_blocks_chunk_1_mm_blocks",
@@ -652,7 +652,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=3,
                 mm_block_wt=3,
-                mm_N_block_wt=15,
+                mm_N_full_block_wt=15,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_24x30_3x3_blocks_2_N_blocks_partial_last_chunk",
@@ -678,7 +678,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=8,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_N_block_wt=8,
+                mm_N_full_block_wt=8,
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=6,
             ),
@@ -705,7 +705,7 @@ def run_reduce_scatter_impl(
                 mm_cores_y=4,
                 mm_block_ht=8,
                 mm_block_wt=8,
-                mm_N_block_wt=16,
+                mm_N_full_block_wt=16,
                 chunk_width_in_mm_blocks=2,
             ),
             id="experimental_strided_128x16_4_cores_single_N_block_wide_chunk",
@@ -763,7 +763,7 @@ def test_strided_reduce_scatter_async(
         mm_cores_y,
         mm_block_ht,
         mm_block_wt,
-        mm_N_block_wt,
+        mm_N_full_block_wt,
         chunk_width_in_mm_blocks,
         num_workers_per_link,
     ) = astuple(test_config)
@@ -792,7 +792,7 @@ def test_strided_reduce_scatter_async(
         mm_cores_y=mm_cores_y,
         mm_block_ht=mm_block_ht,
         mm_block_wt=mm_block_wt,
-        mm_N_block_wt=mm_N_block_wt,
+        mm_N_full_block_wt=mm_N_full_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
         num_workers_per_link=num_workers_per_link,
     )
@@ -812,14 +812,14 @@ def test_strided_reduce_scatter_async(
     # Constraints:
     #   slice_Ht (16) % mm_cores_y == 0
     #   (slice_Ht / mm_cores_y) % mm_block_ht == 0
-    #   slice_Wt (8) % mm_N_block_wt == 0
+    #   slice_Wt (8) % mm_N_full_block_wt == 0
     #
     # Derived values:
-    #   M_blocks_per_core = (16 / mm_cores_y) / mm_block_ht
-    #   N_blocks_per_slice = 8 / mm_N_block_wt
+    #   mm_M_unit_blocks_per_core = (16 / mm_cores_y) / mm_block_ht
+    #   N_blocks_per_slice = 8 / mm_N_full_block_wt
     #   chunk_width_in_tiles = chunk_width_in_mm_blocks * mm_block_wt
-    #   chunks_per_N_block = ceil(mm_N_block_wt / chunk_width_in_tiles)
-    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_block_wt, chunk_width_in_mm_blocks",
+    #   chunks_per_N_block = ceil(mm_N_full_block_wt / chunk_width_in_tiles)
+    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
     [
         # Finest granularity: M=16, N=8, chunk=1 tile each
         (1, 1, 1, 1, 1),
@@ -860,7 +860,7 @@ def test_strided_reduce_scatter_blocking_sweep(
     mm_cores_y,
     mm_block_ht,
     mm_block_wt,
-    mm_N_block_wt,
+    mm_N_full_block_wt,
     chunk_width_in_mm_blocks,
 ):
     run_reduce_scatter_impl(
@@ -885,7 +885,7 @@ def test_strided_reduce_scatter_blocking_sweep(
         mm_cores_y=mm_cores_y,
         mm_block_ht=mm_block_ht,
         mm_block_wt=mm_block_wt,
-        mm_N_block_wt=mm_N_block_wt,
+        mm_N_full_block_wt=mm_N_full_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
     )
 
@@ -904,8 +904,8 @@ def test_strided_reduce_scatter_blocking_sweep(
     # Constraints:
     #   slice_Ht (128) % mm_cores_y == 0
     #   (slice_Ht / mm_cores_y) % mm_block_ht == 0
-    #   slice_Wt (16) % mm_N_block_wt == 0
-    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_block_wt, chunk_width_in_mm_blocks",
+    #   slice_Wt (16) % mm_N_full_block_wt == 0
+    "mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
     [
         # Coarsest: single M-block (128 rows), single N-block, single chunk
         (1, 128, 16, 16, 1),
@@ -947,7 +947,7 @@ def test_strided_reduce_scatter_blocking_sweep_large(
     mm_cores_y,
     mm_block_ht,
     mm_block_wt,
-    mm_N_block_wt,
+    mm_N_full_block_wt,
     chunk_width_in_mm_blocks,
 ):
     run_reduce_scatter_impl(
@@ -972,6 +972,6 @@ def test_strided_reduce_scatter_blocking_sweep_large(
         mm_cores_y=mm_cores_y,
         mm_block_ht=mm_block_ht,
         mm_block_wt=mm_block_wt,
-        mm_N_block_wt=mm_N_block_wt,
+        mm_N_full_block_wt=mm_N_full_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
     )

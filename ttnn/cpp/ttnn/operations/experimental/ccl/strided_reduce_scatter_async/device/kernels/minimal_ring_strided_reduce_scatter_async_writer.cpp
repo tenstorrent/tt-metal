@@ -42,13 +42,13 @@ constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t dim = get_compile_time_arg_val(14);
-constexpr uint32_t mm_M_blocks_per_core = get_compile_time_arg_val(15);
-constexpr uint32_t mm_N_blocks_per_slice = get_compile_time_arg_val(16);
+constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(15);
+constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(16);
 constexpr uint32_t mm_block_ht = get_compile_time_arg_val(17);
 constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
-constexpr uint32_t N_block_wt = get_compile_time_arg_val(19);
+constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(19);
 constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
-constexpr uint32_t chunks_per_mm_N_block = get_compile_time_arg_val(21);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(21);
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
@@ -228,17 +228,17 @@ void kernel_main() {
 
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
-        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_blocks_per_core;
+        const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_unit_blocks_per_core;
         const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
         for (uint32_t b = 0; b < batch_size; b++) {
-            for (uint32_t m_block_iter = 0; m_block_iter < mm_M_blocks_per_core; m_block_iter++) {
+            for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
                 uint32_t output_tile_id_start = b * output_batch_num_pages;
 
-                for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_block; chunk_idx++) {
+                for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                     const uint32_t effective_chunk_width_in_tiles =
-                        get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_block_wt);
+                        get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_full_block_wt);
                     const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                     int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
@@ -246,7 +246,8 @@ void kernel_main() {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                         const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
-                        for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_blocks_per_slice; chunk_piece_idx++) {
+                        for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
+                             chunk_piece_idx++) {
                             uint32_t first_tile_row_in_mm_M_block = 0;
                             uint32_t first_chunk_col_in_tiles = 0;
                             uint32_t first_mm_core_idx = 0;
@@ -289,7 +290,7 @@ void kernel_main() {
                                         chunk_piece_idx,
                                         m_block_iter,
                                         chunk_idx,
-                                        N_block_wt,
+                                        N_full_block_wt,
                                         tiles_ht_per_core,
                                         mm_block_ht,
                                         chunk_width_in_tiles,
@@ -321,7 +322,7 @@ void kernel_main() {
                                                     chunk_piece_idx,
                                                     m_block_iter,
                                                     chunk_idx,
-                                                    N_block_wt,
+                                                    N_full_block_wt,
                                                     tiles_ht_per_core,
                                                     mm_block_ht,
                                                     chunk_width_in_tiles,

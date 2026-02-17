@@ -47,7 +47,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> mm_cores_y;
     std::optional<uint32_t> mm_block_ht;
     std::optional<uint32_t> mm_block_wt;
-    std::optional<uint32_t> mm_N_block_wt;
+    std::optional<uint32_t> mm_N_full_block_wt;
     std::optional<uint32_t> chunk_width_in_mm_blocks;
 
     // Add attributes method for reflection
@@ -70,7 +70,7 @@ struct operation_attributes_t {
         attrs.emplace_back("mm_cores_y", mm_cores_y);
         attrs.emplace_back("mm_block_ht", mm_block_ht);
         attrs.emplace_back("mm_block_wt", mm_block_wt);
-        attrs.emplace_back("mm_N_block_wt", mm_N_block_wt);
+        attrs.emplace_back("mm_N_full_block_wt", mm_N_full_block_wt);
         attrs.emplace_back("chunk_width_in_mm_blocks", chunk_width_in_mm_blocks);
         return attrs;
     }

@@ -209,36 +209,36 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t slice_C,
     const uint32_t slice_Wt,
     const uint32_t normalized_dim,
-    const uint32_t M_blocks_per_core,
-    const uint32_t mm_N_blocks_per_slice,
+    const uint32_t mm_M_unit_blocks_per_core,
+    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
-    const uint32_t N_block_wt,
+    const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
-    const uint32_t chunks_per_mm_N_block) {
+    const uint32_t chunks_per_mm_N_full_block) {
     // Strided reader compile args - include MM blocking parameters
     return {
-        ring_index,               // my_chip_id
-        ring_size,                // ring_size
-        input_cb_index,           // cb_input_id
-        intermediate_cb_index,    // cb_intermediate_id
-        reader_output_cb_index,   // cb_reader_output_id
-        tile_granularity,         // tile_granularity
-        page_size,                // page_size
-        input_batch_num_pages,    // input_batch_num_pages
-        input_channel_num_pages,  // input_channel_num_pages
-        input_tensor_B,           // input_tensor_B
-        input_tensor_Wt,          // input_tensor_Wt
-        slice_C,                  // slice_C
-        slice_Wt,                 // slice_Wt
-        normalized_dim,           // dim normalized to 4D
-        M_blocks_per_core,        // M_blocks_per_core
-        mm_N_blocks_per_slice,    // mm_N_blocks_per_slice
-        mm_block_ht,              // mm_block_ht
-        mm_cores_y,               // mm_cores_y
-        N_block_wt,               // N_block_wt
-        chunk_width_in_tiles,     // chunk_width_in_tiles
-        chunks_per_mm_N_block,    // chunks_per_mm_N_block
+        ring_index,                  // my_chip_id
+        ring_size,                   // ring_size
+        input_cb_index,              // cb_input_id
+        intermediate_cb_index,       // cb_intermediate_id
+        reader_output_cb_index,      // cb_reader_output_id
+        tile_granularity,            // tile_granularity
+        page_size,                   // page_size
+        input_batch_num_pages,       // input_batch_num_pages
+        input_channel_num_pages,     // input_channel_num_pages
+        input_tensor_B,              // input_tensor_B
+        input_tensor_Wt,             // input_tensor_Wt
+        slice_C,                     // slice_C
+        slice_Wt,                    // slice_Wt
+        normalized_dim,              // dim normalized to 4D
+        mm_M_unit_blocks_per_core,   // mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,  // mm_N_full_blocks_per_slice
+        mm_block_ht,                 // mm_block_ht
+        mm_cores_y,                  // mm_cores_y
+        N_full_block_wt,             // N_full_block_wt
+        chunk_width_in_tiles,        // chunk_width_in_tiles
+        chunks_per_mm_N_full_block,  // chunks_per_mm_N_full_block
     };
 }
 
@@ -258,13 +258,13 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t slice_C,
     const uint32_t slice_Wt,
     const uint32_t normalized_dim,
-    const uint32_t M_blocks_per_core,
-    const uint32_t mm_N_blocks_per_slice,
+    const uint32_t mm_M_unit_blocks_per_core,
+    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
-    const uint32_t N_block_wt,
+    const uint32_t N_full_block_wt,
     const uint32_t chunk_width_in_tiles,
-    const uint32_t chunks_per_mm_N_block) {
+    const uint32_t chunks_per_mm_N_full_block) {
     // Strided writer compile args - include MM blocking parameters
     return {
         ring_index,                     // my_chip_id
@@ -282,13 +282,13 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         slice_C,                        // slice_C
         slice_Wt,                       // slice_Wt
         normalized_dim,                 // dim normalized to 4D
-        M_blocks_per_core,              // M_blocks_per_core
-        mm_N_blocks_per_slice,          // mm_N_blocks_per_slice
+        mm_M_unit_blocks_per_core,      // mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,     // mm_N_full_blocks_per_slice
         mm_block_ht,                    // mm_block_ht
         mm_cores_y,                     // mm_cores_y
-        N_block_wt,                     // N_block_wt
+        N_full_block_wt,                // N_full_block_wt
         chunk_width_in_tiles,           // chunk_width_in_tiles
-        chunks_per_mm_N_block,          // chunks_per_mm_N_block
+        chunks_per_mm_N_full_block,     // chunks_per_mm_N_full_block
     };
 }
 
@@ -299,30 +299,30 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t tile_granularity,
     const uint32_t ring_size,
     const uint32_t input_tensor_B,
-    const uint32_t M_blocks_per_core,
-    const uint32_t mm_N_blocks_per_slice,
+    const uint32_t mm_M_unit_blocks_per_core,
+    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t chunk_width_in_tiles,
-    const uint32_t chunks_per_mm_N_block,
+    const uint32_t chunks_per_mm_N_full_block,
     const uint32_t slice_Wt,
-    const uint32_t N_block_wt) {
+    const uint32_t N_full_block_wt) {
     // Strided reduction compile args - include MM blocking parameters
     return {
-        input_cb_index,           // input_cb_id
-        intermediate_cb_index,    // intermediate_cb
-        compute_output_cb_index,  // output_cb
-        tile_granularity,         // tile_granularity
-        ring_size,                // ring_size
-        input_tensor_B,           // input_tensor_B
-        M_blocks_per_core,        // M_blocks_per_core
-        mm_N_blocks_per_slice,    // mm_N_blocks_per_slice
-        mm_block_ht,              // mm_block_ht
-        mm_cores_y,               // mm_cores_y
-        chunk_width_in_tiles,     // chunk_width_in_tiles
-        chunks_per_mm_N_block,    // chunks_per_mm_N_block
-        slice_Wt,                 // slice_Wt
-        N_block_wt,               // mm_N_block_wt
+        input_cb_index,              // input_cb_id
+        intermediate_cb_index,       // intermediate_cb
+        compute_output_cb_index,     // output_cb
+        tile_granularity,            // tile_granularity
+        ring_size,                   // ring_size
+        input_tensor_B,              // input_tensor_B
+        mm_M_unit_blocks_per_core,   // mm_M_unit_blocks_per_core
+        mm_N_full_blocks_per_slice,  // mm_N_full_blocks_per_slice
+        mm_block_ht,                 // mm_block_ht
+        mm_cores_y,                  // mm_cores_y
+        chunk_width_in_tiles,        // chunk_width_in_tiles
+        chunks_per_mm_N_full_block,  // chunks_per_mm_N_full_block
+        slice_Wt,                    // slice_Wt
+        N_full_block_wt,             // mm_N_full_block_wt
     };
 }
 
@@ -407,7 +407,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
-    std::optional<uint32_t> mm_N_block_wt,
+    std::optional<uint32_t> mm_N_full_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
@@ -523,10 +523,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(slice_Ht);
     uint32_t mm_block_wt_val = mm_block_wt.value_or(slice_Wt);
-    uint32_t mm_N_block_wt_val = mm_N_block_wt.value_or(slice_Wt);
+    uint32_t mm_N_full_block_wt_val = mm_N_full_block_wt.value_or(slice_Wt);
     uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(2);
     uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
-    uint32_t chunks_per_mm_N_block_val = (mm_N_block_wt_val + chunk_width_in_tiles_val - 1) / chunk_width_in_tiles_val;
+    uint32_t chunks_per_mm_N_full_block_val =
+        (mm_N_full_block_wt_val + chunk_width_in_tiles_val - 1) / chunk_width_in_tiles_val;
 
     // Introduce checks for current assumptions
     TT_FATAL(
@@ -540,13 +541,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         "slice_Ht_per_core ({}) must be divisible by mm_block_ht_val ({})",
         slice_Ht_per_core,
         mm_block_ht_val);
-    uint32_t M_blocks_per_core = slice_Ht_per_core / mm_block_ht_val;
+    uint32_t mm_M_unit_blocks_per_core = slice_Ht_per_core / mm_block_ht_val;
     TT_FATAL(
-        slice_Wt % mm_N_block_wt_val == 0,
-        "slice_Wt ({}) must be divisible by mm_N_block_wt_val ({})",
+        slice_Wt % mm_N_full_block_wt_val == 0,
+        "slice_Wt ({}) must be divisible by mm_N_full_block_wt_val ({})",
         slice_Wt,
-        mm_N_block_wt_val);
-    uint32_t mm_N_blocks_per_slice = slice_Wt / mm_N_block_wt_val;
+        mm_N_full_block_wt_val);
+    uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
 
     TT_FATAL(
         !(fuse_op && normalized_dim == 0),
@@ -659,13 +660,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_C,
             slice_Wt,
             normalized_dim,
-            M_blocks_per_core,
-            mm_N_blocks_per_slice,
+            mm_M_unit_blocks_per_core,
+            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
-            mm_N_block_wt_val,
+            mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
-            chunks_per_mm_N_block_val);
+            chunks_per_mm_N_full_block_val);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -706,13 +707,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_C,
             slice_Wt,
             normalized_dim,
-            M_blocks_per_core,
-            mm_N_blocks_per_slice,
+            mm_M_unit_blocks_per_core,
+            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
-            mm_N_block_wt_val,
+            mm_N_full_block_wt_val,
             chunk_width_in_tiles_val,
-            chunks_per_mm_N_block_val);
+            chunks_per_mm_N_full_block_val);
 
     append_fabric_mux_connection_ct_args(
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -760,14 +761,14 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             tile_granularity,
             ring_size,
             input_tensor_B,
-            M_blocks_per_core,
-            mm_N_blocks_per_slice,
+            mm_M_unit_blocks_per_core,
+            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
             chunk_width_in_tiles_val,
-            chunks_per_mm_N_block_val,
+            chunks_per_mm_N_full_block_val,
             slice_Wt,
-            mm_N_block_wt_val);
+            mm_N_full_block_wt_val);
 
     std::string sender_reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
@@ -1001,7 +1002,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.mm_cores_y,
         operation_attributes.mm_block_ht,
         operation_attributes.mm_block_wt,
-        operation_attributes.mm_N_block_wt,
+        operation_attributes.mm_N_full_block_wt,
         operation_attributes.chunk_width_in_mm_blocks);
 
     return {std::move(program), std::move(shared_vars)};

@@ -59,7 +59,7 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
-        std::optional<uint32_t> mm_N_block_wt,
+        std::optional<uint32_t> mm_N_full_block_wt,
         std::optional<uint32_t> chunk_width_in_mm_blocks);
 
 }  // namespace ttnn::prim

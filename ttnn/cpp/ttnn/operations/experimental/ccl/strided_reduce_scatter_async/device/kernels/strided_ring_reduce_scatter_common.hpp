@@ -24,14 +24,14 @@ FORCE_INLINE uint32_t wrap_slice_idx(const int32_t slice_idx, const bool directi
 }
 
 FORCE_INLINE uint32_t get_effective_chunk_width_in_tiles(
-    const uint32_t chunk_idx, const uint32_t chunk_width_in_tiles, const uint32_t mm_N_block_wt) {
+    const uint32_t chunk_idx, const uint32_t chunk_width_in_tiles, const uint32_t mm_N_full_block_wt) {
     /**
      * Get the effective width of the chunk in tiles,
      * given that it may end with a partial row at
      * the end of the N-block.
      */
     const uint32_t start_col = chunk_idx * chunk_width_in_tiles;
-    const uint32_t remaining_width = mm_N_block_wt - start_col;
+    const uint32_t remaining_width = mm_N_full_block_wt - start_col;
 
     return std::min(remaining_width, chunk_width_in_tiles);
 }
@@ -116,17 +116,18 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> coordinates_to_slice_coordinates(
     const uint32_t tile_row_in_mm_M_block,
     const uint32_t chunk_col_in_tiles,
     const uint32_t mm_core_idx,
-    const uint32_t N_block_idx,
+    const uint32_t N_full_block_idx,
     const uint32_t M_block_idx,
     const uint32_t chunk_idx,
-    const uint32_t N_block_wt,
+    const uint32_t N_full_block_wt,
     const uint32_t tiles_ht_per_core,
     const uint32_t mm_block_unit_ht,
     const uint32_t chunk_width_in_tiles) {
     const uint32_t rows_before_this_core = mm_core_idx * tiles_ht_per_core;
     const uint32_t rows_before_piece = M_block_idx * mm_block_unit_ht;
     const uint32_t slice_row = rows_before_this_core + rows_before_piece + tile_row_in_mm_M_block;
-    const uint32_t slice_col = N_block_idx * N_block_wt + chunk_idx * chunk_width_in_tiles + chunk_col_in_tiles;
+    const uint32_t slice_col =
+        N_full_block_idx * N_full_block_wt + chunk_idx * chunk_width_in_tiles + chunk_col_in_tiles;
 
     return {slice_row, slice_col};
 }
@@ -155,10 +156,10 @@ FORCE_INLINE TileIndices coordinates_to_tile_indices(
     const uint32_t tile_row_in_mm_M_block,
     const uint32_t chunk_col_in_tiles,
     const uint32_t mm_core_idx,
-    const uint32_t N_block_idx,
+    const uint32_t N_full_block_idx,
     const uint32_t M_block_idx,
     const uint32_t chunk_idx,
-    const uint32_t N_block_wt,
+    const uint32_t N_full_block_wt,
     const uint32_t tiles_ht_per_core,
     const uint32_t mm_block_unit_ht,
     const uint32_t chunk_width_in_tiles,
@@ -169,10 +170,10 @@ FORCE_INLINE TileIndices coordinates_to_tile_indices(
         tile_row_in_mm_M_block,
         chunk_col_in_tiles,
         mm_core_idx,
-        N_block_idx,
+        N_full_block_idx,
         M_block_idx,
         chunk_idx,
-        N_block_wt,
+        N_full_block_wt,
         tiles_ht_per_core,
         mm_block_unit_ht,
         chunk_width_in_tiles);
