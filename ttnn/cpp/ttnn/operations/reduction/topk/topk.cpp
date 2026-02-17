@@ -287,6 +287,12 @@ std::vector<Tensor> topk(
     output_tensor_vec.push_back(std::move(output_value_tensor));
     output_tensor_vec.push_back(std::move(output_index_tensor));
 
+    // Save pre-transformed tensor buffers for comparison (needed to check if device op changed buffers)
+    auto* pre_transform_buffer_0 =
+        preallocated_output_tensors.has_value() ? std::get<0>(output_tensors.value()).buffer() : nullptr;
+    auto* pre_transform_buffer_1 =
+        preallocated_output_tensors.has_value() ? std::get<1>(output_tensors.value()).buffer() : nullptr;
+
     // Apply post-processing transformations to restore original format
     auto post_transform_output_tensors =
         operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
@@ -301,10 +307,10 @@ std::vector<Tensor> topk(
 
     // Check if padding or dtype conversion changed buffer address
     if (preallocated_output_tensors.has_value()) {
-        if (std::get<0>(preallocated_output_tensors.value()).buffer() != output_tensor_vec.at(0).buffer()) {
+        if (std::get<0>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_0) {
             std::get<0>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(0);
         }
-        if (std::get<1>(preallocated_output_tensors.value()).buffer() != output_tensor_vec.at(1).buffer()) {
+        if (std::get<1>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_1) {
             std::get<1>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(1);
         }
     }
