@@ -33,7 +33,7 @@ inline Tensor typecast_impl(
 
     // Device tensor path
     DataType input_dtype = input_tensor.dtype();
-    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
+    bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32) or (output_dtype == DataType::UINT8);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
