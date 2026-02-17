@@ -21,12 +21,17 @@ Two-level barrier synchronization between phases:
     on GlobalSemaphore L1 words, then sets global_release which also
     serves as the phase release signal for compute/writer.
 
-Usage:
-    >>> builder = SequentialChainBuilder()
-    >>> builder.add_phase(op0_desc)
-    >>> builder.add_phase(op1_desc)
-    >>> fused = builder.build(device)
+Usage (linear chain):
+    >>> fused = chain_descriptors([op0_desc, op1_desc], device)
     >>> outputs = composite.launch([fused])
+
+Usage (branching tree):
+    >>> builder = OpGraphBuilder()
+    >>> builder.add_stem_phase(op0_desc)
+    >>> builder.add_branch(branch_a_range, [op1_desc])
+    >>> builder.add_branch(branch_b_range, [op2_desc])
+    >>> paths = builder.build(device)
+    >>> outputs = composite.launch(paths)
 """
 
 from dataclasses import dataclass, field
@@ -554,6 +559,23 @@ def _verify_cb_restore(saved: List[dict]) -> None:
                 )
 
 
+def _create_phase_info(op_descriptor: OpDescriptor, phase_idx: int) -> PhaseInfo:
+    """Create a PhaseInfo from an OpDescriptor.
+
+    Extracts CB info and unpack_to_dest_mode from the op's kernels.
+    """
+    utd_modes = None
+    for kd in op_descriptor.descriptor.kernels:
+        config = kd.config
+        if hasattr(config, "unpack_to_dest_mode"):
+            modes = config.unpack_to_dest_mode
+            if modes is not None and len(modes) > 0:
+                utd_modes = modes
+                break
+    cb_info = extract_cb_info(op_descriptor.descriptor, utd_modes)
+    return PhaseInfo(phase_idx=phase_idx, op_descriptor=op_descriptor, cb_info=cb_info)
+
+
 # =============================================================================
 # Kernel Classification
 # =============================================================================
@@ -981,7 +1003,6 @@ def _generate_fused_riscv0_source(
     phases: List[PhaseInfo],
     ct_arg_offsets: Dict[int, int],
     sweep_cb_indices: List[int],
-    barrier_config: Optional[BarrierConfig] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
@@ -1037,51 +1058,27 @@ def _generate_fused_riscv0_source(
         lines.append("")
 
     is_multi_phase = len(reader_sources) > 1
+    needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
-    use_multi_barrier = multi_barrier is not None
-
-    if is_multi_phase:
+    if needs_barrier:
         # Barrier named compile-time args
         lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
 
-        if use_multi_barrier:
-            # Per-segment compile-time constants
-            for seg_idx in range(len(multi_barrier.segments)):
-                s = f"seg{seg_idx}"
-                lines.append(f'constexpr uint32_t __{s}_num_cores = get_named_compile_time_arg_val("{s}_num_cores");')
-                lines.append(
-                    f'constexpr uint32_t __{s}_core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");'
-                )
-                lines.append(
-                    f'constexpr uint32_t __{s}_core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");'
-                )
-                lines.append(
-                    f'constexpr uint32_t __{s}_mcast_start_x = get_named_compile_time_arg_val("{s}_mcast_start_x");'
-                )
-                lines.append(
-                    f'constexpr uint32_t __{s}_mcast_start_y = get_named_compile_time_arg_val("{s}_mcast_start_y");'
-                )
-                lines.append(
-                    f'constexpr uint32_t __{s}_mcast_end_x = get_named_compile_time_arg_val("{s}_mcast_end_x");'
-                )
-                lines.append(
-                    f'constexpr uint32_t __{s}_mcast_end_y = get_named_compile_time_arg_val("{s}_mcast_end_y");'
-                )
-            lines.append("")
-        else:
+        # Per-segment compile-time constants
+        for seg_idx in range(len(multi_barrier.segments)):
+            s = f"seg{seg_idx}"
+            lines.append(f'constexpr uint32_t __{s}_num_cores = get_named_compile_time_arg_val("{s}_num_cores");')
+            lines.append(f'constexpr uint32_t __{s}_core0_phys_x = get_named_compile_time_arg_val("{s}_core0_phys_x");')
+            lines.append(f'constexpr uint32_t __{s}_core0_phys_y = get_named_compile_time_arg_val("{s}_core0_phys_y");')
             lines.append(
-                'constexpr uint32_t __num_barrier_cores = get_named_compile_time_arg_val("num_barrier_cores");'
+                f'constexpr uint32_t __{s}_mcast_start_x = get_named_compile_time_arg_val("{s}_mcast_start_x");'
             )
-            lines.append("")
-
-            # Global barrier compile-time args (only used if num_cores > 1)
-            lines.append('constexpr uint32_t __core0_phys_x = get_named_compile_time_arg_val("core0_phys_x");')
-            lines.append('constexpr uint32_t __core0_phys_y = get_named_compile_time_arg_val("core0_phys_y");')
-            lines.append('constexpr uint32_t __mcast_start_x = get_named_compile_time_arg_val("mcast_start_x");')
-            lines.append('constexpr uint32_t __mcast_start_y = get_named_compile_time_arg_val("mcast_start_y");')
-            lines.append('constexpr uint32_t __mcast_end_x = get_named_compile_time_arg_val("mcast_end_x");')
-            lines.append('constexpr uint32_t __mcast_end_y = get_named_compile_time_arg_val("mcast_end_y");')
-            lines.append("")
+            lines.append(
+                f'constexpr uint32_t __{s}_mcast_start_y = get_named_compile_time_arg_val("{s}_mcast_start_y");'
+            )
+            lines.append(f'constexpr uint32_t __{s}_mcast_end_x = get_named_compile_time_arg_val("{s}_mcast_end_x");')
+            lines.append(f'constexpr uint32_t __{s}_mcast_end_y = get_named_compile_time_arg_val("{s}_mcast_end_y");')
+        lines.append("")
 
         # BRISC-side CB reset: equalize stream registers + reset pointers to CB start.
         # Uses direct tt_reg_ptr stream register increment (no cb_pop_front dependency).
@@ -1106,78 +1103,39 @@ def _generate_fused_riscv0_source(
         lines.append("}")
         lines.append("")
 
-        if use_multi_barrier:
-            # Per-segment global barrier functions
-            for seg_idx in range(len(multi_barrier.segments)):
-                s = f"seg{seg_idx}"
-                lines.append(f"// Barrier segment {seg_idx}: global barrier across segment cores.")
-                lines.append(
-                    f"FORCE_INLINE void __barrier_{s}(uint32_t call_idx, "
-                    f"volatile tt_l1_ptr uint32_t* arrive, volatile tt_l1_ptr uint32_t* release) {{"
-                )
-                lines.append(f"    if constexpr (__{s}_num_cores > 1) {{")
-                lines.append(
-                    f"        uint64_t core0_arrive_noc_addr = get_noc_addr(__{s}_core0_phys_x, __{s}_core0_phys_y, (uint32_t)arrive);"
-                )
-                lines.append(f"        noc_semaphore_inc(core0_arrive_noc_addr, 1);")
-                lines.append(f"")
-                lines.append(
-                    f"        bool is_core_0 = (my_x[0] == __{s}_core0_phys_x && my_y[0] == __{s}_core0_phys_y);"
-                )
-                lines.append(f"        if (is_core_0) {{")
-                lines.append(f"            noc_semaphore_wait_min(arrive, __{s}_num_cores * (call_idx + 1));")
-                lines.append(f"            *release = call_idx + 1;")
-                lines.append(
-                    f"            uint64_t mcast_addr = get_noc_multicast_addr("
-                    f"__{s}_mcast_start_x, __{s}_mcast_start_y, __{s}_mcast_end_x, __{s}_mcast_end_y, (uint32_t)release);"
-                )
-                lines.append(
-                    f"            noc_semaphore_set_multicast_loopback_src((uint32_t)release, mcast_addr, __{s}_num_cores);"
-                )
-                lines.append(f"            noc_async_write_barrier();")
-                lines.append(f"        }} else {{")
-                lines.append(f"            noc_semaphore_wait_min(release, call_idx + 1);")
-                lines.append(f"        }}")
-                lines.append(f"    }} else {{")
-                lines.append(f"        *release = call_idx + 1;")
-                lines.append(f"    }}")
-                lines.append(f"}}")
-                lines.append("")
-        else:
-            # Global barrier helper (also serves as phase release for compute/writer)
-            lines.append("// Global barrier across cores. Sets global_release which compute/writer spin on.")
+        # Per-segment global barrier functions
+        for seg_idx in range(len(multi_barrier.segments)):
+            s = f"seg{seg_idx}"
+            lines.append(f"// Barrier segment {seg_idx}: global barrier across segment cores.")
             lines.append(
-                "FORCE_INLINE void __global_barrier(uint32_t phase, volatile tt_l1_ptr uint32_t* global_arrive, volatile tt_l1_ptr uint32_t* global_release) {"
+                f"FORCE_INLINE void __barrier_{s}(uint32_t call_idx, "
+                f"volatile tt_l1_ptr uint32_t* arrive, volatile tt_l1_ptr uint32_t* release) {{"
             )
-            lines.append("    if constexpr (__num_barrier_cores > 1) {")
-            lines.append("        // Arrive: all cores send atomic inc to core 0's arrive semaphore")
+            lines.append(f"    if constexpr (__{s}_num_cores > 1) {{")
             lines.append(
-                "        uint64_t core0_arrive_noc_addr = get_noc_addr(__core0_phys_x, __core0_phys_y, (uint32_t)global_arrive);"
+                f"        uint64_t core0_arrive_noc_addr = get_noc_addr(__{s}_core0_phys_x, __{s}_core0_phys_y, (uint32_t)arrive);"
             )
-            lines.append("        noc_semaphore_inc(core0_arrive_noc_addr, 1);")
-            lines.append("")
-            lines.append("        bool is_core_0 = (my_x[0] == __core0_phys_x && my_y[0] == __core0_phys_y);")
-            lines.append("        if (is_core_0) {")
-            lines.append("            // Core 0: wait for all cores to arrive")
-            lines.append("            noc_semaphore_wait_min(global_arrive, __num_barrier_cores * (phase + 1));")
-            lines.append("            // Multicast release to all cores (including self via loopback)")
-            lines.append("            *global_release = phase + 1;")
+            lines.append(f"        noc_semaphore_inc(core0_arrive_noc_addr, 1);")
+            lines.append(f"")
+            lines.append(f"        bool is_core_0 = (my_x[0] == __{s}_core0_phys_x && my_y[0] == __{s}_core0_phys_y);")
+            lines.append(f"        if (is_core_0) {{")
+            lines.append(f"            noc_semaphore_wait_min(arrive, __{s}_num_cores * (call_idx + 1));")
+            lines.append(f"            *release = call_idx + 1;")
             lines.append(
-                "            uint64_t mcast_addr = get_noc_multicast_addr(__mcast_start_x, __mcast_start_y, __mcast_end_x, __mcast_end_y, (uint32_t)global_release);"
+                f"            uint64_t mcast_addr = get_noc_multicast_addr("
+                f"__{s}_mcast_start_x, __{s}_mcast_start_y, __{s}_mcast_end_x, __{s}_mcast_end_y, (uint32_t)release);"
             )
             lines.append(
-                "            noc_semaphore_set_multicast_loopback_src((uint32_t)global_release, mcast_addr, __num_barrier_cores);"
+                f"            noc_semaphore_set_multicast_loopback_src((uint32_t)release, mcast_addr, __{s}_num_cores);"
             )
-            lines.append("            noc_async_write_barrier();")
-            lines.append("        } else {")
-            lines.append("            // Other cores: wait for release from core 0")
-            lines.append("            noc_semaphore_wait_min(global_release, phase + 1);")
-            lines.append("        }")
-            lines.append("    } else {")
-            lines.append("        // Single core: set release directly (no NOC ops needed)")
-            lines.append("        *global_release = phase + 1;")
-            lines.append("    }")
-            lines.append("}")
+            lines.append(f"            noc_async_write_barrier();")
+            lines.append(f"        }} else {{")
+            lines.append(f"            noc_semaphore_wait_min(release, call_idx + 1);")
+            lines.append(f"        }}")
+            lines.append(f"    }} else {{")
+            lines.append(f"        *release = call_idx + 1;")
+            lines.append(f"    }}")
+            lines.append(f"}}")
             lines.append("")
 
     # Generate phase functions
@@ -1207,31 +1165,19 @@ def _generate_fused_riscv0_source(
         lines.append(
             "    volatile tt_l1_ptr uint32_t* __writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__writer_done_addr);"
         )
-        if use_multi_barrier:
-            # Per-segment arrive/release pointers
-            for seg_idx in range(len(multi_barrier.segments)):
-                s = f"seg{seg_idx}"
-                off = 2 + seg_idx * 2
-                lines.append(
-                    f"    const uint32_t __{s}_arrive_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});"
-                )
-                lines.append(
-                    f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off + 1});"
-                )
-                lines.append(
-                    f"    volatile tt_l1_ptr uint32_t* __{s}_arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_arrive_addr);"
-                )
-                lines.append(
-                    f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-                )
-        else:
-            lines.append("    const uint32_t __global_arrive_addr = get_arg_val<uint32_t>(__barrier_rt_offset + 2);")
-            lines.append("    const uint32_t __global_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + 3);")
+        # Per-segment arrive/release pointers
+        for seg_idx in range(len(multi_barrier.segments)):
+            s = f"seg{seg_idx}"
+            off = 2 + seg_idx * 2
+            lines.append(f"    const uint32_t __{s}_arrive_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
             lines.append(
-                "    volatile tt_l1_ptr uint32_t* __global_arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__global_arrive_addr);"
+                f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off + 1});"
             )
             lines.append(
-                "    volatile tt_l1_ptr uint32_t* __global_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__global_release_addr);"
+                f"    volatile tt_l1_ptr uint32_t* __{s}_arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_arrive_addr);"
+            )
+            lines.append(
+                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
             )
         lines.append("")
 
@@ -1240,48 +1186,61 @@ def _generate_fused_riscv0_source(
 
     first = True
     for phase_idx, _ in reader_sources:
-        if not first and is_multi_phase:
-            lines.append("")
-            lines.append(f"    // === Barrier: Phase {phase_idx - 1} -> Phase {phase_idx} ===")
-            lines.append("    // Invariant: BRISC (reader) coordinates all inter-phase cleanup.")
-            lines.append("    // Order: noc_barrier -> wait compute/writer done -> reset CBs ->")
-            lines.append("    //         reset semaphores -> rebind CB addrs -> global barrier.")
-            lines.append("    // Compute/writer must NOT touch CBs until global_release is set.")
-            lines.append("    noc_async_full_barrier();")
-            lines.append("")
-            lines.append(f"    // Wait for local compute + writer to finish Phase {phase_idx - 1}")
-            lines.append(f"    noc_semaphore_wait_min(__compute_done, {phase_idx});")
-            lines.append(f"    noc_semaphore_wait_min(__writer_done, {phase_idx});")
-            lines.append("")
-            lines.append("    // Reset residual tiles from ALL CBs")
-            lines.append("    __cb_reset_to_empty();")
-            lines.append("")
-            # Reset op semaphores to their initial values so next phase starts clean
-            if op_semaphore_info:
-                lines.append("    // Reset op semaphores to initial values (as if each phase runs standalone)")
-                for sem_id, initial_val in op_semaphore_info:
-                    lines.append(
-                        f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_val};"
-                    )
+        if not first and needs_barrier:
+            transition_idx = phase_idx - 1
+            if transition_idx in multi_barrier.transition_map:
                 lines.append("")
-            # Rebind CB addresses before global barrier (so BRISC has correct state)
-            rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
-            if rebind_lines:
-                lines.extend(rebind_lines)
+                lines.append(f"    // === Barrier: Phase {phase_idx - 1} -> Phase {phase_idx} ===")
+                lines.append("    // Invariant: BRISC (reader) coordinates all inter-phase cleanup.")
+                lines.append("    // Order: noc_barrier -> wait compute/writer done -> reset CBs ->")
+                lines.append("    //         reset semaphores -> rebind CB addrs -> global barrier.")
+                lines.append("    // Compute/writer must NOT touch CBs until global_release is set.")
+                lines.append("    noc_async_full_barrier();")
                 lines.append("")
-            if use_multi_barrier:
-                # Transition index = phase_idx - 1 (transition after the preceding phase)
-                transition_idx = phase_idx - 1
+                lines.append(f"    // Wait for local compute + writer to finish Phase {phase_idx - 1}")
+                lines.append(f"    noc_semaphore_wait_min(__compute_done, {phase_idx});")
+                lines.append(f"    noc_semaphore_wait_min(__writer_done, {phase_idx});")
+                lines.append("")
+                lines.append("    // Reset residual tiles from ALL CBs")
+                lines.append("    __cb_reset_to_empty();")
+                lines.append("")
+                # Reset op semaphores to their initial values so next phase starts clean
+                if op_semaphore_info:
+                    lines.append("    // Reset op semaphores to initial values (as if each phase runs standalone)")
+                    for sem_id, initial_val in op_semaphore_info:
+                        lines.append(
+                            f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_val};"
+                        )
+                    lines.append("")
+                # Rebind CB addresses before global barrier (so BRISC has correct state)
+                rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
+                if rebind_lines:
+                    lines.extend(rebind_lines)
+                    lines.append("")
                 seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
                 s = f"seg{seg_idx}"
                 lines.append(f"    // Global barrier segment {seg_idx}, call {call_idx}")
                 lines.append(f"    __barrier_{s}({call_idx}, __{s}_arrive, __{s}_release);")
-            else:
-                lines.append("    // Global barrier (sets global_release, releasing compute/writer)")
-                lines.append(f"    __global_barrier({phase_idx - 1}, __global_arrive, __global_release);")
-            lines.append("")
+                lines.append("")
         lines.append(f"    phase{phase_idx}_reader();")
         first = False
+
+    # Trailing barrier: after the last phase, if there's a pending transition
+    # (e.g. empty leaf branch participating in an ancestor's barrier)
+    if needs_barrier:
+        last_phase_idx = reader_sources[-1][0]
+        trailing_transition = last_phase_idx
+        if trailing_transition in multi_barrier.transition_map:
+            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
+            s = f"seg{seg_idx}"
+            lines.append("")
+            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
+            lines.append("    noc_async_full_barrier();")
+            lines.append(f"    noc_semaphore_wait_min(__compute_done, {last_phase_idx + 1});")
+            lines.append(f"    noc_semaphore_wait_min(__writer_done, {last_phase_idx + 1});")
+            lines.append("    __cb_reset_to_empty();")
+            lines.append(f"    __barrier_{s}({call_idx}, __{s}_arrive, __{s}_release);")
+
     lines.append("}")
     lines.append("")
 
@@ -1295,7 +1254,6 @@ def _generate_fused_riscv1_source(
     ct_arg_offsets: Dict[int, int],
     sweep_cb_indices: List[int],
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
-    barrier_config: Optional[BarrierConfig] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
 ) -> Optional[str]:
     """Generate fused RISCV_1 (writer/NCRISC) kernel source with L1 flag barrier sync.
@@ -1344,13 +1302,14 @@ def _generate_fused_riscv1_source(
         lines.append("")
 
     is_multi_phase = len(writer_sources) > 1
+    needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
-    if is_multi_phase:
+    if needs_barrier:
         lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
         lines.append("")
 
     # Generate NCRISC CB state resync function (resets local pointers to CB start).
-    if sweep_cb_indices and is_multi_phase:
+    if sweep_cb_indices and needs_barrier:
         lines.append("// Resync NCRISC local CB pointers to CB start between phases.")
         lines.append("FORCE_INLINE void __resync_ncrisc_cb_state() {")
         for cb_idx in sweep_cb_indices:
@@ -1380,29 +1339,19 @@ def _generate_fused_riscv1_source(
     # Generate kernel_main
     lines.append("void kernel_main() {")
 
-    use_multi_barrier = multi_barrier is not None
-
-    if is_multi_phase:
+    if needs_barrier:
         lines.append("    // Read barrier L1 flag addresses from runtime args")
         lines.append("    const uint32_t __writer_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset);")
         lines.append(
             "    volatile tt_l1_ptr uint32_t* __writer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__writer_done_addr);"
         )
-        if use_multi_barrier:
-            # Per-segment release pointers
-            for seg_idx in range(len(multi_barrier.segments)):
-                s = f"seg{seg_idx}"
-                off = 1 + seg_idx
-                lines.append(
-                    f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});"
-                )
-                lines.append(
-                    f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-                )
-        else:
-            lines.append("    const uint32_t __global_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + 1);")
+        # Per-segment release pointers
+        for seg_idx in range(len(multi_barrier.segments)):
+            s = f"seg{seg_idx}"
+            off = 1 + seg_idx
+            lines.append(f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
             lines.append(
-                "    volatile tt_l1_ptr uint32_t* __global_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__global_release_addr);"
+                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
             )
         lines.append("")
 
@@ -1412,34 +1361,47 @@ def _generate_fused_riscv1_source(
     num_writers = len(writer_sources)
     for count, (phase_idx, _) in enumerate(writer_sources):
         lines.append(f"    phase{phase_idx}_writer();")
-        if count < num_writers - 1 and is_multi_phase:
-            next_phase_idx = writer_sources[count + 1][0]
-            lines.append("")
-            lines.append(f"    // Ensure all async NOC writes from Phase {phase_idx} are complete")
-            lines.append("    noc_async_write_barrier();")
-            lines.append(f"    // Signal done for Phase {phase_idx}")
-            lines.append(f"    *__writer_done = {phase_idx + 1};")
-            lines.append("")
-            if use_multi_barrier:
-                transition_idx = phase_idx
+        if count < num_writers - 1 and needs_barrier:
+            transition_idx = phase_idx
+            if transition_idx in multi_barrier.transition_map:
+                next_phase_idx = writer_sources[count + 1][0]
+                lines.append("")
+                lines.append(f"    // Ensure all async NOC writes from Phase {phase_idx} are complete")
+                lines.append("    noc_async_write_barrier();")
+                lines.append(f"    // Signal done for Phase {phase_idx}")
+                lines.append(f"    *__writer_done = {phase_idx + 1};")
+                lines.append("")
                 seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
                 s = f"seg{seg_idx}"
                 lines.append(f"    // Wait for segment {seg_idx} release (call {call_idx})")
                 lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
-            else:
-                lines.append(f"    // Wait for global release (Phase {phase_idx + 1})")
-                lines.append(f"    while (*__global_release < {phase_idx + 1}) {{ }}")
+                lines.append("")
+                # Resync NCRISC local CB pointers to CB start
+                if sweep_cb_indices:
+                    lines.append("    // Resync NCRISC CB pointers to start")
+                    lines.append("    __resync_ncrisc_cb_state();")
+                    lines.append("")
+                # Rebind CB addresses after barrier wait
+                rebind_lines = _generate_rebind_code(
+                    rebind_info.get(next_phase_idx, []), next_phase_idx, for_compute=False
+                )
+                if rebind_lines:
+                    lines.extend(rebind_lines)
+                    lines.append("")
+
+    # Trailing barrier: after the last phase, if there's a pending transition
+    if needs_barrier:
+        last_phase_idx = writer_sources[-1][0]
+        trailing_transition = last_phase_idx
+        if trailing_transition in multi_barrier.transition_map:
+            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
+            s = f"seg{seg_idx}"
             lines.append("")
-            # Resync NCRISC local CB pointers to CB start
-            if sweep_cb_indices:
-                lines.append("    // Resync NCRISC CB pointers to start")
-                lines.append("    __resync_ncrisc_cb_state();")
-                lines.append("")
-            # Rebind CB addresses after barrier wait
-            rebind_lines = _generate_rebind_code(rebind_info.get(next_phase_idx, []), next_phase_idx, for_compute=False)
-            if rebind_lines:
-                lines.extend(rebind_lines)
-                lines.append("")
+            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
+            lines.append("    noc_async_write_barrier();")
+            lines.append(f"    *__writer_done = {last_phase_idx + 1};")
+            lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
+
     lines.append("}")
     lines.append("")
 
@@ -1452,7 +1414,6 @@ def _generate_fused_compute_source(
     phases: List[PhaseInfo],
     ct_arg_offsets: Optional[Dict[int, int]] = None,
     sweep_cb_indices: Optional[List[int]] = None,
-    barrier_config: Optional[BarrierConfig] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
 ) -> Optional[str]:
@@ -1509,8 +1470,9 @@ def _generate_fused_compute_source(
         lines.append("")
 
     is_multi_phase = len(compute_sources) > 1
+    needs_barrier = multi_barrier is not None and len(multi_barrier.transition_map) > 0
 
-    if is_multi_phase:
+    if needs_barrier:
         lines.append('constexpr uint32_t __barrier_rt_offset = get_named_compile_time_arg_val("barrier_rt_offset");')
         lines.append("")
 
@@ -1518,7 +1480,7 @@ def _generate_fused_compute_source(
     # After BRISC's __cb_reset_to_empty(), stream registers are equalized and
     # BRISC pointers are at CB start. TRISC0 and TRISC2 need to sync their
     # local state and reset pointers to CB start as well.
-    if sweep_cb_indices and is_multi_phase:
+    if sweep_cb_indices and needs_barrier:
         lines.append("// Resync compute-side local CB state after BRISC reset.")
         lines.append("// TRISC0: sync tiles_acked + reset fifo_rd_ptr to CB start.")
         lines.append("// TRISC2: sync tiles_received + reset fifo_wr_ptr to CB start.")
@@ -1568,29 +1530,19 @@ def _generate_fused_compute_source(
     # Generate kernel_main
     lines.append("void kernel_main() {")
 
-    use_multi_barrier = multi_barrier is not None
-
-    if is_multi_phase:
+    if needs_barrier:
         lines.append("    // Read barrier L1 flag addresses from runtime args")
         lines.append("    const uint32_t __compute_done_addr = get_arg_val<uint32_t>(__barrier_rt_offset);")
         lines.append(
             "    volatile tt_l1_ptr uint32_t* __compute_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__compute_done_addr);"
         )
-        if use_multi_barrier:
-            # Per-segment release pointers
-            for seg_idx in range(len(multi_barrier.segments)):
-                s = f"seg{seg_idx}"
-                off = 1 + seg_idx
-                lines.append(
-                    f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});"
-                )
-                lines.append(
-                    f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
-                )
-        else:
-            lines.append("    const uint32_t __global_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + 1);")
+        # Per-segment release pointers
+        for seg_idx in range(len(multi_barrier.segments)):
+            s = f"seg{seg_idx}"
+            off = 1 + seg_idx
+            lines.append(f"    const uint32_t __{s}_release_addr = get_arg_val<uint32_t>(__barrier_rt_offset + {off});")
             lines.append(
-                "    volatile tt_l1_ptr uint32_t* __global_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__global_release_addr);"
+                f"    volatile tt_l1_ptr uint32_t* __{s}_release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(__{s}_release_addr);"
             )
         lines.append("")
 
@@ -1599,32 +1551,42 @@ def _generate_fused_compute_source(
 
     first = True
     for count, (phase_idx, _) in enumerate(compute_sources):
-        if not first and is_multi_phase:
-            lines.append("")
-            lines.append(f"    // Signal done for Phase {phase_idx - 1}")
-            lines.append(f"    *__compute_done = {phase_idx};")
-            lines.append("")
-            if use_multi_barrier:
-                transition_idx = phase_idx - 1
+        if not first and needs_barrier:
+            transition_idx = phase_idx - 1
+            if transition_idx in multi_barrier.transition_map:
+                lines.append("")
+                lines.append(f"    // Signal done for Phase {phase_idx - 1}")
+                lines.append(f"    *__compute_done = {phase_idx};")
+                lines.append("")
                 seg_idx, call_idx = multi_barrier.transition_map[transition_idx]
                 s = f"seg{seg_idx}"
                 lines.append(f"    // Wait for segment {seg_idx} release (call {call_idx})")
                 lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
-            else:
-                lines.append(f"    // Wait for global release (Phase {phase_idx})")
-                lines.append(f"    while (*__global_release < {phase_idx}) {{ }}")
-            lines.append("")
-            if sweep_cb_indices:
-                lines.append("    // Resync TRISC0 local CB state (tiles_acked, fifo_rd_ptr)")
-                lines.append("    __resync_cb_state_after_sweep();")
                 lines.append("")
-            # Rebind CB addresses after resync (all TRISC instances, with >> 4 shift)
-            rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=True)
-            if rebind_lines:
-                lines.extend(rebind_lines)
-                lines.append("")
+                if sweep_cb_indices:
+                    lines.append("    // Resync TRISC0 local CB state (tiles_acked, fifo_rd_ptr)")
+                    lines.append("    __resync_cb_state_after_sweep();")
+                    lines.append("")
+                # Rebind CB addresses after resync (all TRISC instances, with >> 4 shift)
+                rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=True)
+                if rebind_lines:
+                    lines.extend(rebind_lines)
+                    lines.append("")
         lines.append(f"    phase{phase_idx}_compute();")
         first = False
+
+    # Trailing barrier: after the last phase, if there's a pending transition
+    if needs_barrier:
+        last_phase_idx = compute_sources[-1][0]
+        trailing_transition = last_phase_idx
+        if trailing_transition in multi_barrier.transition_map:
+            seg_idx, call_idx = multi_barrier.transition_map[trailing_transition]
+            s = f"seg{seg_idx}"
+            lines.append("")
+            lines.append(f"    // === Trailing barrier after Phase {last_phase_idx} ===")
+            lines.append(f"    *__compute_done = {last_phase_idx + 1};")
+            lines.append(f"    while (*__{s}_release < {call_idx + 1}) {{ }}")
+
     lines.append("}")
     lines.append("")
 
@@ -1821,14 +1783,14 @@ def _merge_named_compile_time_args(
     kernel_type: str,
     rt_arg_offsets: Optional[Dict[int, int]] = None,
     barrier_rt_offset: Optional[int] = None,
-    barrier_config: Optional[BarrierConfig] = None,
     phase_remaps: Optional[List[Dict[int, int]]] = None,
 ) -> List[Tuple[str, int]]:
     """Merge named compile-time args from all phases with phase prefixes.
 
     Phase 0 keeps original names. Phase N>0 gets "phaseN_" prefix.
-    Runtime arg offsets and barrier config are added as named args.
+    Runtime arg offsets are added as named args.
     CB-reference args (names starting with "cb_") are remapped to pool slot indices.
+    Per-segment barrier constants are added externally by the caller.
     """
     merged = []
 
@@ -1854,17 +1816,9 @@ def _merge_named_compile_time_args(
         if i > 0 and rt_arg_offsets is not None and i in rt_arg_offsets:
             merged.append((f"phase{i}_rt_arg_offset", rt_arg_offsets[i]))
 
-    # Add barrier named args
+    # Add barrier runtime arg offset
     if barrier_rt_offset is not None:
         merged.append(("barrier_rt_offset", barrier_rt_offset))
-    if barrier_config is not None:
-        merged.append(("num_barrier_cores", barrier_config.num_cores))
-        merged.append(("core0_phys_x", barrier_config.core0_phys_x))
-        merged.append(("core0_phys_y", barrier_config.core0_phys_y))
-        merged.append(("mcast_start_x", barrier_config.mcast_start_x))
-        merged.append(("mcast_start_y", barrier_config.mcast_start_y))
-        merged.append(("mcast_end_x", barrier_config.mcast_end_x))
-        merged.append(("mcast_end_y", barrier_config.mcast_end_y))
 
     return merged
 
@@ -2082,36 +2036,23 @@ def _validate_fp32_consistency(op_descriptors: List[OpDescriptor]) -> None:
 # =============================================================================
 
 
-def _create_barrier_config(device: Any, core_ranges: Any) -> BarrierConfig:
-    """Create barrier configuration with GlobalSemaphore L1 flags.
+def _create_barrier_segment_config(device: Any, core_ranges: Any) -> BarrierConfig:
+    """Create a lightweight barrier config for OpGraph segments.
 
-    Allocates 4 GlobalSemaphores (one 4-byte L1 word per core each):
-      - compute_done: compute signals phase completion
-      - writer_done: writer signals phase completion
-      - global_arrive: cross-core barrier arrive counter
-      - global_release: cross-core barrier release flag (also serves as
-        phase release — compute/writer spin on this directly)
-
-    Also computes physical core coordinates for NOC addressing.
+    Only allocates ``global_arrive`` and ``global_release`` GlobalSemaphores
+    (2 instead of 4).  The per-core ``compute_done`` / ``writer_done`` flags
+    are shared across all segments and allocated separately in
+    ``OpGraphBuilder.build()``, so per-segment copies would waste L1.
     """
     config = BarrierConfig()
 
-    # Create GlobalSemaphores for per-core L1 flags
-    sem_compute_done = ttnn.create_global_semaphore(device, core_ranges, 0)
-    sem_writer_done = ttnn.create_global_semaphore(device, core_ranges, 0)
     sem_global_arrive = ttnn.create_global_semaphore(device, core_ranges, 0)
     sem_global_release = ttnn.create_global_semaphore(device, core_ranges, 0)
 
-    # Store references to prevent GC
-    config._sem_refs = [sem_compute_done, sem_writer_done, sem_global_arrive, sem_global_release]
-
-    # Get L1 addresses
-    config.compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
-    config.writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
+    config._sem_refs = [sem_global_arrive, sem_global_release]
     config.global_arrive_addr = ttnn.get_global_semaphore_address(sem_global_arrive)
     config.global_release_addr = ttnn.get_global_semaphore_address(sem_global_release)
 
-    # Compute physical core coordinates for global barrier
     logical_coords = _get_core_coords_from_ranges(core_ranges)
     config.num_cores = len(logical_coords)
 
@@ -2124,7 +2065,6 @@ def _create_barrier_config(device: Any, core_ranges: Any) -> BarrierConfig:
         config.mcast_end_x = max(c.x for c in phys_coords)
         config.mcast_end_y = max(c.y for c in phys_coords)
 
-        # Validate rectangular grid for safe NOC multicast
         if config.num_cores > 1:
             _validate_rectangular_grid(phys_coords, config)
 
@@ -2151,483 +2091,261 @@ def _validate_rectangular_grid(phys_coords: List[Any], config: BarrierConfig) ->
         )
 
 
-def _create_role_barrier_config(
+# =============================================================================
+# Fused Descriptor Builder
+# =============================================================================
+
+
+def _build_fused_descriptor(
+    phases: List[PhaseInfo],
     device: Any,
-    role_core_ranges: Any,
-    shared_config: BarrierConfig,
-) -> BarrierConfig:
-    """Create a role-specific barrier config sharing semaphore addresses.
+    core_range_override: Optional[Any] = None,
+    multi_barrier: Optional[MultiBarrierSpec] = None,
+) -> OpDescriptor:
+    """Build a fused ProgramDescriptor with multi-segment barrier sync.
 
-    Uses the shared GlobalSemaphore L1 addresses but computes role-specific
-    core counts and physical coordinates for the multicast barrier.
+    Dynamically discovers kernel roles from the ProgramDescriptor using
+    (risc_type, core_ranges) as a unique key. This supports any op type
+    (interleaved with 3 kernels, sharded with up to 7 kernels, etc.).
+
+    Args:
+        phases: List of PhaseInfo objects for each phase.
+        device: The device for GlobalSemaphore allocation.
+        core_range_override: If set, overrides role keys and fused kernel
+            core_ranges. Used by OpGraphBuilder for paths where stem ops
+            have wider core ranges than the path's leaf branch.
+        multi_barrier: Multi-segment barrier spec. Required for multi-phase
+            chains. Provides barrier segment configs and transition map.
     """
-    cfg = BarrierConfig()
-    cfg.compute_done_addr = shared_config.compute_done_addr
-    cfg.writer_done_addr = shared_config.writer_done_addr
-    cfg.global_arrive_addr = shared_config.global_arrive_addr
-    cfg.global_release_addr = shared_config.global_release_addr
+    # Validate fp32 consistency
+    _validate_fp32_consistency([p.op_descriptor for p in phases])
 
-    logical_coords = _get_core_coords_from_ranges(role_core_ranges)
-    cfg.num_cores = len(logical_coords)
-
-    if cfg.num_cores > 0:
-        phys_coords = [device.worker_core_from_logical_core(c) for c in logical_coords]
-        cfg.core0_phys_x = phys_coords[0].x
-        cfg.core0_phys_y = phys_coords[0].y
-        cfg.mcast_start_x = min(c.x for c in phys_coords)
-        cfg.mcast_start_y = min(c.y for c in phys_coords)
-        cfg.mcast_end_x = max(c.x for c in phys_coords)
-        cfg.mcast_end_y = max(c.y for c in phys_coords)
-
-        # Validate rectangular grid for safe NOC multicast
-        if cfg.num_cores > 1:
-            _validate_rectangular_grid(phys_coords, cfg)
-
-    return cfg
-
-
-def _compute_union_core_ranges(phases: List[PhaseInfo]) -> Any:
-    """Compute the union of all core ranges across all kernels in phase 0.
-
-    Returns a CoreRangeSet covering all cores used by any kernel.
-    Handles overlapping core ranges by collecting individual cores and
-    creating a bounding box CoreRange that covers all of them.
-    """
-    # Collect all unique logical core coordinates
-    all_coords = set()
+    # Discover all kernel roles from phase 0
+    role_keys: List[Tuple[str, frozenset]] = []
+    role_keys_set: Set[Tuple[str, frozenset]] = set()
     for kernel_desc in phases[0].op_descriptor.descriptor.kernels:
-        for cr in kernel_desc.core_ranges.ranges():
-            for y in range(cr.start.y, cr.end.y + 1):
-                for x in range(cr.start.x, cr.end.x + 1):
-                    all_coords.add((x, y))
+        rk = _get_role_key(kernel_desc, core_range_override)
+        if rk not in role_keys_set:
+            role_keys.append(rk)
+            role_keys_set.add(rk)
 
-    if not all_coords:
-        return phases[0].op_descriptor.descriptor.kernels[0].core_ranges
-
-    # Create a bounding box CoreRange covering all cores
-    min_x = min(x for x, y in all_coords)
-    max_x = max(x for x, y in all_coords)
-    min_y = min(y for x, y in all_coords)
-    max_y = max(y for x, y in all_coords)
-
-    bounding_range = ttnn.CoreRange(
-        ttnn.CoreCoord(min_x, min_y),
-        ttnn.CoreCoord(max_x, max_y),
-    )
-    return ttnn.CoreRangeSet([bounding_range])
-
-
-# =============================================================================
-# Sequential Chain Builder
-# =============================================================================
-
-
-class SequentialChainBuilder:
-    """Builds a fused ProgramDescriptor from a sequence of OpDescriptors.
-
-    All readers/writers run for every phase.  Data flows through DRAM between
-    phases.  No CB remapping — each phase uses native CB indices (0-31).
-
-    Uses two-level barrier synchronization:
-      - Local: L1 flags (via GlobalSemaphore) for per-core RISC coordination
-      - Global: NOC semaphore ops for cross-core barrier (dataflow RISC only)
-    """
-
-    def __init__(self):
-        self.phases: List[PhaseInfo] = []
-        self._built = False
-        self._barrier_config: Optional[BarrierConfig] = None
-
-    def add_phase(self, op_descriptor: OpDescriptor) -> "SequentialChainBuilder":
-        """Add a phase to the sequential chain.
-
-        Args:
-            op_descriptor: The OpDescriptor for this phase.  For phases 1+,
-                the input tensor should be the previous phase's output tensor
-                so the reader reads from the correct DRAM address.
-
-        Returns:
-            self for method chaining
-        """
-        phase_idx = len(self.phases)
-        # Get unpack_to_dest_mode vector from compute kernel config
-        utd_modes = None
-        for kd in op_descriptor.descriptor.kernels:
-            config = kd.config
-            if hasattr(config, "unpack_to_dest_mode"):
-                modes = config.unpack_to_dest_mode
-                if modes is not None and len(modes) > 0:
-                    utd_modes = modes
-                    break
-        cb_info = extract_cb_info(op_descriptor.descriptor, utd_modes)
-        phase = PhaseInfo(
-            phase_idx=phase_idx,
-            op_descriptor=op_descriptor,
-            cb_info=cb_info,
-        )
-        self.phases.append(phase)
-        return self
-
-    def build(self, device: Any) -> OpDescriptor:
-        """Build the fused OpDescriptor from the chain.
-
-        Args:
-            device: The device (MeshDevice or IDevice) for GlobalSemaphore
-                allocation and coordinate conversion.
-
-        Returns:
-            Fused OpDescriptor that executes all phases sequentially.
-        """
-        if self._built:
-            raise ValueError("Chain has already been built")
-        if not self.phases:
-            raise ValueError("Chain has no phases")
-
-        self._built = True
-
-        if len(self.phases) == 1:
-            return self.phases[0].op_descriptor
-
-        # Save CB state before build — _build_fused_descriptor mutates
-        # buffer_index, total_size, and core_ranges in-place on the
-        # original CBDescriptors (can't deepcopy C++ bindings).
-        prog_descs = [p.op_descriptor.descriptor for p in self.phases]
-        saved = _save_cb_state(prog_descs)
-        result = self._build_fused_descriptor(device)
-        _restore_cb_state(saved)
-        _verify_cb_restore(saved)
-        return result
-
-    def _build_fused_descriptor(
-        self,
-        device: Any,
-        core_range_override: Optional[Any] = None,
-        multi_barrier: Optional[MultiBarrierSpec] = None,
-    ) -> OpDescriptor:
-        """Build the fused descriptor with two-level barrier sync.
-
-        Dynamically discovers kernel roles from the ProgramDescriptor using
-        (risc_type, core_ranges) as a unique key. This supports any op type
-        (interleaved with 3 kernels, sharded with up to 7 kernels, etc.).
-
-        Args:
-            device: The device for GlobalSemaphore allocation.
-            core_range_override: If set, overrides role keys and fused kernel
-                core_ranges. Used by OpGraphBuilder for paths where stem ops
-                have wider core ranges than the path's leaf branch.
-            multi_barrier: If set, uses multi-segment barrier instead of
-                single barrier. Used by OpGraphBuilder for barrier scope
-                transitions between stem and branch phases.
-        """
-        # Validate fp32 consistency
-        _validate_fp32_consistency([p.op_descriptor for p in self.phases])
-
-        # Discover all kernel roles from phase 0
-        # Role key = (risc_type, frozenset of core range tuples)
-        # When core_range_override is set, all kernels are mapped to the
-        # override range (needed for OpGraph paths where stem ops have wider
-        # core ranges than the path's leaf branch).
-        role_keys: List[Tuple[str, frozenset]] = []
-        role_keys_set: Set[Tuple[str, frozenset]] = set()
-        for kernel_desc in self.phases[0].op_descriptor.descriptor.kernels:
+    # Build phase_kernels as List[Dict[role_key, KernelDescriptor]]
+    phase_kernels: List[Dict[Any, Any]] = []
+    for phase_idx, phase in enumerate(phases):
+        role_map: Dict[Any, Any] = {}
+        for kernel_desc in phase.op_descriptor.descriptor.kernels:
             rk = _get_role_key(kernel_desc, core_range_override)
-            if rk not in role_keys_set:
-                role_keys.append(rk)
-                role_keys_set.add(rk)
+            role_map[rk] = kernel_desc
+        phase_kernels.append(role_map)
 
-        # Build phase_kernels as List[Dict[role_key, KernelDescriptor]]
-        phase_kernels: List[Dict[Any, Any]] = []
-        for phase_idx, phase in enumerate(self.phases):
-            role_map: Dict[Any, Any] = {}
-            for kernel_desc in phase.op_descriptor.descriptor.kernels:
-                rk = _get_role_key(kernel_desc, core_range_override)
-                role_map[rk] = kernel_desc
-            phase_kernels.append(role_map)
+    # Pool-allocate CB slots based on compatibility keys
+    pool = CBPoolAllocator(max_slots=32)
+    for phase_idx, phase in enumerate(phases):
+        phantom_indices = _get_phantom_cb_indices(phase)
+        pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
 
-        # Pool-allocate CB slots based on compatibility keys
-        pool = CBPoolAllocator(max_slots=32)
-        for phase_idx, phase in enumerate(self.phases):
-            phantom_indices = _get_phantom_cb_indices(phase)
-            pool.allocate_phase(phase_idx, phase.cb_info, phantom_indices)
+    # Compute CB address rebinding info using remapped slot indices.
+    rebind_info = _compute_rebind_info(phases, pool.phase_remaps)
 
-        # Compute CB address rebinding info using remapped slot indices.
-        # Must be computed BEFORE build_merged_cb_descriptors, which
-        # modifies buffer_index in-place on the original CBDescriptors.
-        rebind_info = _compute_rebind_info(self.phases, pool.phase_remaps)
+    # Build merged CB descriptors from pool (modifies buffer_index in-place)
+    merged_cbs = pool.build_merged_cb_descriptors(phases)
 
-        # Build merged CB descriptors from pool (modifies buffer_index in-place)
-        merged_cbs = pool.build_merged_cb_descriptors(self.phases)
+    # Override CB core_ranges when building a path through an OpGraph.
+    if core_range_override is not None:
+        for cb_desc in merged_cbs:
+            cb_desc.core_ranges = core_range_override
 
-        # Override CB core_ranges when building a path through an OpGraph.
-        # Stem ops have CBs with union_range, but each path's fused descriptor
-        # must only claim its leaf core range so paths don't overlap when
-        # merged by composite.launch().
+    # Sweep indices = all allocated CB pool slots
+    sweep_cb_indices = sorted(pool.get_all_slot_indices())
+
+    # Collect all unique op semaphore (id, initial_value) pairs used by any phase.
+    op_semaphore_info: List[Tuple[int, int]] = []
+    seen_sem_ids_for_reset: Set[int] = set()
+    for phase in phases:
+        for sem in phase.op_descriptor.descriptor.semaphores:
+            if sem.id not in seen_sem_ids_for_reset:
+                op_semaphore_info.append((sem.id, sem.initial_value))
+                seen_sem_ids_for_reset.add(sem.id)
+    op_semaphore_info.sort(key=lambda x: x[0])
+
+    fused_kernels = []
+
+    for role_key in role_keys:
+        risc_type, core_key = role_key
+
+        # Get role-specific core_ranges
         if core_range_override is not None:
-            for cb_desc in merged_cbs:
-                cb_desc.core_ranges = core_range_override
-
-        # Create barrier config with GlobalSemaphores on union of all core ranges
-        # (skip if multi_barrier already provides barrier configuration)
-        if multi_barrier is None:
-            union_core_ranges = _compute_union_core_ranges(self.phases)
-            self._barrier_config = _create_barrier_config(device, union_core_ranges)
-            bc = self._barrier_config
+            role_core_ranges = core_range_override
         else:
-            bc = None  # multi_barrier provides all barrier info
-
-        # Sweep indices = all allocated CB pool slots
-        sweep_cb_indices = sorted(pool.get_all_slot_indices())
-
-        # Collect all unique op semaphore (id, initial_value) pairs used by any phase.
-        # These are reset to their initial_value between phases so each phase starts clean.
-        op_semaphore_info: List[Tuple[int, int]] = []  # (sem_id, initial_value)
-        seen_sem_ids_for_reset: Set[int] = set()
-        for phase in self.phases:
-            for sem in phase.op_descriptor.descriptor.semaphores:
-                if sem.id not in seen_sem_ids_for_reset:
-                    op_semaphore_info.append((sem.id, sem.initial_value))
-                    seen_sem_ids_for_reset.add(sem.id)
-        op_semaphore_info.sort(key=lambda x: x[0])
-
-        fused_kernels = []
-
-        # For each discovered role: generate fused source, merge args, build descriptor
-        for role_key in role_keys:
-            risc_type, core_key = role_key
-
-            # Get role-specific core_ranges
-            if core_range_override is not None:
-                role_core_ranges = core_range_override
-            else:
-                role_core_ranges = None
-                for pk in phase_kernels:
-                    kernel = pk.get(role_key)
-                    if kernel is not None:
-                        role_core_ranges = kernel.core_ranges
-                        break
-
-            if role_core_ranges is None:
-                continue
-
-            # Merge compile-time args and compute offsets
-            ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
-            rt_offsets = _compute_runtime_arg_offsets(phase_kernels, role_key, core_range_override=core_range_override)
-
-            # Generate fused source and determine barrier addresses per RISC type
-            if multi_barrier is not None:
-                # --- Multi-barrier path (OpGraph) ---
-                if risc_type == "riscv_0":
-                    fused_source = _generate_fused_riscv0_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        barrier_config=None,
-                        rebind_info=rebind_info,
-                        op_semaphore_info=op_semaphore_info,
-                        multi_barrier=multi_barrier,
-                    )
-                    # riscv0: compute_done, writer_done, then per-segment arrive+release
-                    barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
-                    for seg in multi_barrier.segments:
-                        barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
-                elif risc_type == "riscv_1":
-                    fused_source = _generate_fused_riscv1_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        rebind_info=rebind_info,
-                        barrier_config=None,
-                        multi_barrier=multi_barrier,
-                    )
-                    # riscv1: writer_done, then per-segment release
-                    barrier_addrs = [multi_barrier.writer_done_addr]
-                    for seg in multi_barrier.segments:
-                        barrier_addrs.append(seg.release_addr)
-                elif risc_type == "compute":
-                    fused_source = _generate_fused_compute_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        barrier_config=None,
-                        rebind_info=rebind_info,
-                        multi_barrier=multi_barrier,
-                    )
-                    # compute: compute_done, then per-segment release
-                    barrier_addrs = [multi_barrier.compute_done_addr]
-                    for seg in multi_barrier.segments:
-                        barrier_addrs.append(seg.release_addr)
-                else:
-                    continue
-            else:
-                # --- Single-barrier path (standard linear chain) ---
-                # IMPORTANT: riscv_0 must use the GLOBAL barrier config (bc) so that
-                # ALL riscv_0 cores across ALL roles synchronize via a single barrier.
-                if risc_type == "riscv_0":
-                    fused_source = _generate_fused_riscv0_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        bc,
-                        rebind_info,
-                        op_semaphore_info=op_semaphore_info,
-                    )
-                    barrier_addrs = [
-                        bc.compute_done_addr,
-                        bc.writer_done_addr,
-                        bc.global_arrive_addr,
-                        bc.global_release_addr,
-                    ]
-                elif risc_type == "riscv_1":
-                    fused_source = _generate_fused_riscv1_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        rebind_info,
-                        bc,
-                    )
-                    barrier_addrs = [bc.writer_done_addr, bc.global_release_addr]
-                elif risc_type == "compute":
-                    fused_source = _generate_fused_compute_source(
-                        phase_kernels,
-                        role_key,
-                        self.phases,
-                        ct_offsets,
-                        sweep_cb_indices,
-                        bc,
-                        rebind_info,
-                    )
-                    barrier_addrs = [bc.compute_done_addr, bc.global_release_addr]
-                else:
-                    continue
-
-            if fused_source is None:
-                continue
-
-            # Concatenate runtime args and append barrier addresses
-            rt_args = _concatenate_runtime_args(phase_kernels, role_key, core_range_override=core_range_override)
-            rt_args, barrier_offset = _append_barrier_runtime_args(rt_args, barrier_addrs)
-
-            # Merge named compile-time args
-            if multi_barrier is not None:
-                # Multi-barrier: no single BarrierConfig for named args;
-                # per-segment constants are added below.
-                named_ct_args = _merge_named_compile_time_args(
-                    phase_kernels,
-                    role_key,
-                    rt_offsets,
-                    barrier_rt_offset=barrier_offset,
-                    barrier_config=None,
-                    phase_remaps=pool.phase_remaps,
-                )
-                # Add per-segment named compile-time args (only riscv_0 needs them)
-                if risc_type == "riscv_0":
-                    for seg_idx, seg in enumerate(multi_barrier.segments):
-                        s = f"seg{seg_idx}"
-                        named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
-                        named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
-                        named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
-                        named_ct_args.append((f"{s}_mcast_start_x", seg.config.mcast_start_x))
-                        named_ct_args.append((f"{s}_mcast_start_y", seg.config.mcast_start_y))
-                        named_ct_args.append((f"{s}_mcast_end_x", seg.config.mcast_end_x))
-                        named_ct_args.append((f"{s}_mcast_end_y", seg.config.mcast_end_y))
-            else:
-                # Single barrier: riscv_0 gets full barrier config for global barrier
-                barrier_cfg_for_named = bc if risc_type == "riscv_0" else None
-                named_ct_args = _merge_named_compile_time_args(
-                    phase_kernels,
-                    role_key,
-                    rt_offsets,
-                    barrier_rt_offset=barrier_offset,
-                    barrier_config=barrier_cfg_for_named,
-                    phase_remaps=pool.phase_remaps,
-                )
-
-            # Add rebind named compile-time args (addr + size for each CB that changes)
-            for phase_idx, rebinds in rebind_info.items():
-                for slot_idx, addr, size in rebinds:
-                    prefix = f"phase{phase_idx}_cb{slot_idx}"
-                    named_ct_args.append((f"{prefix}_rebind_addr", addr))
-                    named_ct_args.append((f"{prefix}_rebind_size", size))
-
-            # Get config from first available kernel for this role
-            role_config = None
+            role_core_ranges = None
             for pk in phase_kernels:
                 kernel = pk.get(role_key)
                 if kernel is not None:
-                    role_config = kernel.config
+                    role_core_ranges = kernel.core_ranges
                     break
 
-            # For compute roles, validate configs match across phases and
-            # rebuild unpack_to_dest_mode from pool-allocated slot indices
-            if risc_type == "compute":
-                role_config = _validate_and_get_compute_config_for_role(phase_kernels, role_key)
-                role_config.unpack_to_dest_mode = pool.build_unpack_to_dest_mode()
+        if role_core_ranges is None:
+            continue
 
-            # Build fused kernel descriptor
-            desc = ttnn.KernelDescriptor()
-            desc.kernel_source = fused_source
-            desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-            desc.core_ranges = role_core_ranges
-            desc.compile_time_args = ct_args
-            desc.named_compile_time_args = named_ct_args
-            desc.defines = _merge_defines(phase_kernels, role_key)
-            desc.runtime_args = rt_args
-            desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
-            desc.config = role_config
-            fused_kernels.append(desc)
+        # Merge compile-time args and compute offsets
+        ct_args, ct_offsets = _merge_compile_time_args(phase_kernels, role_key)
+        rt_offsets = _compute_runtime_arg_offsets(phase_kernels, role_key, core_range_override=core_range_override)
 
-        # Merge semaphores (dedup by ID)
-        all_semaphores = []
-        seen_sem_ids: Set[int] = set()
-        for phase in self.phases:
-            for sem in phase.op_descriptor.descriptor.semaphores:
-                if sem.id not in seen_sem_ids:
-                    all_semaphores.append(sem)
-                    seen_sem_ids.add(sem.id)
-
-        # Collect input/output tensors (use id() for dedup because ttnn Tensor's
-        # __eq__ returns an element-wise Tensor, making `in` unreliable)
-        all_input_tensors = []
-        seen_tensor_ids: Set[int] = set()
-        for phase in self.phases:
-            for tensor in phase.op_descriptor.input_tensors:
-                tid = id(tensor)
-                if tid not in seen_tensor_ids:
-                    all_input_tensors.append(tensor)
-                    seen_tensor_ids.add(tid)
-
-        output_tensor = None
-        if self.phases[-1].op_descriptor.output_tensors:
-            output_tensor = self.phases[-1].op_descriptor.output_tensors[0]
-
-        # Create the merged ProgramDescriptor
-        merged_descriptor = ttnn.ProgramDescriptor()
-        merged_descriptor.kernels = fused_kernels
-        merged_descriptor.cbs = merged_cbs
-        merged_descriptor.semaphores = all_semaphores
-
-        # Collect keepalive references to prevent GC of GlobalSemaphores
-        if multi_barrier is not None:
-            keepalive_refs = tuple(multi_barrier._sem_refs)
+        # Generate fused source and determine barrier addresses per RISC type
+        if risc_type == "riscv_0":
+            fused_source = _generate_fused_riscv0_source(
+                phase_kernels,
+                role_key,
+                phases,
+                ct_offsets,
+                sweep_cb_indices,
+                rebind_info=rebind_info,
+                op_semaphore_info=op_semaphore_info,
+                multi_barrier=multi_barrier,
+            )
+            barrier_addrs = []
+            if multi_barrier is not None:
+                barrier_addrs = [multi_barrier.compute_done_addr, multi_barrier.writer_done_addr]
+                for seg in multi_barrier.segments:
+                    barrier_addrs.extend([seg.arrive_addr, seg.release_addr])
+        elif risc_type == "riscv_1":
+            fused_source = _generate_fused_riscv1_source(
+                phase_kernels,
+                role_key,
+                phases,
+                ct_offsets,
+                sweep_cb_indices,
+                rebind_info=rebind_info,
+                multi_barrier=multi_barrier,
+            )
+            barrier_addrs = []
+            if multi_barrier is not None:
+                barrier_addrs = [multi_barrier.writer_done_addr]
+                for seg in multi_barrier.segments:
+                    barrier_addrs.append(seg.release_addr)
+        elif risc_type == "compute":
+            fused_source = _generate_fused_compute_source(
+                phase_kernels,
+                role_key,
+                phases,
+                ct_offsets,
+                sweep_cb_indices,
+                rebind_info=rebind_info,
+                multi_barrier=multi_barrier,
+            )
+            barrier_addrs = []
+            if multi_barrier is not None:
+                barrier_addrs = [multi_barrier.compute_done_addr]
+                for seg in multi_barrier.segments:
+                    barrier_addrs.append(seg.release_addr)
         else:
-            keepalive_refs = tuple(self._barrier_config._sem_refs)
+            continue
 
-        return OpDescriptor(
-            descriptor=merged_descriptor,
-            input_tensors=all_input_tensors,
-            output_tensors=[output_tensor] if output_tensor else [],
-            keepalive=keepalive_refs,
+        if fused_source is None:
+            continue
+
+        # Concatenate runtime args and append barrier addresses
+        rt_args = _concatenate_runtime_args(phase_kernels, role_key, core_range_override=core_range_override)
+        rt_args, barrier_offset = _append_barrier_runtime_args(rt_args, barrier_addrs)
+
+        # Merge named compile-time args
+        named_ct_args = _merge_named_compile_time_args(
+            phase_kernels,
+            role_key,
+            rt_offsets,
+            barrier_rt_offset=barrier_offset if barrier_addrs else None,
+            phase_remaps=pool.phase_remaps,
         )
+        # Add per-segment named compile-time args (only riscv_0 needs them)
+        if multi_barrier is not None and risc_type == "riscv_0":
+            for seg_idx, seg in enumerate(multi_barrier.segments):
+                s = f"seg{seg_idx}"
+                named_ct_args.append((f"{s}_num_cores", seg.config.num_cores))
+                named_ct_args.append((f"{s}_core0_phys_x", seg.config.core0_phys_x))
+                named_ct_args.append((f"{s}_core0_phys_y", seg.config.core0_phys_y))
+                named_ct_args.append((f"{s}_mcast_start_x", seg.config.mcast_start_x))
+                named_ct_args.append((f"{s}_mcast_start_y", seg.config.mcast_start_y))
+                named_ct_args.append((f"{s}_mcast_end_x", seg.config.mcast_end_x))
+                named_ct_args.append((f"{s}_mcast_end_y", seg.config.mcast_end_y))
+
+        # Add rebind named compile-time args (addr + size for each CB that changes)
+        for phase_idx, rebinds in rebind_info.items():
+            for slot_idx, addr, size in rebinds:
+                prefix = f"phase{phase_idx}_cb{slot_idx}"
+                named_ct_args.append((f"{prefix}_rebind_addr", addr))
+                named_ct_args.append((f"{prefix}_rebind_size", size))
+
+        # Get config from first available kernel for this role
+        role_config = None
+        for pk in phase_kernels:
+            kernel = pk.get(role_key)
+            if kernel is not None:
+                role_config = kernel.config
+                break
+
+        # For compute roles, validate configs match across phases and
+        # rebuild unpack_to_dest_mode from pool-allocated slot indices
+        if risc_type == "compute":
+            role_config = _validate_and_get_compute_config_for_role(phase_kernels, role_key)
+            role_config.unpack_to_dest_mode = pool.build_unpack_to_dest_mode()
+
+        # Build fused kernel descriptor
+        desc = ttnn.KernelDescriptor()
+        desc.kernel_source = fused_source
+        desc.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        desc.core_ranges = role_core_ranges
+        desc.compile_time_args = ct_args
+        desc.named_compile_time_args = named_ct_args
+        desc.defines = _merge_defines(phase_kernels, role_key)
+        desc.runtime_args = rt_args
+        desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
+        desc.config = role_config
+        fused_kernels.append(desc)
+
+    # Merge semaphores (dedup by ID)
+    all_semaphores = []
+    seen_sem_ids: Set[int] = set()
+    for phase in phases:
+        for sem in phase.op_descriptor.descriptor.semaphores:
+            if sem.id not in seen_sem_ids:
+                all_semaphores.append(sem)
+                seen_sem_ids.add(sem.id)
+
+    # Collect input/output tensors (use id() for dedup because ttnn Tensor's
+    # __eq__ returns an element-wise Tensor, making `in` unreliable)
+    all_input_tensors = []
+    seen_tensor_ids: Set[int] = set()
+    for phase in phases:
+        for tensor in phase.op_descriptor.input_tensors:
+            tid = id(tensor)
+            if tid not in seen_tensor_ids:
+                all_input_tensors.append(tensor)
+                seen_tensor_ids.add(tid)
+
+    output_tensor = None
+    if phases[-1].op_descriptor.output_tensors:
+        output_tensor = phases[-1].op_descriptor.output_tensors[0]
+
+    # Create the merged ProgramDescriptor
+    merged_descriptor = ttnn.ProgramDescriptor()
+    merged_descriptor.kernels = fused_kernels
+    merged_descriptor.cbs = merged_cbs
+    merged_descriptor.semaphores = all_semaphores
+
+    # Collect keepalive references to prevent GC of GlobalSemaphores
+    keepalive_refs = tuple(multi_barrier._sem_refs) if multi_barrier is not None else ()
+
+    return OpDescriptor(
+        descriptor=merged_descriptor,
+        input_tensors=all_input_tensors,
+        output_tensors=[output_tensor] if output_tensor else [],
+        keepalive=keepalive_refs,
+    )
+
+
+# =============================================================================
+# OpGraph Builder
+# =============================================================================
 
 
 class OpGraphBuilder:
@@ -2683,25 +2401,33 @@ class OpGraphBuilder:
         """Build fused descriptors for all root-to-leaf paths.
 
         Returns a list of OpDescriptors, one per path, suitable for
-        ``composite.launch()``.
+        ``composite.launch()``.  For linear chains (no branches), returns
+        a single-element list.
         """
         if self._built:
             raise ValueError("Already built")
         self._built = True
 
-        if not self.branches:
-            raise ValueError("OpGraph has no branches")
         if not self.stem_phases:
-            raise ValueError("OpGraph has no stem phases")
+            raise ValueError("No phases to fuse")
+
+        # Single-phase linear chain: return as-is
+        if len(self.stem_phases) == 1 and not self.branches:
+            return [self.stem_phases[0]]
 
         # Validate tree topology before doing any device allocation
-        self._validate_topology()
+        if self.branches:
+            self._validate_topology()
 
         # Trace all root-to-leaf paths
         paths = self._trace_paths()
 
         # Compute union of all branch core ranges
         union_range = self._compute_union_ranges()
+
+        # Validate that stem core ranges match the leaf union.
+        if self.branches:
+            self._validate_stem_coverage(union_range)
 
         # Allocate shared per-core monotonic semaphores on union range.
         # compute_done and writer_done are per-core and don't involve cross-core
@@ -2716,12 +2442,16 @@ class OpGraphBuilder:
         # path segments.  Paths that share a segment (e.g. the stem) MUST use
         # the same arrive/release GlobalSemaphore L1 addresses so that cores
         # running different kernel binaries synchronize at the same barrier.
+        # Uses _create_barrier_segment_config (arrive + release only) instead
+        # of _create_barrier_config (which also allocates compute_done +
+        # writer_done per segment — those are shared and already allocated
+        # above on union_range).
         segment_cache: Dict[frozenset, BarrierConfig] = {}
         for path in paths:
             for core_range, _ in path:
                 key = _core_ranges_key(core_range)
                 if key not in segment_cache:
-                    segment_cache[key] = _create_barrier_config(device, core_range)
+                    segment_cache[key] = _create_barrier_segment_config(device, core_range)
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
         # Assign co-dispatch group for barrier safety validation.
@@ -2765,6 +2495,9 @@ class OpGraphBuilder:
         Returns a list of paths.  Each path is a list of
         ``(core_range, [phases])`` segments from root (stem) to leaf.
 
+        For linear chains (no branches), returns a single path with just
+        the stem segment.
+
         For intermediate branches (those with children), the segment's
         core_range is the *effective* range — the union of descendant leaf
         ranges — rather than the branch's own core_range.  This ensures
@@ -2774,6 +2507,11 @@ class OpGraphBuilder:
         """
         union_range = self._compute_union_ranges()
         paths: List[List[Tuple[Any, List[OpDescriptor]]]] = []
+
+        if not self.branches:
+            # Linear chain: single path = stem only
+            paths.append([(union_range, list(self.stem_phases))])
+            return paths
 
         def _collect(branch: BranchSpec, prefix: List[Tuple[Any, List[OpDescriptor]]]):
             if not branch.children:
@@ -2798,10 +2536,33 @@ class OpGraphBuilder:
     def _compute_union_ranges(self) -> Any:
         """Compute the union CoreRangeSet of all leaf branch core ranges.
 
+        For linear chains (no branches), computes the union from all
+        kernels in stem phase 0.
+
         Only leaf branches (those without children) contribute core ranges.
         Intermediate branches' ranges overlap with their children, so
         including both would trigger CoreRangeSet's overlap validation.
         """
+        if not self.branches:
+            # Linear chain: union from stem phase 0 kernels
+            all_coords: Set[Tuple[int, int]] = set()
+            for kernel_desc in self.stem_phases[0].descriptor.kernels:
+                for cr in kernel_desc.core_ranges.ranges():
+                    for y in range(cr.start.y, cr.end.y + 1):
+                        for x in range(cr.start.x, cr.end.x + 1):
+                            all_coords.add((x, y))
+            if not all_coords:
+                return self.stem_phases[0].descriptor.kernels[0].core_ranges
+            min_x = min(x for x, y in all_coords)
+            max_x = max(x for x, y in all_coords)
+            min_y = min(y for x, y in all_coords)
+            max_y = max(y for x, y in all_coords)
+            bounding_range = ttnn.CoreRange(
+                ttnn.CoreCoord(min_x, min_y),
+                ttnn.CoreCoord(max_x, max_y),
+            )
+            return ttnn.CoreRangeSet([bounding_range])
+
         all_ranges = set()
 
         def _collect_leaf_ranges(branches: List[BranchSpec]):
@@ -2826,8 +2587,10 @@ class OpGraphBuilder:
         Checks:
         - Each child's core_range is a subset of its parent's range.
         - Sibling branches have disjoint core ranges.
-        - Leaf branches have at least one phase.
         - All branch core_ranges are rectangular (NOC multicast safety).
+
+        Empty leaf branches (no phases, no children) are allowed — they
+        participate in ancestor barriers via trailing barrier code, then exit.
 
         Note: Children are NOT required to fully cover their parent's range.
         Unused cores in the parent simply don't participate in branch phases.
@@ -2849,10 +2612,6 @@ class OpGraphBuilder:
                     f"OpGraph topology error: {label} has cores {extra} "
                     f"outside parent range {sorted(parent_coords)}"
                 )
-
-            # Leaf branches must have at least one phase
-            if not branch.children and not branch.phases:
-                raise ValueError(f"OpGraph topology error: leaf {label} has no phases")
 
             # Validate children
             if branch.children:
@@ -2883,25 +2642,39 @@ class OpGraphBuilder:
                 )
             seen_top |= branch_coords
 
-        # Validate each top-level branch recursively.  Top-level branches
-        # don't have a "parent" to be subsets of (the stem range is derived
-        # FROM the branches), so we validate their internal structure and
-        # check leaf-has-phases for top-level leaves.
+        # Validate each top-level branch recursively.
         for branch in self.branches:
-            if not branch.children and not branch.phases:
-                raise ValueError(
-                    f"OpGraph topology error: leaf branch on cores "
-                    f"{sorted(_core_range_set_to_coords(branch.core_range))} has no phases"
-                )
-            # Validate children recursively (subset, disjoint, leaf phases)
             if branch.children:
                 branch_coords = _core_range_set_to_coords(branch.core_range)
                 _validate_branch(
-                    # Create a virtual "wrapper" to trigger the children check
                     branch,
                     branch_coords,
                     depth=0,
                 )
+
+    def _validate_stem_coverage(self, union_range: Any) -> None:
+        """Validate that stem kernels don't extend beyond the leaf union.
+
+        The stem only runs on ``union_range`` cores.  If a stem op was
+        created for a wider range, the extra cores' work is silently
+        dropped, producing incorrect results.
+
+        Raises:
+            ValueError: If any stem kernel has cores outside union_range.
+        """
+        union_coords = _core_range_set_to_coords(union_range)
+        for i, stem_op in enumerate(self.stem_phases):
+            for kernel in stem_op.descriptor.kernels:
+                stem_coords = _core_range_set_to_coords(kernel.core_ranges)
+                extra = stem_coords - union_coords
+                if extra:
+                    raise ValueError(
+                        f"Stem phase {i} kernel has cores {sorted(extra)} "
+                        f"outside the leaf union {sorted(union_coords)}. "
+                        f"The stem only runs on the union of leaf core ranges. "
+                        f"Create the stem OpDescriptor for the leaf union range, "
+                        f"or add branches to cover the missing cores."
+                    )
 
     @staticmethod
     def _effective_leaf_range(branch: "BranchSpec") -> Set[Tuple[int, int]]:
@@ -2944,8 +2717,9 @@ class OpGraphBuilder:
         for _, phases in path:
             all_phases.extend(phases)
 
-        # Leaf core range = last segment's core range
-        leaf_core_range = path[-1][0]
+        # Leaf core range = last segment's core range.
+        # For linear chains (single segment), leaf == union so no override needed.
+        leaf_core_range = path[-1][0] if len(path) > 1 else None
 
         # Build barrier segments and transition map
         segments, transition_map = self._build_barrier_segments(
@@ -2963,13 +2737,11 @@ class OpGraphBuilder:
             _sem_refs=list(shared_sem_refs),
         )
 
-        # Use a SequentialChainBuilder with the flattened phase list
-        builder = SequentialChainBuilder()
-        for op in all_phases:
-            builder.add_phase(op)
-        builder._built = True  # Skip build() validation, call _build directly
+        # Build PhaseInfo list and call module-level _build_fused_descriptor
+        phase_infos = [_create_phase_info(op, i) for i, op in enumerate(all_phases)]
 
-        return builder._build_fused_descriptor(
+        return _build_fused_descriptor(
+            phase_infos,
             device,
             core_range_override=leaf_core_range,
             multi_barrier=multi_barrier,
@@ -3068,10 +2840,12 @@ def chain_descriptors(descriptors: List[OpDescriptor], device: Any) -> OpDescrip
     Returns:
         Fused OpDescriptor.
     """
-    builder = SequentialChainBuilder()
+    builder = OpGraphBuilder()
     for desc in descriptors:
-        builder.add_phase(desc)
-    return builder.build(device)
+        builder.add_stem_phase(desc)
+    results = builder.build(device)
+    # Linear chain produces exactly one path
+    return results[0]
 
 
 def create_parallel_chain_descriptors(
@@ -3129,7 +2903,6 @@ def build_op_graph(
 
 __all__ = [
     # Core classes
-    "SequentialChainBuilder",
     "OpGraphBuilder",
     "BranchSpec",
     "PhaseInfo",
