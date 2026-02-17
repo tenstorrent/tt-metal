@@ -468,31 +468,16 @@ void kernel_main() {
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
-                // Move intermediate sum and max values to appropriate ping pong buffers
-                // Always move to prev buffers during FA loop - we'll handle final output later
-                if (k_chunk < k_chunk_end - 1) {
-                    // More local chunks to process - move to ping-pong buffers
-                    reconfig_data_format(cb_cur_max, cb_cur_max);
-                    pack_reconfig_data_format(cb_prev_max);
+                // More local chunks to process - move intermediate sum and max values to ping-pong buffers
+                reconfig_data_format(cb_cur_max, cb_cur_max);
+                pack_reconfig_data_format(cb_prev_max);
 
-                    // PREV_MAX <- CUR_MAX
-                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                // PREV_MAX <- CUR_MAX
+                move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
 
-                    // PREV_SUM <- CUR_SUM
-                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
-                }
+                // PREV_SUM <- CUR_SUM
+                move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
         }
-
-        // After FA loop completes, prepare buffers for tree reduction or output
-        // Results are in: cb_out_accumulate_im (O), cb_cur_max (M), cb_cur_sum (L)
-        if (num_active_children > 0 || has_parent) {
-            // Tree reduction will happen - move cur to prev buffers
-            reconfig_data_format(cb_cur_max, cb_cur_max);
-            pack_reconfig_data_format(cb_prev_max);
-            move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
-            move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
-        }
-        // If root with no children, keep in cur buffers for finalization
 
         /* END OF FLASH ATTENTION LOOP */
 
@@ -575,18 +560,14 @@ void kernel_main() {
             // If we had children with data, results are in cb_prev_sum/cb_prev_max after tree reduction
             // If single core (no children with data), results are in cb_cur_sum/cb_cur_max from FA loop
 
-            // Select the correct sum buffer based on whether tree reduction happened
-            // If tree reduction happened, sum is in cb_prev_sum; otherwise it's in cb_cur_sum
-            uint32_t sum_cb = (num_active_children > 0) ? cb_prev_sum : cb_cur_sum;
-
             /* SUM = 1.0 / SUM */
-            reconfig_data_format(sum_cb, sum_cb);
-            pack_reconfig_data_format(sum_cb);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);
+            pack_reconfig_data_format(cb_prev_sum);
 
             // Handle attention sink here
             if constexpr (use_attention_sink) {
                 // Use appropriate max buffer based on tree reduction
-                uint32_t max_cb_for_sink = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
+                uint32_t max_cb_for_sink = cb_prev_max;
 
                 // m_new
                 max_block<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
@@ -595,48 +576,33 @@ void kernel_main() {
                 sub_exp_block<scale_fp32>(max_cb_for_sink, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
-                mul_block_inplace(sum_cb, cb_exp_max_diff, Sq_chunk_t);
+                mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
                 sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                 cb_pop_front(cb_cur_max, Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
-                add_block_inplace<true>(sum_cb, cb_exp_max_diff_2, Sq_chunk_t);
+                add_block_inplace<true>(cb_prev_sum, cb_exp_max_diff_2, Sq_chunk_t);
 
                 // O -> O * exp(m - m_new)
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
             }
 
-            reconfig_data_format(sum_cb, sum_cb);
-            pack_reconfig_data_format(sum_cb);
-            recip_block_inplace(sum_cb, Sq_chunk_t);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);
+            pack_reconfig_data_format(cb_prev_sum);
+            recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */
-            reconfig_data_format(cb_out_accumulate_im, sum_cb);
+            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);
             pack_reconfig_data_format(cb_out_accumulate_im);
 
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, sum_cb);
+            // cb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
             pack_reconfig_data_format(cb_out_final);
 
-            // Note: sum_cb was already consumed (popped) by mul_block_bcast_cols_inplace above,
-            // so we don't need to pop it again here.
-
             // Pop the max buffer that still has data
-            if constexpr (use_attention_sink) {
-                // In attention sink path:
-                // - If num_active_children > 0: max_cb_for_sink = cb_prev_max, cb_cur_max was popped
-                //   So we need to pop cb_prev_max
-                // - If num_active_children == 0: max_cb_for_sink = cb_cur_max, cb_cur_max was popped
-                //   Nothing left to pop
-                if (num_active_children > 0) {
-                    cb_pop_front(cb_prev_max, Sq_chunk_t);
-                }
-            } else {
-                // No attention sink: the max buffer was never popped
-                uint32_t max_cb = (num_active_children > 0) ? cb_prev_max : cb_cur_max;
-                cb_pop_front(max_cb, Sq_chunk_t);
-            }
+            cb_pop_front(cb_prev_max, Sq_chunk_t);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
