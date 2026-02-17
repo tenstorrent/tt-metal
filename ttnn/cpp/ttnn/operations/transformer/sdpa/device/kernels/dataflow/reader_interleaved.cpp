@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // Read a KV chunk into a CB for L1-L1 forwarding.
 // Skips intermediate read barriers (single barrier at end) for lower latency.
@@ -356,6 +357,7 @@ void kernel_main() {
                     // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
                     // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
                     if constexpr (!use_q_subblock_push) {
+                        // DeviceZoneScopedN("Q-download");
                         read_chunk_with_padding<q_tile_bytes>(
                             q_reader,
                             cb_q_in,
@@ -422,6 +424,7 @@ void kernel_main() {
                             // Single K subblock — use original monolithic read/receive/forward
                             uint32_t cb_k_start_address = 0;
                             if (should_receive) {
+                                // DeviceZoneScopedN("K-receive");
                                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                                 cb_k_start_address = get_write_ptr(cb_k_in);
                                 noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
@@ -429,6 +432,7 @@ void kernel_main() {
                                 noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                                 cb_push_back(cb_k_in, k_chunk_tiles);
                             } else {
+                                // DeviceZoneScopedN("K-download");
                                 if (should_forward) {
                                     cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
                                         k_reader, cb_k_in, k_start_tile_id, k_row_tile_count, DHt, Sk_chunk_t, DHt);
@@ -447,6 +451,7 @@ void kernel_main() {
                             }
                             // K forward (same as original)
                             if (should_forward) {
+                                // DeviceZoneScopedN("K-forward");
                                 noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                                 noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                                 if constexpr (mcast_enabled) {
@@ -472,6 +477,7 @@ void kernel_main() {
                                 uint32_t sub_start_addr = 0;
                                 // Step 1: Read or receive K subblock
                                 if (should_receive) {
+                                    // DeviceZoneScopedN("K-receive");
                                     cb_reserve_back(cb_k_in, k_sub_tiles);
                                     sub_start_addr = get_write_ptr(cb_k_in);
                                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
@@ -479,6 +485,7 @@ void kernel_main() {
                                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                                     cb_push_back(cb_k_in, k_sub_tiles);
                                 } else {
+                                    // DeviceZoneScopedN("K-download");
                                     const uint32_t sb_k_start = sb * qk_subblock_w;
                                     const uint32_t sb_rows =
                                         (k_row_tile_count > sb_k_start)
@@ -493,6 +500,7 @@ void kernel_main() {
                                 // Step 2: Forward K subblock (injector or intermediate unicast core)
                                 // Separate from receive so receiver-forwarders (unicast chains) work
                                 if (should_forward) {
+                                    // DeviceZoneScopedN("K-forward");
                                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
 
@@ -514,6 +522,52 @@ void kernel_main() {
                                         if (sb < qk_in1_num_subblocks - 1) {
                                             noc_async_writes_flushed();
                                             noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                                        }
+                                    }
+                                }
+
+                                // After K sub0: push Q sub0 so compute can start (in0=0, in1=0).
+                                // After K sub1: push remaining Q subs (compute does in0=0,in1=1
+                                // while remaining Q subs are pushed, then in0=1+ can proceed).
+                                // Safe because sb==0 is NOT the last subblock:
+                                //   mcast: linked+companion resolves the write
+                                //   unicast: non-last subblock was flushed
+                                //   receiver/non-participant: no outstanding writes
+                                // Q sub0 after K sub0: compute can start (in0=0,in1=0) immediately.
+                                // Remaining Q after last K sub: compute processes (in0=0,in1=1)
+                                // while remaining Q subs stream in for in0=1+.
+                                // Safe because sb==0 is NOT the last subblock:
+                                //   mcast: linked+companion resolves the write
+                                //   unicast: non-last subblock was flushed
+                                //   receiver/non-participant: no outstanding writes
+                                if constexpr (use_q_subblock_push) {
+                                    if (k_chunk == 0) {
+                                        if (sb == 0) {
+                                            // DeviceZoneScopedN("Q-download");
+                                            read_q_subblock<q_tile_bytes>(
+                                                q_reader,
+                                                cb_q_in,
+                                                q_read_tile_id,
+                                                0 * qk_subblock_h,
+                                                qk_subblock_h,
+                                                q_row_tile_count,
+                                                DHt,
+                                                DHt,
+                                                barrier_threshold);
+                                        } else if (sb == qk_in1_num_subblocks - 1) {
+                                            for (uint32_t q_sub = 1; q_sub < q_num_subblocks; ++q_sub) {
+                                                // DeviceZoneScopedN("Q-download");
+                                                read_q_subblock<q_tile_bytes>(
+                                                    q_reader,
+                                                    cb_q_in,
+                                                    q_read_tile_id,
+                                                    q_sub * qk_subblock_h,
+                                                    qk_subblock_h,
+                                                    q_row_tile_count,
+                                                    DHt,
+                                                    DHt,
+                                                    barrier_threshold);
+                                            }
                                         }
                                     }
                                 }
@@ -572,9 +626,13 @@ void kernel_main() {
                         // Q subblock push: placed after K forward complete so no outstanding
                         // NOC writes remain (noc_async_read_barrier inside read_q_subblock
                         // deadlocks on BH when NOC writes are in-flight).
+                        // For multi-subblock path: ALL Q already pushed inside K loop after sb==0.
+                        // For single-subblock path: push all Q here (original behavior).
                         if constexpr (use_q_subblock_push) {
+                            constexpr uint32_t q_sub_start = (qk_in1_num_subblocks > 1) ? q_num_subblocks : 0;
                             if (k_chunk == 0) {
-                                for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                for (uint32_t q_sub = q_sub_start; q_sub < q_num_subblocks; ++q_sub) {
+                                    // DeviceZoneScopedN("Q-download");
                                     read_q_subblock<q_tile_bytes>(
                                         q_reader,
                                         cb_q_in,
@@ -593,7 +651,8 @@ void kernel_main() {
                         uint32_t cb_v_start_address = 0;
 
                         if (should_receive) {
-                            // Receive forwarded V chunk from previous core
+                            // DeviceZoneScopedN("V-receive");
+                            //  Receive forwarded V chunk from previous core
                             cb_reserve_back(cb_v_in, v_chunk_tiles);
                             cb_v_start_address = get_write_ptr(cb_v_in);
                             noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
@@ -601,7 +660,8 @@ void kernel_main() {
                             noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                             cb_push_back(cb_v_in, v_chunk_tiles);
                         } else {
-                            // Read V chunk from DRAM
+                            // DeviceZoneScopedN("V-download");
+                            //  Read V chunk from DRAM
                             if constexpr (is_chunked) {
                                 // Use page table to read V chunk (forwarding not supported for paged mode)
                                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
@@ -648,6 +708,7 @@ void kernel_main() {
 
                         // Forward V chunk to next core(s) if applicable
                         if (should_forward) {
+                            // DeviceZoneScopedN("V-forward");
                             noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                             noc_semaphore_set(sender_semaphore_addr_ptr, 0);
                             if constexpr (mcast_enabled) {

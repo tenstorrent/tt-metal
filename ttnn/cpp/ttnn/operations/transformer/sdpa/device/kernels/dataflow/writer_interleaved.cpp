@@ -130,15 +130,18 @@ void kernel_main() {
                     const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                     uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                    write_block(
-                        out_writer,
-                        cb_out,
-                        out_chunk_tiles,
-                        out_row_tile_count,
-                        vDHt,
-                        out_tile_id,
-                        tile_bytes,
-                        barrier_threshold);
+                    {
+                        // DeviceZoneScopedN("out-write");
+                        write_block(
+                            out_writer,
+                            cb_out,
+                            out_chunk_tiles,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            barrier_threshold);
+                    }
                 }
             }
         }

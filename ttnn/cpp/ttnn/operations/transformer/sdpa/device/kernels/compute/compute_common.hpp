@@ -21,6 +21,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1217,28 +1218,31 @@ ALWI void matmul_blocks(
     }
     cb_reserve_back(out_cb, output_num_tiles);
 
+    // Original Q outer, K inner loop order (required for correct mask FIFO consumption).
+    // For transposed K: accumulating K wait per subblock.
+    // For non-transposed: upfront K wait.
+    if (!transpose) {
+        cb_wait_front(in1_cb, K * N);
+    }
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         cb_wait_front(in0_cb, in0_wait_tiles);
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            // Accumulating K wait: blocks until reader pushes this subblock
             if (transpose) {
                 cb_wait_front(in1_cb, (in1_subblock + 1) * in1_subblock_num_tiles);
             }
 
             tile_regs_acquire();
-
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
-            // For transposed K: subblock-contiguous layout, base = sb * K * sw, stride = sw
-            // For non-transposed: original layout, base = sb * sw, stride = N
-            uint32_t in1_index = transpose ? in1_subblock * K * subblock_w : in1_index_offset;
-
+            // DeviceZoneScopedN("matmul");
+            uint32_t in1_index = transpose ? in1_subblock * in1_subblock_num_tiles : in1_index_offset;
+            const uint32_t in1_stride = transpose ? subblock_w : N;
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
-                in1_index += transpose ? subblock_w : N;
+                in1_index += in1_stride;
             }
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
@@ -1264,7 +1268,6 @@ ALWI void matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
         in0_wait_tiles += in0_subblock_num_tiles;
-        // Somewhat granularize the push of in0 subblocks
         cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
     }
     cb_pop_front(in1_cb, K * N);
@@ -1549,20 +1552,22 @@ void sdpa_inner_loop(
              * matmul_blocks internally waits on both inputs
              */
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
-                cb_q_in,
-                cb_k_in,
-                cb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_in0_block_w,
-                qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
+            {
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_in0_block_w,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1609,38 +1614,33 @@ void sdpa_inner_loop(
              * else:
              *  cur_max = max(qk, dim=-1)
              */
-            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            {
+                // DeviceZoneScopedN("softmax");
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                    alias_cur_max, alias_prev_max, processed_k_chunks > 0);
 
-            /**
-             * sub_exp fuses a few operations.
-             * In-place it performs `QK = exp((QK - cur_max) * scale)`
-             *
-             * It also partially performs reduce_sum on the output using L1 accumulation.
-             * `cur_sum = sum_tiles(exp((QK - cur_max) * scale), dim=-1)`
-             *
-             * Partial reduce_sum is used to push the final row_reduction within a tile
-             * outside of the loop over K chunks.
-             */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            }
 
             /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
-                cb_qk_im,
-                cb_v_in,
-                alias_mm2_cur_out,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t,
-                out_num_blocks,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
+            {
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    alias_mm2_cur_out,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t,
+                    out_num_blocks,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/);
+            }
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);
