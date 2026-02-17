@@ -473,7 +473,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
     const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
 
-    log_info(tt::LogOp, "Conv3D work distribution diagnostics:");
+    /*log_info(tt::LogOp, "Conv3D work distribution diagnostics:");
     log_info(tt::LogOp, "  Grid: {}x{}, num_cores={}", grid_size.x, grid_size.y, num_cores);
     log_info(tt::LogOp, "  Input: N={} T={} H={} W={} C={}", N, T_in, H_in, W_in, C_in);
     log_info(tt::LogOp, "  Output: T={} H={} W={} C={}", T_out, H_out, W_out, C_out);
@@ -521,7 +521,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         operation_attributes.padding[0],
         operation_attributes.padding[1],
         operation_attributes.padding[2]);
-    log_info(tt::LogOp, "  num_patches (per spatial block): {}", num_patches);
+    log_info(tt::LogOp, "  num_patches (per spatial block): {}", num_patches);*/
 
     // Track cores that need to perform reduction together
     std::vector<std::vector<uint32_t>> reduction_groups(total_output_parallel);
@@ -594,7 +594,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         bool is_reducer = has_work && c_in_idx == 0;
 
         // Diagnostic: compute per-core work metrics
-        if (has_work) {
+        /*if (has_work) {
             uint32_t n_c_out = c_out_block_end - c_out_block_start;
             uint32_t n_t_blocks = t_out_block_end - t_out_block_start;
             uint32_t n_h_blocks = h_out_block_end - h_out_block_start;
@@ -624,7 +624,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
                 n_spatial,
                 n_reader_iters,
                 n_output_positions);
-        }
+        }*/
 
         // Only include in reduction group if there's actual work to do
         if (has_work) {

@@ -1269,6 +1269,7 @@ class WanDecoder(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.dtype = dtype
 
         # Linear for post_quant_conv
         self.post_quant_conv = Linear(
