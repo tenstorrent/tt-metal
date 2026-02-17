@@ -362,10 +362,8 @@ inline auto invoke_binary_ng(
         // we don't support to_layout with optional output tensor
         TT_FATAL(
             !(output_preallocated && input_a_rm && input_b_rm),
-            "Optional output tensor with Row Major input is not supported"
-            "right now for Elementwise operations");
-        static const bool force_tilize_rm = std::getenv("TTNN_FORCE_TILIZE") != nullptr;
-        if (input_a_rm and input_b_rm and not force_tilize_rm and not input_a_sharded and not input_b_sharded) {
+            "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
+        if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
             auto result = ttnn::prim::binary_ng(
                 lhs,
                 rhs,
@@ -412,8 +410,6 @@ inline auto invoke_binary_ng(
             }
             return result;
         }
-
-        return result;
     }
     const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
     const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
@@ -434,6 +430,7 @@ inline auto invoke_binary_ng(
         std::nullopt,
         sub_core_grids);
     return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
+}
 }  // namespace detail
 
 template <BinaryOpType binary_op_type>
