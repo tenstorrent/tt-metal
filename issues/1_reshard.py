@@ -93,7 +93,7 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
-@skip_for_blackhole("Hitting assertion in reshard op on BH, see #12349")
+# @skip_for_blackhole("Hitting assertion in reshard op on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
@@ -125,7 +125,7 @@ def run_reshard_test(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_reshard(
+def test_sample(
     device,
     input_shape,
     input_layout,
