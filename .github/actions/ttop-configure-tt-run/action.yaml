@@ -1,0 +1,141 @@
+# Action that configures TT-Run according to MGD and Allocation's rank data
+# Creates rank_bindings.yaml, hostfile, rankfile and supposedly mgd.textproto in the given location
+# This assumes that SSH is already configured on the worker (create-environment-ssh action is done)
+
+name: 'Configure TT-Run'
+description: 'Configure TT-Run on the worker'
+
+inputs:
+  directory:
+    description: 'Directory for the generated files'
+    required: true
+  mgd:
+    description: 'MGD contents'
+    required: false
+    default: ''
+  mgdFile:
+    description: 'MGD file path, for referring file from inside the worker container. Ignored when mgd spec is given'
+    required: false
+    default: ''
+  copyToWorkers:
+    description: 'Whether to copy files to workers'
+    required: true
+    default: 'true'
+  ranksData:
+    description: 'Node-to-rank JSON mapping'
+    required: true
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create directory
+      shell: bash
+      run: |
+        echo "Creating directory for TT-Run configuration..."
+        sudo mkdir -p ${{ inputs.directory }}
+
+    - name: Create hostfile (parse ranks)
+      shell: bash
+      run: |
+        echo "Creating OpenMPI hostfile from ranks mapping..."
+
+        # Parse the JSON and create ordered hostfile
+        echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee ${{ inputs.directory }}/hostfile
+
+        # Create rankfile from ranksData object, should be:
+        echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[] | "rank \(.value)=\(.key) slot=0"' | sudo tee ${{ inputs.directory }}/rankfile
+
+        echo "OpenMPI hostfile created:"
+        sudo cat ${{ inputs.directory }}/hostfile
+
+    - name: Create MGD spec file
+      shell: bash
+      id: mgd
+      run: |
+        echo "Creating MGD spec file..."
+        printf "%s" "${{ inputs.mgd }}" | sudo tee ${{ inputs.directory }}/mgd.textproto
+
+        # If mgd is empty and mgdFile is not - assign the mgdFile to mesh_graph_desc_path
+        if [ -z "${{ inputs.mgd }}" ] && [ -n "${{ inputs.mgdFile }}" ]; then
+          echo "No MGD spec provided but MGD file path given. Will use ${{ inputs.mgdFile }} as mesh_graph_desc_path in rank_bindings.yaml"
+          echo "mesh_graph_desc_path=${{ inputs.mgdFile }}" >> $GITHUB_OUTPUT
+        else
+          echo "mesh_graph_desc_path=${{ inputs.directory }}/mgd.textproto" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create rank bindings file
+      shell: bash
+      run: |
+        # Count entries in hostfile to determine number of rank bindings
+        # NOTE: This hardcodes ranks in 1 mesh (assumes we have allocated a big mesh - like quad or half)
+        if [ -f ${{ inputs.directory }}/hostfile ]; then
+          num_hosts=$(sudo cat ${{ inputs.directory }}/hostfile | wc -l)
+          echo "Generating rank bindings for $num_hosts hosts..."
+
+          # Generate rank_bindings.yaml
+          sudo tee ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+        rank_bindings:
+        EOF
+
+          # Add rank binding entries (0-based indexing)
+          for i in $(seq 0 $((num_hosts - 1))); do
+            sudo tee -a ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+          - rank: $i
+            mesh_id: 0
+            mesh_host_rank: $i
+
+        EOF
+          done
+
+          # Add mesh graph description path
+          sudo tee -a ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+        mesh_graph_desc_path: "${{ steps.mgd.outputs.mesh_graph_desc_path }}"
+        EOF
+
+          echo "Rank bindings file created:"
+          sudo cat ${{ inputs.directory }}/rank_bindings.yaml
+        else
+          echo "No hostfile found, skipping rank bindings generation"
+        fi
+
+    - name: Print generated files
+      shell: bash
+      run: |
+        echo "Generated files:"
+        sudo ls -l  ${{ inputs.directory }}
+        awk '{print FILENAME ":" $0}'  ${{ inputs.directory }}/* || true
+
+    - name: Copy TT-Run data to workers
+      if: ${{ inputs.copyToWorkers == 'true' }}
+      shell: bash
+      run: |
+        echo "Copying files to all the workers..."
+        while IFS= read -r hostname; do
+          echo "Processing worker: $hostname"
+          # Create  ${{ inputs.directory }} directory on worker
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mkdir -p  ${{ inputs.directory }}"
+
+          # Copy mgd.textproto to worker. Always copy our generated one - empty or not.
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR  ${{ inputs.directory }}/mgd.textproto "$hostname":/tmp/mgd.textproto
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/mgd.textproto  ${{ inputs.directory }}/mgd.textproto"
+
+          # Copy rank_bindings.yaml to worker
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR  ${{ inputs.directory }}/rank_bindings.yaml "$hostname":/tmp/rank_bindings.yaml
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/rank_bindings.yaml  ${{ inputs.directory }}/rank_bindings.yaml"
+
+          # Copy hostfile to worker
+          scp -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR  ${{ inputs.directory }}/hostfile "$hostname":/tmp/hostfile
+          ssh -o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$hostname" "sudo mv /tmp/hostfile  ${{ inputs.directory }}/hostfile"
+
+        done <  ${{ inputs.directory }}/hostfile
+        echo "TT-Run data copied to all the workers"
+
+    - name: Print summary
+      shell: bash
+      run: |
+        echo "---\nGenerated files:\n---"
+        sudo ls -l  ${{ inputs.directory }}
+        awk '{print FILENAME ":" $0}'  ${{ inputs.directory }}/* || true
+        echo "---\nMGD:\n---"
+        awk '{print $0}'  ${{ steps.mgd.outputs.mesh_graph_desc_path }} || true
