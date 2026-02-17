@@ -176,8 +176,9 @@ def test_optimized_moe_decode_block(
     ############################################
     # create (double buffered) global semaphores
     ############################################
-    dispatch_global_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)]
-    combine_global_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)]
+    # NOTE: these don't have to be double buffered, as there is a global sync in combine after reading all dispatch output, and a global sync at the end of dispatch
+    dispatch_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+    combine_global_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
 
     ############################################
     # create constant input tensors
@@ -474,7 +475,7 @@ def test_optimized_moe_decode_block(
             worker_mode=ttnn.WorkerMode.DIRECT,
             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
             output_tensors=tt_dispatch_preallocated_output_tensors,
-            cross_device_semaphore=dispatch_global_semaphores[iteration % 2],
+            cross_device_semaphore=dispatch_global_semaphore,
         )
 
         # NOTE:
@@ -519,7 +520,7 @@ def test_optimized_moe_decode_block(
             worker_core_range_set=combine_worker_cores,
             mux_core_range_set=combine_mux_cores,
             output_tensor=tt_combine_output,
-            optional_cross_device_semaphore=combine_global_semaphores[iteration % 2],
+            optional_cross_device_semaphore=combine_global_semaphore,
         )
 
         return tt_combine_output
