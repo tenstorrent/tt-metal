@@ -101,6 +101,34 @@ def load_latency_csv(path):
     return df
 
 
+def load_h2d_latency_csv(path):
+    """Load H2D latency benchmark CSV (h2d_socket_data_ping output with h2d_mode column)."""
+    with open(path) as f:
+        header = f.readline().strip()
+        rows = [l.strip().split(",") for l in f if l.strip()]
+
+    cols = [
+        "page_size",
+        "socket_fifo_size",
+        "h2d_mode",
+        "num_iterations",
+        "avg_us",
+        "min_us",
+        "max_us",
+        "p50_us",
+        "p99_us",
+        "avg_cycles",
+        "min_cycles",
+        "max_cycles",
+    ]
+    nc = len(cols)
+    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
+    for c in cols[:-1]:  # All except h2d_mode
+        if c != "h2d_mode":
+            df[c] = pd.to_numeric(df[c])
+    return df
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -390,7 +418,7 @@ def lat_plot_breakdown(df, out="d2h_latency_breakdown.png"):
     for i, fs in enumerate(fifos):
         g = df[df.socket_fifo_size == fs].set_index("page_size").reindex(pages)
         axes[1].bar(x + i * w, g.max_us, w, label=f"FIFO={human_bytes(fs)}", alpha=0.6)
-    axes[1].set(xlabel="Page Size", ylabel="Max Latency (us)", title="D2H Max Latency (outliers)")
+    axes[1].set(xlabel="Page Size", ylabel="Max Latency (us)", title="D2H Max Latency")
     axes[1].set_xticks(x + w * (len(fifos) - 1) / 2)
     axes[1].set_xticklabels([human_bytes(p) for p in pages], rotation=45, fontsize=8)
     axes[1].legend(fontsize=8)
@@ -421,6 +449,208 @@ def run_latency(path):
     lat_plot(df)
     lat_plot_breakdown(df)
     lat_export_csv(df)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  H2D LATENCY
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def h2d_print_report(df):
+    modes = sorted(df.h2d_mode.unique())
+    print(f"\n{'='*70}\n  H2D Round-Trip Latency  ({len(df)} rows)\n{'='*70}")
+    print(f"  Modes      : {modes}")
+    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
+    print(f"  FIFO sizes : {[human_bytes(x) for x in sorted(df.socket_fifo_size.unique())]}")
+    print(f"  Iterations : {int(df.num_iterations.iloc[0])}")
+
+    # p50 latency comparison: HOST_PUSH vs DEVICE_PULL at largest FIFO
+    fs_max = df.socket_fifo_size.max()
+    print(f"\n  p50 latency (us) at FIFO={human_bytes(fs_max)}:")
+    print(f"  {'page':>6}", end="")
+    for m in modes:
+        print(f" {m:>12}", end="")
+    print(f" {'delta':>10}")
+    print(f"  {'-'*50}")
+    for ps in sorted(df.page_size.unique()):
+        print(f"  {human_bytes(ps):>6}", end="")
+        vals = {}
+        for m in modes:
+            c = df[(df.page_size == ps) & (df.socket_fifo_size == fs_max) & (df.h2d_mode == m)]
+            val = c.p50_us.values[0] if len(c) else None
+            vals[m] = val
+            print(f" {val:>12.2f}" if val else f" {'--':>12}", end="")
+        if len(vals) == 2 and all(v is not None for v in vals.values()):
+            delta = list(vals.values())[1] - list(vals.values())[0]
+            print(f" {delta:>+10.2f}")
+        else:
+            print()
+
+    # Per-mode breakdown
+    for mode in modes:
+        sub = df[df.h2d_mode == mode]
+        fifos = sorted(sub.socket_fifo_size.unique())
+        print(f"\n  {mode} - p50 latency (us):")
+        hdr = f"  {'page':>6}" + "".join(f"{human_bytes(f):>10}" for f in fifos)
+        print(f"{hdr}\n  {'-'*(len(hdr)-2)}")
+        for ps in sorted(sub.page_size.unique()):
+            row = f"  {human_bytes(ps):>6}"
+            for fs in fifos:
+                c = sub[(sub.page_size == ps) & (sub.socket_fifo_size == fs)]
+                row += f"{c.p50_us.values[0]:>10.2f}" if len(c) else f"{'--':>10}"
+            print(row)
+
+
+def h2d_plot(df, out="h2d_latency.png"):
+    """Main H2D latency chart: HOST_PUSH vs DEVICE_PULL comparison at largest FIFO."""
+    fs_max = df.socket_fifo_size.max()
+    sub = df[df.socket_fifo_size == fs_max]
+    modes = sorted(sub.h2d_mode.unique())
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for mode in modes:
+        g = sub[sub.h2d_mode == mode].sort_values("page_size")
+        color = ax.plot(g.page_size, g.p50_us, "o-", label=f"{mode} (p50)", ms=6, lw=2.5)[0].get_color()
+        ax.plot(g.page_size, g.min_us, "--", color=color, lw=1, alpha=0.4, label=f"{mode} (min/max)")
+        ax.plot(g.page_size, g.max_us, "--", color=color, lw=1, alpha=0.4)
+    ax.set(
+        xscale="log",
+        yscale="log",
+        xlabel="Page Size (bytes)",
+        ylabel="Latency (us)",
+        title=f"H2D Round-Trip Latency: HOST_PUSH vs DEVICE_PULL (FIFO={human_bytes(fs_max)})",
+    )
+    ax.set_xticks(t := sorted(sub.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def h2d_plot_breakdown(df, out="h2d_latency_breakdown.png"):
+    """Detailed per-mode view with all FIFO sizes."""
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+    modes = sorted(df.h2d_mode.unique())
+
+    for idx, mode in enumerate(modes):
+        ax = axes[idx]
+        sub = df[df.h2d_mode == mode]
+        for fs in sorted(sub.socket_fifo_size.unique()):
+            g = sub[sub.socket_fifo_size == fs].sort_values("page_size")
+            ax.plot(g.page_size, g.p50_us, "o-", label=f"FIFO={human_bytes(fs)}", ms=4, lw=1.5, alpha=0.7)
+        ax.set(
+            xscale="log",
+            yscale="log",
+            xlabel="Page Size (bytes)",
+            ylabel="Latency (us)" if idx == 0 else "",
+            title=f"{mode}",
+        )
+        ax.set_xticks(t := sorted(sub.page_size.unique()))
+        ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+        ax.minorticks_off()
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8, loc="best")
+
+    fig.suptitle("H2D Latency by FIFO Size (p50)", fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def h2d_plot_comparison(df, out="h2d_latency_comparison.png"):
+    """Compare HOST_PUSH vs DEVICE_PULL directly at largest FIFO."""
+    fs_max = df.socket_fifo_size.max()
+    sub = df[df.socket_fifo_size == fs_max]
+    modes = sorted(sub.h2d_mode.unique())
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for mode in modes:
+        g = sub[sub.h2d_mode == mode].sort_values("page_size")
+        ax.plot(g.page_size, g.p50_us, "o-", label=mode, ms=6, lw=2.5)
+    ax.set(
+        xscale="log",
+        yscale="log",
+        xlabel="Page Size (bytes)",
+        ylabel="Latency (us)",
+        title=f"H2D: HOST_PUSH vs DEVICE_PULL (FIFO={human_bytes(fs_max)}, p50)",
+    )
+    ax.set_xticks(t := sorted(sub.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def h2d_plot_fifo_impact(df, out="h2d_latency_vs_fifo.png"):
+    """Plot latency vs FIFO size for representative page sizes, separate subplots per mode."""
+    modes = sorted(df.h2d_mode.unique())
+    page_sizes = [64, 256, 1024, 4096, 16384]
+    page_sizes = [p for p in page_sizes if p in df.page_size.values]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+
+    for idx, mode in enumerate(modes):
+        ax = axes[idx]
+        sub = df[df.h2d_mode == mode]
+        for ps in page_sizes:
+            g = sub[sub.page_size == ps].sort_values("socket_fifo_size")
+            if not g.empty:
+                ax.plot(g.socket_fifo_size, g.p50_us, "o-", label=human_bytes(ps), ms=5, lw=2)
+        ax.set(
+            xscale="log",
+            xlabel="Socket FIFO Size (bytes)",
+            ylabel="Latency (us)" if idx == 0 else "",
+            title=f"{mode}",
+        )
+        ax.set_xticks(t := sorted(sub.socket_fifo_size.unique()))
+        ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=8)
+        ax.minorticks_off()
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=9, title="Page Size")
+
+    fig.suptitle("H2D Latency vs FIFO Size", fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def h2d_export_csv(df, out="h2d_latency_summary.csv"):
+    """Pivot: separate tables for each mode."""
+    modes = sorted(df.h2d_mode.unique())
+    tables = []
+    for mode in modes:
+        sub = df[df.h2d_mode == mode]
+        fifos = sorted(sub.socket_fifo_size.unique())
+        result = pd.DataFrame(index=sorted(sub.page_size.unique()))
+        result.index.name = f"page_size ({mode})"
+        for fs in fifos:
+            g = sub[sub.socket_fifo_size == fs].set_index("page_size")
+            tag = human_bytes(fs)
+            for col in ["p50_us", "min_us", "max_us", "p99_us", "avg_us"]:
+                result[f"{col} (FIFO={tag})"] = g[col]
+        tables.append(result)
+
+    with open(out, "w") as f:
+        for i, t in enumerate(tables):
+            if i > 0:
+                f.write("\n")
+            t.to_csv(f, float_format="%.4f")
+    print(f"  Saved {out}")
+
+
+def run_h2d_latency(path):
+    df = load_h2d_latency_csv(path)
+    h2d_print_report(df)
+    h2d_plot(df)
+    h2d_plot_breakdown(df)
+    h2d_plot_fifo_impact(df)
+    h2d_export_csv(df)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -468,11 +698,12 @@ def run_ping(path):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Analyze D2H benchmark results")
+    p = argparse.ArgumentParser(description="Analyze H2D/D2H benchmark results")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--throughput", action="store_true", help="Analyze throughput benchmark")
-    mode.add_argument("--latency", action="store_true", help="Analyze latency benchmark")
-    mode.add_argument("--ping", action="store_true", help="Analyze pure ping benchmark")
+    mode.add_argument("--throughput", action="store_true", help="Analyze D2H throughput benchmark")
+    mode.add_argument("--latency", action="store_true", help="Analyze D2H latency benchmark")
+    mode.add_argument("--h2d-latency", action="store_true", help="Analyze H2D latency benchmark")
+    mode.add_argument("--ping", action="store_true", help="Analyze D2H pure ping benchmark")
     p.add_argument("csv", help="Path to benchmark CSV")
     args = p.parse_args()
 
@@ -480,5 +711,7 @@ if __name__ == "__main__":
         run_throughput(args.csv)
     elif args.latency:
         run_latency(args.csv)
+    elif args.h2d_latency:
+        run_h2d_latency(args.csv)
     else:
         run_ping(args.csv)
