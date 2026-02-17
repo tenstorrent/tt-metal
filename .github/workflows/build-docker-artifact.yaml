@@ -290,6 +290,11 @@ jobs:
           buildkitd-config-inline: |
             [worker.oci]
               max-parallelism = 4
+          driver-opts: |
+            image=moby/buildkit:v0.27.0
+            network=host
+          buildkitd-flags: --debug
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
