@@ -27,8 +27,8 @@ inline void calculate_typecast_fp32_to_uint8() {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vInt mantissa = sfpi::exman8(in);
         sfpi::vInt exponent = sfpi::exexp(in);
-        mantissa >>= (23 - exponent - 1);
-        mantissa = (mantissa + 1) >> 1;
+        mantissa = sfpi::shft(mantissa, -(23 - exponent - 1));
+        mantissa = sfpi::shft(mantissa + 1, -1);
         mantissa += 256;  // Handle negative numbers
         mantissa &= 0xFF;
         sfpi::dst_reg[0] = mantissa;
@@ -42,7 +42,7 @@ inline void calculate_typecast_uint_to_uint8() {
     for (int d = 0; d < ITERATIONS; ++d) {
         sfpi::vUInt in;
         if constexpr (u16) {
-            TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+            TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
             in = sfpi::l_reg[sfpi::LRegs::LReg0];
         } else {
             in = sfpi::dst_reg[0];
