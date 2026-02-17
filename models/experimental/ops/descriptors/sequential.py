@@ -199,7 +199,9 @@ class CBPoolAllocator:
     number of slots exceeds the device limit.
     """
 
-    def __init__(self, max_slots: int = 32):
+    MAX_SLOTS = 32
+
+    def __init__(self, max_slots: int = MAX_SLOTS):
         self.max_slots = max_slots
         self._slots: Dict[int, CBSlot] = {}  # slot_index -> CBSlot
         # Maps CBPoolKey -> list of slot indices with that config.
@@ -241,7 +243,6 @@ class CBPoolAllocator:
                 reservations to prevent collisions.
         """
         remap: Dict[int, int] = {}
-        # Track which slots are used by THIS phase (to avoid sharing within a phase)
         slots_used_this_phase: Set[int] = set()
 
         # Reserve phantom CB indices first (identity mapping)
@@ -250,12 +251,27 @@ class CBPoolAllocator:
                 self._allocated_indices.add(phantom_idx)
             remap[phantom_idx] = phantom_idx
 
-        # Two-pass allocation: first claim identity-matching slots (CBs that
-        # existed in previous phases keep their slot), then allocate remaining
-        # CBs from the pool.  This prevents new CBs from stealing slots that
-        # belong to cross-phase shared CBs.
-        identity_cbs = []  # (orig_idx, info, key) with identity match
-        remaining_cbs = []  # (orig_idx, info, key) without identity match
+        # Two-pass allocation: identity-matching CBs first (preserves cross-phase
+        # slot assignments), then remaining CBs from the pool.
+        identity_cbs, remaining_cbs = self._partition_by_identity(cb_info)
+
+        for orig_idx, info, key in identity_cbs + remaining_cbs:
+            slot_idx = self._find_reusable_slot(key, orig_idx, slots_used_this_phase)
+            if slot_idx is not None:
+                self._reuse_slot(slot_idx, info, phase_idx)
+            else:
+                slot_idx = self._allocate_new_slot(key, info, orig_idx, phase_idx)
+            slots_used_this_phase.add(slot_idx)
+            remap[orig_idx] = slot_idx
+
+        self.phase_remaps.append(remap)
+
+    def _partition_by_identity(
+        self, cb_info: Dict[int, CBInfo]
+    ) -> Tuple[List[Tuple[int, CBInfo, CBPoolKey]], List[Tuple[int, CBInfo, CBPoolKey]]]:
+        """Split CBs into those with an existing identity-matching slot and the rest."""
+        identity_cbs = []
+        remaining_cbs = []
         for orig_idx, info in sorted(cb_info.items()):
             key = CBPoolKey(
                 data_format=info.data_format,
@@ -263,7 +279,6 @@ class CBPoolAllocator:
                 has_buffer=info.has_buffer,
                 unpack_to_dest_mode=info.unpack_to_dest_mode,
             )
-            # Check if there's an existing slot from the same original index
             has_identity = False
             if key in self._config_to_slots:
                 for candidate_idx in self._config_to_slots[key]:
@@ -274,82 +289,74 @@ class CBPoolAllocator:
                 identity_cbs.append((orig_idx, info, key))
             else:
                 remaining_cbs.append((orig_idx, info, key))
+        return identity_cbs, remaining_cbs
 
-        # Process identity-matching CBs first, then remaining
-        for orig_idx, info, key in identity_cbs + remaining_cbs:
-            # Look for an existing slot with the same config that's NOT
-            # already used by this phase.  Prefer the slot created from
-            # the same original CB index (preserves identity mapping).
-            reused_slot = None
-            if key in self._config_to_slots:
-                # First: look for a slot from the same original index
-                for candidate_idx in self._config_to_slots[key]:
-                    if candidate_idx not in slots_used_this_phase:
-                        if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
-                            reused_slot = candidate_idx
-                            break
-                # Second: any compatible slot
-                if reused_slot is None:
-                    for candidate_idx in self._config_to_slots[key]:
-                        if candidate_idx not in slots_used_this_phase:
-                            reused_slot = candidate_idx
-                            break
+    def _find_reusable_slot(self, key: CBPoolKey, orig_idx: int, slots_used_this_phase: Set[int]) -> Optional[int]:
+        """Find an existing slot compatible with *key* not used by this phase.
 
-            if reused_slot is not None:
-                # Reuse existing slot from a different phase
-                slot_idx = reused_slot
-                slot = self._slots[slot_idx]
-                # Update total_size to max
-                if info.total_size > slot.total_size:
-                    slot.total_size = info.total_size
-                    # Keep phase 0's descriptor for correct initial buffer setup
-                    if slot.source_phase != 0:
-                        slot.cb_descriptor = self._get_cb_descriptor(info, phase_idx)
-                        slot.source_phase = phase_idx
-            else:
-                # Allocate new slot
-                slot_idx = self._alloc_index()
-                if len(self._slots) + 1 > self.max_slots:
-                    breakdown = []
-                    for si, sl in sorted(self._slots.items()):
-                        breakdown.append(
-                            f"  slot {si}: fmt={sl.config.data_format}, "
-                            f"page_size={sl.config.page_size}, "
-                            f"unpack={sl.config.unpack_to_dest_mode}"
-                        )
-                    raise ValueError(
-                        f"CB pool overflow: need {len(self._slots) + 1} slots but "
-                        f"device limit is {self.max_slots}.\n"
-                        f"Allocated slots:\n" + "\n".join(breakdown)
-                    )
-                self._allocated_indices.add(slot_idx)
-                desc = self._get_cb_descriptor(info, phase_idx)
-                self._slots[slot_idx] = CBSlot(
-                    slot_index=slot_idx,
-                    config=key,
-                    cb_descriptor=desc,
-                    total_size=info.total_size,
-                    source_phase=phase_idx,
-                )
-                self._slot_to_orig_index[slot_idx] = orig_idx
-                if key not in self._config_to_slots:
-                    self._config_to_slots[key] = []
-                self._config_to_slots[key].append(slot_idx)
+        Prefers a slot created from the same original CB index (identity match).
+        """
+        if key not in self._config_to_slots:
+            return None
+        # First: identity match
+        for candidate_idx in self._config_to_slots[key]:
+            if candidate_idx not in slots_used_this_phase:
+                if self._slot_to_orig_index.get(candidate_idx) == orig_idx:
+                    return candidate_idx
+        # Second: any compatible slot
+        for candidate_idx in self._config_to_slots[key]:
+            if candidate_idx not in slots_used_this_phase:
+                return candidate_idx
+        return None
 
-            slots_used_this_phase.add(slot_idx)
-            remap[orig_idx] = slot_idx
+    def _reuse_slot(self, slot_idx: int, info: CBInfo, phase_idx: int) -> None:
+        """Reuse an existing slot, updating total_size if needed."""
+        slot = self._slots[slot_idx]
+        if info.total_size > slot.total_size:
+            slot.total_size = info.total_size
+            if slot.source_phase != 0:
+                slot.cb_descriptor = self._get_cb_descriptor(info, phase_idx)
+                slot.source_phase = phase_idx
 
-        self.phase_remaps.append(remap)
+    def _allocate_new_slot(self, key: CBPoolKey, info: CBInfo, orig_idx: int, phase_idx: int) -> int:
+        """Allocate a fresh slot, raising ValueError on overflow."""
+        slot_idx = self._alloc_index()
+        if len(self._slots) + 1 > self.max_slots:
+            breakdown = [
+                f"  slot {si}: fmt={sl.config.data_format}, "
+                f"page_size={sl.config.page_size}, "
+                f"unpack={sl.config.unpack_to_dest_mode}"
+                for si, sl in sorted(self._slots.items())
+            ]
+            raise ValueError(
+                f"CB pool overflow: need {len(self._slots) + 1} slots but "
+                f"device limit is {self.max_slots}.\n"
+                f"Allocated slots:\n" + "\n".join(breakdown)
+            )
+        self._allocated_indices.add(slot_idx)
+        self._slots[slot_idx] = CBSlot(
+            slot_index=slot_idx,
+            config=key,
+            cb_descriptor=self._get_cb_descriptor(info, phase_idx),
+            total_size=info.total_size,
+            source_phase=phase_idx,
+        )
+        self._slot_to_orig_index[slot_idx] = orig_idx
+        if key not in self._config_to_slots:
+            self._config_to_slots[key] = []
+        self._config_to_slots[key].append(slot_idx)
+        return slot_idx
 
     @staticmethod
-    def _get_cb_descriptor(info: CBInfo, phase_idx: int) -> Any:
-        """Get the CBDescriptor from a CBInfo's source descriptor.
+    def _get_cb_descriptor(info: CBInfo, phase_idx: int) -> Dict[str, int]:
+        """Create a lookup key for finding the CBDescriptor later.
 
-        We can't deepcopy CBDescriptors, so we store a reference.
-        The CBDescriptor is looked up later from the phase's ProgramDescriptor.
+        We can't deepcopy CBDescriptors (C++ bindings), so we store the
+        phase index and original CB index.  build_merged_cb_descriptors()
+        uses these to look up the actual CBDescriptor from the phase's
+        ProgramDescriptor.
         """
-        # Return a lightweight reference to reconstruct later
-        return {"phase_idx": phase_idx, "cb_idx": info.original_index, "info": info}
+        return {"phase_idx": phase_idx, "cb_idx": info.original_index}
 
     def get_remap(self, phase_idx: int) -> Dict[int, int]:
         """Return {orig_cb_idx: slot_idx} for a phase."""
@@ -478,7 +485,7 @@ def _is_cb_named_arg(name: str, value: Any) -> bool:
     """
     if not name.startswith(CB_ARG_PREFIX):
         return False
-    if not isinstance(value, int) or value < 0 or value > 31:
+    if not isinstance(value, int) or value < 0 or value >= CBPoolAllocator.MAX_SLOTS:
         logger.warning(
             "Named arg '%s' starts with '%s' but has value %s outside CB range [0,31]. "
             "If this is not a CB arg, rename it to not start with '%s'.",
@@ -1216,8 +1223,7 @@ def _generate_fused_riscv0_source(
             )
         lines.append("")
 
-    if rebind_info is None:
-        rebind_info = {}
+    rebind_info = rebind_info or {}
 
     first = True
     for phase_idx, _ in reader_sources:
@@ -1390,8 +1396,7 @@ def _generate_fused_riscv1_source(
             )
         lines.append("")
 
-    if rebind_info is None:
-        rebind_info = {}
+    rebind_info = rebind_info or {}
 
     num_writers = len(writer_sources)
     for count, (phase_idx, _) in enumerate(writer_sources):
@@ -1581,8 +1586,7 @@ def _generate_fused_compute_source(
             )
         lines.append("")
 
-    if rebind_info is None:
-        rebind_info = {}
+    rebind_info = rebind_info or {}
 
     first = True
     for count, (phase_idx, _) in enumerate(compute_sources):
@@ -1803,7 +1807,7 @@ def _concatenate_common_runtime_args(
             continue
         try:
             common_args.extend(list(kernel.common_runtime_args))
-        except Exception:
+        except (AttributeError, TypeError):
             pass
     return common_args
 
@@ -1939,56 +1943,6 @@ def _merge_defines(
 # =============================================================================
 
 
-def _validate_and_get_compute_config(
-    phase_kernels: List[Dict[str, Any]],
-) -> "ttnn.ComputeConfigDescriptor":
-    """Validate that all phases have identical compute configs and return it.
-
-    Compute kernel configs (fp32_dest_acc_en, math_fidelity, math_approx_mode,
-    etc.) are hardware settings that cannot be reconfigured mid-kernel.  All
-    phases must use exactly the same config.
-    """
-    base = None
-    base_phase = -1
-
-    for phase_idx, pk in enumerate(phase_kernels):
-        compute = pk.get("compute")
-        if compute is None:
-            continue
-
-        config = compute.config
-        if base is None:
-            base = config
-            base_phase = phase_idx
-            continue
-
-        # Validate all fields match
-        mismatches = []
-        for field in (
-            "fp32_dest_acc_en",
-            "math_approx_mode",
-            "math_fidelity",
-            "dst_full_sync_en",
-            "bfp8_pack_precise",
-        ):
-            base_val = getattr(base, field, None)
-            this_val = getattr(config, field, None)
-            if base_val != this_val:
-                mismatches.append(f"  {field}: phase {base_phase}={base_val}, phase {phase_idx}={this_val}")
-
-        if mismatches:
-            raise ValueError(
-                f"Compute config mismatch between phases. These are hardware "
-                f"settings that cannot change mid-kernel — all phases must use "
-                f"identical compute configs.\n" + "\n".join(mismatches)
-            )
-
-    if base is None:
-        return ttnn.ComputeConfigDescriptor()
-
-    return base
-
-
 def _validate_and_get_compute_config_for_role(
     phase_kernels: List[Dict[Any, Any]],
     role_key: Any,
@@ -2009,11 +1963,11 @@ def _validate_and_get_compute_config_for_role(
             continue
 
         mismatches = []
-        for fld in ("fp32_dest_acc_en", "math_approx_mode", "math_fidelity", "dst_full_sync_en", "bfp8_pack_precise"):
-            base_val = getattr(base, fld, None)
-            this_val = getattr(config, fld, None)
+        for field in ("fp32_dest_acc_en", "math_approx_mode", "math_fidelity", "dst_full_sync_en", "bfp8_pack_precise"):
+            base_val = getattr(base, field, None)
+            this_val = getattr(config, field, None)
             if base_val != this_val:
-                mismatches.append(f"  {fld}: phase {base_phase}={base_val}, phase {phase_idx}={this_val}")
+                mismatches.append(f"  {field}: phase {base_phase}={base_val}, phase {phase_idx}={this_val}")
 
         if mismatches:
             raise ValueError(f"Compute config mismatch for role {role_key}.\n" + "\n".join(mismatches))
@@ -2782,6 +2736,7 @@ __all__ = [
     # Core classes
     "OpGraphBuilder",
     "OpNode",
+    "CBPoolAllocator",
     "PhaseInfo",
     "CBInfo",
     "BarrierConfig",
