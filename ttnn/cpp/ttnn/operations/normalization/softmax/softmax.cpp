@@ -12,7 +12,6 @@
 #include "ttnn/operations/creation.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 
