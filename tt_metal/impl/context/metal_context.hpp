@@ -147,6 +147,10 @@ public:
     // Hang detection
     void on_dispatch_timeout_detected();
 
+    void teardown_base_objects();
+
+    void initialize_base_objects();
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -159,9 +163,7 @@ private:
     void construct_control_plane();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
-    void teardown_base_objects();
     void teardown_dispatch_state();
-    void initialize_base_objects();
 
     void reset_cores(ChipId device_id);
     void assert_cores(ChipId device_id);
