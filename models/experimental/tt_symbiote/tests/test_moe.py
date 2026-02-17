@@ -35,11 +35,23 @@ def default_moe_config():
 
 
 @pytest.mark.parametrize(
+    "real_weights",
+    [
+        True,  # Use real weights
+        False,  # Use random weights
+    ],
+)
+@pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 245760, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
-def test_glm4_moe_full(mesh_device, default_moe_config):
+def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
     """Test full Glm4MoeMoE module with TTNN acceleration."""
-    model = Glm4MoeMoE(default_moe_config).to(dtype=torch.bfloat16)
+    if real_weights:
+        from transformers import AutoModelForCausalLM
+
+        model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash").model.layers[1].mlp
+    else:
+        model = Glm4MoeMoE(default_moe_config).to(dtype=torch.bfloat16)
     model.eval()
     torch.set_grad_enabled(False)
 
