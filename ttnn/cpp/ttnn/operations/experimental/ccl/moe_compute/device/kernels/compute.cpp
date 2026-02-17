@@ -167,6 +167,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
 
+    uint32_t num_active_tokens[2];
+
     constexpr uint32_t BITS_PER_EXPERT = 10;
     constexpr uint32_t EXPERT_MASK = 0x3FFu;
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
@@ -174,11 +176,15 @@ void kernel_main() {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
         DPRINT << "expert_id: " << expert_id << " num_tokens: " << num_tokens << "\n";
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        num_active_tokens[expert_id] = num_tokens;
     }
 
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
     uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
     uint32_t matmul_chunk_ready_semaphore_addr = cb_w2c_md_read_ptr[1];
+
+    // Zero out dest registers
+    MATH((ckernel::zeroacc()));
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -189,9 +195,6 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Zero out dest registers
-            MATH((ckernel::zeroacc()));
-
             // Initialize SFPU for SILU and eltwise multiply
             PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
@@ -206,11 +209,12 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
 
-            for (uint32_t i = 0; i < 224; ++i) {
-                if (i % 20 == 0) {
-                    PACK((print_tile_rows(cb_s2c_in, i, true)));
-                }
-            }
+            // for (uint32_t i = 0; i < 224; ++i) {
+            //                 if (i % 2 == 0) {
+            //                     const uint32_t idx = (use_second_half_buffer)? num_w0_w1_tiles_h+i:i;
+            //                     PACK((print_tile_rows(cb_s2c_in, idx, true, 0, num_active_tokens[expert_id])));
+            //                 }
+            //             }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -264,7 +268,6 @@ void kernel_main() {
                 pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
                 tile_regs_release();
             }
-            cb_pop_front(cb_s2c_in, num_w0_w1_tiles_h);
 
             // Signal to DM1 that the output from this core is ready
             cb_reserve_back(cb_c2w_rdy, 1);
@@ -274,7 +277,6 @@ void kernel_main() {
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
 
-            pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
@@ -316,18 +318,21 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-
-                // fill_tile_init();
-                // fill_tile(0,1.0);
-                // fill_tile(1,1.0);
-                // fill_tile(2,1.0);
-                // fill_tile(3,1.0);
+                //                 fill_tile_init();
+                //                 fill_tile(0,(expert_id+1)*(iter+1));
+                //                 fill_tile(1,(expert_id+1)*(iter+1));
+                //                 fill_tile(2,(expert_id+1)*(iter+1));
+                //                 fill_tile(3,(expert_id+1)*(iter+1));
 
                 tile_regs_commit();
 
                 tile_regs_wait();
+                pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+
                 pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
+                pack_untilize_uninit(cb_c2s_out);
+
                 tile_regs_release();
             }
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
@@ -335,7 +340,6 @@ void kernel_main() {
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
 
-            pack_untilize_uninit(cb_c2s_out);
         }  // end for (chunk)
     }  // end for (expert_id)
 

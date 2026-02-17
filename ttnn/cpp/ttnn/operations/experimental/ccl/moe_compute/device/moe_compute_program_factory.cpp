@@ -350,6 +350,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // All cores (not just Tilize and Matmul)
     const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
+
     auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
         program,

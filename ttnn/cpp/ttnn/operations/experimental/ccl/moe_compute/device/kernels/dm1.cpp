@@ -8,6 +8,35 @@
 
 #include "api/debug/dprint_pages.h"
 
+void print_tile_rows(
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = false,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = start_row; r < end_row; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
@@ -77,14 +106,8 @@ void kernel_main() {
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
-
     const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
     const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
-
-    const uint32_t num_elt_tiles = num_w0_w1_tiles_w;
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
@@ -184,22 +207,17 @@ void kernel_main() {
         const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Wait for compute core to tell us that all mm01 data is ready
-
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
-
             // Set state for the data writes
             noc_async_write_one_packet_set_state</*posted=*/true>(
                 neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
-            // Signal to tilize cores that they can send another chunk of tiles
-            noc_semaphore_inc</*posted=*/true>(
-                matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
-
             // Set state for the semaphore write
             noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
                 neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
+
+            // Wait for compute core to tell us that all mm01 data is ready
+            cb_wait_front(cb_c2w_rdy, 1);
+            cb_pop_front(cb_c2w_rdy, 1);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
@@ -216,7 +234,7 @@ void kernel_main() {
 
                     // Write 6 tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
-                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step & 1];
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
                     const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
@@ -232,7 +250,7 @@ void kernel_main() {
                         /*update_val=*/true>(++semaphore_value);
 
                     // Ensure writes have left the core before continuing
-                    noc_async_posted_writes_flushed();
+                    noc_async_posted_writes_flushed(1);
                 }
             }
 
@@ -246,6 +264,9 @@ void kernel_main() {
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
+            DPRINT << "output_width_tiles_core: " << output_width_tiles_core << "\n";
+            const uint32_t elts_per_page = source_width_tiles * tile_width;
+            tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, active_tokens);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
@@ -279,8 +300,6 @@ void kernel_main() {
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
 
-                    // tt::data_movement::common::print_bf16_pages(source_l1_addr, width_transfer_bytes/2, 1);
-
                     noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
 
                     if (++shard_row == max_tokens_per_height_shard) {
@@ -293,6 +312,10 @@ void kernel_main() {
             }
             noc_async_posted_writes_flushed(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
+
+            // Signal to tilize cores that they can send another chunk of tiles
+            noc_semaphore_inc</*posted=*/true>(
+                matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
     }
 

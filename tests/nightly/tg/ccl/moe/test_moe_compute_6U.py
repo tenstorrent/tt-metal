@@ -301,6 +301,7 @@ def prepare_output_tensor_from_combine_writer(
             contrib = shaped_torch_output[e, bt * total_tokens // output_shard_height_dim + ot]
 
             torch_output[e, t] = contrib
+
         print(f"{torch_output[e,:active_tokens,:16]=}")
     return torch_output
 
@@ -668,8 +669,10 @@ def gen_sparse_buffer_and_indices(
 
     # Generate original tokens for each source device
     # Shape: [num_dispatch_devices, tokens_per_device, hidden_size]
-    original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
-    # original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+
+    # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
@@ -1183,8 +1186,11 @@ def test_moe_compute(
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    MATMUL_FULL_CORES = {0, 1, 8, 9}
-    MATMUL_PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
+    MATMUL_FULL_CORES_A = {0, 1, 8, 9}
+    MATMUL_PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
+
+    MATMUL_FULL_CORES_B = {0, 3, 6, 9}
+    MATMUL_PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
 
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
     core2dram = {}
@@ -1199,7 +1205,7 @@ def test_moe_compute(
     ring2cores = {}
     for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
         # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES_B else 0)
 
     dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
     dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
