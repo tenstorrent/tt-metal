@@ -17,7 +17,7 @@ import ttnn
 from ....models.transformers.transformer_mochi import MochiTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils.cache import get_cache_path, load_cache_dict
+from ....utils import cache
 
 
 @pytest.mark.parametrize(
@@ -124,18 +124,13 @@ def test_transformer_accuracy(
         is_fsdp=True,
     )
 
-    cache_path = get_cache_path(
+    cache.load_model(
+        tt_model,
         model_name="mochi-1-preview",
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
     )
-    assert os.path.exists(
-        cache_path
-    ), "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-    cache_dict = load_cache_dict(cache_path)
-    tt_model.from_cached_state_dict(cache_dict)
 
     # Get list of step directories
     step_dirs = [d for d in os.listdir(ground_truth_dir) if d.startswith("step_")]

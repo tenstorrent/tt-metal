@@ -274,19 +274,14 @@ def test_transformer(
         padding_config=padding_config,
     )
 
-    if not cache.initialize_from_cache(
+    cache.load_model(
         tt_model,
-        torch_model.state_dict(),
-        "Flux.1-dev",
-        "transformer",
-        parallel_config,
-        tuple(submesh_device.shape),
-        "bf16",
-    ):
-        logger.info(
-            "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."
-        )
-        tt_model.load_torch_state_dict(torch_model.state_dict())
+        get_torch_state_dict=torch_model.state_dict,
+        model_name="Flux.1-dev",
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(submesh_device.shape),
+    )
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])

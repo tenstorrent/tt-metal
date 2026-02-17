@@ -79,17 +79,14 @@ class T5TokenizerEncoderPair:
             parallel_config=self._parallel_config,
         )
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=model,
-            torch_state_dict=torch_model.state_dict(),
+            get_torch_state_dict=torch_model.state_dict,
             model_name=checkpoint,
             subfolder="",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
-            dtype="bf16",
-        ):
-            logger.info("loading T5 encoder from torch state...")
-            model.load_torch_state_dict(torch_model.state_dict())
+        )
 
         return model
 
