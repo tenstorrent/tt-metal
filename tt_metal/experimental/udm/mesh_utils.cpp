@@ -98,11 +98,13 @@ std::vector<uint32_t> factor_cores_into_dims(uint32_t num_cores, size_t num_dims
         while (factor > 1 && remaining % factor != 0) {
             factor--;
         }
+        // If no good factor found (factor <= 1), use all remaining cores for this dimension
+        // This handles both factor == 0 (when target < 1.0) and factor == 1 cases
         if (factor <= 1 && remaining > 1) {
-            factor = remaining;  // Use all remaining if no good factor found
-        }
-        // Ensure factor is at least 1 to prevent division by zero
-        if (factor == 0) {
+            factor = remaining;
+        } else if (factor == 0) {
+            // Edge case: target < 1.0 resulted in factor = 0, and remaining = 1
+            // Set factor to 1 to prevent division by zero
             factor = 1;
         }
 
