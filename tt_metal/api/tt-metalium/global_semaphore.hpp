@@ -24,10 +24,18 @@ namespace tt::tt_metal {
 class GlobalSemaphore {
 public:
     GlobalSemaphore(
-        IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        IDevice* device,
+        const CoreRangeSet& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<uint64_t> address = std::nullopt);
 
     GlobalSemaphore(
-        IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+        IDevice* device,
+        CoreRangeSet&& cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1,
+        std::optional<uint64_t> address = std::nullopt);
 
     GlobalSemaphore(const GlobalSemaphore&) = default;
     GlobalSemaphore& operator=(const GlobalSemaphore&) = default;
@@ -45,7 +53,7 @@ public:
     auto attribute_values() const { return std::make_tuple(this->cores_, this->buffer_.get_buffer()->buffer_type()); }
 
 private:
-    void setup_buffer(uint32_t initial_value, BufferType buffer_type);
+    void setup_buffer(uint32_t initial_value, BufferType buffer_type, std::optional<uint64_t> address);
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
