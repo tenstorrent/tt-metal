@@ -287,6 +287,7 @@ void set_or_update_runtime_arguments(
 
     uint32_t c_num_tiles;
     uint32_t num_rows_per_tile = 0;
+    uint32_t row_blocks_per_channel = 1;
     uint32_t tiles_per_row_width = 1;
     uint32_t common_row_width_elements = 0;
     uint32_t reader_stride_size_bytes = 0;
@@ -323,7 +324,8 @@ void set_or_update_runtime_arguments(
             num_rows_per_tile = 1;
         }
 
-        uint32_t total_logical_rows = cND * cD * cN * cC * cHt_r;
+        row_blocks_per_channel = tt::div_up(cHt_r, num_rows_per_tile);
+        uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
         tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
         const uint32_t a_tile_bytes = tile_hw * a.element_size();
         const uint32_t a_row_width_bytes = common_row_width_elements * a.element_size();
@@ -333,8 +335,8 @@ void set_or_update_runtime_arguments(
         const uint32_t c_row_width_bytes = common_row_width_elements * c.element_size();
         writer_stride_size_bytes =
             (c_row_width_bytes > c_tile_bytes) ? c_tile_bytes : tt::round_up(c_row_width_bytes, c_alignment);
-        // Calculate Total Height-Units to distribute
-        c_num_tiles = tt::div_up(total_logical_rows, num_rows_per_tile);
+        // Row-major kernels process one (ND,D,N,C,th-block) at a time.
+        c_num_tiles = total_row_blocks;
     } else {
         c_num_tiles = c.physical_volume() / tile_hw;
     }
@@ -379,7 +381,7 @@ void set_or_update_runtime_arguments(
         cores = corerange_to_cores(all_device_cores, {}, row_major);
     }
 
-    uint32_t current_row = 0;
+    uint32_t current_block = 0;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
@@ -440,14 +442,12 @@ void set_or_update_runtime_arguments(
                     c.buffer()->address(),
                     common_row_width_elements,
                     c_num_tiles,
-                    c_current_shard_width,
                     cD,
                     cN,
                     cC,
                     cHt_r,
-                    cWt_r,
                     cND,
-                    current_row,
+                    current_block,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
@@ -495,14 +495,12 @@ void set_or_update_runtime_arguments(
                     c.buffer()->address(),
                     common_row_width_elements,
                     c_num_tiles,
-                    c_current_shard_width,
                     cD,
                     cN,
                     cC,
                     cHt_r,
-                    cWt_r,
                     cND,
-                    current_row,
+                    current_block,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
@@ -538,7 +536,6 @@ void set_or_update_runtime_arguments(
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
             const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-            const uint32_t bWt_r_arg = b.has_value() ? bWt_r : 1u;
             reader_runtime_args = {
                 a.buffer()->address(),
                 c_num_tiles,
@@ -546,16 +543,17 @@ void set_or_update_runtime_arguments(
                 aN,
                 aC,
                 aHt_r,
-                aWt_r,
+                aND,
                 b_addr,
                 bD_arg,
                 bN_arg,
                 bC_arg,
                 bHt_r_arg,
-                bWt_r_arg,
+                bND,
                 cHt_r,
                 cC,
-                current_row,
+                cND,
+                current_block,
                 num_rows_per_tile,
                 common_row_width_elements,
                 static_cast<uint32_t>(a.buffer()->aligned_page_size()),
@@ -595,7 +593,7 @@ void set_or_update_runtime_arguments(
 
         start_tile_id += c_num_tiles;
         if (row_major_inputs) {
-            current_row += c_num_tiles * num_rows_per_tile;
+            current_block += c_num_tiles;
         }
     }
     if (has_sharding) {
@@ -641,6 +639,42 @@ KernelName get_reader_kernel_name_and_defines(
         return KernelName::ReaderScalarBcastNg;
     }
     TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
+}
+
+KernelName get_reader_rm_kernel_name_and_defines(
+    const SubtileBroadcastType subtile_broadcast_type,
+    const bool has_rhs_tensor,
+    std::map<std::string, std::string>& reader_defines) {
+    if (!has_rhs_tensor) {
+        return KernelName::ReaderRmScalarOpNg;
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
+        return KernelName::ReaderRmNoBcastNg;
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        return KernelName::ReaderRmRowBcastNg;
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
+        return KernelName::ReaderRmColBcastNg;
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        return KernelName::ReaderRmRowBColABcastNg;
+    }
+    if (subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
+        return KernelName::ReaderRmScalarBcastNg;
+    }
+    TT_FATAL(false, "Unsupported row-major subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
 }
 
 void overwrite_compute_kernel_name_and_defines(
@@ -893,35 +927,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
-    writer_defines["SCALAR_OP"] = (inputs_row_major && !b.has_value()) ? "1" : "0";
 
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
-    reader_defines["RM_HAS_B"] = b.has_value() ? "1" : "0";
-    reader_defines["SCALAR_OP"] = (inputs_row_major && !b.has_value()) ? "1" : "0";
-    const auto bcast_type = operation_attributes.subtile_broadcast_type;
-    const bool rm_row_bcast_a =
-        (bcast_type == SubtileBroadcastType::ROW_A || bcast_type == SubtileBroadcastType::ROW_A_COL_B ||
-         bcast_type == SubtileBroadcastType::SCALAR_A);
-    const bool rm_row_bcast_b =
-        (bcast_type == SubtileBroadcastType::ROW_B || bcast_type == SubtileBroadcastType::ROW_B_COL_A ||
-         bcast_type == SubtileBroadcastType::SCALAR_B);
-    const bool rm_col_bcast_a =
-        (bcast_type == SubtileBroadcastType::COL_A || bcast_type == SubtileBroadcastType::ROW_B_COL_A ||
-         bcast_type == SubtileBroadcastType::SCALAR_A);
-    const bool rm_col_bcast_b =
-        (bcast_type == SubtileBroadcastType::COL_B || bcast_type == SubtileBroadcastType::ROW_A_COL_B ||
-         bcast_type == SubtileBroadcastType::SCALAR_B);
-    reader_defines["RM_ROW_BCAST_A"] = rm_row_bcast_a ? "1" : "0";
-    reader_defines["RM_ROW_BCAST_B"] = rm_row_bcast_b ? "1" : "0";
-    reader_defines["RM_COL_BCAST_A"] = rm_col_bcast_a ? "1" : "0";
-    reader_defines["RM_COL_BCAST_B"] = rm_col_bcast_b ? "1" : "0";
-
-    // overwrite reader and write kernel names so that reader reads both and b and
-    // writer does not read b and seperate kernels for native row major data.
     if (inputs_row_major) {
-        kernel_config.reader_kernel = KernelName::ReaderRmUnifiedNg;
+        kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_rm_kernel_name_and_defines(
+            operation_attributes.subtile_broadcast_type, b.has_value(), reader_defines);
         writer_kernel = KernelName::WriterRmNoBcastNg;
     } else if (b.has_value()) {
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
