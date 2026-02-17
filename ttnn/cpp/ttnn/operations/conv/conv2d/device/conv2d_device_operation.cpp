@@ -155,7 +155,8 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
     };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
+    return tt::stl::hash::hash_objects_with_default_seed(
+        tt::stl::hash::type_hash<Conv2dDeviceOperation>, hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

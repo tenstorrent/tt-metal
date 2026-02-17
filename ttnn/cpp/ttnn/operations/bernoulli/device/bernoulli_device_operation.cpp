@@ -65,7 +65,8 @@ tt::stl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
     cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+    return tt::stl::hash::hash_objects_with_default_seed(
+        tt::stl::hash::type_hash<BernoulliDeviceOperation>, cached_operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::operations::bernoulli
