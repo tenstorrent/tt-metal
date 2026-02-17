@@ -344,7 +344,7 @@ def _get_num_trace_executions(rows):
             try:
                 trace_indices.add(int(run_type.split("_")[-1]))
             except ValueError:
-                # Ignore malformed trace_execution labels but log for diagnostics.
+                # Intentionally ignore run types with a non-integer suffix; they are not valid trace executions.
                 logger.debug("Ignoring malformed RUN TYPE for trace execution: {!r}", run_type)
     return len(trace_indices)
 
@@ -400,6 +400,7 @@ def _calculate_stats(rows, reference, skip_traces=1):
                         try:
                             durations.append(float(dur))
                         except ValueError:
+                            # Intentionally skip non-numeric kernel duration values in warmup data.
                             logger.warning(
                                 f"Non-numeric kernel duration '{dur}' for op_idx={op_idx}, "
                                 f"device_id={device_id} in warmup; skipping this value."
@@ -419,6 +420,7 @@ def _calculate_stats(rows, reference, skip_traces=1):
                             try:
                                 durations.append(float(dur))
                             except ValueError:
+                                # Intentionally skip non-numeric kernel duration values in trace execution data.
                                 logger.warning(
                                     f"Non-numeric kernel duration '{dur}' for op_idx={op_idx}, "
                                     f"device_id={device_id}, run_type={run_type}; skipping this value."
@@ -439,6 +441,7 @@ def _calculate_stats(rows, reference, skip_traces=1):
                     try:
                         latencies.append(float(lat))
                     except ValueError:
+                        # Intentionally skip non-numeric op-to-op latency values in trace execution data.
                         logger.warning(
                             f"Non-numeric op-to-op latency '{lat}' for op_idx={op_idx}, "
                             f"run_type={run_type}; skipping this value."
