@@ -11,6 +11,15 @@ on:
         options:
           - all
           - llama3.1-8b
+      sku:
+        description: "Select SKU to test"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "wh_llmbox_perf (T3000)"
+          - "wh_n150_civ2 (N150)"
       platform:
         required: false
         type: choice
@@ -41,6 +50,23 @@ permissions:
   contents: write
 
 jobs:
+  resolve-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+    steps:
+      - name: Resolve SKU selection
+        id: resolve
+        run: |
+          ALL_SKUS="wh_llmbox_perf,wh_n150_civ2"
+          SKU_INPUT="${{ inputs.sku || 'all' }}"
+          if [[ "$SKU_INPUT" == "all" ]]; then
+            echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          else
+            # Extract SKU name before the parenthetical description
+            SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+            echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+          fi
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -52,12 +78,12 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
-    needs: build-artifact
+    needs: [build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: "wh_llmbox_perf,wh_n150_civ2"
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
