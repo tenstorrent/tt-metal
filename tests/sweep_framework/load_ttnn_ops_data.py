@@ -172,7 +172,7 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
     if hw_key not in hardware_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2.ttnn_hardware (board_type, device_series, card_count)
+            INSERT INTO ttnn_ops.ttnn_hardware (board_type, device_series, card_count)
             VALUES (%s, %s, %s)
             ON CONFLICT (board_type, device_series, card_count) DO NOTHING
             RETURNING ttnn_hardware_id
@@ -184,7 +184,7 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
             hardware_cache[hw_key] = result[0]
         else:
             cur.execute(
-                "SELECT ttnn_hardware_id FROM ttnn_ops_v2.ttnn_hardware WHERE board_type=%s AND device_series=%s AND card_count=%s",
+                "SELECT ttnn_hardware_id FROM ttnn_ops.ttnn_hardware WHERE board_type=%s AND device_series=%s AND card_count=%s",
                 hw_key,
             )
             hardware_cache[hw_key] = cur.fetchone()[0]
@@ -195,26 +195,22 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
 def get_or_create_mesh_config(
     cur, mesh_config_cache, mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 ):
-    """Get or create a mesh config entry, return the ID.
-
-    Note: In V2 schema, ttnn_mesh_config only stores mesh_shape and device_count.
-    Placement info (placement_type, shard_dim) is per-tensor and stored in arguments.
-    """
+    """Get or create a mesh config entry, return the ID."""
     if not mesh_shape:
         return None, None
 
-    # V2 schema only uses mesh_shape and device_count
-    mesh_key = (tuple(mesh_shape), device_count)
+    dist_tuple = tuple(distribution_shape) if distribution_shape else None
+    mesh_key = (tuple(mesh_shape), device_count, placement_type, shard_dim, dist_tuple)
 
     if mesh_key not in mesh_config_cache:
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2.ttnn_mesh_config (mesh_shape, device_count)
-            VALUES (%s, %s)
-            ON CONFLICT (mesh_shape, device_count) DO NOTHING
+            INSERT INTO ttnn_ops.ttnn_mesh_config (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (mesh_shape, device_count, placement_type, shard_dim, distribution_shape) DO NOTHING
             RETURNING ttnn_mesh_config_id
         """,
-            (mesh_shape, device_count),
+            (mesh_shape, device_count, placement_type, shard_dim, distribution_shape),
         )
         result = cur.fetchone()
         if result:
@@ -222,17 +218,17 @@ def get_or_create_mesh_config(
         else:
             cur.execute(
                 """
-                SELECT ttnn_mesh_config_id FROM ttnn_ops_v2.ttnn_mesh_config
-                WHERE mesh_shape = %s AND device_count = %s
+                SELECT ttnn_mesh_config_id FROM ttnn_ops.ttnn_mesh_config
+                WHERE mesh_shape = %s AND device_count = %s AND placement_type = %s
+                  AND shard_dim IS NOT DISTINCT FROM %s
+                  AND distribution_shape IS NOT DISTINCT FROM %s
             """,
-                (mesh_shape, device_count),
+                (mesh_shape, device_count, placement_type, shard_dim, distribution_shape),
             )
             result = cur.fetchone()
             if result:
                 mesh_config_cache[mesh_key] = result[0]
 
-    # Return mesh_info with placement for config_hash computation
-    # Even though placement isn't stored in the DB, it's used for hash
     mesh_info = {"mesh_shape": mesh_shape, "placement_type": placement_type, "shard_dim": shard_dim}
     return mesh_config_cache.get(mesh_key), mesh_info
 
@@ -247,7 +243,7 @@ def get_or_create_model(cur, model_cache, source_file, hf_model):
         model_family = extract_model_family(source_file, hf_model)
         cur.execute(
             """
-            INSERT INTO ttnn_ops_v2.ttnn_model (source_file, hf_model_identifier, model_family)
+            INSERT INTO ttnn_ops.ttnn_model (source_file, hf_model_identifier, model_family)
             VALUES (%s, %s, %s)
             ON CONFLICT (source_file, hf_model_identifier) DO UPDATE SET update_ts = NOW()
             RETURNING ttnn_model_id
@@ -274,28 +270,19 @@ def extract_primary_tensor_info(arguments):
     return {}
 
 
-def parse_mesh_from_machine_info(machine_info, arguments=None):
-    """Extract mesh configuration from tensor arguments (V2 format).
-
-    In V2 format, tensor_placement is stored in the tensor arguments themselves,
-    not in machine_info. This function extracts mesh config from the first tensor argument.
+def parse_mesh_from_machine_info(machine_info):
+    """Extract mesh configuration from machine_info.
 
     Returns: (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
     """
-    placement = None
+    tensor_placements = machine_info.get("tensor_placements", [])
 
-    # V2 format: Extract tensor_placement from first tensor argument
-    if arguments:
-        for arg_value in arguments.values():
-            if isinstance(arg_value, dict) and arg_value.get("type") == "ttnn.Tensor":
-                if "tensor_placement" in arg_value:
-                    placement = arg_value["tensor_placement"]
-                    break
-
-    if not placement:
-        # No tensor_placement = no specific mesh config
+    if not tensor_placements:
+        # No tensor_placements = no specific mesh config
         return None, None, None, None, None
 
+    # Take first placement
+    placement = tensor_placements[0]
     mesh_shape_str = placement.get("mesh_device_shape")
     mesh_shape = parse_array_value(mesh_shape_str)
 
@@ -347,7 +334,7 @@ def load_data():
         if op_name not in operation_cache:
             cur.execute(
                 """
-                INSERT INTO ttnn_ops_v2.ttnn_operation (operation_name)
+                INSERT INTO ttnn_ops.ttnn_operation (operation_name)
                 VALUES (%s)
                 ON CONFLICT (operation_name) DO UPDATE SET update_ts = NOW()
                 RETURNING ttnn_operation_id
@@ -360,49 +347,28 @@ def load_data():
 
         for config in op_data.get("configurations", []):
             arguments = config.get("arguments", [])
+            source = config.get("source")
+            machine_info_list = config.get("machine_info", [{}])
 
-            # V2 Format: Use executions array (preferred)
-            # V1 Format: Use source and machine_info at config level (legacy)
-            executions = config.get("executions", [])
+            # Ensure machine_info_list is a list
+            if not machine_info_list:
+                machine_info_list = [{}]
 
-            if not executions:
-                # Fallback to V1 format for backward compatibility
-                source = config.get("source")
-                machine_info_list = config.get("machine_info", [{}])
+            # Parse all sources (string or array -> list of tuples)
+            source_tuples = parse_all_sources(source)
 
-                # Ensure machine_info_list is a list
-                if not machine_info_list:
-                    machine_info_list = [{}]
-
-                # Convert V1 format to V2 executions format
-                source_tuples = parse_all_sources(source)
-                executions = []
-                for machine_info in machine_info_list:
-                    for source_file, hf_model in source_tuples:
-                        source_str = source_file
-                        if hf_model:
-                            source_str = f"{source_file} [HF_MODEL:{hf_model}]"
-                        executions.append(
-                            {
-                                "source": source_str,
-                                "machine_info": machine_info,
-                                "count": 1,  # Default count for V1 format
-                            }
-                        )
+            # Get/create all model IDs for this config's sources
+            model_ids = []
+            for source_file, hf_model in source_tuples:
+                model_id = get_or_create_model(cur, model_cache, source_file, hf_model)
+                model_ids.append(model_id)
 
             # Extract primary tensor info (same for all hardware/mesh variants)
             primary_info = extract_primary_tensor_info(arguments)
 
-            # Process each execution - each creates a potentially unique config
+            # Process each machine_info entry - each creates a potentially unique config
             # because hardware + mesh are part of config identity
-            for execution in executions:
-                source = execution.get("source")
-                machine_info = execution.get("machine_info", {})
-                execution_count = execution.get("count", 1)
-
-                # Parse source to get model info
-                source_file, hf_model = parse_source(source)
-                model_id = get_or_create_model(cur, model_cache, source_file, hf_model)
+            for machine_info in machine_info_list:
                 # Parse hardware
                 board_type = machine_info.get("board_type")
                 device_series = machine_info.get("device_series")
@@ -412,7 +378,7 @@ def load_data():
 
                 # Parse mesh config
                 mesh_shape, device_count, placement_type, shard_dim, distribution_shape = parse_mesh_from_machine_info(
-                    machine_info, arguments
+                    machine_info
                 )
 
                 mesh_config_id = None
@@ -430,7 +396,7 @@ def load_data():
                     config_id = config_cache[config_hash]
                     # Just update last_seen_ts
                     cur.execute(
-                        "UPDATE ttnn_ops_v2.ttnn_configuration SET last_seen_ts = NOW() WHERE ttnn_configuration_id = %s",
+                        "UPDATE ttnn_ops.ttnn_configuration SET last_seen_ts = NOW() WHERE ttnn_configuration_id = %s",
                         (config_id,),
                     )
                 else:
@@ -438,7 +404,7 @@ def load_data():
                     try:
                         cur.execute(
                             """
-                            INSERT INTO ttnn_ops_v2.ttnn_configuration
+                            INSERT INTO ttnn_ops.ttnn_configuration
                             (operation_id, hardware_id, mesh_config_id, primary_dtype, primary_storage_type, primary_layout,
                              primary_memory_layout, primary_buffer_type, primary_shape, config_hash, full_config_json)
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -489,7 +455,7 @@ def load_data():
 
                                 cur.execute(
                                     """
-                                    INSERT INTO ttnn_ops_v2.ttnn_argument
+                                    INSERT INTO ttnn_ops.ttnn_argument
                                     (configuration_id, arg_index, arg_name, is_tensor, is_tensor_list, tensor_count,
                                      tensor_dtype, tensor_storage_type, tensor_layout, tensor_memory_layout,
                                      tensor_buffer_type, tensor_shape, shard_shape, shard_orientation,
@@ -526,25 +492,26 @@ def load_data():
                         conn.rollback()
                         # Config already exists, fetch its ID
                         cur.execute(
-                            "SELECT ttnn_configuration_id FROM ttnn_ops_v2.ttnn_configuration WHERE config_hash = %s",
+                            "SELECT ttnn_configuration_id FROM ttnn_ops.ttnn_configuration WHERE config_hash = %s",
                             (config_hash,),
                         )
                         result = cur.fetchone()
                         if result:
                             config_id = result[0]
                             config_cache[config_hash] = config_id
+                        continue
 
-                # Link this execution's model to the config via junction table (even if config existed)
-                if model_id is not None:
+                # Link ALL sources to this config via junction table
+                for model_id in model_ids:
+                    if model_id is None:
+                        continue
                     cur.execute(
                         """
-                        INSERT INTO ttnn_ops_v2.ttnn_configuration_model (configuration_id, model_id, execution_count)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (configuration_id, model_id) DO UPDATE
-                        SET last_seen_ts = NOW(),
-                            execution_count = ttnn_ops_v2.ttnn_configuration_model.execution_count + EXCLUDED.execution_count
+                        INSERT INTO ttnn_ops.ttnn_configuration_model (configuration_id, model_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (configuration_id, model_id) DO UPDATE SET last_seen_ts = NOW()
                     """,
-                        (config_id, model_id, execution_count),
+                        (config_id, model_id),
                     )
                     total_model_links += 1
 
@@ -555,19 +522,19 @@ def load_data():
     print(f"\n✅ Loaded {total_configs} unique configurations, {total_args} arguments, {total_model_links} model links")
 
     # Print stats
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_operation")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_operation")
     print(f"   Operations: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_model")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_model")
     print(f"   Models: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_hardware")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_hardware")
     print(f"   Hardware configs: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_mesh_config")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_mesh_config")
     print(f"   Mesh configs: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_configuration")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_configuration")
     print(f"   Configurations: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_argument")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_argument")
     print(f"   Arguments: {cur.fetchone()[0]}")
-    cur.execute("SELECT COUNT(*) FROM ttnn_ops_v2.ttnn_configuration_model")
+    cur.execute("SELECT COUNT(*) FROM ttnn_ops.ttnn_configuration_model")
     print(f"   Config-Model links: {cur.fetchone()[0]}")
 
     conn.close()
@@ -603,12 +570,8 @@ def format_mesh_placement(mesh_shape, placement_type, shard_dim):
     return placement_dict
 
 
-def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
+def reconstruct_from_db(output_path=None):
     """Reconstruct ttnn_operations_master.json from the database.
-
-    Args:
-        output_path: Path to write the reconstructed JSON
-        schema: Database schema to use ("ttnn_ops" for V1, "ttnn_ops_v2" for V2)
 
     This recreates the original JSON structure:
     {
@@ -627,15 +590,15 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
         }
     }
     """
-    print(f"Reconstructing JSON from database (schema: {schema})...")
+    print("Reconstructing JSON from database...")
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
 
     # Get all operations
     cur.execute(
-        f"""
+        """
         SELECT ttnn_operation_id, operation_name
-        FROM {schema}.ttnn_operation
+        FROM ttnn_ops.ttnn_operation
         ORDER BY operation_name
     """
     )
@@ -646,59 +609,30 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
 
     for op_id, op_name in operations:
         # Get all configurations for this operation
-        # V2 schema doesn't have placement_type, shard_dim, distribution_shape in mesh_config
-        # (placement is per-tensor in V2)
-        if schema == "ttnn_ops_v2":
-            cur.execute(
-                f"""
-                SELECT
-                    c.ttnn_configuration_id,
-                    c.config_hash,
-                    c.full_config_json,
-                    c.hardware_id,
-                    c.mesh_config_id,
-                    h.board_type,
-                    h.device_series,
-                    h.card_count,
-                    mc.mesh_shape,
-                    mc.device_count,
-                    NULL as placement_type,
-                    NULL as shard_dim,
-                    NULL as distribution_shape
-                FROM {schema}.ttnn_configuration c
-                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
-                WHERE c.operation_id = %s
-                ORDER BY c.ttnn_configuration_id
-            """,
-                (op_id,),
-            )
-        else:
-            # V1 schema has placement fields in mesh_config
-            cur.execute(
-                f"""
-                SELECT
-                    c.ttnn_configuration_id,
-                    c.config_hash,
-                    c.full_config_json,
-                    c.hardware_id,
-                    c.mesh_config_id,
-                    h.board_type,
-                    h.device_series,
-                    h.card_count,
-                    mc.mesh_shape,
-                    mc.device_count,
-                    mc.placement_type,
-                    mc.shard_dim,
-                    mc.distribution_shape
-                FROM {schema}.ttnn_configuration c
-                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
-                WHERE c.operation_id = %s
-                ORDER BY c.ttnn_configuration_id
-            """,
-                (op_id,),
-            )
+        cur.execute(
+            """
+            SELECT
+                c.ttnn_configuration_id,
+                c.config_hash,
+                c.full_config_json,
+                c.hardware_id,
+                c.mesh_config_id,
+                h.board_type,
+                h.device_series,
+                h.card_count,
+                mc.mesh_shape,
+                mc.device_count,
+                mc.placement_type,
+                mc.shard_dim,
+                mc.distribution_shape
+            FROM ttnn_ops.ttnn_configuration c
+            LEFT JOIN ttnn_ops.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+            LEFT JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+            WHERE c.operation_id = %s
+            ORDER BY c.ttnn_configuration_id
+        """,
+            (op_id,),
+        )
         configs = cur.fetchall()
 
         if not configs:
@@ -723,31 +657,46 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                 distribution_shape,
             ) = config_row
 
-            # Get all sources linked to this config (with execution_count for V2)
-            if schema == "ttnn_ops_v2":
-                cur.execute(
-                    f"""
-                    SELECT m.source_file, m.hf_model_identifier, cm.execution_count
-                    FROM {schema}.ttnn_configuration_model cm
-                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                    WHERE cm.configuration_id = %s
-                    ORDER BY m.source_file, m.hf_model_identifier
-                """,
-                    (config_id,),
-                )
-                source_rows = cur.fetchall()
+            # Get all sources linked to this config
+            cur.execute(
+                """
+                SELECT m.source_file, m.hf_model_identifier
+                FROM ttnn_ops.ttnn_configuration_model cm
+                JOIN ttnn_ops.ttnn_model m ON m.ttnn_model_id = cm.model_id
+                WHERE cm.configuration_id = %s
+                ORDER BY m.source_file, m.hf_model_identifier
+            """,
+                (config_id,),
+            )
+            source_rows = cur.fetchall()
+
+            # Format sources
+            sources = [format_source(sf, hf) for sf, hf in source_rows]
+            sources = [s for s in sources if s]  # Remove None values
+
+            if len(sources) == 0:
+                source = None
+            elif len(sources) == 1:
+                source = sources[0]
             else:
-                cur.execute(
-                    f"""
-                    SELECT m.source_file, m.hf_model_identifier, 1 as execution_count
-                    FROM {schema}.ttnn_configuration_model cm
-                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                    WHERE cm.configuration_id = %s
-                    ORDER BY m.source_file, m.hf_model_identifier
-                """,
-                    (config_id,),
-                )
-                source_rows = cur.fetchall()
+                source = sources
+
+            # Build machine_info
+            machine_info = []
+            if board_type:
+                mi = {
+                    "board_type": board_type,
+                    "device_series": device_series,
+                    "card_count": card_count,
+                }
+
+                # Add tensor_placements if mesh config exists
+                if mesh_shape:
+                    placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
+                    if placement:
+                        mi["tensor_placements"] = [placement]
+
+                machine_info.append(mi)
 
             # Use full_config_json for arguments (preserves exact original structure)
             if full_config_json:
@@ -761,66 +710,11 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
             if config_hash:
                 config_dict["config_hash"] = config_hash
 
-            # V2 format: use executions array
-            if schema == "ttnn_ops_v2":
-                executions = []
-                for source_file, hf_model, exec_count in source_rows:
-                    source_str = format_source(source_file, hf_model)
-                    if not source_str:
-                        continue
+            if source:
+                config_dict["source"] = source
 
-                    execution = {"source": source_str, "machine_info": {}, "count": exec_count}
-
-                    # Add hardware info to machine_info
-                    if board_type:
-                        execution["machine_info"]["board_type"] = board_type
-                        execution["machine_info"]["device_series"] = device_series
-                        execution["machine_info"]["card_count"] = card_count
-
-                    # Add mesh info (shape only, no placement - that's per-tensor in V2)
-                    if mesh_shape:
-                        execution["machine_info"]["mesh_device_shape"] = mesh_shape
-                        if device_count:
-                            execution["machine_info"]["device_count"] = device_count
-
-                    executions.append(execution)
-
-                if executions:
-                    config_dict["executions"] = executions
-            else:
-                # V1 format: use source and machine_info at config level
-                sources = [format_source(sf, hf) for sf, hf, _ in source_rows]
-                sources = [s for s in sources if s]  # Remove None values
-
-                if len(sources) == 0:
-                    source = None
-                elif len(sources) == 1:
-                    source = sources[0]
-                else:
-                    source = sources
-
-                # Build machine_info
-                machine_info = []
-                if board_type:
-                    mi = {
-                        "board_type": board_type,
-                        "device_series": device_series,
-                        "card_count": card_count,
-                    }
-
-                    # Add tensor_placements if mesh config exists (V1 only)
-                    if mesh_shape:
-                        placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
-                        if placement:
-                            mi["tensor_placements"] = [placement]
-
-                    machine_info.append(mi)
-
-                if source:
-                    config_dict["source"] = source
-
-                if machine_info:
-                    config_dict["machine_info"] = machine_info
+            if machine_info:
+                config_dict["machine_info"] = machine_info
 
             configurations.append(config_dict)
 
@@ -851,7 +745,7 @@ def reconstruct_single_operation(operation_name, output_path=None):
 
     # Get operation ID
     cur.execute(
-        "SELECT ttnn_operation_id FROM ttnn_ops_v2.ttnn_operation WHERE operation_name = %s",
+        "SELECT ttnn_operation_id FROM ttnn_ops.ttnn_operation WHERE operation_name = %s",
         (operation_name,),
     )
     row = cur.fetchone()
@@ -879,9 +773,9 @@ def reconstruct_single_operation(operation_name, output_path=None):
             mc.placement_type,
             mc.shard_dim,
             mc.distribution_shape
-        FROM ttnn_ops_v2.ttnn_configuration c
-        LEFT JOIN ttnn_ops_v2.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-        LEFT JOIN ttnn_ops_v2.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+        FROM ttnn_ops.ttnn_configuration c
+        LEFT JOIN ttnn_ops.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+        LEFT JOIN ttnn_ops.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
         WHERE c.operation_id = %s
         ORDER BY c.ttnn_configuration_id
     """,
@@ -912,8 +806,8 @@ def reconstruct_single_operation(operation_name, output_path=None):
         cur.execute(
             """
             SELECT m.source_file, m.hf_model_identifier
-            FROM ttnn_ops_v2.ttnn_configuration_model cm
-            JOIN ttnn_ops_v2.ttnn_model m ON m.ttnn_model_id = cm.model_id
+            FROM ttnn_ops.ttnn_configuration_model cm
+            JOIN ttnn_ops.ttnn_model m ON m.ttnn_model_id = cm.model_id
             WHERE cm.configuration_id = %s
             ORDER BY m.source_file, m.hf_model_identifier
         """,
@@ -1260,8 +1154,7 @@ if __name__ == "__main__":
             load_data()
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
-            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2"
-            reconstruct_from_db(output, schema)
+            reconstruct_from_db(output)
         elif cmd == "reconstruct-op":
             if len(sys.argv) < 3:
                 print("Usage: python load_ttnn_ops_data_v2.py reconstruct-op <operation_name> [output.json]")
@@ -1288,13 +1181,11 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {cmd}")
             print("Usage:")
-            print("  python load_ttnn_ops_data_v2.py load                         # Load JSON to DB")
-            print(
-                "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] # Reconstruct JSON from DB (schema: ttnn_ops or ttnn_ops_v2)"
-            )
-            print("  python load_ttnn_ops_data_v2.py reconstruct-op <name>        # Reconstruct single op")
+            print("  python load_ttnn_ops_data_v2.py load                    # Load JSON to DB")
+            print("  python load_ttnn_ops_data_v2.py reconstruct [output]    # Reconstruct JSON from DB")
+            print("  python load_ttnn_ops_data_v2.py reconstruct-op <name>   # Reconstruct single op")
             print("  python load_ttnn_ops_data_v2.py verify [original] [reconstructed]  # Compare files")
-            print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]       # Detect duplicates")
-            print("  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>     # Find config line numbers")
+            print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]  # Detect duplicates")
+            print("  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2> # Find config line numbers")
     else:
         load_data()

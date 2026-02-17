@@ -1,6 +1,17 @@
-# TTNN Operations Database: Tracer Integration Guide
+# TTNN Operations Database: Tracer Integration Guide (V2)
 
-This guide explains how the model tracer should format its output to be compatible with the `ttnn_ops` database schema.
+This guide explains how the model tracer should format its output to be compatible with the `ttnn_ops` database schema **version 2**.
+
+## Version 2 Key Changes
+
+**V2 introduces per-tensor placement** - each tensor argument stores its own placement information:
+
+| Aspect | V1 (Legacy) | V2 (Current) |
+|--------|-------------|--------------|
+| **Arguments** | Array format `[{arg0: ...}, ...]` | Dictionary format `{arg0: ..., arg1: ...}` |
+| **Placement** | Global at `machine_info.tensor_placements` | Per-tensor at `arg0.tensor_placement` |
+| **machine_info** | Array with placement info | Single object, hardware only |
+| **Mesh config** | Includes placement type | Only mesh shape, no placement |
 
 ## Quick Overview
 
@@ -9,7 +20,8 @@ The database stores traced TTNN operations with these key concepts:
 1. **Operations** - TTNN operations like `ttnn::add`, `ttnn::matmul`
 2. **Configurations** - Unique combinations of arguments + hardware + mesh
 3. **Sources** - Which model/test file the configuration came from
-4. **Deduplication** - Same (args + hardware + mesh) = same config, even from different sources
+4. **Deduplication** - Same (args + per-tensor placements + hardware + mesh) = same config
+5. **Per-Tensor Placement** - Each tensor can have different placement strategies (replicate/shard)
 
 ## JSON Output Format
 
@@ -21,23 +33,42 @@ The tracer should output JSON in this structure:
     "ttnn::add": {
       "configurations": [
         {
-          "arguments": [
-            {"arg0": {"Tensor": {...}}},
-            {"arg1": {"Tensor": {...}}},
-            {"arg2": {"MemoryConfig": {...}}}
-          ],
-          "source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]",
-          "machine_info": [
+          "config_id": 1,
+          "arguments": {
+            "arg0": {
+              "type": "ttnn.Tensor",
+              "original_shape": [1, 1, 32, 128],
+              "original_dtype": "DataType.BFLOAT16",
+              "layout": "Layout.TILE",
+              "storage_type": "StorageType.DEVICE",
+              "memory_config": {...},
+              "tensor_placement": {
+                "placement": "['PlacementShard(2)', 'PlacementShard(3)']",
+                "distribution_shape": "[1, 2]",
+                "mesh_device_shape": "[1, 2]"
+              }
+            },
+            "arg1": {
+              "type": "ttnn.Tensor",
+              "original_shape": [1, 1, 32, 128],
+              "original_dtype": "DataType.BFLOAT16",
+              "layout": "Layout.TILE",
+              "storage_type": "StorageType.DEVICE",
+              "memory_config": {...}
+            }
+          },
+          "executions": [
             {
-              "board_type": "Wormhole",
-              "device_series": "n300",
-              "card_count": 1,
-              "tensor_placements": [
-                {
-                  "mesh_device_shape": "[2, 4]",
-                  "placement": "[PlacementReplicate]"
-                }
-              ]
+              "source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]",
+              "machine_info": {
+                "board_type": "Wormhole",
+                "device_series": "n300",
+                "card_count": 2,
+                "device_ids": [0, 1],
+                "device_count": 2,
+                "mesh_device_shape": [1, 2]
+              },
+              "count": 128
             }
           ]
         }
@@ -49,7 +80,44 @@ The tracer should output JSON in this structure:
 
 ## Field Specifications
 
-### `source` (Required)
+### `config_id` (Required)
+
+Unique identifier for this configuration within the operation. Sequential integer starting from 1.
+
+### `executions` (Required)
+
+Array of execution instances where this configuration was observed. Each execution records:
+- **source**: Which model/test traced this config
+- **machine_info**: Hardware where it was executed
+- **count**: How many times this config was executed in this source (for tracking frequency)
+
+```python
+"executions": [
+    {
+        "source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]",
+        "machine_info": {
+            "board_type": "Wormhole",
+            "device_series": "n300",
+            "card_count": 2,
+            "device_ids": [0, 1],
+            "device_count": 2,
+            "mesh_device_shape": [1, 2]
+        },
+        "count": 128  # This config executed 128 times in this model
+    }
+]
+```
+
+**Multiple executions**: The same config can appear in multiple models/sources:
+
+```python
+"executions": [
+    {"source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]", "machine_info": {...}, "count": 128},
+    {"source": "models/demos/qwen/demo.py [HF_MODEL:Qwen/Qwen2.5-7B]", "machine_info": {...}, "count": 256}
+]
+```
+
+### `source` Format (within executions)
 
 Format: `"<file_path> [HF_MODEL:<huggingface_model_id>]"`
 
@@ -63,60 +131,91 @@ The loader parses this to extract:
 - `source_file` - The file path
 - `hf_model_identifier` - The HuggingFace model name (if present)
 
-### `machine_info` (Required for hardware tracking)
+### `machine_info` (Required, within each execution)
 
 ```python
 {
-    "board_type": "Wormhole",     # From tt-smi: board type
-    "device_series": "n300",      # From tt-smi: device series
-    "card_count": 1,              # Number of cards
-    "tensor_placements": [...]    # Optional: mesh configuration
+    "board_type": "Wormhole",       # From tt-smi: board type
+    "device_series": "n300",        # From tt-smi: device series (N150, n300, etc.)
+    "card_count": 2,                # Number of physical cards
+    "device_ids": [0, 1],           # Physical device IDs used
+    "device_count": 2,              # Number of devices used
+    "mesh_device_shape": [1, 2]     # Optional: Mesh grid dimensions (for multi-device)
 }
 ```
 
-### `tensor_placements` (Optional, for multi-device)
+**Note**: In v2 format, `machine_info` is nested within each execution and contains hardware info only. Tensor placement is now stored per-tensor in each argument.
+
+### `tensor_placement` (Per-Tensor, Optional for multi-device)
+
+Each tensor argument can have its own placement information:
 
 ```python
 {
-    "mesh_device_shape": "[2, 4]",      # Mesh grid dimensions as string
-    "placement": "[PlacementReplicate]", # or "[PlacementShard(0)]" for shard dim 0
-    "distribution_shape": "[8]"          # Optional
+    "placement": "['PlacementShard(2)', 'PlacementShard(3)']",  # List of placement strategies per mesh dimension
+    "distribution_shape": "[1, 2]",        # How tensor is distributed across mesh
+    "mesh_device_shape": "[1, 2]"          # Mesh grid dimensions for this tensor
 }
 ```
 
-**Important**: `tensor_placements` affects config identity. Same arguments with different mesh = different configs.
+**Placement examples:**
+- `"['PlacementReplicate']"` - Tensor replicated on all devices
+- `"['PlacementShard(2)']"` - Tensor sharded on dimension 2
+- `"['PlacementShard(2)', 'PlacementShard(3)']"` - Sharded on dims 2 and 3 across 2D mesh
+
+**Important**: Each tensor can have different placement strategies. Same operation with different per-tensor placements = different configs.
 
 ### `arguments` (Required)
 
-Array of argument dictionaries. Each element is `{argN: value}`:
+Dictionary (not array) mapping argument names to values. Keys are `arg0`, `arg1`, `arg2`, etc.:
 
 ```python
-# Tensor argument
-{"arg0": {"Tensor": {
-    "storage_type": "StorageType::DEVICE",
-    "tensor_spec": {
-        "logical_shape": [1, 1, 32, 128],
-        "tensor_layout": {
-            "dtype": "DataType::BFLOAT16",
-            "memory_config": {
-                "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-                "buffer_type": "BufferType::DRAM"
-            }
-        }
+# Tensor argument (single-device)
+"arg0": {
+    "type": "ttnn.Tensor",
+    "original_shape": [1, 1, 32, 128],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.DEVICE",
+    "memory_config": {
+        "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+        "buffer_type": "BufferType.DRAM",
+        "shard_spec": "None",
+        "is_sharded": false,
+        "interleaved": true
     }
-}}}
+}
+
+# Tensor argument (multi-device with placement)
+"arg1": {
+    "type": "ttnn.Tensor",
+    "original_shape": [1, 4, 1024, 128],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.DEVICE",
+    "memory_config": {...},
+    "tensor_placement": {
+        "placement": "['PlacementShard(2)', 'PlacementShard(3)']",
+        "distribution_shape": "[1, 2]",
+        "mesh_device_shape": "[1, 2]"
+    }
+}
 
 # Scalar argument
-{"arg1": "-1"}
+"arg2": {
+    "type": "int",
+    "value": -1
+}
 
 # MemoryConfig argument
-{"arg2": {"MemoryConfig": {
-    "memory_layout": "TensorMemoryLayout::INTERLEAVED",
-    "buffer_type": "BufferType::DRAM"
-}}}
+"arg3": {
+    "type": "ttnn.MemoryConfig",
+    "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+    "buffer_type": "BufferType.DRAM"
+}
 
-# Null/optional argument
-{"arg3": "nullopt"}
+# Optional/None argument
+"arg4": null
 ```
 
 ## Config Identity (Deduplication)
@@ -126,20 +225,45 @@ The database deduplicates configurations using a SHA-256 hash of:
 ```python
 config_hash = SHA256({
     "operation": "ttnn::add",
-    "arguments": [...],  # The full arguments array
-    "hardware": ("Wormhole", "n300", 1),  # (board_type, device_series, card_count)
-    "mesh": {
-        "mesh_shape": [2, 4],
-        "placement_type": "replicate",
-        "shard_dim": None
-    }
+    "arguments": {
+        "arg0": {
+            "type": "ttnn.Tensor",
+            "shape": [1, 1, 32, 128],
+            "dtype": "DataType.BFLOAT16",
+            "layout": "Layout.TILE",
+            "memory_config": {...},
+            "tensor_placement": {...}  # Per-tensor placement included in hash
+        },
+        "arg1": {...}
+    },
+    "hardware": {
+        "board_type": "Wormhole",
+        "device_series": "n300",
+        "card_count": 2
+    },
+    "mesh_device_shape": [1, 2]  # Global mesh shape
 })
 ```
 
 **What this means:**
-- Same args + same hardware + same mesh → merged into one config
-- Multiple sources sharing a config → linked via junction table
+- Same args (including per-tensor placements) + same hardware + same mesh → merged into one config
+- Multiple sources sharing identical config → stored as multiple entries in `executions` array
+- Each execution tracks: source, machine_info, and count (how many times it ran)
+- Different per-tensor placement → separate configs (placement is part of tensor identity)
 - Different hardware or mesh → separate configs (even with same args)
+
+**Example - Multiple Executions of Same Config:**
+```python
+{
+    "config_id": 42,
+    "arguments": {...},  # Same arguments
+    "executions": [
+        {"source": "llama/demo.py", "machine_info": {...}, "count": 128},
+        {"source": "qwen/demo.py", "machine_info": {...}, "count": 256}
+    ]
+}
+```
+Both models use the same config, tracked via 2 execution entries.
 
 ## Loading Data
 
@@ -169,16 +293,29 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py find-lines ttnn::add 0,1,5
 
 ## Common Pitfalls
 
-### 1. Missing `machine_info`
+### 1. Missing `executions` Array
 
-Without hardware info, the loader cannot properly deduplicate configs:
+Configs must have executions array with source and machine info:
 
 ```python
-# ❌ Bad - no machine_info
-{"arguments": [...], "source": "..."}
+# ❌ Bad - no executions
+{
+    "config_id": 1,
+    "arguments": {...}
+}
 
 # ✅ Good
-{"arguments": [...], "source": "...", "machine_info": [{...}]}
+{
+    "config_id": 1,
+    "arguments": {...},
+    "executions": [
+        {
+            "source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]",
+            "machine_info": {...},
+            "count": 128
+        }
+    ]
+}
 ```
 
 ### 2. Inconsistent Tensor Formats
@@ -186,45 +323,76 @@ Without hardware info, the loader cannot properly deduplicate configs:
 The loader expects tensors in a specific structure:
 
 ```python
-# ❌ Bad - missing tensor_spec
+# ❌ Bad - old format or incomplete
 {"arg0": {"Tensor": {"dtype": "BFLOAT16", "shape": [1, 32]}}}
 
-# ✅ Good - full structure
-{"arg0": {"Tensor": {
-    "storage_type": "StorageType::DEVICE",
-    "tensor_spec": {
-        "logical_shape": [1, 32],
-        "tensor_layout": {
-            "dtype": "DataType::BFLOAT16",
-            "memory_config": {...}
-        }
+# ✅ Good - v2 format with complete structure
+"arg0": {
+    "type": "ttnn.Tensor",
+    "original_shape": [1, 32],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.DEVICE",
+    "memory_config": {
+        "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+        "buffer_type": "BufferType.DRAM",
+        "is_sharded": false
     }
-}}}
+}
 ```
 
-### 3. Source Format Issues
+### 3. Per-Tensor Placement Format
+
+When tracing multi-device tensors, placement must be stored per-tensor:
 
 ```python
-# ❌ Bad - will lose HF model info
-"meta-llama/Llama-3.2-1B"
+# ❌ Bad - global placement at machine_info level (old format)
+"machine_info": {
+    "tensor_placements": [{
+        "placement": "[PlacementReplicate]"
+    }]
+}
 
-# ✅ Good
-"models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]"
+# ✅ Good - per-tensor placement (v2 format)
+"arg0": {
+    "type": "ttnn.Tensor",
+    ...,
+    "tensor_placement": {
+        "placement": "['PlacementShard(2)', 'PlacementShard(3)']",
+        "distribution_shape": "[1, 2]",
+        "mesh_device_shape": "[1, 2]"
+    }
+}
 ```
 
-### 4. Array Sources (Multiple Models)
+### 4. Source Format Issues
 
-When the same config appears in multiple models during one trace:
+Source must include file path, optionally with HF_MODEL tag:
 
 ```python
-# ✅ Supported - source can be a list
-{
-    "arguments": [...],
-    "source": [
-        "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]",
-        "models/demos/qwen/demo.py [HF_MODEL:Qwen/Qwen2.5-7B]"
-    ],
-    "machine_info": [...]
+# ❌ Bad - only HF model, missing file path
+"source": "meta-llama/Llama-3.2-1B"
+
+# ✅ Good - file path with HF_MODEL tag
+"source": "models/demos/llama/demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]"
+
+# ✅ Also good - file path without HF model
+"source": "tests/ttnn/unit_tests/test_add.py"
+```
+
+### 5. Arguments Structure
+
+```python
+# ❌ Bad - arguments as array (old format)
+"arguments": [
+    {"arg0": {...}},
+    {"arg1": {...}}
+]
+
+# ✅ Good - arguments as dictionary (v2 format)
+"arguments": {
+    "arg0": {...},
+    "arg1": {...}
 }
 ```
 
@@ -249,15 +417,22 @@ When the same config appears in multiple models during one trace:
                         ┌────────────────────────┼────────────────────┐
                         │                        │                    │
                         ▼                        ▼                    ▼
-               ┌─────────────────┐     ┌─────────────────┐   ┌─────────────────┐
-               │ ttnn_hardware   │     │ ttnn_mesh_config│   │ ttnn_argument   │
-               ├─────────────────┤     ├─────────────────┤   ├─────────────────┤
-               │ board_type      │     │ mesh_shape      │   │ arg_index       │
-               │ device_series   │     │ placement_type  │   │ is_tensor       │
-               │ card_count      │     │ shard_dim       │   │ tensor_dtype    │
-               └─────────────────┘     └─────────────────┘   │ tensor_shape    │
-                                                             └─────────────────┘
+               ┌─────────────────┐     ┌─────────────────┐   ┌──────────────────────┐
+               │ ttnn_hardware   │     │ ttnn_mesh_config│   │ ttnn_argument        │
+               ├─────────────────┤     ├─────────────────┤   ├──────────────────────┤
+               │ board_type      │     │ mesh_shape      │   │ arg_index            │
+               │ device_series   │     │ device_count    │   │ is_tensor            │
+               │ card_count      │     └─────────────────┘   │ tensor_dtype         │
+               └─────────────────┘                           │ tensor_shape         │
+                                                             │ tensor_placement_json│ ← Per-tensor
+                                                             │ tensor_spec_json     │   placement
+                                                             └──────────────────────┘
 ```
+
+**Key Changes in V2:**
+- `ttnn_mesh_config`: Stores only mesh shape and device count (no placement)
+- `ttnn_argument.tensor_placement_json`: Per-tensor placement stored here (NEW)
+- `ttnn_argument.tensor_spec_json`: Full tensor specification including memory config
 
 ## Querying Configs by Mesh
 
