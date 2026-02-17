@@ -1,6 +1,6 @@
 # TT-Metalium Docker Build System
 
-This directory contains the Docker build system for TT-Metalium, including multi-stage Dockerfiles, tool installation scripts, and local build automation.
+This directory contains the Docker build system for TT-Metalium, including multi-stage Dockerfiles, tool installation scripts, and a Bake file for build orchestration.
 
 ## Architecture Overview
 
@@ -24,12 +24,17 @@ flowchart TB
         DockerfileManylinux[Dockerfile.manylinux]
     end
 
+    subgraph Orchestration [Build Orchestration]
+        BakeFile[docker-bake.hcl]
+    end
+
+    BakeFile -->|defines targets| Dockerfiles
     DockerfileTools -->|build & push| ToolImages
     DockerfilePython -->|build & push| VenvImages
-    ToolImages -->|COPY --from| DockerfileMain
-    ToolImages -->|COPY --from| DockerfileBasic
-    ToolImages -->|COPY --from| DockerfileManylinux
-    VenvImages -->|COPY --from| DockerfileMain
+    ToolImages -->|"bake contexts / COPY --from"| DockerfileMain
+    ToolImages -->|"bake contexts / COPY --from"| DockerfileBasic
+    ToolImages -->|"bake contexts / COPY --from"| DockerfileManylinux
+    VenvImages -->|"bake contexts / COPY --from"| DockerfileMain
     DockerfileMain -->|build & push| MainImages
     DockerfileBasic -->|build & push| BasicImages
     DockerfileManylinux -->|build & push| ManylinuxImage
@@ -37,7 +42,17 @@ flowchart TB
 
 - **Tool images** are built once by `Dockerfile.tools` and pushed to GHCR. They contain pre-built binaries (ccache, mold, doxygen, etc.) to avoid repeated downloads and compilations.
 - **Python venv images** are built by `Dockerfile.python` and contain pre-installed Python dependencies for ci-build and ci-test environments.
-- **Main images** pull these pre-built layers via `COPY --from=` instead of building from scratch, dramatically reducing build times.
+- **Main images** pull these pre-built layers via Bake `contexts` which resolve to either local builds or GHCR images, dramatically reducing build times.
+- **docker-bake.hcl** is the single source of truth for all build targets, dependencies, and configuration.
+
+### How Bake Contexts Work
+
+Tool and venv layers are injected into Dockerfiles via [Docker Buildx Bake contexts](https://docs.docker.com/build/bake/). Each downstream Dockerfile declares stub stages (`FROM scratch AS ccache-layer`, etc.) that Bake overrides:
+
+- **Locally:** `"target:ccache"` -- Bake builds the `ccache` target from `Dockerfile.tools` first, then wires its output into the main build.
+- **In CI:** `"docker-image://ghcr.io/.../ccache:tag"` -- Bake uses the pre-built GHCR image directly via `--set` overrides.
+
+This eliminates the need for `--build-arg TOOL_X_IMAGE=...` plumbing between Dockerfiles, shell scripts, and workflows.
 
 ### CI Workflow Architecture
 
@@ -53,14 +68,14 @@ flowchart TD
 
     subgraph Tools [build-docker-tools.yaml]
         ToolTags[📋 tags]
-        ToolBuild[🔧 build]
+        ToolBuild[🔧 bake tools]
         ToolTags -->|missing?| ToolBuild
         ToolTags -->|outputs| TT[tool-tags JSON]
     end
 
     subgraph Venvs [build-docker-python-venvs.yaml]
         VenvTags[📋 tags]
-        VenvBuild[🐍 build]
+        VenvBuild[🐍 bake venvs]
         VenvTags -->|missing?| VenvBuild
     end
 
@@ -68,13 +83,9 @@ flowchart TD
         DATools[🔧 tools]
         DAVenvs[🐍 venvs]
         ImgTags[📋 image-tags]
-        Ubuntu[🐳 ubuntu]
-        ML[🐳 manylinux]
+        Ubuntu[🐳 bake ubuntu]
+        ML[🐳 bake manylinux]
         TagLatest[🏷️ tag-latest]
-    end
-
-    subgraph CompositeAction [setup-tool-buildargs action]
-        CA[Extract tool tags<br/>from JSON bundle]
     end
 
     MG --> AD
@@ -82,14 +93,12 @@ flowchart TD
     Tools -->|tool-tags| DATools
     DATools -.->|calls| Tools
     DAVenvs -.->|calls| Venvs
-    DATools -->|tool-tags| Ubuntu
-    DATools -->|tool-tags| ML
+    DATools -->|"context overrides"| Ubuntu
+    DATools -->|"context overrides"| ML
     ImgTags --> Ubuntu
     ImgTags --> ML
     ImgTags --> TagLatest
     DAVenvs --> Ubuntu
-    Ubuntu -.->|uses| CA
-    ML -.->|uses| CA
 ```
 
 **Job naming convention:** Short job IDs (e.g., `tags`, `ubuntu`) with descriptive `name:` fields for the GitHub UI (e.g., "📋 Compute image tags").
@@ -104,30 +113,7 @@ flowchart TD
 
 ### Tool Tags JSON Bundle
 
-Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. This simplifies maintenance and reduces boilerplate.
-
-```mermaid
-flowchart LR
-    subgraph Before [Before: 9 Individual Inputs]
-        I1[tool-ccache-tag]
-        I2[tool-mold-tag]
-        I3[tool-doxygen-tag]
-        I4[...]
-        I9[tool-openmpi-tag]
-    end
-
-    subgraph After [After: JSON Bundle]
-        JSON[tool-tags]
-    end
-
-    subgraph Action [Composite Action]
-        Extract[setup-tool-buildargs]
-    end
-
-    JSON --> Extract
-    Extract --> BA[build-args for Docker]
-    Extract --> IT[Individual tags<br/>when needed]
-```
+Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. In CI, the JSON is parsed to generate Bake `--set` context overrides.
 
 **JSON bundle format:**
 ```json
@@ -144,53 +130,38 @@ flowchart LR
 }
 ```
 
-## Composite Action: setup-tool-buildargs
-
-The `.github/actions/setup-tool-buildargs` action extracts individual tool tags from the JSON bundle and formats them for Docker builds.
-
-**Usage:**
-```yaml
-- uses: ./.github/actions/setup-tool-buildargs
-  id: tool-args
-  with:
-    # Resolve from input (if provided) or from tools job output
-    tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
-    include: ccache,mold,sfpi,openmpi  # Optional: filter to specific tools
-
-- uses: docker/build-push-action@v6
-  with:
-    build-args: ${{ steps.tool-args.outputs.build-args }}
-```
-
-**Outputs:**
-- `build-args`: Multi-line string ready for `docker/build-push-action`
-- Individual tags: `ccache-tag`, `mold-tag`, etc. for direct access
-
 ## When to Use CI vs Local Builds
 
-- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically. Used by merge-gate, pr-gate, and build-artifact.
-- **Local development**: Use `build-local.sh` when you need to build or rebuild images on your machine. It builds missing tool and venv images first, then the main image.
+- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using `docker buildx bake` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
+- **Local development**: Use `docker buildx bake` (directly or via `build-local.sh`) to build images locally. Bake automatically builds tool and venv dependencies first.
 
-## Local Builds with build-local.sh
+## Local Builds
 
-The `build-local.sh` script automates building Docker images locally by:
-1. Building any missing tool images (from `Dockerfile.tools`)
-2. Building any missing Python venv images (from `Dockerfile.python`)
-3. Building the main image with all dependencies
-
-### Quick Start
+### Quick Start (bake directly)
 
 ```bash
-# Build the development image (default)
-./dockerfile/build-local.sh dev
+# Build the development image (tools+venvs built automatically)
+docker buildx bake -f dockerfile/docker-bake.hcl dev
 
 # Build for Ubuntu 24.04
-./dockerfile/build-local.sh --ubuntu 24.04 dev
+UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
 
 # Build CI test image
-./dockerfile/build-local.sh ci-test
+docker buildx bake -f dockerfile/docker-bake.hcl ci-test
 
-# Show all options
+# Dry run (show what would be built)
+docker buildx bake -f dockerfile/docker-bake.hcl --print dev
+
+# Force rebuild with no cache
+docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
+```
+
+### Using the wrapper script
+
+```bash
+./dockerfile/build-local.sh dev
+./dockerfile/build-local.sh --ubuntu 24.04 ci-test
+./dockerfile/build-local.sh --no-cache dev
 ./dockerfile/build-local.sh --help
 ```
 
@@ -199,11 +170,9 @@ The `build-local.sh` script automates building Docker images locally by:
 | Option | Description |
 |--------|-------------|
 | `--ubuntu VERSION` | Ubuntu version (default: 22.04) |
-| `--tag TAG` | Output image tag (default: `tt-metalium-<target>:local`) |
-| `--rebuild-tools` | Force rebuild of tool images even if they exist |
-| `--rebuild-venvs` | Force rebuild of venv images even if they exist |
-| `--rebuild-all` | Force rebuild of everything |
+| `--tag TAG` | Output image tag override |
 | `--no-cache` | Build without Docker cache |
+| `--print` | Dry run: show what would be built |
 
 ### Targets
 
@@ -214,19 +183,12 @@ The `build-local.sh` script automates building Docker images locally by:
 | `ci-test` | CI test image |
 | `release` | Release image |
 | `release-models` | Release models image |
-
-### Examples
-
-```bash
-# Rebuild all tool images and dev image
-./dockerfile/build-local.sh --rebuild-tools dev
-
-# Build ci-test for Ubuntu 24.04 with custom tag
-./dockerfile/build-local.sh --ubuntu 24.04 --tag my-ci-test:v1 ci-test
-
-# Fresh build with no cache
-./dockerfile/build-local.sh --rebuild-all --no-cache dev
-```
+| `basic-dev` | Basic dev image |
+| `basic-ttnn-runtime` | Basic TTNN runtime image |
+| `manylinux` | ManyLinux wheel build image |
+| `tools` | All tool images only |
+| `venvs` | All Python venv images only |
+| `all` | Everything |
 
 ## Dockerfiles
 
@@ -238,6 +200,14 @@ The `build-local.sh` script automates building Docker images locally by:
 | `Dockerfile.manylinux` | ManyLinux wheel builds | - |
 | `Dockerfile.python` | Python venv images | ci-build-venv, ci-test-venv |
 | `Dockerfile.tools` | Tool images | ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `docker-bake.hcl` | Single source of truth for all build targets and dependencies |
+| `build-local.sh` | Thin wrapper around `docker buildx bake` for local builds |
+| `Dockerfile.tools` | Tool versions, hashes, and install stages |
 
 ## Workflow Files
 
@@ -251,17 +221,20 @@ The `build-local.sh` script automates building Docker images locally by:
 ## Adding a New Tool
 
 1. **Add to `Dockerfile.tools`:**
-   - Add `ARG TOOL_VERSION=x.y.z`
+   - Add `ARG TOOL_VERSION=x.y.z` and `ARG TOOL_SHA256=...`
    - Add build stage with install script
-   - Add to multi-stage targets
+   - Add `FROM scratch AS <tool>` final stage
 
 2. **Create install script:** `scripts/install-tool.sh`
 
-3. **Update composite action:** `.github/actions/setup-tool-buildargs/action.yml`
-   - Add extraction for new tool in the `extract` step
-   - Add to `build-args` generation
+3. **Add to `docker-bake.hcl`:**
+   - Add a new tool target
+   - Add to the `tools` group
+   - Add to the relevant `contexts` in `_main-common`, `_basic-common`, or `manylinux`
 
-4. **Update JSON bundle generation** in `build-docker-tools.yaml`
+4. **Add `FROM scratch AS <tool>-layer`** stub to consuming Dockerfiles (Dockerfile, Dockerfile.basic-dev, etc.)
+
+5. **Update JSON bundle generation** in `build-docker-tools.yaml` (tags job)
 
 ## Scripts
 

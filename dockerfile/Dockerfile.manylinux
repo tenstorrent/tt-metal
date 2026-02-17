@@ -1,34 +1,15 @@
 # ManyLinux Dockerfile
-# Uses pre-built tool images from GHCR for ccache, mold, SFPI, and OpenMPI (ULFM).
-# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
-# Tool layers are expected to be available when this image is built (no fallbacks).
+# Uses pre-built tool images for ccache, mold, SFPI, and OpenMPI (ULFM).
+# Tool layers are injected via docker-bake.hcl contexts.
 
 #############################################################
-# Tool image configuration
-# NOTE: ARGs used in FROM must be declared before any FROM statement
+# Tool layers (resolved by docker-bake.hcl contexts)
 #############################################################
 
-# Tool images from GHCR (built by Dockerfile.tools)
-ARG TOOL_CCACHE_IMAGE=scratch
-ARG TOOL_MOLD_IMAGE=scratch
-ARG TOOL_SFPI_IMAGE=scratch
-ARG TOOL_OPENMPI_IMAGE=scratch
-
-#############################################################
-# Tool layers - pulled from pre-built GHCR images
-#############################################################
-
-# ccache layer - pre-built from GHCR
-FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
-
-# mold layer - pre-built from GHCR
-FROM ${TOOL_MOLD_IMAGE} AS mold-layer
-
-# SFPI layer - pre-built from GHCR
-FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
-
-# OpenMPI layer - pre-built from GHCR (ULFM support)
-FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
+FROM scratch AS ccache-layer
+FROM scratch AS mold-layer
+FROM scratch AS sfpi-layer
+FROM scratch AS openmpi-layer
 
 #############################################################
 # Main manylinux image

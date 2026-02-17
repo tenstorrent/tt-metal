@@ -229,9 +229,10 @@ jobs:
           labels: ${{ steps.docker-metadata.outputs.labels }}
           build-args: |
             UBUNTU_VERSION=${{ inputs.ubuntu-version }}
-            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
-            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             ${{ inputs.build-args }}
+          build-contexts: |
+            ccache-layer=docker-image://${{ needs.check-tool-images.outputs.ccache-tag }}
+            sfpi-layer=docker-image://${{ needs.check-tool-images.outputs.sfpi-tag }}
           secrets: |
             CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
           cache-from: ${{ inputs.cache-from }}

@@ -58,7 +58,7 @@ on:
         description: |
           JSON object containing all tool image tags (from build-docker-tools.yaml).
           When provided, skips building tool images and uses these tags instead.
-          Use with .github/actions/setup-tool-buildargs to extract individual tags.
+          Tags are converted to bake context overrides for Dockerfile builds.
           Example: needs.build-tools.outputs.tool-tags
     outputs:
       ci-build-tag:
@@ -80,7 +80,6 @@ on:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
         value: ${{ jobs.image-tags.outputs.manylinux-tag }}
       # Tool image tags as JSON bundle
-      # Use with .github/actions/setup-tool-buildargs to extract individual tags
       tool-tags:
         description: "JSON object containing all tool image tags"
         value: ${{ inputs.tool-tags || jobs.tools.outputs.tool-tags }}
@@ -266,6 +265,7 @@ jobs:
           fi
 
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
+  # Uses docker buildx bake with context overrides for pre-built GHCR tool/venv images.
   ubuntu:
     name: "🐳 Ubuntu images"
     needs: [image-tags, tools, venvs]
@@ -284,109 +284,88 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup tool build args
-        id: tool-args
-        uses: ./.github/actions/setup-tool-buildargs
-        with:
-          # Resolve tool-tags: use input if provided, otherwise use tools job output
-          tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
-      - name: Setup build args
-        id: buildargs
+      - name: Build and push images via bake
+        env:
+          TOOL_TAGS: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
+          CI_BUILD_VENV_TAG: ${{ needs.venvs.outputs.ci-build-venv-tag }}
+          CI_TEST_VENV_TAG: ${{ needs.venvs.outputs.ci-test-venv-tag }}
+          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
+          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
         run: |
-          # Main images need all tools + python venvs
-          {
-            echo "main<<EOF"
-            echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
-            echo "PYTHON_VERSION=${{ needs.image-tags.outputs.python-version }}"
-            echo "${{ steps.tool-args.outputs.build-args }}"
-            echo "PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.venvs.outputs.ci-build-venv-tag }}"
-            echo "PYTHON_CI_TEST_VENV_IMAGE=${{ needs.venvs.outputs.ci-test-venv-tag }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-          # Basic-dev needs only a subset of tools
-          {
-            echo "basic-dev<<EOF"
-            echo "UBUNTU_VERSION=${{ needs.image-tags.outputs.version }}"
-            echo "PYTHON_VERSION=${{ needs.image-tags.outputs.python-version }}"
-            echo "TOOL_CMAKE_IMAGE=${{ steps.tool-args.outputs.cmake-tag }}"
-            echo "TOOL_SFPI_IMAGE=${{ steps.tool-args.outputs.sfpi-tag }}"
-            echo "TOOL_OPENMPI_IMAGE=${{ steps.tool-args.outputs.openmpi-tag }}"
-            echo "TOOL_CCACHE_IMAGE=${{ steps.tool-args.outputs.ccache-tag }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-      - name: Build and push CI Build image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-build
-          tags: ${{ needs.image-tags.outputs.ci-build-tag }}
-          build-args: ${{ steps.buildargs.outputs.main }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push CI Test image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: ci-test
-          tags: ${{ needs.image-tags.outputs.ci-test-tag }}
-          build-args: ${{ steps.buildargs.outputs.main }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Dev image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile
-          target: dev
-          tags: ${{ needs.image-tags.outputs.dev-tag }}
-          build-args: ${{ steps.buildargs.outputs.main }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic Dev image
-        if: needs.image-tags.outputs.basic-dev-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: base
-          tags: ${{ needs.image-tags.outputs.basic-dev-tag }}
-          build-args: ${{ steps.buildargs.outputs.basic-dev }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-      - name: Build and push Basic TTNN runtime image
-        if: needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.basic-dev
-          target: basic-ttnn-runtime
-          tags: ${{ needs.image-tags.outputs.basic-ttnn-runtime-tag }}
-          build-args: ${{ steps.buildargs.outputs.basic-dev }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          BAKE_OUTPUT="type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          BAKE_FILE="dockerfile/docker-bake.hcl"
+          BAKE_SETS=()
+          TARGETS=()
+
+          # Helper: add context overrides for a target from tool-tags JSON
+          add_tool_contexts() {
+            local target="$1"
+            shift
+            for tool in "$@"; do
+              local tag
+              tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+              BAKE_SETS+=(--set "${target}.contexts.${tool}-layer=docker-image://${tag}")
+            done
+          }
+
+          # Helper: add venv context overrides for a target
+          add_venv_contexts() {
+            local target="$1"
+            BAKE_SETS+=(--set "${target}.contexts.ci-build-venv-layer=docker-image://${CI_BUILD_VENV_TAG}")
+            BAKE_SETS+=(--set "${target}.contexts.ci-test-venv-layer=docker-image://${CI_TEST_VENV_TAG}")
+          }
+
+          ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq sfpi openmpi)
+
+          # Main images (ci-build, ci-test, dev) - all 9 tools + 2 venvs
+          if [ "${{ needs.image-tags.outputs.dev-exists }}" != "true" ]; then
+            declare -A MAIN_TAGS=(
+              [ci-build]="${{ needs.image-tags.outputs.ci-build-tag }}"
+              [ci-test]="${{ needs.image-tags.outputs.ci-test-tag }}"
+              [dev]="${{ needs.image-tags.outputs.dev-tag }}"
+            )
+            for target in ci-build ci-test dev; do
+              TARGETS+=("$target")
+              add_tool_contexts "$target" "${ALL_TOOLS[@]}"
+              add_venv_contexts "$target"
+              BAKE_SETS+=(--set "${target}.tags=${MAIN_TAGS[$target]}")
+              BAKE_SETS+=(--set "${target}.output=${BAKE_OUTPUT}")
+            done
+          fi
+
+          # Basic images - cmake, sfpi, openmpi, ccache only
+          BASIC_TOOLS=(cmake sfpi openmpi ccache)
+          if [ "${{ needs.image-tags.outputs.basic-dev-exists }}" != "true" ]; then
+            TARGETS+=("basic-dev")
+            add_tool_contexts "basic-dev" "${BASIC_TOOLS[@]}"
+            BAKE_SETS+=(--set "basic-dev.tags=${{ needs.image-tags.outputs.basic-dev-tag }}")
+            BAKE_SETS+=(--set "basic-dev.output=${BAKE_OUTPUT}")
+          fi
+          if [ "${{ needs.image-tags.outputs.basic-ttnn-runtime-exists }}" != "true" ]; then
+            TARGETS+=("basic-ttnn-runtime")
+            add_tool_contexts "basic-ttnn-runtime" "${BASIC_TOOLS[@]}"
+            BAKE_SETS+=(--set "basic-ttnn-runtime.tags=${{ needs.image-tags.outputs.basic-ttnn-runtime-tag }}")
+            BAKE_SETS+=(--set "basic-ttnn-runtime.output=${BAKE_OUTPUT}")
+          fi
+
+          if [ ${#TARGETS[@]} -gt 0 ]; then
+            echo "Building targets: ${TARGETS[*]}"
+            export UBUNTU_VERSION PYTHON_VERSION
+            docker buildx bake -f "$BAKE_FILE" \
+              "${BAKE_SETS[@]}" \
+              "${TARGETS[@]}"
+          fi
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
+  # Uses docker buildx bake with context overrides for pre-built GHCR tool images.
   manylinux:
     name: "🐳 ManyLinux image"
     needs: [image-tags, tools]
@@ -404,38 +383,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup tool build args
-        id: tool-args
-        uses: ./.github/actions/setup-tool-buildargs
-        with:
-          # Resolve tool-tags: use input if provided, otherwise use tools job output
-          tool-tags: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
-          include: ccache,mold,sfpi,openmpi
-      - name: Setup build args
-        id: buildargs
+      - name: Build and push ManyLinux image via bake
+        env:
+          TOOL_TAGS: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
         run: |
-          {
-            echo "manylinux<<EOF"
-            echo "${{ steps.tool-args.outputs.build-args }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-      - name: Build and push ManyLinux image
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.manylinux
-          tags: ${{ needs.image-tags.outputs.manylinux-tag }}
-          build-args: ${{ steps.buildargs.outputs.manylinux }}
-          cache-to: type=inline
-          pull: true
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          BAKE_OUTPUT="type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          BAKE_SETS=()
+
+          for tool in ccache mold sfpi openmpi; do
+            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+            BAKE_SETS+=(--set "manylinux.contexts.${tool}-layer=docker-image://${tag}")
+          done
+
+          BAKE_SETS+=(--set "manylinux.tags=${{ needs.image-tags.outputs.manylinux-tag }}")
+          BAKE_SETS+=(--set "manylinux.output=${BAKE_OUTPUT}")
+
+          docker buildx bake -f dockerfile/docker-bake.hcl \
+            "${BAKE_SETS[@]}" \
+            manylinux
 
   # tag-latest runs after image-tags only (not after build jobs) because adding
   # needs.ubuntu would cause this job to be skipped when builds are skipped

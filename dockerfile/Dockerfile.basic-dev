@@ -1,54 +1,26 @@
 # Basic Development Dockerfile
 # Optimized with multi-stage builds for tool caching.
+# Tool layers are injected via docker-bake.hcl contexts.
 #
-# Uses pre-built tool images from GHCR for cmake, SFPI, OpenMPI, and ccache
-# to avoid repeated downloads from upstream sources.
-#
-# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
-# For local builds, you MUST build the tool images first (see build-local.sh or below).
-#
-# To build locally, first build tool images:
-#   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
-#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
-#   docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
-#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
-#
-# Then build with:
-#   docker build -f dockerfile/Dockerfile.basic-dev \
-#     --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
-#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
-#     --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
-#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local .
+# Build:
+#   docker buildx bake -f dockerfile/docker-bake.hcl basic-dev
+#   docker buildx bake -f dockerfile/docker-bake.hcl basic-ttnn-runtime
 
 #############################################################
-# Tool image configuration
-# NOTE: ARGs used in FROM must be declared before any FROM statement
+# Build arguments
 #############################################################
 
 ARG UBUNTU_VERSION=22.04
 ARG PYTHON_VERSION=3.10
 
-# Tool images from GHCR (built by Dockerfile.tools)
-ARG TOOL_CMAKE_IMAGE=scratch
-ARG TOOL_SFPI_IMAGE=scratch
-ARG TOOL_OPENMPI_IMAGE=scratch
-ARG TOOL_CCACHE_IMAGE=scratch
-
 #############################################################
-# Tool layers - pulled from pre-built GHCR images
+# Tool layers (resolved by docker-bake.hcl contexts)
 #############################################################
 
-# cmake layer - pre-built from GHCR
-FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
-
-# SFPI layer - pre-built from GHCR
-FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
-
-# OpenMPI layer - pre-built from GHCR (ULFM support)
-FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
-
-# ccache layer - pre-built from GHCR
-FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
+FROM scratch AS cmake-layer
+FROM scratch AS sfpi-layer
+FROM scratch AS openmpi-layer
+FROM scratch AS ccache-layer
 
 #############################################################
 # uv layer - copy from official distroless image

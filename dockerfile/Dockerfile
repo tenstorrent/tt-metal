@@ -1,114 +1,53 @@
 # TT-Metalium Dockerfile
-# Optimized with multi-stage builds for tool and Python dependency caching
+# Optimized with multi-stage builds for tool and Python dependency caching.
 #
-# Third-party tools are pulled from pre-built GHCR images to avoid hitting
-# upstream endpoints repeatedly. Tool images are built by Dockerfile.tools
-# and pushed to GHCR by build-docker-artifact.yaml.
-#
-# Python virtual environments with all dependencies pre-installed are pulled
-# from pre-built GHCR images to avoid repeated pip install operations.
-# Python venv images are built by Dockerfile.python and pushed to GHCR.
+# Tool and venv layers are injected via Docker Buildx Bake contexts
+# (see docker-bake.hcl). The FROM scratch stubs below are overridden by
+# Bake with either local tool target outputs or pre-built GHCR images.
 #
 # =============================================================================
-# LOCAL BUILD INSTRUCTIONS (without GHCR)
+# BUILD INSTRUCTIONS
 # =============================================================================
 #
-# RECOMMENDED: Use the build-local.sh script which automatically builds any
-# missing tool/venv images before building the main image:
+#   docker buildx bake -f dockerfile/docker-bake.hcl dev
+#   docker buildx bake -f dockerfile/docker-bake.hcl ci-test
+#   UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
+#   docker buildx bake -f dockerfile/docker-bake.hcl --print dev   # dry run
 #
-#   ./dockerfile/build-local.sh dev              # Build dev image
-#   ./dockerfile/build-local.sh ci-test          # Build ci-test image
-#   ./dockerfile/build-local.sh --ubuntu 24.04 dev
-#   ./dockerfile/build-local.sh --help           # Show all options
-#
-# MANUAL: If you prefer to build images manually or need finer control:
-#
-# Step 1: Build tool images (Dockerfile.tools)
-#   docker build -f dockerfile/Dockerfile.tools --target <tool> -t tool-<tool>:local .
-#   # Tools: ccache, mold, doxygen, cba, gdb, cmake, yq, sfpi, openmpi
-#
-# Step 2: Build Python venv images (Dockerfile.python)
-#   docker build -f dockerfile/Dockerfile.python --target ci-build-venv \
-#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-build-venv:local .
-#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv \
-#     --build-arg UBUNTU_VERSION=22.04 -t python-ci-test-venv:local .
-#
-# Step 3: Build the main image with all --build-arg values (see build-local.sh)
+# Or use the wrapper script:
+#   ./dockerfile/build-local.sh dev
+#   ./dockerfile/build-local.sh --help
 #
 # Available targets: ci-build, ci-test, dev, release, release-models
 # =============================================================================
 
 #############################################################
-# Tool image configuration (pre-built images from GHCR)
-# NOTE: ARGs used in FROM must be declared before any FROM statement
+# Build arguments
 #############################################################
 
-# Ubuntu base image version
 ARG UBUNTU_VERSION=22.04
 ARG PYTHON_VERSION=3.10
 
-# Tool images from GHCR (built by Dockerfile.tools, pushed by build-docker-artifact.yaml)
-# These default to scratch (empty image); CI workflow passes actual GHCR tags.
-# For local builds, you MUST build the tool images first (see instructions above).
-ARG TOOL_CCACHE_IMAGE=scratch
-ARG TOOL_MOLD_IMAGE=scratch
-ARG TOOL_DOXYGEN_IMAGE=scratch
-ARG TOOL_CBA_IMAGE=scratch
-ARG TOOL_GDB_IMAGE=scratch
-ARG TOOL_CMAKE_IMAGE=scratch
-ARG TOOL_YQ_IMAGE=scratch
-ARG TOOL_SFPI_IMAGE=scratch
-ARG TOOL_OPENMPI_IMAGE=scratch
-
-# Python venv images from GHCR (built by Dockerfile.python, pushed by build-docker-artifact.yaml)
-# These contain pre-built virtual environments with all Python dependencies installed.
-# Using pre-built venvs saves 5-10 minutes per build by avoiding pip install operations.
-# For local builds, you MUST build the venv images first (see instructions above).
-ARG PYTHON_CI_BUILD_VENV_IMAGE=scratch
-ARG PYTHON_CI_TEST_VENV_IMAGE=scratch
-
-# uv - Python package manager
-# Pinned to specific SHA256 for reproducible builds per:
-# https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-ARG UV_VERSION=0.9.26
-ARG UV_IMAGE_DIGEST=sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
-
 #############################################################
-# Tool layers - pulled from pre-built GHCR images
-# These images contain binaries at /install/{bin,lib,...}
+# Tool and venv layers (resolved by docker-bake.hcl contexts)
+#
+# These FROM scratch stubs are overridden by Bake:
+#   - Locally: Bake builds Dockerfile.tools/Dockerfile.python targets first
+#   - In CI:   Bake substitutes pre-built GHCR images via --set contexts
+# Without Bake, these resolve to empty scratch images (same as before).
 #############################################################
 
-# ccache layer - pre-built from GHCR
-FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
-
-# mold layer - pre-built from GHCR
-FROM ${TOOL_MOLD_IMAGE} AS mold-layer
-
-# doxygen layer - pre-built from GHCR
-FROM ${TOOL_DOXYGEN_IMAGE} AS doxygen-layer
-
-# ClangBuildAnalyzer layer - pre-built from GHCR
-FROM ${TOOL_CBA_IMAGE} AS cba-layer
-
-# GDB layer - pre-built from GHCR
-FROM ${TOOL_GDB_IMAGE} AS gdb-layer
-
-# cmake layer - pre-built from GHCR
-FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
-
-# yq layer - pre-built from GHCR
-FROM ${TOOL_YQ_IMAGE} AS yq-layer
-
-# SFPI layer - pre-built from GHCR
-FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
-
-# OpenMPI layer - pre-built from GHCR (ULFM support)
-FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
-
-# Python venv layers - pre-built from GHCR
-# These contain complete virtual environments with all dependencies pre-installed
-FROM ${PYTHON_CI_BUILD_VENV_IMAGE} AS ci-build-venv-layer
-FROM ${PYTHON_CI_TEST_VENV_IMAGE} AS ci-test-venv-layer
+FROM scratch AS ccache-layer
+FROM scratch AS mold-layer
+FROM scratch AS doxygen-layer
+FROM scratch AS cba-layer
+FROM scratch AS gdb-layer
+FROM scratch AS cmake-layer
+FROM scratch AS yq-layer
+FROM scratch AS sfpi-layer
+FROM scratch AS openmpi-layer
+FROM scratch AS ci-build-venv-layer
+FROM scratch AS ci-test-venv-layer
 
 #############################################################
 # uv layer - copy from official distroless image

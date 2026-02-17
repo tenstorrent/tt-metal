@@ -1,41 +1,19 @@
 # Evaluation Dockerfile
 # Optimized with multi-stage builds for tool caching.
-#
-# Uses pre-built tool images from GHCR for ccache and SFPI to avoid
-# repeated downloads from upstream sources during evaluation builds.
-#
-# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
-# For local builds without GHCR, tools default to scratch (build will fail without tools).
-#
-# To build locally, first build tool images:
-#   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
-#   docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
-#
-# Then build with:
-#   docker build -f dockerfile/Dockerfile.evaluation \
-#     --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
-#     --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local .
+# Tool layers are injected via docker-bake.hcl contexts or --build-context flags.
 
 #############################################################
-# Tool image configuration
-# NOTE: ARGs used in FROM must be declared before any FROM statement
+# Build arguments
 #############################################################
 
 ARG UBUNTU_VERSION=24.04
 
-# Tool images from GHCR (built by Dockerfile.tools)
-ARG TOOL_CCACHE_IMAGE=scratch
-ARG TOOL_SFPI_IMAGE=scratch
-
 #############################################################
-# Tool layers - pulled from pre-built GHCR images
+# Tool layers (resolved by docker-bake.hcl contexts or --build-context)
 #############################################################
 
-# ccache layer - pre-built from GHCR
-FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
-
-# SFPI layer - pre-built from GHCR
-FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+FROM scratch AS ccache-layer
+FROM scratch AS sfpi-layer
 
 #############################################################
 # uv layer - copy from official distroless image

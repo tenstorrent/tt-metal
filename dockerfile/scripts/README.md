@@ -16,7 +16,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 1. **Pre-built Tool Images** (9 tools)
    - Built by `Dockerfile.tools` and pushed to GHCR
-   - Pulled via `FROM ${TOOL_*_IMAGE}` ARG pattern
+   - Injected into downstream Dockerfiles via Bake `contexts` (overriding `FROM scratch AS <tool>-layer` stubs)
    - Tagged as `ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>`
    - Third-party endpoints only hit once per tool version
 
@@ -49,37 +49,18 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
 
 Tool images are automatically built and pushed by `build-docker-tools.yaml` when they don't exist in GHCR.
 
-**Using build-local.sh (recommended):**
+**Using docker buildx bake (recommended):**
 ```bash
-# Build dev image - automatically builds any missing tool images first
+# Build dev image - tools and venvs are built automatically via bake contexts
+docker buildx bake -f dockerfile/docker-bake.hcl dev
+
+# Or use the wrapper script
 ./dockerfile/build-local.sh dev
 ```
 
-**Manual build:**
+**Build just the tool images:**
 ```bash
-# Build individual tool images
-docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
-docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
-docker build -f dockerfile/Dockerfile.tools --target doxygen -t tool-doxygen:local .
-docker build -f dockerfile/Dockerfile.tools --target cba -t tool-cba:local .
-docker build -f dockerfile/Dockerfile.tools --target gdb -t tool-gdb:local .
-docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
-docker build -f dockerfile/Dockerfile.tools --target yq -t tool-yq:local .
-docker build -f dockerfile/Dockerfile.tools --target sfpi -t tool-sfpi:local .
-docker build -f dockerfile/Dockerfile.tools --target openmpi -t tool-openmpi:local .
-
-# Build main image with local tool images
-docker build \
-  --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
-  --build-arg TOOL_MOLD_IMAGE=tool-mold:local \
-  --build-arg TOOL_DOXYGEN_IMAGE=tool-doxygen:local \
-  --build-arg TOOL_CBA_IMAGE=tool-cba:local \
-  --build-arg TOOL_GDB_IMAGE=tool-gdb:local \
-  --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
-  --build-arg TOOL_YQ_IMAGE=tool-yq:local \
-  --build-arg TOOL_SFPI_IMAGE=tool-sfpi:local \
-  --build-arg TOOL_OPENMPI_IMAGE=tool-openmpi:local \
-  -f dockerfile/Dockerfile --target dev .
+docker buildx bake -f dockerfile/docker-bake.hcl tools
 ```
 
 ## Scripts

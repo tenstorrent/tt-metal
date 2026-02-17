@@ -2,6 +2,9 @@ name: "[internal] Build Docker tool images"
 
 # Reusable workflow that checks and builds tool images (ccache, mold, doxygen, etc.).
 # Called by build-docker-artifact.yaml. Tool images are pushed to GHCR.
+#
+# Uses docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools
+# in a single invocation instead of individual build-push-action steps.
 permissions:
   packages: write
 
@@ -9,7 +12,6 @@ on:
   workflow_call:
     outputs:
       # JSON bundle containing all tool tags
-      # Use with .github/actions/setup-tool-buildargs to extract individual tags
       tool-tags:
         description: "JSON object containing all tool image tags"
         value: ${{ jobs.tags.outputs.tool-tags }}
@@ -20,9 +22,9 @@ jobs:
     name: "📋 Compute tool tags"
     runs-on: ubuntu-latest
     outputs:
-      # JSON bundle of all tool tags for easy passing between workflows
       tool-tags: ${{ steps.tags.outputs.tool-tags }}
-      # Existence flags used by build job
+      any-missing: ${{ steps.check.outputs.any-missing }}
+      # Per-tool existence flags and tags (consumed by build job)
       ccache-exists: ${{ steps.check.outputs.ccache-exists }}
       mold-exists: ${{ steps.check.outputs.mold-exists }}
       doxygen-exists: ${{ steps.check.outputs.doxygen-exists }}
@@ -32,17 +34,6 @@ jobs:
       yq-exists: ${{ steps.check.outputs.yq-exists }}
       sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
       openmpi-exists: ${{ steps.check.outputs.openmpi-exists }}
-      any-missing: ${{ steps.check.outputs.any-missing }}
-      # Individual tags (internal use by build job)
-      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
-      mold-tag: ${{ steps.tags.outputs.mold-tag }}
-      doxygen-tag: ${{ steps.tags.outputs.doxygen-tag }}
-      cba-tag: ${{ steps.tags.outputs.cba-tag }}
-      gdb-tag: ${{ steps.tags.outputs.gdb-tag }}
-      cmake-tag: ${{ steps.tags.outputs.cmake-tag }}
-      yq-tag: ${{ steps.tags.outputs.yq-tag }}
-      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
-      openmpi-tag: ${{ steps.tags.outputs.openmpi-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -61,7 +52,6 @@ jobs:
           CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
           YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
           OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
           SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
           # Compute hashes for each tool (version + install script)
@@ -77,18 +67,8 @@ jobs:
 
           # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
-          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
-          echo "mold-tag=${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" >> $GITHUB_OUTPUT
-          echo "doxygen-tag=${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" >> $GITHUB_OUTPUT
-          echo "cba-tag=${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" >> $GITHUB_OUTPUT
-          echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
-          echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
-          echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
-          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
-          echo "openmpi-tag=${BASE}/openmpi:${OMPI_TAG}-${OPENMPI_HASH}" >> $GITHUB_OUTPUT
 
-          # Generate JSON bundle of all tool tags for easy passing between workflows
-          # This eliminates the need to pass 9 individual inputs/outputs
+          # Generate JSON bundle of all tool tags for passing between workflows
           cat >> $GITHUB_OUTPUT << EOF
           tool-tags<<EOJSON
           {
@@ -108,33 +88,22 @@ jobs:
       - name: Check if tool images exist
         id: check
         run: |
+          TOOL_TAGS='${{ steps.tags.outputs.tool-tags }}'
           any_missing=false
-          check_image() {
-            local tag="$1"
-            local name="$2"
+          for key in ccache mold doxygen cba gdb cmake yq sfpi openmpi; do
+            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${key}-tag\"")
             if docker manifest inspect "$tag" > /dev/null 2>&1; then
               echo "$tag exists"
-              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+              echo "${key}-exists=true" >> $GITHUB_OUTPUT
             else
               echo "$tag does not exist"
-              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+              echo "${key}-exists=false" >> $GITHUB_OUTPUT
               any_missing=true
             fi
-          }
-
-          check_image "${{ steps.tags.outputs.ccache-tag }}" "ccache"
-          check_image "${{ steps.tags.outputs.mold-tag }}" "mold"
-          check_image "${{ steps.tags.outputs.doxygen-tag }}" "doxygen"
-          check_image "${{ steps.tags.outputs.cba-tag }}" "cba"
-          check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
-          check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
-          check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
-          check_image "${{ steps.tags.outputs.sfpi-tag }}" "sfpi"
-          check_image "${{ steps.tags.outputs.openmpi-tag }}" "openmpi"
-
+          done
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  # Build any tool images that don't exist yet
+  # Build any tool images that don't exist yet using docker buildx bake
   build:
     name: "🔧 Build missing tools"
     needs: tags
@@ -147,6 +116,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -154,110 +126,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ccache image
-        if: needs.tags.outputs.ccache-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: ccache
-          push: true
-          tags: ${{ needs.tags.outputs.ccache-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Build and push missing tool images
+        env:
+          TOOL_TAGS: ${{ needs.tags.outputs.tool-tags }}
+        run: |
+          BAKE_OUTPUT="type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          TARGETS=()
+          BAKE_SETS=()
 
-      - name: Build and push mold image
-        if: needs.tags.outputs.mold-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: mold
-          push: true
-          tags: ${{ needs.tags.outputs.mold-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          add_if_missing() {
+            local name="$1"
+            local exists="$2"
+            if [ "$exists" != "true" ]; then
+              local tag
+              tag=$(echo "$TOOL_TAGS" | jq -r ".\"${name}-tag\"")
+              TARGETS+=("$name")
+              BAKE_SETS+=(--set "${name}.tags=${tag}")
+              BAKE_SETS+=(--set "${name}.output=${BAKE_OUTPUT}")
+            fi
+          }
 
-      - name: Build and push doxygen image
-        if: needs.tags.outputs.doxygen-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: doxygen
-          push: true
-          tags: ${{ needs.tags.outputs.doxygen-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          add_if_missing ccache "${{ needs.tags.outputs.ccache-exists }}"
+          add_if_missing mold "${{ needs.tags.outputs.mold-exists }}"
+          add_if_missing doxygen "${{ needs.tags.outputs.doxygen-exists }}"
+          add_if_missing cba "${{ needs.tags.outputs.cba-exists }}"
+          add_if_missing gdb "${{ needs.tags.outputs.gdb-exists }}"
+          add_if_missing cmake "${{ needs.tags.outputs.cmake-exists }}"
+          add_if_missing yq "${{ needs.tags.outputs.yq-exists }}"
+          add_if_missing sfpi "${{ needs.tags.outputs.sfpi-exists }}"
+          add_if_missing openmpi "${{ needs.tags.outputs.openmpi-exists }}"
 
-      - name: Build and push ClangBuildAnalyzer image
-        if: needs.tags.outputs.cba-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: cba
-          push: true
-          tags: ${{ needs.tags.outputs.cba-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push GDB image
-        if: needs.tags.outputs.gdb-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: gdb
-          push: true
-          tags: ${{ needs.tags.outputs.gdb-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push cmake image
-        if: needs.tags.outputs.cmake-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: cmake
-          push: true
-          tags: ${{ needs.tags.outputs.cmake-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push yq image
-        if: needs.tags.outputs.yq-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: yq
-          push: true
-          tags: ${{ needs.tags.outputs.yq-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push sfpi image
-        if: needs.tags.outputs.sfpi-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: sfpi
-          push: true
-          tags: ${{ needs.tags.outputs.sfpi-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
-
-      - name: Build and push openmpi image
-        if: needs.tags.outputs.openmpi-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.tools
-          target: openmpi
-          push: true
-          tags: ${{ needs.tags.outputs.openmpi-tag }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          if [ ${#TARGETS[@]} -gt 0 ]; then
+            echo "Building missing tools: ${TARGETS[*]}"
+            docker buildx bake -f dockerfile/docker-bake.hcl \
+              "${BAKE_SETS[@]}" \
+              "${TARGETS[@]}"
+          fi

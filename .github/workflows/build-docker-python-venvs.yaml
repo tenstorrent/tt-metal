@@ -2,6 +2,8 @@ name: "[internal] Build Docker Python venv images"
 
 # Reusable workflow that checks and builds Python venv images (ci-build-venv, ci-test-venv).
 # Called by build-docker-artifact.yaml. Venv images are pushed to GHCR.
+#
+# Uses docker buildx bake (dockerfile/docker-bake.hcl) for builds.
 permissions:
   packages: write
 
@@ -51,21 +53,13 @@ jobs:
         id: tags
         run: |
           VERSION="${{ steps.platform.outputs.version }}"
-          # Remove dots from version for image tag (22.04 -> 2204)
           VERSION_NODOT="${VERSION//.}"
 
-          # Hash Dockerfile.python + its COPY source files (requirements files)
-          # dockerfile-hash.sh automatically discovers COPY sources from the Dockerfile
           VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
 
-          # Generate tags: ghcr.io/<repo>/tt-metalium/python-venv/<type>:<ubuntu-version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
           echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
-
-          # Store version and target suffix for build step
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "version-nodot=${VERSION_NODOT}" >> $GITHUB_OUTPUT
 
       - name: Check if Python venv images exist
         id: check
@@ -89,7 +83,7 @@ jobs:
 
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  # Build any venv images that don't exist yet
+  # Build any venv images that don't exist yet using docker buildx bake
   build:
     name: "🐍 Build missing venvs"
     needs: tags
@@ -102,6 +96,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -109,30 +106,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ci-build-venv image
-        if: needs.tags.outputs.ci-build-venv-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.python
-          target: ci-build-venv
-          push: true
-          tags: ${{ needs.tags.outputs.ci-build-venv-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+      - name: Build and push missing venv images
+        run: |
+          BAKE_OUTPUT="type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          UBUNTU_VERSION="${{ needs.tags.outputs.ubuntu-version }}"
 
-      - name: Build and push ci-test-venv image
-        if: needs.tags.outputs.ci-test-venv-exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ github.workspace }}
-          file: dockerfile/Dockerfile.python
-          target: ci-test-venv
-          push: true
-          tags: ${{ needs.tags.outputs.ci-test-venv-tag }}
-          build-args: |
-            UBUNTU_VERSION=${{ needs.tags.outputs.ubuntu-version }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          # Derive PYTHON_VERSION from Ubuntu version
+          if [ "$UBUNTU_VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+
+          TARGETS=()
+          BAKE_SETS=(
+            --set "*.args.UBUNTU_VERSION=${UBUNTU_VERSION}"
+            --set "*.args.PYTHON_VERSION=${PYTHON_VERSION}"
+          )
+
+          if [ "${{ needs.tags.outputs.ci-build-venv-exists }}" != "true" ]; then
+            TARGETS+=("ci-build-venv")
+            BAKE_SETS+=(--set "ci-build-venv.tags=${{ needs.tags.outputs.ci-build-venv-tag }}")
+            BAKE_SETS+=(--set "ci-build-venv.output=${BAKE_OUTPUT}")
+          fi
+
+          if [ "${{ needs.tags.outputs.ci-test-venv-exists }}" != "true" ]; then
+            TARGETS+=("ci-test-venv")
+            BAKE_SETS+=(--set "ci-test-venv.tags=${{ needs.tags.outputs.ci-test-venv-tag }}")
+            BAKE_SETS+=(--set "ci-test-venv.output=${BAKE_OUTPUT}")
+          fi
+
+          if [ ${#TARGETS[@]} -gt 0 ]; then
+            echo "Building missing venvs: ${TARGETS[*]}"
+            export UBUNTU_VERSION PYTHON_VERSION
+            docker buildx bake -f dockerfile/docker-bake.hcl \
+              "${BAKE_SETS[@]}" \
+              "${TARGETS[@]}"
+          fi
