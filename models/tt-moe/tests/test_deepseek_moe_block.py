@@ -126,7 +126,15 @@ def state_dict(model_path):
     return load_state_dict(model_path, "")
 
 
-def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict):
+@pytest.mark.parametrize(
+    "mode,seq_len",
+    [
+        ("decode", 1),  # Current test configuration
+        ("prefill", 128),  # Add prefill mode with seq_len=128
+    ],
+    ids=["mode_decode_seq_1", "mode_prefill_seq_128"],  # Clear test IDs
+)
+def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict, mode, seq_len):
     """Test DeepSeek MoE Block against reference implementation with PCC checking."""
 
     if DeepseekV3MoE is None:
@@ -136,14 +144,25 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
         pytest.skip("PCC checking utilities not available")
 
     logger.info("\n" + "=" * 60)
-    logger.info("Testing DeepSeek MoE Block Against Reference")
+    logger.info(f"Testing DeepSeek MoE Block Against Reference - Mode: {mode}, Seq Len: {seq_len}")
     logger.info("=" * 60)
 
-    # Test parameters
-    MODE = "decode"
-    SEQ_LEN = 1
-    BATCH_SIZE_PER_ROW = 32  # USERS_PER_ROW
-    BATCH_SIZE = BATCH_SIZE_PER_ROW * mesh_device.shape[0]  # 32 * 4 = 128 for decode mode
+    # Test parameters based on mode
+    MODE = mode
+    SEQ_LEN = seq_len
+
+    # Adjust batch size based on mode (following reference test pattern)
+    # Note: DeepSeek reference tests use different batch sizes for different modes:
+    # - Decode: batch_size=32 per row (total 128 for 4 rows) with seq_len=1
+    # - Prefill: batch_size=1 per row (total 4 for 4 rows) with seq_len=128
+    # This is due to memory constraints and computational efficiency considerations
+    if MODE == "decode":
+        BATCH_SIZE_PER_ROW = 32  # USERS_PER_ROW
+        BATCH_SIZE = BATCH_SIZE_PER_ROW * mesh_device.shape[0]  # 32 * 4 = 128 for decode mode
+    else:  # prefill mode
+        BATCH_SIZE_PER_ROW = 1  # Use batch_size=1 for prefill to manage memory usage
+        BATCH_SIZE = BATCH_SIZE_PER_ROW * mesh_device.shape[0]  # 1 * 4 = 4 for prefill mode
+
     HIDDEN_SIZE = hf_config.hidden_size
 
     # Select layer 3 (MoE layer) like reference test
@@ -209,9 +228,11 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
 
     # Generate test input
     if MODE == "prefill":
-        torch_input = torch.randn(1, SEQ_LEN, HIDDEN_SIZE, dtype=torch.bfloat16)
+        # For prefill: (batch_size, seq_len, hidden_size)
+        torch_input = torch.randn(BATCH_SIZE_PER_ROW, SEQ_LEN, HIDDEN_SIZE, dtype=torch.bfloat16)
     else:
-        torch_input = torch.randn(BATCH_SIZE, 1, HIDDEN_SIZE, dtype=torch.bfloat16)
+        # For decode: (batch_size, 1, hidden_size)
+        torch_input = torch.randn(BATCH_SIZE, SEQ_LEN, HIDDEN_SIZE, dtype=torch.bfloat16)
 
     logger.info(f"Input shape: {torch_input.shape}")
 
@@ -244,6 +265,7 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
         temp_config_path = tmp_config.name
 
     logger.info(f"Loading DeepSeek MoEBlock from config (without auto-loading weights)")
+    logger.info(f"Mode: {MODE}, Seq Len: {SEQ_LEN}, Batch Size: {BATCH_SIZE}, Batch Size Per Row: {BATCH_SIZE_PER_ROW}")
     moe_block = MoEBlock(temp_config_path, mesh_device, ccl)
 
     # Clean up temp config
@@ -287,9 +309,12 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
 
     # Convert input to TTNN format
     if MODE == "prefill":
-        # For prefill, add batch dimension and shard
+        # For prefill: (batch, seq_len, hidden) -> (1, batch, seq_len, hidden)
+        # Following the reference pattern, add batch dimension for TTNN
+        torch_input_reshaped = torch_input.unsqueeze(0)  # Shape: (1, batch, seq_len, hidden)
+        # Shard across devices on the sequence dimension
         tt_input = ttnn.from_torch(
-            torch_input.unsqueeze(0),
+            torch_input_reshaped,
             device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
             dtype=ttnn.bfloat16,
@@ -299,7 +324,7 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
     else:
         # For decode, reshape [batch, 1, hidden] -> [1, 1, batch, hidden] (like reference)
         # Reference does: torch_input.permute(1, 0, 2).unsqueeze(0) for decode
-        torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)  # Shape: (1, 1, 32, 7168)
+        torch_input_reshaped = torch_input.permute(1, 0, 2).unsqueeze(0)  # Shape: (1, 1, batch, 7168)
         # Use ShardTensor2dMesh with dims=(-2, -1) like the reference test
         tt_input = ttnn.from_torch(
             torch_input_reshaped,
@@ -355,7 +380,7 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict)
 
     # Reshape output back to match reference format
     if MODE == "prefill":
-        # Remove batch dimension added for TTNN
+        # Remove batch dimension added for TTNN: (1, batch, seq_len, hidden) -> (batch, seq_len, hidden)
         tt_output_torch = tt_output_torch.squeeze(0)
     else:
         # Reshape back from [1, 1, batch, hidden] to [batch, 1, hidden]

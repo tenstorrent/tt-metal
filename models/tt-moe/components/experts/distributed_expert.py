@@ -318,9 +318,140 @@ class DistributedExpert:
         return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
-        """Forward pass in decode mode."""
-        return cls._forward(x, cfg)
+    def forward_decode(
+        cls,
+        hidden_states: ttnn.Tensor,
+        topk_expert_indices: ttnn.Tensor,
+        topk_expert_weights: ttnn.Tensor,
+        cfg: Dict,
+        expert_mapping_tensors: ttnn.Tensor,
+        mesh_device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        """
+        Forward pass in decode mode with integrated all-to-all operations.
+
+        Args:
+            hidden_states: Original input hidden states [batch, 1, seq, H]
+            topk_expert_indices: Expert routing indices [batch, 1, seq, K]
+            topk_expert_weights: Routing weights [K, 1, seq*batch, H]
+            cfg: Model configuration including weights
+            expert_mapping_tensors: Expert to device mapping [1, 1, E, D]
+            mesh_device: Mesh device for operations
+
+        Returns:
+            Expert output tensor [1, 1, seq*batch, H]
+        """
+        # Get configuration parameters
+        memory_config = cfg.get("output_memory_config", ttnn.L1_MEMORY_CONFIG)
+        hidden_size = cfg.get("hidden_size", 7168)
+        num_experts_per_tok = cfg.get("num_experts_per_tok", 8)
+        num_experts_per_device = cfg.get("num_experts_per_device", 8)
+        cluster_axis = cfg.get("cluster_axis", 0)
+        dispatch_topology = cfg.get("dispatch_topology", "Linear")
+        combine_topology = cfg.get("combine_topology", "Linear")
+
+        # Convert topology strings to enums if needed
+        if isinstance(dispatch_topology, str):
+            dispatch_topology = getattr(ttnn.Topology, dispatch_topology)
+        if isinstance(combine_topology, str):
+            combine_topology = getattr(ttnn.Topology, combine_topology)
+
+        # Get sequence length and batch size
+        batch_size, _, seq_len, _ = hidden_states.shape
+        tokens_per_device = batch_size * seq_len
+
+        # ==========================================================================
+        # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
+        # ==========================================================================
+        # Convert to ROW_MAJOR layout as required by all-to-all dispatch
+        hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, hidden_size))
+
+        # Expert indices: [1, 1, tokens_per_device, K]
+        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, num_experts_per_tok))
+
+        # ==========================================================================
+        # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
+        # ==========================================================================
+        dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
+            hidden_rm,
+            topk_indices_rm,
+            expert_mapping_tensors,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            output_concat_dim=2,  # Concatenate on token dimension
+            topology=dispatch_topology,
+        )
+        ttnn.deallocate(hidden_rm)
+        ttnn.deallocate(topk_indices_rm)
+
+        # ==========================================================================
+        # STEP 3: PREPARE FOR EXPERT COMPUTATION
+        # ==========================================================================
+        # Get total tokens after dispatch
+        num_dispatch_devices = mesh_device.shape[cluster_axis] if hasattr(mesh_device, "shape") else 1
+        total_tokens = tokens_per_device * num_dispatch_devices
+
+        # Reshape for expert computation
+        dispatch_output = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, hidden_size))
+        dispatch_output = ttnn.to_layout(dispatch_output, ttnn.TILE_LAYOUT)
+
+        # Repeat for all experts on this device
+        dispatch_output = ttnn.repeat(
+            dispatch_output, ttnn.Shape((1, num_experts_per_device, 1, 1)), memory_config=memory_config
+        )
+
+        # ==========================================================================
+        # STEP 4: RUN EXPERT COMPUTATION
+        # ==========================================================================
+        # Call the existing _forward method for expert computation
+        experts_output = cls._forward(dispatch_output, cfg)
+
+        # ==========================================================================
+        # STEP 5: PREPARE FOR ALL_TO_ALL_COMBINE
+        # ==========================================================================
+        # Convert to ROW_MAJOR for all_to_all_combine
+        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+        # Reshape from [1, num_experts_per_device, total_tokens, H] to [num_experts_per_device, 1, total_tokens, H]
+        experts_output = ttnn.reshape(experts_output, shape=(num_experts_per_device, 1, total_tokens, hidden_size))
+
+        # Reshape dispatch_metadata for combine
+        dispatch_metadata = ttnn.reshape(dispatch_metadata, shape=(1, 1, total_tokens, num_experts_per_tok))
+
+        # ==========================================================================
+        # STEP 6: ALL_TO_ALL_COMBINE - Route expert outputs back to token positions
+        # ==========================================================================
+        combine_output = ttnn.all_to_all_combine(
+            experts_output,
+            dispatch_metadata,
+            expert_mapping_tensors,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            output_shard_dim=2,  # Shard on token dimension
+            topology=combine_topology,
+        )
+        ttnn.deallocate(experts_output)
+        ttnn.deallocate(dispatch_metadata)
+
+        # ==========================================================================
+        # STEP 7: APPLY ROUTING WEIGHTS AND REDUCE ACROSS EXPERTS
+        # ==========================================================================
+        # Combine output shape: [K, 1, tokens_per_device, H]
+        post_combine = ttnn.to_layout(combine_output, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(combine_output)
+
+        # Apply routing weights and sum across experts
+        # topk_expert_weights is already in shape [K, 1, tokens_per_device, H]
+        weighted_output = ttnn.mul(post_combine, topk_expert_weights, memory_config=memory_config)
+        ttnn.deallocate(post_combine)
+
+        # Sum across K experts (first dimension)
+        output = ttnn.sum(weighted_output, dim=0, keepdim=True)
+        ttnn.deallocate(weighted_output)
+
+        # Final shape: [1, 1, tokens_per_device, H]
+        return output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:

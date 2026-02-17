@@ -6,9 +6,11 @@
 from .base_expert import BaseExpert
 from .distributed_expert import DistributedExpert
 from .shared_expert import SharedExpert
+from .throughput_expert import ThroughputExpert
 
 __all__ = [
     "BaseExpert",
     "DistributedExpert",
     "SharedExpert",
+    "ThroughputExpert",
 ]

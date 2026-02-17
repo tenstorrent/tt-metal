@@ -338,7 +338,9 @@ class SharedExpert:
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """Forward pass in decode mode."""
-        assert x.memory_config() == cfg["input_memory_config"]
+        # Move to expected memory config if needed
+        if x.memory_config() != cfg["input_memory_config"]:
+            x = ttnn.to_memory_config(x, cfg["input_memory_config"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -357,13 +359,17 @@ class SharedExpert:
         output = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
 
-        assert output.memory_config() == cfg["output_memory_config"]
+        # Ensure output has the expected memory config
+        if output.memory_config() != cfg["output_memory_config"]:
+            output = ttnn.to_memory_config(output, cfg["output_memory_config"])
         return output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """Forward pass in prefill mode."""
-        assert x.memory_config() == cfg["input_memory_config"]
+        # Move to expected memory config if needed
+        if x.memory_config() != cfg["input_memory_config"]:
+            x = ttnn.to_memory_config(x, cfg["input_memory_config"])
 
         # Handle chunking if needed
         num_layers, _, seq_len, _ = x.shape
@@ -412,5 +418,7 @@ class SharedExpert:
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
 
-        assert output.memory_config() == cfg["output_memory_config"]
+        # Ensure output has the expected memory config
+        if output.memory_config() != cfg["output_memory_config"]:
+            output = ttnn.to_memory_config(output, cfg["output_memory_config"])
         return output

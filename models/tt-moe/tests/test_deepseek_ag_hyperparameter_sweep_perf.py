@@ -14,10 +14,7 @@ import time
 import pandas as pd
 import pytest
 from loguru import logger
-
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.perf.device_perf_utils import run_device_perf_detailed
-from models.tt_moe.tests.sweep_deepseek_ag_hyperparameters import (
+from sweep_deepseek_ag_hyperparameters import (
     CHUNKS_PER_SYNC,
     CHUNKS_PER_SYNC_IDS,
     CONFIGS,
@@ -29,6 +26,9 @@ from models.tt_moe.tests.sweep_deepseek_ag_hyperparameters import (
     WORKERS_PER_LINK_IDS,
     get_max_chunks_per_sync,
 )
+
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.device_perf_utils import run_device_perf_detailed
 
 
 def total_elems(ag_output_shape):

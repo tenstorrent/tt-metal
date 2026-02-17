@@ -50,7 +50,13 @@ class TopKRouter(BaseRouter):
             state_dict: Router weights with keys 'weight' and 'bias'
             tensor_cache_path: Optional cache path
         """
-        super().__init__(mesh_device, config, state_dict, tensor_cache_path)
+        # Call BaseRouter with the correct signature (config, mesh_device)
+        super().__init__(config, mesh_device)
+
+        # Store additional parameters not handled by BaseRouter
+        self.mesh_device = mesh_device  # Store mesh_device as instance variable
+        self.state_dict = state_dict
+        self.tensor_cache_path = tensor_cache_path
 
         # Router configuration
         self.num_experts = config["num_experts"]
@@ -156,12 +162,22 @@ class TopKRouter(BaseRouter):
         if self.weight is None or self.bias is None:
             raise ValueError("Router weights not loaded. Call load_weights() first.")
 
-        # Get input shape
+        # Get input shape and preserve batch dimensions
         input_shape = hidden_states.shape
-        batch_seq_len = input_shape[0] * input_shape[1] if len(input_shape) == 3 else input_shape[0]
 
-        # Reshape to 2D for linear projection
-        hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_size))
+        # Flatten batch and sequence dimensions for linear projection
+        # Input could be [1, seq_len, batch_size, hidden_dim] or similar 4D shape
+        if len(input_shape) == 4:
+            batch_seq_len = input_shape[1] * input_shape[2]
+            # Reshape to [1, 1, batch*seq, hidden_dim] for linear projection
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, batch_seq_len, self.hidden_size))
+        elif len(input_shape) == 3:
+            batch_seq_len = input_shape[0] * input_shape[1]
+            # Reshape to [1, 1, batch*seq, hidden_dim] for linear projection
+            hidden_states = ttnn.reshape(hidden_states, (1, 1, batch_seq_len, self.hidden_size))
+        else:
+            # Already in correct shape
+            batch_seq_len = input_shape[0]
 
         # Linear projection to get router logits
         # Memory config based on decode mode (like GPT-OSS)
@@ -214,9 +230,12 @@ class TopKRouter(BaseRouter):
             ttnn.deallocate(logits)
             logits = logits_orig
 
+        # Convert indices to uint16 (required for all-to-all dispatch)
+        expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint16)
+
         # Softmax normalization with numerical stability
         expert_weights = ttnn.softmax(
-            expert_weights, dim=1, numeric_stable=True, compute_kernel_config=self.compute_config
+            expert_weights, dim=-1, numeric_stable=True, compute_kernel_config=self.compute_config
         )
 
         # Return format based on mode

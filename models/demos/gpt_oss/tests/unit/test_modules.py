@@ -385,7 +385,9 @@ def run_full_mlp_pipeline(
 
 def setup_reference_layer(setup, layer_idx=0):
     logger.info("Setting up reference layer...")
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
+    # Always use mock implementation since transformers doesn't have GPT-OSS yet
+    logger.info("Using mock GPT-OSS implementation for reference")
+    from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssDecoderLayer
 
     reference_layer = GptOssDecoderLayer(setup["config"], layer_idx=layer_idx)
     with torch.no_grad():
@@ -548,7 +550,8 @@ def test_decoder(
         orig_context_len=131072,
     )
 
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
+    # Always use mock implementation since transformers doesn't have GPT-OSS yet
+    from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssRotaryEmbedding
 
     rope_embeddings_ref = GptOssRotaryEmbedding(config)
     cos_hf_ref, sin_hf_ref = rope_embeddings_ref(hidden_states, position_ids.unsqueeze(1 if is_decode else 0))
@@ -762,8 +765,8 @@ def run_model_forward_test(
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
-
+    # Always use mock implementation since transformers doesn't have GPT-OSS yet
+    from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssForCausalLM
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
 

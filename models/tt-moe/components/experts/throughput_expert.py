@@ -334,8 +334,13 @@ class ThroughputExpert:
             w2_bias = state_dict.get("down_proj_bias", torch.zeros(1, num_experts, 1, hidden_size))
             if w2.dim() == 3:
                 w2 = w2.unsqueeze(0)
-            if w2_bias.dim() == 3:
-                w2_bias = w2_bias.unsqueeze(0)
+            # Handle different bias tensor dimensions
+            if w2_bias.dim() == 2:
+                # Shape: (num_experts, hidden_size) -> (1, num_experts, 1, hidden_size)
+                w2_bias = w2_bias.unsqueeze(0).unsqueeze(2)
+            elif w2_bias.dim() == 3:
+                # Shape: (1, num_experts, hidden_size) -> (1, num_experts, 1, hidden_size)
+                w2_bias = w2_bias.unsqueeze(2)
 
         # Convert to ttnn tensors and shard across devices
         # Each device gets num_experts_per_device experts
@@ -498,8 +503,28 @@ class ThroughputExpert:
         hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, hidden_size))
 
         # Expert indices: [1, 1, tokens_per_device, K]
+        # Convert to ROW_MAJOR first before typecast if needed (typecast requires ROW_MAJOR with padded dimension)
         topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, num_experts_per_tok))
+
+        # Ensure indices are uint16 (required for all_to_all_dispatch)
+        # Typecast after converting to ROW_MAJOR and only if not already uint16
+        if topk_indices_rm.dtype != ttnn.uint16:
+            # Pad the last dimension if needed for typecast
+            if num_experts_per_tok < 32:
+                # Pad to 32 for typecast requirement (padding = [[top, bottom], [left, right]] for each dimension)
+                padding_amount = 32 - num_experts_per_tok
+                padded_indices = ttnn.pad(
+                    topk_indices_rm, padding=[[0, 0], [0, 0], [0, 0], [0, padding_amount]], value=0.0
+                )
+                padded_indices = ttnn.typecast(padded_indices, dtype=ttnn.uint16)
+                # Slice back to original size
+                topk_indices_rm = ttnn.slice(
+                    padded_indices, [0, 0, 0, 0], [1, 1, tokens_per_device, num_experts_per_tok]
+                )
+                ttnn.deallocate(padded_indices)
+            else:
+                topk_indices_rm = ttnn.typecast(topk_indices_rm, dtype=ttnn.uint16)
 
         # ==========================================================================
         # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
@@ -785,7 +810,6 @@ class ThroughputExpert:
         # ==========================================================================
         # All-reduce across columns (cluster_axis=1) to aggregate expert outputs
         # This is needed when experts are sharded across multiple columns
-        logger.info(f"Mesh shape: {mesh_device.shape}, will all-reduce: {mesh_device.shape[1] > 1}")
         if mesh_device.shape[1] > 1:  # If we have multiple columns
             output_all_reduced = ttnn.all_reduce(
                 output,
