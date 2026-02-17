@@ -454,14 +454,104 @@ def extract_cb_info(
     return cb_info
 
 
+# Convention: CB-reference named compile-time args MUST start with this prefix
+# and have a value in range [0, 31]. Non-CB args MUST NOT use this prefix.
+CB_ARG_PREFIX = "cb_"
+
+
+def _is_cb_named_arg(name: str, value: Any) -> bool:
+    """Check if a named compile-time arg refers to a CB index.
+
+    Returns True if the name starts with CB_ARG_PREFIX and the value
+    is an integer in [0, 31] (valid CB slot range).
+    """
+    if not name.startswith(CB_ARG_PREFIX):
+        return False
+    if not isinstance(value, int) or value < 0 or value > 31:
+        logger.warning(
+            "Named arg '%s' starts with '%s' but has value %s outside CB range [0,31]. "
+            "If this is not a CB arg, rename it to not start with '%s'.",
+            name,
+            CB_ARG_PREFIX,
+            value,
+            CB_ARG_PREFIX,
+        )
+        return False
+    return True
+
+
 def extract_cb_names_from_kernel(kernel_desc: "ttnn.KernelDescriptor") -> Dict[str, int]:
     """Extract CB name -> index mapping from kernel's named compile-time args."""
     cb_names = {}
     if hasattr(kernel_desc, "named_compile_time_args"):
         for name, value in kernel_desc.named_compile_time_args:
-            if name.startswith("cb_"):
+            if _is_cb_named_arg(name, value):
                 cb_names[name] = value
     return cb_names
+
+
+# =============================================================================
+# CB State Save/Restore
+# =============================================================================
+
+
+def _save_cb_state(program_descriptors: List[Any]) -> List[dict]:
+    """Save mutable CB descriptor state before a fused build.
+
+    _build_fused_descriptor mutates buffer_index, total_size, and
+    core_ranges on the original CBDescriptors (can't deepcopy C++
+    bindings).  Save these fields so they can be restored after build.
+
+    Args:
+        program_descriptors: List of ProgramDescriptor objects whose
+            CB state should be saved.  Deduplicates by object id.
+    """
+    saved = []
+    seen_cb_ids: set = set()
+    for prog_desc in program_descriptors:
+        for cb_desc in prog_desc.cbs:
+            cb_id = id(cb_desc)
+            if cb_id in seen_cb_ids:
+                continue
+            seen_cb_ids.add(cb_id)
+            saved.append(
+                {
+                    "cb": cb_desc,
+                    "total_size": cb_desc.total_size,
+                    "core_ranges": cb_desc.core_ranges,
+                    "fmt": [(fmt, fmt.buffer_index) for fmt in cb_desc.format_descriptors],
+                }
+            )
+    return saved
+
+
+def _restore_cb_state(saved: List[dict]) -> None:
+    """Restore CB descriptor state saved by _save_cb_state."""
+    for entry in saved:
+        entry["cb"].total_size = entry["total_size"]
+        entry["cb"].core_ranges = entry["core_ranges"]
+        for fmt, orig_idx in entry["fmt"]:
+            fmt.buffer_index = orig_idx
+
+
+def _verify_cb_restore(saved: List[dict]) -> None:
+    """Verify that CB descriptor state was correctly restored.
+
+    Called after _restore_cb_state to catch any future code changes
+    that add mutation paths not covered by save/restore.
+
+    Raises:
+        RuntimeError: If any CB field doesn't match its saved value.
+    """
+    for entry in saved:
+        cb = entry["cb"]
+        if cb.total_size != entry["total_size"]:
+            raise RuntimeError(f"CB restore failed: total_size is {cb.total_size}, " f"expected {entry['total_size']}")
+        for fmt, expected_idx in entry["fmt"]:
+            if fmt.buffer_index != expected_idx:
+                raise RuntimeError(
+                    f"CB restore failed: buffer_index is {fmt.buffer_index}, " f"expected {expected_idx}"
+                )
 
 
 # =============================================================================
@@ -776,7 +866,7 @@ def _get_phantom_cb_indices(phase: PhaseInfo) -> Set[int]:
     phantom = set()
     for kernel_desc in phase.op_descriptor.descriptor.kernels:
         for name, value in kernel_desc.named_compile_time_args:
-            if name.startswith("cb_") and isinstance(value, int) and value not in real_cb_indices:
+            if _is_cb_named_arg(name, value) and value not in real_cb_indices:
                 phantom.add(value)
 
     return phantom
@@ -893,7 +983,7 @@ def _generate_fused_riscv0_source(
     sweep_cb_indices: List[int],
     barrier_config: Optional[BarrierConfig] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
-    op_semaphore_ids: Optional[List[int]] = None,
+    op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
 ) -> Optional[str]:
     """Generate fused RISCV_0 (reader/BRISC) kernel source with two-level barrier sync.
@@ -1166,11 +1256,13 @@ def _generate_fused_riscv0_source(
             lines.append("    // Reset residual tiles from ALL CBs")
             lines.append("    __cb_reset_to_empty();")
             lines.append("")
-            # Reset op semaphores to initial value (0) so next phase starts clean
-            if op_semaphore_ids:
-                lines.append("    // Reset op semaphores to 0 (as if each phase runs standalone)")
-                for sem_id in op_semaphore_ids:
-                    lines.append(f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = 0;")
+            # Reset op semaphores to their initial values so next phase starts clean
+            if op_semaphore_info:
+                lines.append("    // Reset op semaphores to initial values (as if each phase runs standalone)")
+                for sem_id, initial_val in op_semaphore_info:
+                    lines.append(
+                        f"    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore({sem_id})) = {initial_val};"
+                    )
                 lines.append("")
             # Rebind CB addresses before global barrier (so BRISC has correct state)
             rebind_lines = _generate_rebind_code(rebind_info.get(phase_idx, []), phase_idx, for_compute=False)
@@ -1644,11 +1736,29 @@ def _concatenate_runtime_args(
         kernel = pk.get(kernel_type)
         if kernel is None:
             continue
+
+        # First pass: compute max_args for this phase (must match _compute_runtime_arg_offsets)
+        phase_max_args = 0
+        for core in core_coords:
+            try:
+                args = kernel.runtime_args[core.x][core.y]
+                phase_max_args = max(phase_max_args, len(args))
+            except (IndexError, KeyError):
+                pass
+
+        # Second pass: append args + pad to phase_max_args so offsets align
         for col_idx, core in enumerate(core_coords):
             try:
                 args = kernel.runtime_args[core.x][core.y]
-                col_args[col_idx].extend(list(args))
+                arg_list = list(args)
+                col_args[col_idx].extend(arg_list)
+                pad_count = phase_max_args - len(arg_list)
+                if pad_count > 0:
+                    col_args[col_idx].extend([0] * pad_count)
             except (IndexError, KeyError):
+                # No args for this core — pad entire phase width
+                if phase_max_args > 0:
+                    col_args[col_idx].extend([0] * phase_max_args)
                 if core_range_override is not None:
                     logger.warning(
                         "Phase %d %s: no runtime args for core (%d,%d) "
@@ -1732,7 +1842,7 @@ def _merge_named_compile_time_args(
         for name, value in kernel.named_compile_time_args:
             actual_value = value
             # Remap CB-reference named args to pool slot indices
-            if remap is not None and name.startswith("cb_") and isinstance(value, int):
+            if remap is not None and _is_cb_named_arg(name, value):
                 actual_value = remap.get(value, value)
 
             if i == 0:
@@ -1788,11 +1898,19 @@ def _merge_defines(
     """Merge defines from all phases' kernels.
 
     Source-level defines (RMSNORM etc.) are resolved per-phase into source.
-    Common defines (REDUCE_OP etc.) are kept as-is. Others get phase-prefixed.
+    Common defines (REDUCE_OP etc.) must have consistent values across all
+    phases (they are referenced at include time and cannot change mid-kernel).
+    Others get phase-prefixed.
+
+    Raises:
+        ValueError: If a MUST_MATCH define has inconsistent values across phases.
     """
     merged = []
     seen_common = set()
+    # These defines are referenced by LLK headers at include time.
+    # They MUST have identical values across all fused phases.
     common_defines = {"REDUCE_OP", "REDUCE_DIM", "BCAST_LLKOP", "BCAST_DIM"}
+    common_values: Dict[str, Tuple[str, int]] = {}  # name -> (value, first_phase)
 
     for i, pk in enumerate(phase_kernels):
         kernel = pk.get(kernel_type)
@@ -1801,6 +1919,18 @@ def _merge_defines(
 
         for name, value in kernel.defines:
             if name in common_defines:
+                # Validate consistency across phases
+                if name in common_values:
+                    prev_val, prev_phase = common_values[name]
+                    if value != prev_val:
+                        raise ValueError(
+                            f"Define '{name}' has inconsistent values across phases: "
+                            f"phase {prev_phase} has '{prev_val}', phase {i} has '{value}'. "
+                            f"These defines (REDUCE_OP, REDUCE_DIM, BCAST_LLKOP, BCAST_DIM) "
+                            f"must have identical values in all fused phases."
+                        )
+                else:
+                    common_values[name] = (value, i)
                 if name not in seen_common:
                     merged.append((name, value))
                     seen_common.add(name)
@@ -2158,7 +2288,15 @@ class SequentialChainBuilder:
         if len(self.phases) == 1:
             return self.phases[0].op_descriptor
 
-        return self._build_fused_descriptor(device)
+        # Save CB state before build — _build_fused_descriptor mutates
+        # buffer_index, total_size, and core_ranges in-place on the
+        # original CBDescriptors (can't deepcopy C++ bindings).
+        prog_descs = [p.op_descriptor.descriptor for p in self.phases]
+        saved = _save_cb_state(prog_descs)
+        result = self._build_fused_descriptor(device)
+        _restore_cb_state(saved)
+        _verify_cb_restore(saved)
+        return result
 
     def _build_fused_descriptor(
         self,
@@ -2240,16 +2378,16 @@ class SequentialChainBuilder:
         # Sweep indices = all allocated CB pool slots
         sweep_cb_indices = sorted(pool.get_all_slot_indices())
 
-        # Collect all unique op semaphore IDs (0-15) used by any phase.
-        # These need to be reset to 0 between phases so each phase starts clean.
-        op_semaphore_ids: List[int] = []
+        # Collect all unique op semaphore (id, initial_value) pairs used by any phase.
+        # These are reset to their initial_value between phases so each phase starts clean.
+        op_semaphore_info: List[Tuple[int, int]] = []  # (sem_id, initial_value)
         seen_sem_ids_for_reset: Set[int] = set()
         for phase in self.phases:
             for sem in phase.op_descriptor.descriptor.semaphores:
                 if sem.id not in seen_sem_ids_for_reset:
-                    op_semaphore_ids.append(sem.id)
+                    op_semaphore_info.append((sem.id, sem.initial_value))
                     seen_sem_ids_for_reset.add(sem.id)
-        op_semaphore_ids.sort()
+        op_semaphore_info.sort(key=lambda x: x[0])
 
         fused_kernels = []
 
@@ -2287,7 +2425,7 @@ class SequentialChainBuilder:
                         sweep_cb_indices,
                         barrier_config=None,
                         rebind_info=rebind_info,
-                        op_semaphore_ids=op_semaphore_ids,
+                        op_semaphore_info=op_semaphore_info,
                         multi_barrier=multi_barrier,
                     )
                     # riscv0: compute_done, writer_done, then per-segment arrive+release
@@ -2339,7 +2477,7 @@ class SequentialChainBuilder:
                         sweep_cb_indices,
                         bc,
                         rebind_info,
-                        op_semaphore_ids=op_semaphore_ids,
+                        op_semaphore_info=op_semaphore_info,
                     )
                     barrier_addrs = [
                         bc.compute_done_addr,
@@ -2598,7 +2736,9 @@ class OpGraphBuilder:
             # core_ranges IN-PLACE on the original CBDescriptors (can't
             # deepcopy C++ bindings).  When paths share ops (e.g. stem),
             # the first path's mutations corrupt subsequent paths' cb_info.
-            saved_cb_state = self._save_cb_state(path)
+            # Collect all ProgramDescriptors in this path for save/restore
+            path_prog_descs = [op.descriptor for _, phases in path for op in phases]
+            saved_cb_state = _save_cb_state(path_prog_descs)
 
             fused = self._build_path(
                 device,
@@ -2614,8 +2754,8 @@ class OpGraphBuilder:
             fused_ops.append(fused)
 
             # Restore original state so the next path sees uncorrupted indices
-            self._restore_cb_state(saved_cb_state)
-            self._verify_cb_restore(saved_cb_state)
+            _restore_cb_state(saved_cb_state)
+            _verify_cb_restore(saved_cb_state)
 
         return fused_ops
 
@@ -2788,67 +2928,6 @@ class OpGraphBuilder:
         for x, y in coords:
             ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
         return ttnn.CoreRangeSet(ranges)
-
-    @staticmethod
-    def _save_cb_state(
-        path: List[Tuple[Any, List[OpDescriptor]]],
-    ) -> List[dict]:
-        """Save mutable CB descriptor state for all ops in a path.
-
-        _build_fused_descriptor mutates buffer_index, total_size, and
-        core_ranges on the original CBDescriptors (can't deepcopy C++
-        bindings).  Save these fields so they can be restored after
-        each path build to prevent cross-path corruption.
-        """
-        saved = []
-        seen_cb_ids: set = set()
-        for _, phases in path:
-            for phase in phases:
-                for cb_desc in phase.descriptor.cbs:
-                    cb_id = id(cb_desc)
-                    if cb_id in seen_cb_ids:
-                        continue
-                    seen_cb_ids.add(cb_id)
-                    saved.append(
-                        {
-                            "cb": cb_desc,
-                            "total_size": cb_desc.total_size,
-                            "core_ranges": cb_desc.core_ranges,
-                            "fmt": [(fmt, fmt.buffer_index) for fmt in cb_desc.format_descriptors],
-                        }
-                    )
-        return saved
-
-    @staticmethod
-    def _restore_cb_state(saved: List[dict]) -> None:
-        """Restore CB descriptor state saved by _save_cb_state."""
-        for entry in saved:
-            entry["cb"].total_size = entry["total_size"]
-            entry["cb"].core_ranges = entry["core_ranges"]
-            for fmt, orig_idx in entry["fmt"]:
-                fmt.buffer_index = orig_idx
-
-    @staticmethod
-    def _verify_cb_restore(saved: List[dict]) -> None:
-        """Verify that CB descriptor state was correctly restored.
-
-        Called after _restore_cb_state to catch any future code changes
-        that add mutation paths not covered by save/restore.
-
-        Raises:
-            RuntimeError: If any CB field doesn't match its saved value.
-        """
-        for entry in saved:
-            cb = entry["cb"]
-            if cb.total_size != entry["total_size"]:
-                raise RuntimeError(
-                    f"CB restore failed: total_size is {cb.total_size}, " f"expected {entry['total_size']}"
-                )
-            for fmt, expected_idx in entry["fmt"]:
-                if fmt.buffer_index != expected_idx:
-                    raise RuntimeError(
-                        f"CB restore failed: buffer_index is {fmt.buffer_index}, " f"expected {expected_idx}"
-                    )
 
     def _build_path(
         self,

@@ -2815,11 +2815,11 @@ class TestEffectiveLeafRange:
 
 
 class TestCBRestoreVerification:
-    """Tests for _verify_cb_restore."""
+    """Tests for _verify_cb_restore (module-level function)."""
 
     def test_verify_passes_on_correct_restore(self):
         """Verification should pass when state matches."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        _verify_cb_restore = _mock_sequential._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 4096
@@ -2828,11 +2828,11 @@ class TestCBRestoreVerification:
 
         saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
         # Should not raise
-        OpGraphBuilder._verify_cb_restore(saved)
+        _verify_cb_restore(saved)
 
     def test_verify_fails_on_total_size_mismatch(self):
         """Verification should fail when total_size doesn't match."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        _verify_cb_restore = _mock_sequential._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 8192  # Different from saved!
@@ -2841,11 +2841,11 @@ class TestCBRestoreVerification:
 
         saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
         with pytest.raises(RuntimeError, match="total_size"):
-            OpGraphBuilder._verify_cb_restore(saved)
+            _verify_cb_restore(saved)
 
     def test_verify_fails_on_buffer_index_mismatch(self):
         """Verification should fail when buffer_index doesn't match."""
-        OpGraphBuilder = _mock_sequential.OpGraphBuilder
+        _verify_cb_restore = _mock_sequential._verify_cb_restore
 
         cb = MagicMock()
         cb.total_size = 4096
@@ -2854,7 +2854,7 @@ class TestCBRestoreVerification:
 
         saved = [{"cb": cb, "total_size": 4096, "fmt": [(fmt, 5)]}]
         with pytest.raises(RuntimeError, match="buffer_index"):
-            OpGraphBuilder._verify_cb_restore(saved)
+            _verify_cb_restore(saved)
 
 
 class TestCompileTimePerformance:
@@ -2963,6 +2963,410 @@ class TestCompileTimePerformance:
                 f"Scaling appears super-linear: 2-phase={times[2]:.4f}s, "
                 f"8-phase={times[8]:.4f}s, ratio={ratio:.1f}x (limit: 10x)"
             )
+
+
+def _make_mock_core_ranges_multi(coords):
+    """Create a mock CoreRangeSet for multiple cores.
+
+    coords: list of (x, y) tuples.
+    """
+    ranges = []
+    for x, y in coords:
+        cr = MagicMock()
+        cr.start.x = x
+        cr.start.y = y
+        cr.end.x = x
+        cr.end.y = y
+        ranges.append(cr)
+    crs = MagicMock()
+    crs.ranges.return_value = ranges
+    return crs
+
+
+def _make_mock_runtime_args_view_multi(args_by_coord):
+    """Create a mock RuntimeArgsView with coordinate-based 2D indexing.
+
+    args_by_coord: dict mapping (x, y) -> list of int args.
+    rv[x][y] -> args list for that core.
+    """
+    view = MagicMock()
+
+    def get_col(x):
+        col = MagicMock()
+
+        def get_row(y):
+            key = (x, y)
+            if key in args_by_coord:
+                return args_by_coord[key]
+            raise KeyError(f"No args for core ({x},{y})")
+
+        col.__getitem__ = MagicMock(side_effect=get_row)
+        return col
+
+    view.__getitem__ = MagicMock(side_effect=get_col)
+    return view
+
+
+class _SimpleCoreCoord:
+    """Simple CoreCoord mock with proper .x/.y attributes."""
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __repr__(self):
+        return f"CoreCoord({self.x}, {self.y})"
+
+
+class TestRuntimeArgsPadding:
+    """Tests that _concatenate_runtime_args pads to match _compute_runtime_arg_offsets."""
+
+    def _patch_core_coord(self):
+        """Temporarily set ttnn.CoreCoord to return objects with proper .x/.y."""
+        original = _mock_sequential.ttnn.CoreCoord
+        _mock_sequential.ttnn.CoreCoord = _SimpleCoreCoord
+        return original
+
+    def _restore_core_coord(self, original):
+        _mock_sequential.ttnn.CoreCoord = original
+
+    def test_padding_matches_offsets(self):
+        """Core A has 5 args, core B has 3 — both should pad to 5 for phase offset alignment."""
+        original = self._patch_core_coord()
+        try:
+            _compute_runtime_arg_offsets = _mock_sequential._compute_runtime_arg_offsets
+            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+
+            coords = [(0, 0), (1, 0)]
+            core_ranges = _make_mock_core_ranges_multi(coords)
+
+            # Phase 0: core (0,0) has 5 args, core (1,0) has 3 args
+            kernel0 = MagicMock()
+            kernel0.runtime_args = _make_mock_runtime_args_view_multi(
+                {
+                    (0, 0): [1, 2, 3, 4, 5],
+                    (1, 0): [10, 20, 30],
+                }
+            )
+            kernel0.core_ranges = core_ranges
+
+            # Phase 1: both cores have 2 args
+            kernel1 = MagicMock()
+            kernel1.runtime_args = _make_mock_runtime_args_view_multi(
+                {
+                    (0, 0): [100, 200],
+                    (1, 0): [300, 400],
+                }
+            )
+            kernel1.core_ranges = core_ranges
+
+            phase_kernels = [{"reader": kernel0}, {"reader": kernel1}]
+
+            offsets = _compute_runtime_arg_offsets(phase_kernels, "reader")
+            result = _concatenate_runtime_args(phase_kernels, "reader")
+
+            assert offsets[0] == 0
+            assert offsets[1] == 5  # max_args for phase 0 = 5
+
+            # Find args for each core
+            result_dict = {(c.x, c.y): args for c, args in result}
+
+            # Core (0,0): [1,2,3,4,5] + [100,200] = 7 args
+            assert result_dict[(0, 0)] == [1, 2, 3, 4, 5, 100, 200]
+
+            # Core (1,0): [10,20,30] + 2 padding zeros + [300,400] = 7 args
+            assert result_dict[(1, 0)] == [10, 20, 30, 0, 0, 300, 400]
+
+            # Both cores have same total length
+            assert len(result_dict[(0, 0)]) == len(result_dict[(1, 0)])
+        finally:
+            self._restore_core_coord(original)
+
+    def test_missing_core_padded(self):
+        """A core with no args in a phase gets zero-padded to max width."""
+        original = self._patch_core_coord()
+        try:
+            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+
+            coords = [(0, 0), (1, 0)]
+            core_ranges = _make_mock_core_ranges_multi(coords)
+
+            # Phase 0: only core (0,0) has args
+            kernel0 = MagicMock()
+            kernel0.runtime_args = _make_mock_runtime_args_view_multi(
+                {
+                    (0, 0): [1, 2, 3],
+                }
+            )
+            kernel0.core_ranges = core_ranges
+
+            phase_kernels = [{"reader": kernel0}]
+
+            result = _concatenate_runtime_args(phase_kernels, "reader", core_range_override=core_ranges)
+
+            result_dict = {(c.x, c.y): args for c, args in result}
+
+            # Core (0,0) has [1,2,3]
+            assert result_dict[(0, 0)] == [1, 2, 3]
+
+            # Core (1,0) has [0,0,0] — padded to phase max
+            assert result_dict[(1, 0)] == [0, 0, 0]
+        finally:
+            self._restore_core_coord(original)
+
+    def test_uniform_args_no_padding(self):
+        """When all cores have same arg count, no padding is needed."""
+        original = self._patch_core_coord()
+        try:
+            _concatenate_runtime_args = _mock_sequential._concatenate_runtime_args
+
+            coords = [(0, 0), (1, 0)]
+            core_ranges = _make_mock_core_ranges_multi(coords)
+
+            kernel0 = MagicMock()
+            kernel0.runtime_args = _make_mock_runtime_args_view_multi(
+                {
+                    (0, 0): [1, 2, 3],
+                    (1, 0): [4, 5, 6],
+                }
+            )
+            kernel0.core_ranges = core_ranges
+
+            phase_kernels = [{"reader": kernel0}]
+            result = _concatenate_runtime_args(phase_kernels, "reader")
+
+            result_dict = {(c.x, c.y): args for c, args in result}
+            assert result_dict[(0, 0)] == [1, 2, 3]
+            assert result_dict[(1, 0)] == [4, 5, 6]
+        finally:
+            self._restore_core_coord(original)
+
+
+class TestCBArgNaming:
+    """Tests for _is_cb_named_arg and centralized CB naming convention."""
+
+    def test_valid_cb_arg_identified(self):
+        """Standard CB args with valid index are identified."""
+        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        assert _is_cb_named_arg("cb_in", 0) is True
+        assert _is_cb_named_arg("cb_out", 16) is True
+        assert _is_cb_named_arg("cb_scaler", 2) is True
+        assert _is_cb_named_arg("cb_gamma", 31) is True
+
+    def test_non_cb_prefix_excluded(self):
+        """Args without cb_ prefix are not identified as CB args."""
+        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        assert _is_cb_named_arg("blk", 4) is False
+        assert _is_cb_named_arg("Ht", 8) is False
+        assert _is_cb_named_arg("num_tiles", 16) is False
+
+    def test_out_of_range_value_excluded(self):
+        """CB-prefixed args with values outside [0,31] are excluded."""
+        _is_cb_named_arg = _mock_sequential._is_cb_named_arg
+        assert _is_cb_named_arg("cb_debug_flag", 100) is False
+        assert _is_cb_named_arg("cb_count", -1) is False
+        assert _is_cb_named_arg("cb_large", 32) is False
+        assert _is_cb_named_arg("cb_str", "not_an_int") is False
+
+
+class TestCBStateSaveRestore:
+    """Tests for module-level _save_cb_state / _restore_cb_state."""
+
+    def test_save_and_restore_round_trip(self):
+        """Save/restore should preserve original values after mutation."""
+        _save_cb_state = _mock_sequential._save_cb_state
+        _restore_cb_state = _mock_sequential._restore_cb_state
+        _verify_cb_restore = _mock_sequential._verify_cb_restore
+
+        # Create a mock ProgramDescriptor with one CB
+        fmt = MagicMock()
+        fmt.buffer_index = 5
+        cb = MagicMock()
+        cb.total_size = 4096
+        cb.format_descriptors = [fmt]
+        prog_desc = MagicMock()
+        prog_desc.cbs = [cb]
+
+        saved = _save_cb_state([prog_desc])
+
+        # Mutate (simulating what _build_fused_descriptor does)
+        cb.total_size = 8192
+        fmt.buffer_index = 10
+
+        # Restore
+        _restore_cb_state(saved)
+
+        assert cb.total_size == 4096
+        assert fmt.buffer_index == 5
+
+        # Verify should pass
+        _verify_cb_restore(saved)
+
+    def test_deduplicates_shared_cbs(self):
+        """When multiple phases share the same CB object, save it once."""
+        _save_cb_state = _mock_sequential._save_cb_state
+
+        fmt = MagicMock()
+        fmt.buffer_index = 3
+        cb = MagicMock()
+        cb.total_size = 2048
+        cb.format_descriptors = [fmt]
+
+        # Two program descriptors sharing the SAME CB object
+        prog1 = MagicMock()
+        prog1.cbs = [cb]
+        prog2 = MagicMock()
+        prog2.cbs = [cb]
+
+        saved = _save_cb_state([prog1, prog2])
+        # Only saved once despite appearing in two programs
+        assert len(saved) == 1
+
+
+class TestSemaphoreInitialValue:
+    """Tests that semaphore reset uses initial_value, not hardcoded 0."""
+
+    def test_nonzero_initial_value_in_source(self):
+        """Generated source should reset semaphore to initial_value=5, not 0."""
+        _generate_fused_riscv0_source = _mock_sequential._generate_fused_riscv0_source
+
+        # Create minimal mock data for a 2-phase chain
+        core_ranges = _make_mock_core_ranges()
+
+        # source_type must be the exact same object as ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        source_code_type = _mock_sequential.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+
+        kernel = MagicMock()
+        kernel.kernel_source = "void kernel_main() { /* reader */ }"
+        kernel.source_type = source_code_type
+        kernel.defines = []
+        kernel.core_ranges = core_ranges
+        kernel.named_compile_time_args = [("cb_in", 0)]
+
+        PhaseInfo = _mock_sequential.PhaseInfo
+        CBInfo = _mock_sequential.CBInfo
+
+        phase0 = PhaseInfo(
+            phase_idx=0,
+            op_descriptor=MagicMock(),
+            cb_info={0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())},
+        )
+        phase1 = PhaseInfo(
+            phase_idx=1,
+            op_descriptor=MagicMock(),
+            cb_info={0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())},
+        )
+        phases = [phase0, phase1]
+
+        phase_kernels = [{"reader": kernel}, {"reader": kernel}]
+
+        result = _generate_fused_riscv0_source(
+            phase_kernels,
+            "reader",
+            phases,
+            {0: 0, 1: 0},  # ct_offsets
+            [0],  # sweep_cb_indices
+            barrier_config=MagicMock(
+                compute_done_addr=1000,
+                writer_done_addr=2000,
+                global_arrive_addr=3000,
+                global_release_addr=4000,
+                num_barrier_cores=1,
+            ),
+            rebind_info={},
+            op_semaphore_info=[(3, 5)],  # sem_id=3, initial_value=5
+        )
+
+        assert result is not None
+        assert "get_semaphore(3)) = 5;" in result
+        assert "get_semaphore(3)) = 0;" not in result
+
+    def test_mixed_initial_values(self):
+        """Multiple semaphores with different initial values get their own values."""
+        _generate_fused_riscv0_source = _mock_sequential._generate_fused_riscv0_source
+
+        source_code_type = _mock_sequential.ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+
+        core_ranges = _make_mock_core_ranges()
+        kernel = MagicMock()
+        kernel.kernel_source = "void kernel_main() { /* reader */ }"
+        kernel.source_type = source_code_type
+        kernel.defines = []
+        kernel.core_ranges = core_ranges
+        kernel.named_compile_time_args = [("cb_in", 0)]
+
+        PhaseInfo = _mock_sequential.PhaseInfo
+        CBInfo = _mock_sequential.CBInfo
+
+        phase0 = PhaseInfo(0, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
+        phase1 = PhaseInfo(1, MagicMock(), {0: CBInfo(0, 2048, MagicMock(), 2048, core_ranges, False, MagicMock())})
+
+        phase_kernels = [{"reader": kernel}, {"reader": kernel}]
+
+        result = _generate_fused_riscv0_source(
+            phase_kernels,
+            "reader",
+            [phase0, phase1],
+            {0: 0, 1: 0},
+            [0],
+            barrier_config=MagicMock(
+                compute_done_addr=1000,
+                writer_done_addr=2000,
+                global_arrive_addr=3000,
+                global_release_addr=4000,
+                num_barrier_cores=1,
+            ),
+            rebind_info={},
+            op_semaphore_info=[(2, 0), (7, 3)],  # sem 2 -> 0, sem 7 -> 3
+        )
+
+        assert result is not None
+        assert "get_semaphore(2)) = 0;" in result
+        assert "get_semaphore(7)) = 3;" in result
+
+
+class TestMustMatchDefines:
+    """Tests for MUST_MATCH_DEFINES validation in _merge_defines."""
+
+    def test_matching_accepted(self):
+        """Same REDUCE_OP value across phases should be accepted."""
+        _merge_defines = _mock_sequential._merge_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
+            {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
+        ]
+
+        result = _merge_defines(phase_kernels, "compute")
+        names = [name for name, _ in result]
+        assert "REDUCE_OP" in names
+        assert "REDUCE_DIM" in names
+
+    def test_mismatched_rejected(self):
+        """Different REDUCE_OP values across phases should raise ValueError."""
+        _merge_defines = _mock_sequential._merge_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("REDUCE_OP", "0")])},
+            {"compute": MagicMock(defines=[("REDUCE_OP", "1")])},
+        ]
+
+        with pytest.raises(ValueError, match="REDUCE_OP.*inconsistent"):
+            _merge_defines(phase_kernels, "compute")
+
+    def test_present_in_one_phase_only(self):
+        """Define present in only one phase should not raise (no conflict)."""
+        _merge_defines = _mock_sequential._merge_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("BCAST_LLKOP", "2")])},
+            {"compute": MagicMock(defines=[])},
+        ]
+
+        result = _merge_defines(phase_kernels, "compute")
+        names = [name for name, _ in result]
+        assert "REDUCE_OP" in names
+        assert "BCAST_LLKOP" in names
 
 
 if __name__ == "__main__":
