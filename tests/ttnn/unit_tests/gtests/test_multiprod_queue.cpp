@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cstdint>
-#include <tt-metalium/event.hpp>
 #include <algorithm>
 #include <memory>
 #include <numeric>
