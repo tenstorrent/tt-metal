@@ -35,6 +35,7 @@ CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
 ITERATIONS=50
 OUTPUT_DIR="validation_output"
+OUTPUT_DIR_RETRY="validation_output_retry"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -128,6 +129,7 @@ echo ""
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR_RETRY"
 
 # Main testing loop
 for ((i=1; i<=ITERATIONS; i++)); do
@@ -174,6 +176,42 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
+
+    if grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
+        LOG_FILE_RETRY="$OUTPUT_DIR_RETRY/cluster_validation_iteration_${i}_retry.log"
+
+        {
+            echo "=========================================="
+            echo "Iteration: $i - retry due to retrained links"
+            echo "Timestamp: $(date)"
+            echo "=========================================="
+            echo ""
+
+            echo ""
+            echo "Running cluster validation..."
+            if [[ $DOCKER_IMAGE == "none" ]]; then
+                mpirun --host $HOSTS \
+                    --mca btl_tcp_if_exclude docker0,lo,tailscale0 \
+                    --tag-output \
+                    ./build/tools/scaleout/run_cluster_validation \
+                    --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
+                    --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
+                    --send-traffic \
+                    --num-iterations 10
+            else
+                ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                    --empty-entrypoint \
+                    --host "$HOSTS" \
+                    ./build/tools/scaleout/run_cluster_validation \
+                    --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
+                    --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
+                    --send-traffic \
+                    --num-iterations 10
+            fi
+            echo "Iteration $i retry completed at $(date)"
+            echo "=========================================="
+        } 2>&1 | tee "$LOG_FILE_RETRY"
+    fi
 done
 
 echo "All $ITERATIONS iterations completed!"

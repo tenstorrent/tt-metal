@@ -1424,6 +1424,171 @@ void reset_local_ethernet_links(
     }
 }
 
+#define ETH_MSG_STATUS_MASK 0xFFFF0000
+#define ETH_MSG_CALL 0xCA110000
+#define ETH_MSG_ACK 0xCEDE0000
+#define ETH_MSG_DONE 0xD0E50000
+#define ETH_MSG_TYPE_MASK 0x0000FFFF
+#define ETH_MSG_PORT_REINIT_MACPCS 0x0006
+#define ETH_MSG_PORT_ACTION 0x0009
+
+// 4 mailboxes starting from 0x7D000, each with 1 msg DW and 3 arg DWs
+// Mailbox IDs are HOST, RISC1, CMFW, OTHER
+#define ETH_HOST_MAILBOX_BASE_ADDR 0x7D000
+
+struct LinkToReset {
+    ChipId chip_id;
+    uint8_t chan;
+    std::string log_message;
+};
+
+struct EthMsg {
+    uint32_t msg_type;
+    std::vector<uint32_t> msg_args;
+    std::string log_message;
+};
+
+// Global ethernet messages
+const EthMsg ETH_MSG_PORT_DOWN = {
+    ETH_MSG_PORT_ACTION, {2, 0, 0}, "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
+
+const EthMsg ETH_MSG_PORT_REINIT = {
+    ETH_MSG_PORT_REINIT_MACPCS, {1, 2, 0}, "Sending ETH_MSG_PORT_REINIT_MACPCS to reinitialize MAC/PCS on all links"};
+
+bool eth_mailbox_ready(ChipId chip_id, uint8_t chan, bool wait_for_ready = true) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+    auto logical_coord = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+    auto coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        chip_id, tt_xy_pair(logical_coord.x, logical_coord.y), CoreType::ETH);
+
+    // Check mailbox is empty/ready
+    uint32_t msg_status = 0;
+    std::vector<uint32_t> msg_vec = {0};
+    do {
+        cluster.read_core(msg_vec, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), ETH_HOST_MAILBOX_BASE_ADDR);
+        msg_status = msg_vec[0] & ETH_MSG_STATUS_MASK;
+
+        if ((msg_status != ETH_MSG_DONE && msg_status != 0) && !wait_for_ready) {
+            return false;
+        }
+    } while (msg_status != ETH_MSG_DONE && msg_status != 0);
+
+    return true;
+}
+
+void send_eth_msg(
+    ChipId chip_id,
+    uint8_t chan,
+    uint32_t msg_type,
+    std::vector<uint32_t> args,
+    bool wait_for_ready = true,
+    bool wait_for_done = true) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+    auto logical_coord = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+    auto coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        chip_id, tt_xy_pair(logical_coord.x, logical_coord.y), CoreType::ETH);
+
+    // Check mailbox is empty/ready
+    if (!eth_mailbox_ready(chip_id, chan, wait_for_ready)) {
+        log_output_rank0(
+            "Ethernet mailbox not ready for new message on chip " + std::to_string(chip_id) + " channel " +
+            std::to_string(chan) + ". Skipping message send.");
+        return;
+    }
+
+    // Write to the mailbox -> write args first in case
+    // service_eth_msg picks up message call before args are fully populated
+    std::vector<uint32_t> msg_vec = {ETH_MSG_CALL | msg_type};
+    cluster.write_core(chip_id, coord, args, ETH_HOST_MAILBOX_BASE_ADDR + 4);
+    cluster.write_core(chip_id, coord, msg_vec, ETH_HOST_MAILBOX_BASE_ADDR);
+
+    // Wait for the message to be serviced if requested
+    if (wait_for_done) {
+        // Wait for mailbox to be ready again, indicating message has been processed
+        eth_mailbox_ready(chip_id, chan, true /*wait_for_ready*/);
+    }
+}
+
+void send_eth_msg_to_links(const std::vector<LinkToReset>& links, EthMsg eth_msg) {
+    log_warning(tt::LogDistributed, eth_msg.log_message);
+    for (const auto& link : links) {
+        log_warning(tt::LogDistributed, "  " + link.log_message);
+        send_eth_msg(link.chip_id, link.chan, eth_msg.msg_type, eth_msg.msg_args, true, false);
+    }
+
+    log_warning(tt::LogDistributed, "Waiting for all messages to be processed");
+    for (const auto& link : links) {
+        eth_mailbox_ready(link.chip_id, link.chan, true);
+    }
+}
+
+void reset_local_ethernet_links_blackhole(
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+    std::vector<LinkToReset> links_to_reset;
+
+    // Collect all links to reset
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        if (physical_system_descriptor.get_host_name_for_asic(asic_id) != physical_system_descriptor.my_host_name()) {
+            continue;
+        }
+        auto src_chip_id = asic_id_to_chip_id[*asic_id];
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) !=
+                physical_system_descriptor.my_host_name()) {
+                continue;
+            }
+            auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto dst_chan = eth_connection.dst_chan;
+
+                if (reset_cores[*dst_asic_id].contains(dst_chan)) {
+                    TT_FATAL(
+                        reset_cores[*asic_id].contains(src_chan),
+                        "Expected channel {} on ASIC {} to already be reset",
+                        src_chan,
+                        *asic_id);
+                    continue;
+                }
+                reset_cores[*asic_id].insert(src_chan);
+                reset_cores[*dst_asic_id].insert(dst_chan);
+                const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+                const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
+
+                std::string src_log_message = "Host: " + asic_descriptor.host_name + " Link " +
+                                              std::to_string(src_chan) +
+                                              " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+                                              " Location: " + std::to_string(*asic_descriptor.asic_location);
+                std::string dst_log_message = "Host: " + dst_asic_descriptor.host_name + " Link " +
+                                              std::to_string(dst_chan) +
+                                              " Tray: " + std::to_string(*dst_asic_descriptor.tray_id) +
+                                              " Location: " + std::to_string(*dst_asic_descriptor.asic_location);
+
+                links_to_reset.push_back({src_chip_id, src_chan, src_log_message});
+                links_to_reset.push_back({dst_chip_id, dst_chan, dst_log_message});
+            }
+        }
+    }
+
+    // Send port down messages to all links
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+
+    // Send port reinit messages to all links
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
+}
+
 void get_cross_node_ethernet_links_to_reset(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_metal::AsicTopology& asic_topology,
@@ -1523,11 +1688,53 @@ void reset_cross_node_ethernet_links(
     distributed_context.barrier();
 }
 
+void reset_cross_node_ethernet_links_blackhole(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
+    const std::vector<ResetPair>& cross_node_reset_pairs) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    std::vector<LinkToReset> links_to_reset;
+
+    // Collect all cross-node links to reset
+    for (size_t i = 0; i < cross_node_links_to_reset.size(); i++) {
+        const auto& link = cross_node_links_to_reset[i];
+        auto chip_id = asic_id_to_chip_id[*link.asic_id];
+        const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
+
+        std::string log_message = "Cross-Node Link on Host: " + asic_descriptor.host_name +
+                                  " Link: " + std::to_string(link.channel) +
+                                  " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+                                  " Location: " + std::to_string(*asic_descriptor.asic_location);
+
+        links_to_reset.push_back({chip_id, link.channel, log_message});
+    }
+
+    // Send port down messages to all links
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+
+    // Barrier to ensure all hosts have brought their links down before reinitialization
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
+
+    // Send port reinit messages to all links
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
+
+    // Final barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding
+    distributed_context.barrier();
+}
+
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
-    reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    // reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    reset_local_ethernet_links_blackhole(physical_system_descriptor, asic_topology);
     // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
     // This prevents race conditions where one host might start cross-node reset while another is still
     // resetting local links.
@@ -1538,7 +1745,11 @@ void reset_ethernet_links(
     std::vector<ResetPair> cross_node_reset_pairs;
     get_cross_node_ethernet_links_to_reset(
         physical_system_descriptor, asic_topology, cross_node_links_to_reset, cross_node_reset_pairs);
-    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset, cross_node_reset_pairs);
+    // reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset, cross_node_reset_pairs);
+    reset_cross_node_ethernet_links_blackhole(
+        physical_system_descriptor, cross_node_links_to_reset, cross_node_reset_pairs);
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 }
 
 // ============================================================================
