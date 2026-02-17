@@ -20,8 +20,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 4]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -41,8 +39,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 4]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -54,16 +50,14 @@ groupings {
     { id: 0 asic_location: ASIC_LOCATION_1 },
     { id: 1 asic_location: ASIC_LOCATION_2 },
     { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
+    { id: 3 asic_location: ASIC_LOCATION_5 },
+    { id: 4 asic_location: ASIC_LOCATION_4 },
     { id: 5 asic_location: ASIC_LOCATION_6 },
     { id: 6 asic_location: ASIC_LOCATION_7 },
     { id: 7 asic_location: ASIC_LOCATION_8 }
   ]
   row_major_mesh {
     dims: [2, 4]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -83,8 +77,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 4]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -100,8 +92,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 2]
-    dim_types: [RING, RING]
-    num_connections: 2
   }
 }
 
@@ -126,8 +116,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 1]
-    dim_types: [LINE, LINE]
-    num_connections: 8
   }
 }
 
@@ -141,8 +129,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 2]
-    dim_types: [LINE, LINE]
-    num_connections: 4
   }
 }
 
@@ -156,8 +142,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 2]
-    dim_types: [LINE, LINE]
-    num_connections: 4
   }
 }
 
@@ -183,8 +167,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [4, 1]
-    dim_types: [RING, RING]
-    num_connections: 4
   }
 }
 
@@ -200,7 +182,5 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 2]
-    dim_types: [RING, RING]
-    num_connections: 4
   }
 }
