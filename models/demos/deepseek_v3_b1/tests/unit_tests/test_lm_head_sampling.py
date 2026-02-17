@@ -457,6 +457,8 @@ def test_lm_head_sampling_fused_argmax_single_device(
     ttnn.synchronize_device(submesh)
 
     output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
+    logger.info(f"Output index: {output_index_torch}")
+    logger.info(f"Expected index: {torch_expected_idx}")
     assert torch.equal(
         output_index_torch, torch_expected_idx
     ), f"Fused argmax index mismatch. expected={torch_expected_idx.item()}, got={output_index_torch.item()}"

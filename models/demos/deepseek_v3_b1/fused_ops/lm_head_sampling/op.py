@@ -373,7 +373,6 @@ class LMHeadSampling:
                     ("argmax_stage2_expected_remote_incs", 0),
                     ("argmax_stage2_local_slot_offset", 0),
                     ("argmax_mesh_local_send_slot_offset", 0),
-                    ("argmax_sender_idx", 0),
                     ("argmax_gather_cb", argmax_gather_cb if enable_argmax else 0),
                     ("argmax_indices_cb", argmax_indices_cb if enable_argmax else 0),
                 ]

@@ -124,6 +124,7 @@ struct Sampling {
             best_index = 0xFFFFFFFF;
             for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
                 const uint16_t score = scores_ptr[i];
+                uint32_t index = indices_ptr[i];
                 if (bfloat16_greater(score, best_score)) {
                     best_score = score;
                     best_index = indices_ptr[i];
@@ -261,7 +262,6 @@ struct Sampling {
 
             // Phase 1: per-core local argmax and delivery to the final core.
             if constexpr (IsActiveCore) {
-                DPRINT << "Reader argmax: impl" << ENDL();
                 auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.scores_addr);
                 auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
                 uint16_t best_score = NEG_INF_BFLOAT16;
@@ -344,7 +344,6 @@ struct Sampling {
 #elif defined(COMPILE_FOR_BRISC)
             invalidate_l1_cache();
             if constexpr (IsFinalCore && IsMeshSenderCore) {
-                DPRINT << "Reader argmax: impl: IsFinalCore && IsMeshSenderCore" << ENDL();
                 auto local_ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
