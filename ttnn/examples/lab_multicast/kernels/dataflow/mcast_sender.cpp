@@ -61,13 +61,20 @@ void kernel_main() {
         uint32_t cb_read_addr = get_read_ptr(cb_id_in0);
 
         // Multicast tile to all receiver cores
+        // Observe that we are using the CB read pointer as the destination address.
+        // The CB read pointer is the same as the CB write pointer that was just used above.
+        // Since the receivers update their CB write pointers in sync (relative to the multicast semaphore updates)
+        // with the sender's CB write pointer, CB write pointers on the sender and all receivers will
+        // contain the same address when the multicast operation occurs.
+        // This synchronized approach avoids the need for receiver cores to pass their local addresses to the sender;
+        // the sender can simply use its own CB pointer as the destination address.
         uint64_t tile_mcast_addr =
             get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, cb_read_addr);
         noc_async_write_multicast(cb_read_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
 
         // Flush is needed to ensure the multicast command is sent before the semaphore set command
         // because the commands go into separate command buffer FIFOs on some architectures and may not be
-        // sent in order they are issued.
+        // sent in the order they are issued.
         // Note that this doesn't wait on the multicast command to complete, only ensures it is sent.
         noc_async_writes_flushed();
 
