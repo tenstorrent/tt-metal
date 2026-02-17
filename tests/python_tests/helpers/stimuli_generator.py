@@ -9,6 +9,15 @@ from .format_config import (
     DataFormat,
 )
 from .llk_params import format_dict
+from .tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    FACE_C_DIM,
+    MAX_FACE_R_DIM,
+    MAX_NUM_FACES,
+    get_tile_params,
+    validate_tile_dimensions,
+)
 
 
 def flatten_list(sublists):
@@ -37,10 +46,10 @@ def generate_random_face(
     const_value=1,
     const_face=False,
     sfpu=True,
-    face_r_dim=16,
+    face_r_dim=MAX_FACE_R_DIM,
     negative_values=False,
 ):
-    size = face_r_dim * 16  # face_r_dim rows × 16 columns
+    size = face_r_dim * FACE_C_DIM  # face_r_dim rows × FACE_C_DIM columns
 
     if stimuli_format in [DataFormat.MxFp8R, DataFormat.MxFp8P]:
         # MXFP8 optimized stimuli generation
@@ -150,6 +159,7 @@ def calculate_tile_and_face_counts(
 ) -> tuple[int, int, int]:
     """
     Calculate tile counts and faces to generate based on input dimensions and face configuration.
+    This is the ORIGINAL function that always uses 32x32 tiles.
 
     Args:
         input_dimensions_A: [height, width] in elements for input A
@@ -161,102 +171,146 @@ def calculate_tile_and_face_counts(
         tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
     """
     assert (
-        face_r_dim == 16 or face_r_dim == input_dimensions_A[0]
+        face_r_dim == MAX_FACE_R_DIM or face_r_dim == input_dimensions_A[0]
     ), f"Invalid face_r_dim, got {face_r_dim}"
 
     # Handle partial faces
-    if face_r_dim < 16:
+    if face_r_dim < MAX_FACE_R_DIM:
         # Partial face case: generate exactly num_faces worth of data
         tile_cnt_A, tile_cnt_B = 1, 1
         faces_to_generate = num_faces  # Generate exactly the right number of faces
     else:
-        # Full tile case
-        tile_cnt_A = input_dimensions_A[0] // 32 * input_dimensions_A[1] // 32
-        tile_cnt_B = input_dimensions_B[0] // 32 * input_dimensions_B[1] // 32
-        faces_to_generate = 4
+        # Full tile case - always use 32x32 tiles
+        tile_cnt_A = (
+            input_dimensions_A[0]
+            // DEFAULT_TILE_R_DIM
+            * input_dimensions_A[1]
+            // DEFAULT_TILE_C_DIM
+        )
+        tile_cnt_B = (
+            input_dimensions_B[0]
+            // DEFAULT_TILE_R_DIM
+            * input_dimensions_B[1]
+            // DEFAULT_TILE_C_DIM
+        )
+        faces_to_generate = MAX_NUM_FACES
 
     return tile_cnt_A, tile_cnt_B, faces_to_generate
 
 
-def generate_stimuli(
-    stimuli_format_A=DataFormat.Float16_b,
-    input_dimensions_A=[32, 32],
-    stimuli_format_B=DataFormat.Float16_b,
-    input_dimensions_B=[32, 32],
-    const_face=False,
-    const_value_A=1,
-    const_value_B=1,
-    sfpu=True,
-    face_r_dim=16,  # Add face_r_dim parameter
-    num_faces=4,  # Add num_faces parameter for partial faces
-    negative_values=False,
-    output_format=None,  # Optional output format to consider for range constraints (MX)
-    sequential_A=False,  # Generate sequential values (1, 2, 3, ...) for src_A
-    sequential_B=False,  # Generate sequential values (1, 2, 3, ...) for src_B
-):
+def calculate_tile_and_face_counts_w_tile_dimensions(
+    input_dimensions_A: list,
+    input_dimensions_B: list,
+    face_r_dim: int,
+    num_faces: int,
+    tile_dimensions: list,
+) -> tuple[int, int, int]:
     """
-    Generate stimuli data for testing.
+    Calculate tile counts and faces to generate for variable tile dimensions (dense mode).
 
     Args:
-        sequential_A: If True, generates sequential values starting from 1 for src_A.
-                     src_A will have values 1, 2, 3, ...
-        sequential_B: If True, generates sequential values starting from 1 for src_B.
-                     src_B will have values 1, 2, 3, ...
-        output_format: Optional output format to consider for range constraints (MX formats)
+        input_dimensions_A: [height, width] in elements for input A
+        input_dimensions_B: [height, width] in elements for input B
+        face_r_dim: Number of rows in a face (1, 2, 4, 8, or 16)
+        num_faces: Number of faces per tile (1, 2, or 4)
+        tile_dimensions: [rows, cols] for tile size
+
+    Returns:
+        tuple: (tile_cnt_A, tile_cnt_B, faces_to_generate)
     """
+    validate_tile_dimensions(tile_dimensions)
+    tile_r_dim, tile_c_dim = tile_dimensions
 
-    tile_cnt_A, tile_cnt_B, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions_A, input_dimensions_B, face_r_dim, num_faces
+    # Calculate tile counts based on actual tile dimensions
+    tile_cnt_A = (input_dimensions_A[0] // tile_r_dim) * (
+        input_dimensions_A[1] // tile_c_dim
     )
-
-    dtype_A = (
-        format_dict[stimuli_format_A]
-        if stimuli_format_A != DataFormat.Bfp8_b
-        else torch.bfloat16
+    tile_cnt_B = (input_dimensions_B[0] // tile_r_dim) * (
+        input_dimensions_B[1] // tile_c_dim
     )
-    dtype_B = (
-        format_dict[stimuli_format_B]
-        if stimuli_format_B != DataFormat.Bfp8_b
-        else torch.bfloat16
-    )
+    # Always generate all faces to fill the tile densely
+    faces_to_generate = num_faces
 
-    num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
-    num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
+    return tile_cnt_A, tile_cnt_B, faces_to_generate
 
-    # Generate src_A
-    if sequential_A:
-        srcA_tensor = torch.arange(1, num_elements_A + 1, dtype=dtype_A)
-    else:
-        srcA = []
-        for _ in range(faces_to_generate * tile_cnt_A):
-            face_a = generate_random_face(
-                stimuli_format=stimuli_format_A,
-                const_value=const_value_A,
-                const_face=const_face,
-                sfpu=sfpu,
-                face_r_dim=face_r_dim,
-                negative_values=negative_values,
-            )
-            srcA.extend(face_a.tolist())
-        srcA_tensor = torch.tensor(srcA[:num_elements_A], dtype=dtype_A)
 
-    # Generate src_B
-    if sequential_B:
-        srcB_tensor = torch.arange(1, num_elements_B + 1, dtype=dtype_B)
-    else:
-        srcB = []
-        for _ in range(faces_to_generate * tile_cnt_B):
-            face_b = generate_random_face(
-                stimuli_format=stimuli_format_B,
-                const_value=const_value_B,
-                const_face=const_face,
-                sfpu=sfpu,
-                face_r_dim=face_r_dim,
-                negative_values=negative_values,
-            )
-            srcB.extend(face_b.tolist())
-        srcB_tensor = torch.tensor(srcB[:num_elements_B], dtype=dtype_B)
+def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
+    """Get the torch dtype for a given data format."""
+    if stimuli_format == DataFormat.Bfp8_b:
+        return torch.bfloat16
+    return format_dict[stimuli_format]
 
+
+def _generate_source_tensor(
+    stimuli_format: DataFormat,
+    num_elements: int,
+    faces_to_generate: int,
+    tile_cnt: int,
+    face_r_dim: int,
+    const_face: bool,
+    const_value: float,
+    sfpu: bool,
+    negative_values: bool,
+    sequential: bool,
+) -> torch.Tensor:
+    """
+    Generate a source tensor with random or sequential values.
+
+    Args:
+        stimuli_format: Data format for the tensor
+        num_elements: Total number of elements to generate
+        faces_to_generate: Number of faces per tile
+        tile_cnt: Number of tiles
+        face_r_dim: Number of rows per face
+        const_face: Whether to use constant values
+        const_value: Constant value to use if const_face is True
+        sfpu: Whether to add SFPU-friendly offset
+        negative_values: Whether to include negative values
+        sequential: If True, generate sequential values (1, 2, 3, ...)
+
+    Returns:
+        torch.Tensor with generated values
+    """
+    dtype = _get_dtype_for_format(stimuli_format)
+
+    if sequential:
+        return torch.arange(1, num_elements + 1, dtype=dtype)
+
+    src = []
+    for _ in range(faces_to_generate * tile_cnt):
+        face = generate_random_face(
+            stimuli_format=stimuli_format,
+            const_value=const_value,
+            const_face=const_face,
+            sfpu=sfpu,
+            face_r_dim=face_r_dim,
+            negative_values=negative_values,
+        )
+        src.extend(face.tolist())
+
+    return torch.tensor(src[:num_elements], dtype=dtype)
+
+
+def _clamp_mx_tensors(
+    srcA_tensor: torch.Tensor,
+    srcB_tensor: torch.Tensor,
+    stimuli_format_A: DataFormat,
+    stimuli_format_B: DataFormat,
+    output_format: DataFormat = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Clamp tensors for MX format compatibility.
+
+    Args:
+        srcA_tensor: Source A tensor
+        srcB_tensor: Source B tensor
+        stimuli_format_A: Data format for source A
+        stimuli_format_B: Data format for source B
+        output_format: Optional output format for range constraints
+
+    Returns:
+        tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
+    """
     # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
     if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
         if stimuli_format_A != stimuli_format_B:
@@ -282,5 +336,182 @@ def generate_stimuli(
         srcB_tensor = torch.clamp(
             srcB_tensor, -MXFP8_E5M2_MAX_NORMAL, MXFP8_E5M2_MAX_NORMAL
         )
+
+    return srcA_tensor, srcB_tensor
+
+
+def generate_stimuli(
+    stimuli_format_A=DataFormat.Float16_b,
+    input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+    stimuli_format_B=DataFormat.Float16_b,
+    input_dimensions_B=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+    const_face=False,
+    const_value_A=1,
+    const_value_B=1,
+    sfpu=True,
+    face_r_dim=MAX_FACE_R_DIM,
+    num_faces=MAX_NUM_FACES,
+    negative_values=False,
+    output_format=None,
+    sequential_A=False,
+    sequential_B=False,
+):
+    """
+    Generate stimuli data for testing - ORIGINAL backward-compatible version.
+
+    This is the original generate_stimuli that ALWAYS uses 32x32 tiles.
+    - For full faces (face_r_dim == 16): generates 4 faces per tile (1024 elements)
+    - For partial faces (face_r_dim < 16): generates num_faces worth of data
+
+    Args:
+        stimuli_format_A: Data format for source A
+        input_dimensions_A: [height, width] for source A
+        stimuli_format_B: Data format for source B
+        input_dimensions_B: [height, width] for source B
+        const_face: Whether to use constant values
+        const_value_A: Constant value for source A
+        const_value_B: Constant value for source B
+        sfpu: Whether to add SFPU-friendly offset
+        face_r_dim: Number of rows per face (typically 16 for full faces)
+        num_faces: Number of faces for partial face case
+        negative_values: Whether to include negative values
+        output_format: Optional output format for MX range constraints
+        sequential_A: If True, generate sequential values for src_A
+        sequential_B: If True, generate sequential values for src_B
+
+    Returns:
+        tuple: (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B)
+    """
+    tile_cnt_A, tile_cnt_B, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions_A, input_dimensions_B, face_r_dim, num_faces
+    )
+
+    num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
+    num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
+
+    srcA_tensor = _generate_source_tensor(
+        stimuli_format=stimuli_format_A,
+        num_elements=num_elements_A,
+        faces_to_generate=faces_to_generate,
+        tile_cnt=tile_cnt_A,
+        face_r_dim=face_r_dim,
+        const_face=const_face,
+        const_value=const_value_A,
+        sfpu=sfpu,
+        negative_values=negative_values,
+        sequential=sequential_A,
+    )
+
+    srcB_tensor = _generate_source_tensor(
+        stimuli_format=stimuli_format_B,
+        num_elements=num_elements_B,
+        faces_to_generate=faces_to_generate,
+        tile_cnt=tile_cnt_B,
+        face_r_dim=face_r_dim,
+        const_face=const_face,
+        const_value=const_value_B,
+        sfpu=sfpu,
+        negative_values=negative_values,
+        sequential=sequential_B,
+    )
+
+    srcA_tensor, srcB_tensor = _clamp_mx_tensors(
+        srcA_tensor, srcB_tensor, stimuli_format_A, stimuli_format_B, output_format
+    )
+
+    return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B
+
+
+def generate_stimuli_w_tile_dimensions(
+    stimuli_format_A=DataFormat.Float16_b,
+    input_dimensions_A=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+    stimuli_format_B=DataFormat.Float16_b,
+    input_dimensions_B=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+    const_face=False,
+    const_value_A=1,
+    const_value_B=1,
+    sfpu=True,
+    tile_dimensions=None,
+    negative_values=False,
+    output_format=None,
+    sequential_A=False,
+    sequential_B=False,
+):
+    """
+    Generate stimuli data for testing - DENSE mode for variable tile dimensions.
+
+    This variant generates DENSE data that fills all elements based on tile_dimensions.
+    For example: tile_dimensions=[8, 32] with input_dimensions=[64, 64] produces:
+    - tile_cnt = (64//8) * (64//32) = 8 * 2 = 16 tiles
+    - Each tile is 8×32 = 256 elements
+    - Total = 64×64 = 4096 elements (all filled)
+
+    Args:
+        stimuli_format_A: Data format for source A
+        input_dimensions_A: [height, width] for source A
+        stimuli_format_B: Data format for source B
+        input_dimensions_B: [height, width] for source B
+        const_face: Whether to use constant values
+        const_value_A: Constant value for source A
+        const_value_B: Constant value for source B
+        sfpu: Whether to add SFPU-friendly offset
+        tile_dimensions: [rows, cols] for tile size (e.g., [8, 32], [32, 16])
+        negative_values: Whether to include negative values
+        output_format: Optional output format for MX range constraints
+        sequential_A: If True, generate sequential values for src_A
+        sequential_B: If True, generate sequential values for src_B
+
+    Returns:
+        tuple: (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B)
+    """
+    # Compute face_r_dim and num_faces from tile_dimensions
+    if tile_dimensions is None:
+        tile_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
+
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    tile_cnt_A, tile_cnt_B, faces_to_generate = (
+        calculate_tile_and_face_counts_w_tile_dimensions(
+            input_dimensions_A,
+            input_dimensions_B,
+            face_r_dim,
+            num_faces,
+            tile_dimensions,
+        )
+    )
+
+    num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
+    num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
+
+    srcA_tensor = _generate_source_tensor(
+        stimuli_format=stimuli_format_A,
+        num_elements=num_elements_A,
+        faces_to_generate=faces_to_generate,
+        tile_cnt=tile_cnt_A,
+        face_r_dim=face_r_dim,
+        const_face=const_face,
+        const_value=const_value_A,
+        sfpu=sfpu,
+        negative_values=negative_values,
+        sequential=sequential_A,
+    )
+
+    srcB_tensor = _generate_source_tensor(
+        stimuli_format=stimuli_format_B,
+        num_elements=num_elements_B,
+        faces_to_generate=faces_to_generate,
+        tile_cnt=tile_cnt_B,
+        face_r_dim=face_r_dim,
+        const_face=const_face,
+        const_value=const_value_B,
+        sfpu=sfpu,
+        negative_values=negative_values,
+        sequential=sequential_B,
+    )
+
+    srcA_tensor, srcB_tensor = _clamp_mx_tensors(
+        srcA_tensor, srcB_tensor, stimuli_format_A, stimuli_format_B, output_format
+    )
 
     return srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B

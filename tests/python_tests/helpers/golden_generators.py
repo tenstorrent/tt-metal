@@ -1006,10 +1006,8 @@ class DataCopyGolden:
         # Handle partial faces (face_r_dim < 16) as single tiles
         if face_r_dim < 16:
             tile_cnt = 1
-            tile_size = height * width
         else:
             tile_cnt = (height // 32) * (width // 32)
-            tile_size = height * width // tile_cnt
 
         # Calculate elements based on variable face dimensions
         # Each face is face_r_dim × 16, and we have num_faces
@@ -1018,6 +1016,19 @@ class DataCopyGolden:
         # Convert input to tensor if needed
         if not isinstance(operand1, torch.Tensor):
             operand1 = torch.tensor(operand1, dtype=torch_format)
+
+        # Determine actual tile size from input:
+        # If input is sized for partial faces (num_faces < 4), use elements_per_tile_needed
+        # Otherwise use full tile size
+        total_elements = operand1.numel()
+        expected_partial_size = tile_cnt * elements_per_tile_needed
+
+        if total_elements == expected_partial_size:
+            # Input is already sized for num_faces, just pass through
+            tile_size = elements_per_tile_needed
+        else:
+            # Input has full tiles, need to select elements
+            tile_size = height * width // tile_cnt if tile_cnt > 0 else height * width
 
         reshaped = operand1.view(tile_cnt, tile_size)
         selected = reshaped[:, :elements_per_tile_needed]

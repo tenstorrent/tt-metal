@@ -258,6 +258,7 @@ class TestConfig:
             f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
             f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+            "-I../common",
             f"-I{TestConfig.HEADER_DIR}",
             f"-Ihw_specific/{TestConfig.ARCH.value}",
             f"-Ihw_specific/{TestConfig.ARCH.value}/metal_sfpu",
