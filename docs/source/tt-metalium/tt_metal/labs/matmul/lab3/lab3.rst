@@ -633,6 +633,12 @@ Perform the following steps to complete the exercise:
 
 #. Terminate the program (using ``Ctrl + C``) and execute the ``tt-smi -r`` command from the command line to reset the device.
    It is always a good idea to reset the device after a hang to ensure that the device is in a known good state.
+   Note that using ``Ctrl + C`` may not always terminate a hung program. In that case, do the following:
+
+   * Press ``Ctrl + Z`` to suspend the program.
+   * Use ``kill %%`` (or ``kill %1``, depending on the job ID) to terminate the program.
+   * Run ``tt-smi -r`` to reset the device.
+
 
 #. Rerun the program with Watcher enabled with a period of 10 seconds:
 
@@ -863,12 +869,14 @@ slabs of tiles of ``A`` and ``B`` differently depending on their role:
 
 * **Left column A-source cores** (red background) with coordinates ``(0, y)``, where ``y > 0``:
   Each of these cores:
+
   * Reads slabs of ``A`` it needs for its own computation from DRAM and multicasts them across their row ``y``.
   * Receives slabs of ``B`` from the topmost core in its column via multicast.
 
 
 * **Top row B-source cores** (blue background) with coordinates ``(x, 0)``, where ``x > 0``:
   Each of these cores:
+  
   * Reads slabs of ``B`` it needs for its own computation from DRAM and multicasts them down their column ``x``.
   * Receives slabs of ``A`` from the leftmost core in its row via multicast.
 
