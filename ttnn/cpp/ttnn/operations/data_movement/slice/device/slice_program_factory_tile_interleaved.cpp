@@ -57,31 +57,6 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // reader
-    uint32_t src_tile_stride = num_cores;
-    std::vector<uint32_t> reader_compile_time_args = {0 /*tt::CBIndex::c_0*/, src_tile_stride, rank, single_tile_size};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-
-    KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_reader_unary_tile_interleaved.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    // writer
-    uint32_t out_tile_stride = num_cores;
-    std::vector<uint32_t> writer_compile_time_args = {0 /*tt::CBIndex::c_0*/, out_tile_stride, rank, single_tile_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_writer_unary_tile_interleaved.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
-
-    // RUNTIME ARGS
     uint32_t out_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
     uint32_t out_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t src_tiles_per_row = input.padded_shape()[-1] / TILE_WIDTH;
@@ -121,6 +96,37 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
             src_coord_inc[i] = src_coord_inc[i] % out_shape_tiles[i];
         }
     }
+    uint32_t src_tile_id_inc_tot = 0;
+    for (int32_t i = 0; i < rank; i++) {
+        src_tile_id_inc_tot += src_coord_inc[i] * src_tile_id_acc[i];
+    }
+
+    // reader
+    uint32_t src_tile_stride = num_cores;
+    std::vector<uint32_t> reader_compile_time_args = {
+        0 /*tt::CBIndex::c_0*/, src_tile_stride, rank, single_tile_size, src_tile_id_inc_tot};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+
+    KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_reader_unary_tile_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // writer
+    uint32_t out_tile_stride = num_cores;
+    std::vector<uint32_t> writer_compile_time_args = {0 /*tt::CBIndex::c_0*/, out_tile_stride, rank, single_tile_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+
+    KernelHandle unary_writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_writer_unary_tile_interleaved.cpp",
+        all_cores,
+        WriterDataMovementConfig(writer_compile_time_args));
+
+    // RUNTIME ARGS
 
     auto coord_to_tile_id = [](const std::vector<uint32_t>& coord,
                                const std::vector<uint32_t>& shape,

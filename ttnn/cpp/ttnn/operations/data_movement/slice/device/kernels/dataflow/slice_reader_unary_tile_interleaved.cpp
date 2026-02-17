@@ -10,6 +10,7 @@ void kernel_main() {
     constexpr uint32_t tile_id_stride = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
     constexpr uint32_t size_tile = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_id_inc = get_compile_time_arg_val(4);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t src_tile_id_start = get_arg_val<uint32_t>(1);
@@ -20,7 +21,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* tile_id_acc = tile_coord + num_dims;
     tt_l1_ptr uint32_t* coord_inc = tile_id_acc + num_dims;
 
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr auto src_args = TensorAccessorArgs<5>();
     const auto s = TensorAccessor(src_args, src_addr, size_tile);
 
     uint32_t src_tile_id = src_tile_id_start;
@@ -32,10 +33,11 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
 
-        for (int32_t j = num_dims - 1; j >= 0; j--) {
+        src_tile_id += tile_id_inc;
+        for (int32_t j = num_dims - 1; j >= 1; j--) {
             tile_coord[j] += coord_inc[j];
-            src_tile_id += coord_inc[j] * tile_id_acc[j];
-            if (j > 0 && tile_coord[j] >= shape_tiles[j]) {
+            // src_tile_id += coord_inc[j] * tile_id_acc[j];
+            if (tile_coord[j] >= shape_tiles[j]) {
                 tile_coord[j] -= shape_tiles[j];
                 tile_coord[j - 1] += 1;
                 src_tile_id += tile_id_acc[j - 1] - shape_tiles[j] * tile_id_acc[j];
