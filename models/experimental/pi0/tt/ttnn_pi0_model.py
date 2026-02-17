@@ -21,6 +21,7 @@ Optimizations:
     3. Single transfer at the end for final actions
 """
 
+import math
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -79,11 +80,6 @@ class PI0ModelTTNN:
             action_horizon=config.action_horizon,
         )
 
-        pad_steps = ((self.denoise_config.num_steps + 31) // 32) * 32
-
-        # Create timestep indices on device using ttnn.arange
-        self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
-
         x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -95,6 +91,12 @@ class PI0ModelTTNN:
 
         # Initialize components
         self._init_components()
+
+        # OPTIMIZATION: Pre-compute sinusoidal timestep embeddings for all denoising steps.
+        # The 10 timesteps [1.0, 0.9, ..., 0.1] are deterministic, so their sinusoidal
+        # embeddings can be computed once on host and stored on device. This replaces
+        # ~150 TTNN ops (15 ops x 10 steps) with 10 slice ops during inference.
+        self._precompute_timestep_embeddings()
 
     def _init_components(self):
         """Initialize all model components."""
@@ -133,6 +135,42 @@ class PI0ModelTTNN:
             embed_language_fn=self.backbone.embed_language_tokens,
         )
 
+    def _precompute_timestep_embeddings(self):
+        """Pre-compute sinusoidal timestep embeddings for all denoising steps.
+
+        Computes on host (one-time cost) and transfers to device as a single
+        tensor of shape (num_steps, expert_width). During inference, each step
+        just slices one row instead of running ~15 TTNN ops.
+        """
+        num_steps = self.denoise_config.num_steps
+        expert_width = self.config.expert_config.width
+        half_dim = expert_width // 2
+
+        # Timestep values: [1.0, 0.9, 0.8, ..., 0.1] (excludes final 0.0)
+        timestep_values = torch.tensor([1.0 - i / num_steps for i in range(num_steps)], dtype=torch.float32)
+
+        # Sinusoidal embedding (matches create_sinusoidal_pos_embedding logic)
+        min_period, max_period = 4e-3, 4.0
+        fraction = torch.linspace(0.0, 1.0, half_dim, dtype=torch.float64)
+        period = min_period * (max_period / min_period) ** fraction
+        scaling_factor = (1.0 / period) * 2 * math.pi
+        sin_input = scaling_factor[None, :] * timestep_values[:, None].to(torch.float64)
+        all_time_embs = torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=1).to(
+            torch.float32
+        )  # (num_steps, expert_width)
+
+        # Transfer to device as a single tensor
+        self.cached_time_embs = ttnn.from_torch(
+            all_time_embs,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Pre-compute dt values (Python floats, used for Euler step scaling)
+        self._dt_values = [-(1.0 / num_steps)] * num_steps
+
     def embed_prefix(
         self,
         images: List[torch.Tensor],
@@ -160,6 +198,7 @@ class PI0ModelTTNN:
         noisy_actions: ttnn.Tensor,
         timestep: ttnn.Tensor,
         state_emb: Optional[ttnn.Tensor] = None,
+        time_emb: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
         """
         Embed suffix (state + noisy actions + timestep) using TTNN.
@@ -167,14 +206,18 @@ class PI0ModelTTNN:
         Args:
             state: Robot state (TTNN)
             noisy_actions: Noisy actions (TTNN)
-            timestep: Diffusion timestep (TTNN)
+            timestep: Diffusion timestep (TTNN). Unused when time_emb is provided.
             state_emb: Optional pre-computed state embedding to avoid
                 redundant projection when state is constant across steps.
+            time_emb: Optional pre-computed timestep embedding to avoid
+                redundant sinusoidal computation when timesteps are known.
 
         Returns:
             Tuple of (embeddings, padding_mask, attention_mask, adarms_cond)
         """
-        return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep, state_emb=state_emb)
+        return self.suffix_embedding.embed_suffix(
+            state, noisy_actions, timestep, state_emb=state_emb, time_emb=time_emb
+        )
 
     def sample_actions(
         self,
@@ -218,26 +261,8 @@ class PI0ModelTTNN:
         if self.enable_profiler_flush:
             ttnn.ReadDeviceProfiler(self.device)
 
-        # Get timesteps using pure Python list (for control flow on host)
         num_steps = self.denoise_config.num_steps
-        # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
-        timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
-
-        # OPTIMIZATION: Pre-compute all timestep tensors on device using TTNN
-        pad_steps = ((num_steps + 31) // 32) * 32
-
-        # Create timestep indices on device using ttnn.arange
-        timestep_indices = self.timestep_indices
-        timestep_indices = ttnn.to_layout(timestep_indices, ttnn.TILE_LAYOUT)
-
-        # Convert to timestep values: 1.0 - index / num_steps
-        timestep_values = ttnn.multiply(timestep_indices, -1.0 / num_steps)
-        timesteps_ttnn = ttnn.add(timestep_values, 1.0)
-        timesteps_ttnn = ttnn.reshape(timesteps_ttnn, (1, pad_steps))
-
-        # Cleanup
-        ttnn.deallocate(timestep_indices)
-        ttnn.deallocate(timestep_values)
+        expert_width = self.config.expert_config.width
 
         # Step 3: Sample initial noise (small tensor - host generation is fine)
         # Note: Using torch.randn ensures PCC compatibility with PyTorch reference
@@ -249,18 +274,15 @@ class PI0ModelTTNN:
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
-            t = timesteps[i]  # Already Python float
-            t_next = timesteps[i + 1]
-            dt = t_next - t  # Negative since we go from 1.0 to 0.0
+            dt = self._dt_values[i]
 
-            # OPTIMIZATION: Slice timestep from pre-computed tensor (no transfer per step!)
-            t_tensor = ttnn.slice(timesteps_ttnn, [0, i], [batch_size, i + 1])
-            t_tensor = ttnn.reshape(t_tensor, (batch_size,))
+            # OPTIMIZATION: Slice pre-computed sinusoidal timestep embedding (1 slice vs ~15 ops)
+            time_emb = ttnn.slice(self.cached_time_embs, [i, 0], [i + 1, expert_width])
 
             # Embed suffix (x_t_ttnn already on device - no transfer!)
-            # Pass cached state embedding to avoid redundant state_proj linear per step
+            # Pass cached state embedding and pre-computed time embedding
             suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(
-                state_ttnn, x_t_ttnn, t_tensor, state_emb=cached_state_emb
+                state_ttnn, x_t_ttnn, None, state_emb=cached_state_emb, time_emb=time_emb
             )
 
             # Forward through expert with cached prefix KV
