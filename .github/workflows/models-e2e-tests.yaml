@@ -1,6 +1,9 @@
 name: "Models End-to-End Pipeline"
 
 on:
+  push:
+    branches:
+      - models-ci/model_unit_pipeline  # Temporary: force first run so workflow appears in GHA UI
   workflow_dispatch:
     inputs:
       model:
