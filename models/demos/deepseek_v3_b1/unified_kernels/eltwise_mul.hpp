@@ -78,6 +78,8 @@ struct EltwiseMul {
         uint32_t num_tiles_,
         uint32_t cb_in0_wait_,
         uint32_t cb_in0_wait_tiles_,
+        uint32_t cb_in1_wait_,
+        uint32_t cb_in1_wait_tiles_,
         uint32_t cb_scalar_,
         uint32_t fp32_dest_acc_en_ = 0,
         uint32_t enable_scalar_ = 1>
@@ -88,6 +90,8 @@ struct EltwiseMul {
         static constexpr uint32_t num_tiles = num_tiles_;
         static constexpr uint32_t cb_in0_wait = cb_in0_wait_;
         static constexpr uint32_t cb_in0_wait_tiles = cb_in0_wait_tiles_;
+        static constexpr uint32_t cb_in1_wait = cb_in1_wait_;
+        static constexpr uint32_t cb_in1_wait_tiles = cb_in1_wait_tiles_;
         static constexpr uint32_t cb_scalar = cb_scalar_;
         static constexpr bool fp32_dest_acc_en = fp32_dest_acc_en_ == 1;
         static constexpr bool enable_scalar = enable_scalar_ == 1;
@@ -145,9 +149,9 @@ struct EltwiseMul {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
             // Wait for both inputs
-            // cb_in0_wait allows waiting on a different CB (for CB aliasing)
+            // cb_in0_wait/cb_in1_wait allow waiting on different CBs (for CB aliasing)
             cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-            cb_wait_front(CTArgs::cb_in1, num_tiles);
+            cb_wait_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
 
             // Reserve output space
             cb_reserve_back(CTArgs::cb_out, num_tiles);
@@ -201,7 +205,7 @@ struct EltwiseMul {
             // Pop from cb_in0_wait (not cb_in0) since that's where tiles were pushed
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-                cb_pop_front(CTArgs::cb_in1, num_tiles);
+                cb_pop_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
                 if constexpr (CTArgs::enable_scalar) {
                     cb_pop_front(CTArgs::cb_scalar, 1);
                 }
