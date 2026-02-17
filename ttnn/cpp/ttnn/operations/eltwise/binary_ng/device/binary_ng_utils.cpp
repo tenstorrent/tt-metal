@@ -92,7 +92,17 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
         case KernelName::ReaderScalarBcastNg:
             return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::ReaderRmUnifiedNg: return fmt::format(dataflow, root_ng, "reader_interleaved_rm_unified.cpp");
+        case KernelName::ReaderRmNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_rm_no_bcast.cpp");
+        case KernelName::ReaderRmRowBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_bcast.cpp");
+        case KernelName::ReaderRmColBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_col_bcast.cpp");
+        case KernelName::ReaderRmRowBColABcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_col_mixed_bcast.cpp");
+        case KernelName::ReaderRmScalarBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_bcast.cpp");
+        case KernelName::ReaderRmScalarOpNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_op.cpp");
         case KernelName::WriterRmNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_rm_no_bcast.cpp");
         case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
