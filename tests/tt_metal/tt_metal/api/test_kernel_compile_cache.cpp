@@ -13,7 +13,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "detail/kernel_cache.hpp"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/hal.hpp>
@@ -35,7 +34,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
 
     for (const auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
-        detail::ClearKernelCache();
+        jit_build_cache_clear();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
         DataMovementConfig config_riscv_1 = {.processor = DataMovementProcessor::RISCV_1};
