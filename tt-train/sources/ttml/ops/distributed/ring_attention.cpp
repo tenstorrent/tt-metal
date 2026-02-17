@@ -36,6 +36,9 @@ autograd::TensorPtr ring_attention_sdpa(
     auto& pctx = autograd::ctx().get_parallelism_context();
     std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
     const uint32_t cp_size = pctx.get_cp_size();
+    auto mesh_device_ptr = autograd::ctx().get_device_ptr();
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     // If CP not enabled, fall back to regular SDPA
     if (!cp_axis.has_value() || cp_size <= 1) {
@@ -233,7 +236,10 @@ autograd::TensorPtr ring_attention_sdpa(
                                       v_current,  // V at end of forward (position v1)
                                       ring_size,
                                       cp_axis_value,
-                                      mask_type]() mutable {
+                                      mask_type,
+                                      mesh_device_ptr]() mutable {
+        tt::tt_metal::distributed::Synchronize(
+            mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
         // Get gradient w.r.t. output
         const auto& grad_output = out->get_grad();
         const auto& query_tensor = query->get_value();
@@ -376,7 +382,6 @@ autograd::TensorPtr ring_attention_sdpa(
         query->add_grad(grad_Q_accum);
         key->add_grad(grad_K_accum);
         value->add_grad(grad_V_accum);
-        // fmt::print("grad_Q_accum: {}\n", ttml::core::to_xtensor(grad_Q_accum, ttml::core::IdentityComposer{})[0]);
     };
 
     auto links = autograd::get_links(query, key, value);

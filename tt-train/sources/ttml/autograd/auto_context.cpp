@@ -131,28 +131,67 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
 
 ParallelismContext::ParallelismContext(
     const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
-    TT_FATAL(
-        !(config.enable_ddp && config.enable_cp),
-        "DP and CP cannot be enabled simultaneously. This combination is not currently supported.");
+    const uint32_t num_enabled_parallelisms =
+        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp;
+    const auto& mesh_shape = mesh_device.shape();
 
-    TT_FATAL(
-        (uint32_t)config.enable_ddp + (uint32_t)config.enable_cp + (uint32_t)config.enable_tp ==
-            mesh_device.shape().dims(),
-        "Mesh shape dimensions must be greater than the number of parallelization axes");
+    // Check if this is a line topology (one dimension is 1, e.g., [1, 32] or [32, 1])
+    // For line topologies, only one parallelism type can be enabled
+    const bool is_line_topology = mesh_shape.is_line_topology();
 
-    // Axis assignment order: DP -> CP -> TP
-    uint32_t axis = 0;
-    if (config.enable_ddp) {
-        m_ddp_axis = axis++;
-        m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
-    }
-    if (config.enable_cp) {
-        m_cp_axis = axis++;
-        m_cp_size = mesh_device.shape()[m_cp_axis.value()];
-    }
-    if (config.enable_tp) {
-        m_tp_axis = axis++;
-        m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
+    if (is_line_topology) {
+        TT_FATAL(
+            num_enabled_parallelisms <= 1,
+            "For line mesh topology (shape {}), exactly one parallelism type must be enabled. "
+            "Got: ddp={}, tp={}, cp={}",
+            mesh_shape,
+            config.enable_ddp,
+            config.enable_tp,
+            config.enable_cp);
+
+        // Find the non-trivial axis (the one with size > 1)
+        uint32_t active_axis = 0;
+        for (uint32_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1) {
+                active_axis = i;
+                break;
+            }
+        }
+
+        // Assign the single enabled parallelism to the active axis
+        if (config.enable_ddp) {
+            m_ddp_axis = active_axis;
+            m_num_ddp_devices = mesh_shape[active_axis];
+        } else if (config.enable_cp) {
+            m_cp_axis = active_axis;
+            m_cp_size = mesh_shape[active_axis];
+        } else if (config.enable_tp) {
+            m_tp_axis = active_axis;
+            m_num_tp_devices = mesh_shape[active_axis];
+        }
+    } else {
+        // For 2D meshes (both dimensions > 1), number of parallelisms must match mesh dimensions
+        TT_FATAL(
+            num_enabled_parallelisms == mesh_shape.dims(),
+            "For 2D mesh (shape {}), number of enabled parallelization axes ({}) must equal mesh dimensions ({}).",
+            mesh_shape,
+            num_enabled_parallelisms,
+            mesh_shape.dims());
+
+        // Axis assignment order: DP -> CP -> TP
+        uint32_t axis = 0;
+        if (config.enable_ddp) {
+            m_ddp_axis = axis++;
+            m_num_ddp_devices = mesh_shape[m_ddp_axis.value()];
+        }
+        if (config.enable_cp) {
+            m_cp_axis = axis++;
+            m_cp_size = mesh_shape[m_cp_axis.value()];
+        }
+        if (config.enable_tp) {
+            m_tp_axis = axis++;
+            m_num_tp_devices = mesh_shape[m_tp_axis.value()];
+        }
     }
 }
 

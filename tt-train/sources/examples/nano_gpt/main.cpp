@@ -196,7 +196,6 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
     if (mesh_shape_node) {
-        assert(mesh_shape_node.size() == 2);
         const std::vector<uint32_t> mesh_shape = mesh_shape_node.as<std::vector<uint32_t>>();
         config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape);
     }
@@ -321,7 +320,11 @@ int main(int argc, char **argv) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
     }
 
-    auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+    // Calculate total number of devices from mesh shape (handles both 1D and 2D meshes)
+    uint32_t num_devices = 1;
+    for (uint32_t i = 0; i < device_config.mesh_shape.dims(); ++i) {
+        num_devices *= device_config.mesh_shape[i];
+    }
     // enable fabric config for 3-tier architecture, tp, ddp, cp
     if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
         device_config.enable_cp) {
@@ -513,6 +516,9 @@ int main(int argc, char **argv) {
                             data_mapper.get()));
                     tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
+                    if (pctx.is_ddp_enabled()) {
+                        targets_placements[pctx.get_ddp_axis().value()] = ttnn::distributed::MeshMapperConfig::Shard{0};
+                    }
                     if (pctx.is_cp_enabled()) {
                         targets_placements[pctx.get_cp_axis().value()] = ttnn::distributed::MeshMapperConfig::Shard{1};
                     }

@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "linear.hpp"
 #include "modules/dropout_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/rotary_embedding.hpp"
 #include "ops/distributed/ring_attention.hpp"
 #include "ops/multi_head_utils.hpp"
@@ -19,46 +20,65 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     auto tp_size = pctx.get_tp_size();
+    bool use_tp = pctx.is_tp_enabled();
 
-    if (m_num_heads % tp_size != 0) {
-        throw std::runtime_error(fmt::format(
-            "Number of heads must be divisible by the TP size. Number of heads = {}, TP size = {}",
-            m_num_heads,
-            tp_size));
-    }
+    if (use_tp) {
+        if (m_num_heads % tp_size != 0) {
+            throw std::runtime_error(fmt::format(
+                "Number of heads must be divisible by the TP size. Number of heads = {}, TP size = {}",
+                m_num_heads,
+                tp_size));
+        }
 
-    if (m_num_groups % tp_size != 0) {
-        throw std::runtime_error(fmt::format(
-            "Number of groups must be divisible by the TP size. Number of groups = {}, TP size = {}",
+        if (m_num_groups % tp_size != 0) {
+            throw std::runtime_error(fmt::format(
+                "Number of groups must be divisible by the TP size. Number of groups = {}, TP size = {}",
+                m_num_groups,
+                tp_size));
+        }
+
+        m_num_local_heads = m_num_heads / tp_size;
+        m_num_local_groups = m_num_groups / tp_size;
+
+        // Calculate concat_kv_dim and ensure it's divisible by tp_size
+        // concat_kv_dim = 2 * num_groups * head_dim, where head_dim = embedding_dim / num_heads
+        auto head_dim = m_embedding_dim / m_num_heads;
+        auto concat_kv_dim = 2U * m_num_groups * head_dim;
+
+        TT_FATAL(
+            concat_kv_dim % tp_size == 0 && m_embedding_dim % tp_size == 0,
+            "KV concatenated dimension ({}) must be divisible by the TP size ({}). "
+            "This requires: 2 * num_groups ({}) * head_dim ({}) % tp_size == 0",
+            concat_kv_dim,
+            tp_size,
             m_num_groups,
-            tp_size));
+            head_dim);
+    } else {
+        m_num_local_heads = m_num_heads;
+        m_num_local_groups = m_num_groups;
     }
 
-    m_num_local_heads = m_num_heads / tp_size;
-    m_num_local_groups = m_num_groups / tp_size;
-
-    // Calculate concat_kv_dim and ensure it's divisible by tp_size
-    // concat_kv_dim = 2 * num_groups * head_dim, where head_dim = embedding_dim / num_heads
+    // Calculate concat_kv_dim for both TP and non-TP cases
     auto head_dim = m_embedding_dim / m_num_heads;
     auto concat_kv_dim = 2U * m_num_groups * head_dim;
 
-    TT_FATAL(
-        concat_kv_dim % tp_size == 0 && m_embedding_dim % tp_size == 0,
-        "KV concatenated dimension ({}) must be divisible by the TP size ({}). "
-        "This requires: 2 * num_groups ({}) * head_dim ({}) % tp_size == 0",
-        concat_kv_dim,
-        tp_size,
-        m_num_groups,
-        head_dim);
-
     // create layers
-    m_q_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
-    m_kv_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, concat_kv_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
+    if (use_tp) {
+        m_q_linear = std::make_shared<ColumnParallelLinear>(
+            m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
+        m_kv_linear = std::make_shared<ColumnParallelLinear>(
+            m_embedding_dim, concat_kv_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
+        m_out_linear = std::make_shared<RowParallelLinear>(
+            m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
+    } else {
+        m_q_linear =
+            std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, /* has_bias */ false);
+        m_kv_linear =
+            std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, concat_kv_dim, /* has_bias */ false);
+        m_out_linear =
+            std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, /* has_bias */ false);
+    }
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob, /* use_per_device_seed */ false);
-    m_out_linear = std::make_shared<RowParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
     // register modules

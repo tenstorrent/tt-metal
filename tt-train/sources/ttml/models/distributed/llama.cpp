@@ -10,6 +10,7 @@
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/llama_block.hpp"
 #include "modules/embedding_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
@@ -43,7 +44,9 @@ namespace {
 }  // namespace
 
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
-    auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    auto tp_axis = pctx.get_tp_axis();
+    bool use_tp = pctx.is_tp_enabled();
 
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
@@ -111,8 +114,12 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
             embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
-    fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-        embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+    if (use_tp) {
+        fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+            embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
+    } else {
+        fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* has_bias */ false);
+    }
 
     create_name("llama");
     register_module(tok_emb, "tok_emb");
