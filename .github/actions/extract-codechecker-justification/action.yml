@@ -1,0 +1,59 @@
+name: "Extract CodeChecker justification"
+description: "Generate Clang SA justification report (bug path + code) from CodeChecker JSON and print to terminal"
+
+inputs:
+  json-path:
+    description: "Path to CodeChecker JSON report (e.g. codechecker_issues.json), relative to workspace"
+    required: true
+  output-path:
+    description: "Path to write the full justification report (e.g. /tmp/all_justification.txt)"
+    required: true
+  repo-root:
+    description: "Repository root for resolving source paths (default workspace)"
+    required: false
+    default: "."
+  strip-prefix:
+    description: "Prefix to strip from report paths (e.g. /work/)"
+    required: false
+    default: "/work/"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Extract CodeChecker justification
+      shell: bash
+      run: |
+        set -euo pipefail
+        JSON_PATH="${{ inputs.json-path }}"
+        OUT_PATH="${{ inputs.output-path }}"
+        REPO_ROOT="${{ inputs.repo-root }}"
+        STRIP_PREFIX="${{ inputs.strip-prefix }}"
+
+        # Resolve repo root when default (.) so script sees absolute path for consistent path resolution
+        if [ "$REPO_ROOT" = "." ]; then
+          REPO_ROOT="$GITHUB_WORKSPACE"
+        fi
+
+        echo "--- Extract CodeChecker justification ---"
+        echo "JSON:      $JSON_PATH"
+        echo "Output:    $OUT_PATH"
+        echo "Repo root: $REPO_ROOT"
+        echo "Strip:     $STRIP_PREFIX"
+        echo ""
+
+        python3 "$GITHUB_ACTION_PATH/extract_codechecker_findings.py" \
+          "$JSON_PATH" \
+          -o "$OUT_PATH" \
+          --repo-root "$REPO_ROOT" \
+          --strip-prefix "$STRIP_PREFIX" \
+        || true
+
+        if [ -f "$OUT_PATH" ]; then
+          LINES=$(wc -l < "$OUT_PATH")
+          echo ""
+          echo "--- Justification report ($LINES lines) ---"
+          cat "$OUT_PATH"
+          echo "--- end justification ---"
+        else
+          echo "No justification file produced (no reports or script failed)."
+        fi
