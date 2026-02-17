@@ -12,7 +12,7 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 // ---- MeshWorkloadFactoryConcept methods ----
 
@@ -285,4 +285,4 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

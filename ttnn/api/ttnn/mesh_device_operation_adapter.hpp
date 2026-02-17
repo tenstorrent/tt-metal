@@ -420,38 +420,18 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
-        // Three-tier hash logic:
+        [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
+        // Two-tier hash logic:
         //  1. If the operation provides a custom compute_program_hash, use it.
-        //  2. If all factories are ProgramDescriptorFactoryConcept, auto-derive
-        //     from create_descriptor + compute_program_descriptor_hash.
-        //  3. Otherwise, fall back to the default hash of type + attrs + tensor_args.
+        //  2. Otherwise, fall back to the default hash of type + attrs + tensor_args.
+        //
+        // Note: descriptor-based operations that have dynamic fields in their
+        // attributes (e.g. random seeds) MUST provide compute_program_hash to
+        // exclude those fields and avoid cache misses on every call.
         tt::stl::hash::hash_t hash;
 
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
-        } else if constexpr ([]<typename... Ts>(std::variant<Ts...>*) {
-                                 // Auto-hash only if ALL factories are pure descriptor-based
-                                 // AND none require prepare_resources (which changes the
-                                 // create_descriptor signature and involves side effects).
-                                 return (ProgramDescriptorFactoryConcept<Ts> && ...) &&
-                                        ((!requires(
-                                             const operation_attributes_t& a,
-                                             const tensor_args_t& t,
-                                             tensor_return_value_t& r) { Ts::prepare_resources(a, t, r); }) &&
-                                         ...);
-                             }(static_cast<program_factory_t*>(nullptr))) {
-            // All factories are descriptor-based with simple 3-arg create_descriptor:
-            // auto-hash from the descriptor's compile-time parts (kernel sources, core
-            // ranges, compile-time args, defines, CB configs).  Runtime args excluded.
-            auto factory = DeviceOperation::select_program_factory(attrs, tensor_args);
-            hash = std::visit(
-                [&](auto& f) -> tt::stl::hash::hash_t {
-                    using F = std::decay_t<decltype(f)>;
-                    auto desc = F::create_descriptor(attrs, tensor_args, tensor_return_value);
-                    return tt::tt_metal::compute_program_descriptor_hash(desc);
-                },
-                factory);
         } else {
             hash = tt::stl::hash::hash_objects_with_default_seed(
                 tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);

@@ -16,7 +16,7 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descriptor(
     const MatmulParams& operation_attributes,
@@ -524,4 +524,4 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

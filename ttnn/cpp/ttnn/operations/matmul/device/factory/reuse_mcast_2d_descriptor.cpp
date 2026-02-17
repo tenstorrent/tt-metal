@@ -26,7 +26,7 @@ using ttnn::operations::unary::UnaryWithParam;
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor(
     const MatmulParams& operation_attributes,
@@ -577,10 +577,10 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
         }
     }
 
-    NOC in0_noc = detail::preferred_noc_for_dram_write(device->arch());
-    NOC in1_noc = detail::preferred_noc_for_dram_read(device->arch());
-    NOC in0_split_noc = detail::preferred_noc_for_dram_read(device->arch());
-    NOC in1_split_noc = detail::preferred_noc_for_dram_write(device->arch());
+    NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     // -- Kernels --
     // in0 sender kernel(s)
@@ -1171,4 +1171,4 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail

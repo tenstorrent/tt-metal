@@ -23,7 +23,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace ttnn::prim::matmul_new_detail {
+namespace ttnn::prim::matmul_detail {
 
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
@@ -165,8 +165,8 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    NOC in0_noc = detail::preferred_noc_for_dram_write(device->arch());
-    NOC in1_noc = detail::preferred_noc_for_dram_read(device->arch());
+    NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -880,4 +880,4 @@ tt::tt_metal::ProgramDescriptor DRAMShardedDescriptorFactory::create_descriptor(
     return desc;
 }
 
-}  // namespace ttnn::prim::matmul_new_detail
+}  // namespace ttnn::prim::matmul_detail
