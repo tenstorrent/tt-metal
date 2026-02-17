@@ -65,7 +65,7 @@ struct CBDescriptor {
 
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
-    uint32_t address_offset = 0;  // byte offset from buffer base address
+    uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 

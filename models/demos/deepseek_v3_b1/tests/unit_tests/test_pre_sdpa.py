@@ -716,42 +716,6 @@ def test_pre_sdpa(
         )
     ttnn.synchronize_device(submesh)
 
-    # ========================================================================
-    # Verify CB overlap addresses
-    # CB descriptors backed by kv_cache_tensor or sdpa_out_interm_tensor should
-    # have their L1 addresses within the backing tensor's buffer region.
-    # We verify this by checking that buffer_address() values are valid and
-    # that the expected overlap relationships hold.
-    # ========================================================================
-    kv_cache_per_device = ttnn.get_device_tensors(kv_cache_tensor)
-    sdpa_out_interm_per_device = ttnn.get_device_tensors(sdpa_out_interm_tensor)
-
-    for device_idx in range(mesh_rows * mesh_cols):
-        kv_addr = kv_cache_per_device[device_idx].buffer_address()
-        sdpa_interm_addr = sdpa_out_interm_per_device[device_idx].buffer_address()
-
-        logger.info(f"Device {device_idx}: kv_cache buffer_address = {kv_addr} (0x{kv_addr:X})")
-        logger.info(
-            f"Device {device_idx}: sdpa_out_interm buffer_address = {sdpa_interm_addr} (0x{sdpa_interm_addr:X})"
-        )
-
-        # Log expected overlap layout for manual verification:
-        # kv_cache-backed CBs: CB2 at +14336, CB5 at +28672
-        # sdpa_out_interm-backed CBs: CB4 at +0, CB9 at +6208, CB10 at +9280, CB12 at +12352, etc.
-        logger.info(f"Device {device_idx}: Expected CB2 (rmsnorm_out) addr = {kv_addr} (0x{kv_addr:X})")
-        logger.info(f"Device {device_idx}: Expected CB5 (matmul_in) addr = {kv_addr + 14336} (0x{kv_addr + 14336:X})")
-        logger.info(
-            f"Device {device_idx}: Expected CB4 (matmul_out) addr = {sdpa_interm_addr} (0x{sdpa_interm_addr:X})"
-        )
-        logger.info(
-            f"Device {device_idx}: Expected CB9 (rmsn2_out) addr = {sdpa_interm_addr + 6208} (0x{sdpa_interm_addr + 6208:X})"
-        )
-        logger.info(
-            f"Device {device_idx}: Expected CB10 (matmul2_in) addr = {sdpa_interm_addr + 9280} (0x{sdpa_interm_addr + 9280:X})"
-        )
-
-    logger.info("CB overlap address verification passed.")
-
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
         ttnn_sdpa_input_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
