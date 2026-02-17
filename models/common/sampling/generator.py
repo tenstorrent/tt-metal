@@ -169,22 +169,18 @@ class SamplingGenerator:
             formatted_params = format_sampling_params(sampling_params_chunks[0], max_batch_size)
             self.reset_sampling_params(formatted_params)
         else:
-            # Row-sharded case: merge all chunks then format
-            def _merge_field(params_list, field_name):
-                vals = []
-                all_none = True
-                for p in params_list:
-                    v = getattr(p, field_name)
-                    if v is None:
-                        continue
-                    all_none = False
-                    vals.extend(v if isinstance(v, list) else [v])
-                return None if all_none else vals
-
-            merged = SamplingParams(
-                **{field: _merge_field(sampling_params_chunks, field) for field in SAMPLING_PARAM_FIELDS}
-            )
-            formatted_params = format_sampling_params(merged, max_batch_size * chunks_per_model)
+            # Row-sharded case: format each chunk to max_batch_size, concatenate.
+            # After (0, None) sharding each row gets its own chunk of max_batch_size entries.
+            # Both TTSampling and TTPenalties use the same concatenated params.
+            formatted_chunks = [format_sampling_params(chunk, max_batch_size) for chunk in sampling_params_chunks]
+            concat_fields = {}
+            for field in SAMPLING_PARAM_FIELDS:
+                lists = [getattr(fc, field) for fc in formatted_chunks]
+                if all(v is None for v in lists):
+                    concat_fields[field] = None
+                else:
+                    concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
+            formatted_params = SamplingParams(**concat_fields)
             self.reset_sampling_params(formatted_params)
 
         if reset_batch:
