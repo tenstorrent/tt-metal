@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,6 +62,20 @@ enum class UnicastFusedAtomicIncUpdateMask : uint32_t {
           static_cast<uint32_t>(Val) | static_cast<uint32_t>(Flush) | static_cast<uint32_t>(PayloadSize),
 };
 
+// Fused scatter write + atomic inc dynamic mask
+enum class UnicastFusedScatterWriteAtomicIncUpdateMask : uint32_t {
+    None = 0,
+    WriteDstAddrs = 1u << 0,
+    SemaphoreDstAddr = 1u << 1,
+    WriteChunkSizes = 1u << 2,
+    Val = 1u << 3,
+    Flush = 1u << 4,
+    PayloadSize = 1u << 5,
+    All = static_cast<uint32_t>(WriteDstAddrs) | static_cast<uint32_t>(SemaphoreDstAddr) |
+          static_cast<uint32_t>(WriteChunkSizes) | static_cast<uint32_t>(Val) | static_cast<uint32_t>(Flush) |
+          static_cast<uint32_t>(PayloadSize),
+};
+
 // Bitwise helpers for enum class flags
 constexpr inline UnicastWriteUpdateMask operator|(UnicastWriteUpdateMask a, UnicastWriteUpdateMask b) {
     return static_cast<UnicastWriteUpdateMask>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -116,6 +130,21 @@ constexpr inline UnicastFusedAtomicIncUpdateMask operator&(
     return static_cast<UnicastFusedAtomicIncUpdateMask>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
 }
 constexpr inline bool has_flag(UnicastFusedAtomicIncUpdateMask mask, UnicastFusedAtomicIncUpdateMask bit) {
+    return static_cast<uint32_t>(mask & bit) != 0u;
+}
+
+constexpr inline UnicastFusedScatterWriteAtomicIncUpdateMask operator|(
+    UnicastFusedScatterWriteAtomicIncUpdateMask a, UnicastFusedScatterWriteAtomicIncUpdateMask b) {
+    return static_cast<UnicastFusedScatterWriteAtomicIncUpdateMask>(
+        static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+constexpr inline UnicastFusedScatterWriteAtomicIncUpdateMask operator&(
+    UnicastFusedScatterWriteAtomicIncUpdateMask a, UnicastFusedScatterWriteAtomicIncUpdateMask b) {
+    return static_cast<UnicastFusedScatterWriteAtomicIncUpdateMask>(
+        static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+}
+constexpr inline bool has_flag(
+    UnicastFusedScatterWriteAtomicIncUpdateMask mask, UnicastFusedScatterWriteAtomicIncUpdateMask bit) {
     return static_cast<uint32_t>(mask & bit) != 0u;
 }
 
@@ -265,6 +294,10 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
             packet_header->command_fields.unicast_scatter_write.chunk_size[i] = 0;
         }
     }
+
+    // Set all encodings to unicast write.
+    uint8_t chunk_encodings = expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+    packet_header->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
 }
 
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
@@ -278,6 +311,11 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush),
             "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
     }
+
+    // Chunk count = 2 unicast write chunks + 1 semaphore increment chunk (constant)
+    packet_header->command_fields.unicast_scatter_write.chunk_count =
+        NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS + 1;
+
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
@@ -295,6 +333,79 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
         packet_header->command_fields.unicast_seminc_fused.flush = command_header.flush;
     }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::PayloadSize)) {
+        packet_header->payload_size_bytes = packet_size_bytes;
+    }
+}
+
+template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
+static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
+    volatile PACKET_HEADER_TYPE* packet_header, uint16_t packet_size_bytes, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs) &&
+                !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::SemaphoreDstAddr) &&
+                !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes) &&
+                !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Val) &&
+                !has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
+            "UnicastFusedScatterWriteAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
+    }
+
+    // Don't clear destination addresses, since the packet will always have 2 unicast write chunks and 1 semaphore
+    // increment chunk.
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs)) {
+        for (uint8_t i = 0; i < NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS; i++) {
+            auto comps = get_noc_address_components(command_header.noc_address[i]);
+            auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
+            packet_header->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+        }
+    }
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::SemaphoreDstAddr)) {
+        auto scomps = get_noc_address_components(command_header.semaphore_noc_address);
+        auto snoc_addr = safe_get_noc_addr(scomps.first.x, scomps.first.y, scomps.second, edm_to_local_chip_noc);
+        packet_header->command_fields.unicast_scatter_write
+            .noc_address[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS] = snoc_addr;
+    }
+
+    // Don't clear chunk sizes, since the packet will always have 2 unicast write chunks and 1 semaphore increment
+    // chunk.
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes)) {
+        size_t accumulated_chunk_size = 0;
+        for (uint8_t i = 0; i < NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1; i++) {
+            uint16_t chunk = command_header.chunk_size[i];
+            ASSERT(chunk > 0);
+            packet_header->command_fields.unicast_scatter_write.chunk_size[i] = chunk;
+            accumulated_chunk_size += chunk;
+        }
+        // Last chunk size is implicit (remaining payload)
+        packet_header->command_fields.unicast_scatter_write
+            .chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1] =
+            packet_size_bytes - accumulated_chunk_size;
+    }
+
+    // Semaphore increment value is stored in chunk_size, after the last unicast write chunk.
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Val)) {
+        packet_header->command_fields.unicast_scatter_write
+            .chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS] = command_header.val;
+    }
+
+    // Set the encodings of the unicast write chunks and semaphore increment chunk.
+    // Only set if flush field is being updated (eg. during initialization).
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush)) {
+        uint8_t chunk_encodings = 0;
+        for (uint8_t i = 0; i < NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS; i++) {
+            set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
+        }
+        if (command_header.flush) {
+            set_chunk_encoding(
+                chunk_encodings,
+                (command_header.flush ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
+                                      : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH),
+                NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS);
+        }
+        packet_header->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
+    }
+
+    if constexpr (has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize)) {
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 }
