@@ -25,6 +25,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
+        where.cpp
         device/where_device_operation.cpp
         device/program_factory/element_wise_multi_core_where_program.cpp
 )
