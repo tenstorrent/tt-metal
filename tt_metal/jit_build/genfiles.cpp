@@ -126,9 +126,9 @@ string transform_to_legacy_syntax(const string& source, const char* ns_name, con
 
     ostringstream result;
     result << preamble;
-    result << "namespace " << ns_name << " {\n";
+    result << "namespace " << ns_name << " {";
     result << function_part;
-    result << "\n}  // namespace " << ns_name << "\n";
+    result << "}  // namespace " << ns_name << "\n";
     return result.str();
 }
 }  // namespace simple_kernel_syntax
