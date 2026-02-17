@@ -16,8 +16,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 4]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -30,8 +28,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 2]
-    dim_types: [LINE, LINE]
-    num_connections: 2
   }
 }
 
@@ -51,7 +47,7 @@ groupings {
     { id: 0 grouping_ref { preset_type: MESH } },  # Pod with 2 meshes
     { id: 1 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -62,7 +58,7 @@ groupings {
     { id: 1 grouping_ref { preset_type: MESH } },
     { id: 2 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -74,7 +70,7 @@ groupings {
     { id: 2 grouping_ref { preset_type: MESH } },
     { id: 3 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 # Clusters groupings - different configurations
@@ -85,7 +81,7 @@ groupings {
     { id: 0 grouping_ref { custom_type: "pods" } },  # Cluster with 2 pods
     { id: 1 grouping_ref { custom_type: "pods" } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -96,7 +92,7 @@ groupings {
     { id: 1 grouping_ref { custom_type: "pods" } },
     { id: 2 grouping_ref { custom_type: "pods" } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 # Mixed composition: superpods with both meshes and pods
@@ -108,7 +104,7 @@ groupings {
     { id: 1 grouping_ref { preset_type: MESH } },
     { id: 2 grouping_ref { custom_type: "pods" } }  # Superpod with 2 meshes + 1 pod
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -121,7 +117,7 @@ groupings {
     { id: 3 grouping_ref { custom_type: "pods" } },
     { id: 4 grouping_ref { custom_type: "pods" } }  # Superpod with 1 mesh + 4 pods
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 # Widgets groupings - same composition as pods but different name (for testing name independence)
@@ -132,7 +128,7 @@ groupings {
     { id: 0 grouping_ref { preset_type: MESH } },  # Widget with 2 meshes (same as pods)
     { id: 1 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -143,7 +139,7 @@ groupings {
     { id: 1 grouping_ref { preset_type: MESH } },
     { id: 2 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 groupings {
@@ -156,7 +152,7 @@ groupings {
     { id: 3 grouping_ref { preset_type: MESH } },
     { id: 4 grouping_ref { preset_type: MESH } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
 
 # Additional meshes configurations for various test scenarios
@@ -171,8 +167,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 4]
-    dim_types: [LINE, RING]
-    num_connections: 2
   }
 }
 
@@ -188,8 +182,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 4]
-    dim_types: [LINE, RING]
-    num_connections: 2
   }
 }
 
@@ -205,8 +197,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [1, 4]
-    dim_types: [LINE, RING]
-    num_connections: 2
   }
 }
 
@@ -237,8 +227,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [3, 4]
-    dim_types: [LINE, RING]
-    num_connections: 2
   }
 }
 
@@ -297,8 +285,6 @@ groupings {
   ]
   row_major_mesh {
     dims: [6, 8]
-    dim_types: [LINE, RING]
-    num_connections: 2
   }
 }
 
@@ -310,5 +296,5 @@ groupings {
     { id: 1 grouping_ref { custom_type: "clusters" } },
     { id: 2 grouping_ref { custom_type: "clusters" } }
   ]
-  all_to_all { num_connections: 2 }
+  all_to_all { }
 }
