@@ -45,6 +45,9 @@ struct BinaryNgDeviceOperation {
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
+        Layout input_layout_a = Layout::TILE;
+        Layout input_layout_b = Layout::TILE;
+        Layout output_layout = Layout::TILE;
 
         tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
