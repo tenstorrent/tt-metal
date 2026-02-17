@@ -217,6 +217,7 @@ void kernel_main() {
                             }
                         }
                     }
+                    // Move to the next slice
                     slice_idx += direction ? -1 : 1;
                 }
             }

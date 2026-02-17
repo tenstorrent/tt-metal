@@ -16,11 +16,9 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
-#include <utility>
 #include "strided_ring_reduce_scatter_common.hpp"
 
 using address_t = uint32_t;
-using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
@@ -35,8 +33,6 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
 constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
 constexpr uint32_t slice_C = get_compile_time_arg_val(12);
@@ -76,14 +72,14 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
+    const address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
+    const address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
@@ -97,16 +93,16 @@ void kernel_main() {
     const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto& unicast_route_info = (direction == 1) ? forward_unicast_route_info : backward_unicast_route_info;
-    const auto& multicast_route_info = (direction == 1) ? forward_multicast_route_info : backward_multicast_route_info;
+    const auto& unicast_route_info = direction ? forward_unicast_route_info : backward_unicast_route_info;
+    const auto& multicast_route_info = direction ? forward_multicast_route_info : backward_multicast_route_info;
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
@@ -233,9 +229,9 @@ void kernel_main() {
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
         for (uint32_t b = 0; b < batch_size; b++) {
-            for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
-                uint32_t output_tile_id_start = b * output_batch_num_pages;
+            const uint32_t output_tile_id_start = b * output_batch_num_pages;
 
+            for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
                 for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_mm_N_full_block; chunk_idx++) {
                     const uint32_t effective_chunk_width_in_tiles =
                         get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, N_full_block_wt);
@@ -308,8 +304,10 @@ void kernel_main() {
                                         mm_block_ht);
 
                                     if (i < (ring_size - 1)) {
-                                        auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                            intermediate_addrgen, global_tile_idx, 0);
+                                        // Write the tile(s) to the intermediate buffer on the neighboring device.
+                                        const auto noc_address0 =
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                intermediate_addrgen, global_tile_idx, 0);
 
                                         switch (tiles_to_put_in_current_packet) {
                                             case 2: {
@@ -336,7 +334,7 @@ void kernel_main() {
                                                     effective_chunk_width_in_tiles,
                                                     mm_block_ht);
 
-                                                auto noc_address1 =
+                                                const auto noc_address1 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                                         intermediate_addrgen, global_tile_idx_two, 0);
                                                 fabric_unicast_noc_scatter_write_with_state<
@@ -362,8 +360,9 @@ void kernel_main() {
                                         }
                                         noc_async_writes_flushed();
                                     } else {
-                                        uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
-                                        uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
+                                        // Write the tile to the output buffer on this device.
+                                        const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx;
+                                        const uint64_t local_noc_addr = get_noc_addr(output_tile_id, output_addrgen);
                                         noc_async_write(l1_read_addr, local_noc_addr, page_size);
                                         l1_read_addr += page_size;
                                     }
@@ -373,9 +372,10 @@ void kernel_main() {
                             }
                         }
 
-                        // Signal reader after all chunk_piece_idx tiles for this ring iteration are written
                         if (i < (ring_size - 1)) {
-                            uint64_t out_ready_sem_noc_addr_in_pkt =
+                            // Signal reader on the neighboring device after all chunk_piece_idx tiles for this ring
+                            // iteration are written.
+                            const uint64_t out_ready_sem_noc_addr_in_pkt =
                                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
                             fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                                 &mux_connection_handle,
@@ -386,13 +386,15 @@ void kernel_main() {
                             noc_async_write_barrier();
                         }
 
+                        // Move to the next slice
                         slice_idx += direction ? -1 : 1;
                     }
                 }
             }
 
-            // Signal batch done and wait for all other chips to finish before next batch
-            uint64_t batch_ready_sem_noc_addr_in_pkt =
+            // Signal batch done and wait for all other chips to finish before next batch.
+            // This is needed to avoid race conditions in the intermediate buffer.
+            const uint64_t batch_ready_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 &mux_connection_handle,
@@ -414,7 +416,7 @@ void kernel_main() {
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            uint64_t dest_addr =
+            const uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);
             noc_async_atomic_barrier();
