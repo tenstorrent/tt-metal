@@ -41,10 +41,9 @@ on:
 
 run-name: >
   ${{ 
-    (github.event_name == 'schedule' && '(BH Galaxy) Quick') || 
-    (github.event_name == 'push' && '(WH Galaxy) Quick') || 
-    (github.inputs.arch == 'blackhole' && '(BH Galaxy) Quick') || 
-    (github.inputs.arch == 'wormhole_b0' && '(WH Galaxy) Quick')
+    github.event_name == 'schedule' && '(BH Galaxy) Quick' || 
+    github.inputs.arch == 'blackhole' && '(BH Galaxy) Quick' || 
+    '(WH Galaxy) Quick' 
   }}
   
 permissions:
