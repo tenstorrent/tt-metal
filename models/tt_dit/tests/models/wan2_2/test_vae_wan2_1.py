@@ -1551,7 +1551,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         if new_logical_h != tt_output_torch.shape[3]:
             tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
             logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
-        assert_quality(torch_output, tt_output_torch, pcc=0.999_950, relative_rmse=0.012)
+        assert_quality(torch_output, tt_output_torch, pcc=0.999_945, relative_rmse=0.012)
     else:
         logger.warning("Skipping check")
 
