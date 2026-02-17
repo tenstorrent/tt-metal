@@ -30,8 +30,8 @@ void kernel_main() {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
         noc_async_read_tile(src_tile_id, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id, 1);
+        // noc_async_read_barrier();
+        // cb_push_back(cb_id, 1);
 
         src_tile_id += tile_id_inc;
         for (int32_t j = num_dims - 1; j >= 1; j--) {
@@ -43,5 +43,8 @@ void kernel_main() {
                 src_tile_id += tile_id_acc[j - 1] - shape_tiles[j] * tile_id_acc[j];
             }
         }
+
+        noc_async_read_barrier();
+        cb_push_back(cb_id, 1);
     }
 }
