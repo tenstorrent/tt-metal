@@ -55,8 +55,6 @@ package tt.tt_fabric.proto;
 //     ]
     //     row_major_mesh {
     //       dims: [2, 1]
-    //       dim_types: [LINE, LINE]
-    //       num_connections: 2
     //     }
 //   }
 //   # Using custom types
@@ -82,8 +80,6 @@ package tt.tt_fabric.proto;
 //     ]
     //     row_major_mesh {
     //       dims: [2, 4]
-    //       dim_types: [LINE, RING]  # LINE and RING are enum values nested in RowMajorMeshConnection
-    //       num_connections: 2
     //     }
 //   }
 //   groupings {
@@ -93,7 +89,7 @@ package tt.tt_fabric.proto;
 //       { id: 0 grouping_ref { custom_type: "meshes" } },
 //       { id: 1 grouping_ref { custom_type: "meshes" } }
 //     ]
-    //     all_to_all { num_connections: 2 }
+    //     all_to_all { }
 //   }
     //   # Mixing preset keywords and custom types
     //   groupings {
@@ -105,7 +101,7 @@ package tt.tt_fabric.proto;
     //     ]
     //     custom {
     //       connections: [
-    //         { src_instance: 0 dst_instance: 1 num_connections: 2 }
+    //         { src_instance: 0 dst_instance: 1 }
     //       ]
     //     }
     //   }
@@ -173,28 +169,14 @@ message Instance {
 
 // All-to-all connection - every instance connects to every other instance
 message AllToAllConnection {
-    // Number of connections between each pair of instances
-    uint32 num_connections = 1;
+    // Always uses 1 connection per edge
 }
 
 // Row-major mesh connection - instances arranged in a grid with mesh connectivity
 message RowMajorMeshConnection {
-    // Dimension type - defines wrap behavior for a dimension in row-major mesh
-    enum DimType {
-        INVALID_DIM_TYPE = 0;
-        LINE = 1;  // No wrap-around (endpoints not connected)
-        RING = 2;  // Wrap-around (endpoints connected, forming a ring)
-    }
-
     // Dimensions of the mesh (e.g., [2, 4] for a 2x4 grid)
+    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
     repeated int32 dims = 1;
-
-    // Per-dimension types (LINE or RING) - must match length of dims
-    // If omitted or shorter than dims, missing entries default to LINE
-    repeated DimType dim_types = 2;
-
-    // Number of connections per edge in the mesh
-    uint32 num_connections = 3;
 }
 
 // Custom connection - explicit connection between specific instances
@@ -205,8 +187,7 @@ message CustomConnection {
     // Destination instance index (0-based, refers to instances list)
     uint32 dst_instance = 2;
 
-    // Number of connections from src to dst
-    uint32 num_connections = 3;
+    // Always uses 1 connection per edge
 }
 
 // Custom connections - list of explicit connections between specific instances
