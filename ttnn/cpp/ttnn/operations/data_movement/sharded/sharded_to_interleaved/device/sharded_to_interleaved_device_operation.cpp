@@ -53,11 +53,6 @@ void ShardedToInterleavedDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void ShardedToInterleavedDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {

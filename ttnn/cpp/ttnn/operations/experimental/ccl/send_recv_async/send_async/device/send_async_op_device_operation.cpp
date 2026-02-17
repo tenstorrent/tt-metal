@@ -17,11 +17,6 @@ SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_pro
     return SendAsyncMeshWorkloadFactory{};
 }
 
-void SendAsyncDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SendAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& mesh_socket = args.mesh_socket;
