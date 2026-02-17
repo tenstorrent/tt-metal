@@ -22,9 +22,12 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     // Expected input shape:      (batch_size, 1, 1, sentence_size)
     // Actual embedding shape:    (batch_size, 1, 1, sentence_size, embedding_dim)
     // Expected embedding shape:  (batch_size, 1, sentence_size, embedding_dim)
-    TT_FATAL(tensor->get_value().logical_shape().size() != 4, "Input tensor must be 4d");
     TT_FATAL(
-        tensor->get_value().logical_shape()[1] != 1 || tensor->get_value().logical_shape()[2] != 1,
+        tensor->get_value().logical_shape().size() == 4,
+        "Input tensor must be 4D, got {}",
+        tensor->get_value().logical_shape().size());
+    TT_FATAL(
+        tensor->get_value().logical_shape()[1] == 1 && tensor->get_value().logical_shape()[2] == 1,
         "Expected input dims[1] == dims[2] == 1, got {} and {}.",
         tensor->get_value().logical_shape()[1],
         tensor->get_value().logical_shape()[2]);
