@@ -34,6 +34,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # NOTE:
+          # This query fetches up to 100 merge queue entries.
+          # Pagination is NOT implemented intentionally.
+          # Given queue size is typically small, this is acceptable.
+          # If queue size exceeds 100 in future, pagination must be added.
+
           gh api graphql -f query='
           query {
             repository(owner: "tenstorrent", name: "tt-metal") {
@@ -62,6 +68,11 @@ jobs:
           set -euo pipefail
           LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
 
+          # NOTE:
+          # Limited to first:100 results.
+          # No pagination is implemented.
+          # Acceptable because 30-min window unlikely to exceed 100 PRs.
+
           gh api graphql -f query="
           query {
             search(
@@ -89,6 +100,11 @@ jobs:
         run: |
           set -euo pipefail
           LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          # NOTE:
+          # Limited to first:100 results.
+          # No pagination is implemented.
+          # Acceptable for 30-min lookback window.
 
           gh api graphql -f query="
           query {
@@ -129,7 +145,8 @@ jobs:
             merge_queue:
               (
                 [
-                  $queue[0].data.repository.mergeQueue.entries.nodes[]? | {
+                  # Null-safe handling if mergeQueue is disabled or null
+                  ($queue[0].data.repository.mergeQueue.entries.nodes // [])[]? | {
                     pr_number: .pullRequest.number,
                     pr_title: .pullRequest.title,
                     pr_author_login: .pullRequest.author.login,
