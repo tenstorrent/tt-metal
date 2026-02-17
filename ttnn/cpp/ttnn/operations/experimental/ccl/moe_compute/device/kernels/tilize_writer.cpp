@@ -170,11 +170,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
     constexpr uint32_t previous_chunk_sent_semaphore_id =
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
+    constexpr uint32_t initial_gather_semaphore_id = get_named_compile_time_arg_val("initial_gather_semaphore_id");
 
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
+    uint32_t initial_gather_semaphore_addr = get_semaphore(initial_gather_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -537,7 +539,7 @@ void kernel_main() {
                     // == 5a ==
                     // wait for all gathered sub-chunks to arrive
                     noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(initial_gather_semaphore_addr),
                         primary_mcast_gather_group_num_cores - 1);
 
                     // == 6a ==
@@ -563,6 +565,11 @@ void kernel_main() {
 
                     // == 8a ==
                     // wait for secondary mcaster to signal that all secondary mcast sub-chunks have been delivered
+                    // also bump local value (value of primary mcast group)
+                    noc_semaphore_inc(
+                        tilize_chunk_ready_drain_semaphore_noc_addr,
+                        primary_mcast_gather_group_num_cores - 1,
+                        noc_index);
                     noc_semaphore_wait(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
                         tilize_chunk_ready_wait_value);
@@ -574,7 +581,7 @@ void kernel_main() {
                     // == 5a ==
                     // wait for all gathered sub-chunks to arrive
                     noc_semaphore_wait(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(initial_gather_semaphore_addr),
                         secondary_mcast_gather_group_num_cores - 1);
 
                     // == 6a ==
@@ -611,7 +618,7 @@ void kernel_main() {
                     // send to proper offset on our initial mcast gather core
                     uint32_t target_l1_initial_gather_addr =
                         l1_read_addr + mcast_group_tile_offset * tilize_output_page_size;
-                    uint32_t initial_gather_noc_addr = get_noc_addr(
+                    uint64_t initial_gather_noc_addr = get_noc_addr(
                         initial_mcast_gather_core_nox_x,
                         initial_mcast_gather_core_nox_y,
                         target_l1_initial_gather_addr,
@@ -627,7 +634,7 @@ void kernel_main() {
                     uint64_t initial_gather_semaphore_noc_addr = get_noc_addr(
                         initial_mcast_gather_core_nox_x,
                         initial_mcast_gather_core_nox_y,
-                        tilize_chunk_ready_semaphore_addr,
+                        initial_gather_semaphore_addr,
                         noc_index);
                     noc_semaphore_inc(initial_gather_semaphore_noc_addr, 1, noc_index);
                 }
@@ -661,7 +668,7 @@ void kernel_main() {
                     // == 3b ==
                     // send to proper offset on global mmcast gather core (the drain-sync core)
                     uint32_t gather_addr = l1_read_addr + global_tile_offset * tilize_output_page_size;
-                    uint32_t drain_gather_noc_addr =
+                    uint64_t drain_gather_noc_addr =
                         get_noc_addr(drain_core_noc_x, drain_core_noc_y, gather_addr, noc_index);
                     noc_async_write(
                         l1_read_addr,

@@ -253,6 +253,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     // to do the mcast, which is also a requirement for doing linked mcasts.
     auto previous_chunk_sent_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
+    // For the gather phase scheme used for the first chunk
+    auto initial_gather_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+
     //-------------------------------------------------------------------------
     // Matmul semaphores
     //-------------------------------------------------------------------------
@@ -663,7 +666,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
         {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
-    };
+        {"initial_gather_semaphore_id", initial_gather_semaphore_id}};
 
     std::vector<uint32_t> tilize_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.buffer()).append_to(tilize_compile_time_args);
