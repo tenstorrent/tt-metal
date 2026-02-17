@@ -710,6 +710,8 @@ void pytensor_module(nb::module_& mod) {
                 +--------------+--------------------------------+
                 | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
                 +--------------+--------------------------------+
+                | col_tilize   | Column-wise BFP tilize (false)  |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
 

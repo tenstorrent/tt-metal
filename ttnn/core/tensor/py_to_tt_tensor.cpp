@@ -230,8 +230,9 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     ttnn::Shape effective_shape = tensor_shape;
     if (col_tilize) {
-        // Transpose the last two dims of the float32 host buffer in-place
-        // so that BFP exponent grouping happens along columns instead of rows.
+        // Transpose the last two dims of the float32 host buffer by creating a new
+        // buffer and replacing host_buffer, so that BFP exponent grouping happens
+        // along columns instead of rows.
         auto rank = tensor_shape.rank();
         TT_FATAL(rank >= 2, "col_tilize requires tensor rank >= 2, got {}", rank);
         TT_FATAL(

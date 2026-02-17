@@ -293,6 +293,8 @@ def from_torch(
             raise RuntimeError("ttnn.from_torch: col_tilize=True requires BFP dtype (bfloat8_b or bfloat4_b)")
         if tensor.ndim < 2:
             raise RuntimeError("ttnn.from_torch: col_tilize=True requires tensor.ndim >= 2")
+        if layout is not None and layout is not ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT")
 
     if spec is not None:
         if spec.shape != tensor.shape:

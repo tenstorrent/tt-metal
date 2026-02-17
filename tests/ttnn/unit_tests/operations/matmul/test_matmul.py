@@ -2913,6 +2913,10 @@ def test_from_torch_col_tilize_validation():
     with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
         ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
 
+    # col_tilize requires tile layout
+    with pytest.raises(RuntimeError, match="col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT, col_tilize=True)
+
 
 @pytest.mark.parametrize(
     "weight_dtype, pcc_threshold",
@@ -2948,3 +2952,28 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
         result_col.shape == result_manual.shape
     ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
     assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+
+
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (64, 32),  # 2D
+        (2, 64, 32),  # 3D with batch
+        (2, 3, 64, 32),  # 4D with batch
+    ],
+)
+def test_from_torch_col_tilize_batched(weight_dtype, shape):
+    """Verify col_tilize works correctly for tensors of various ranks (2D through 4D)."""
+    torch.manual_seed(0)
+    torch_W = torch.randn(shape, dtype=torch.bfloat16)
+
+    tt_col = ttnn.from_torch(torch_W, dtype=weight_dtype, col_tilize=True)
+    result_col = ttnn.to_torch(tt_col)
+
+    torch_W_T = torch_W.transpose(-1, -2).contiguous()
+    tt_manual = ttnn.from_torch(torch_W_T, dtype=weight_dtype)
+    result_manual = ttnn.to_torch(tt_manual)
+
+    assert result_col.shape == result_manual.shape
+    assert_with_pcc(result_manual, result_col, pcc=0.98)
