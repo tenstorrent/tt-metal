@@ -915,17 +915,22 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
     // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_ring_reduce_compile_args(
-        input_cb_index,
-        intermediate_cb_index,
-        compute_output_cb_index,
-        tile_granularity,
-        ring_size,
-        input_tensor_B,
-        slice_B,
-        slice_C,
-        normalized_dim);
+    // Match llama_reduce_scatter behavior: only enable FP32 dest accumulation for FP32 inputs.
+    const bool use_fp32_dest_acc = df == tt::DataFormat::Float32;
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = use_fp32_dest_acc,
+        .compile_args = operations::experimental::ccl::detail::get_ring_reduce_compile_args(
+            input_cb_index,
+            intermediate_cb_index,
+            compute_output_cb_index,
+            tile_granularity,
+            ring_size,
+            input_tensor_B,
+            slice_B,
+            slice_C,
+            normalized_dim)
+    };
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1529,17 +1534,21 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_worker_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
+    // Match llama_reduce_scatter behavior: only enable FP32 dest accumulation for FP32 inputs.
+    const bool use_fp32_dest_acc = df == tt::DataFormat::Float32;
     // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_line_reduce_compile_args(
-        input_cb_index,
-        intermediate_cb_index,
-        compute_output_cb_index,
-        tile_granularity,
-        input_tensor_B,
-        slice_B,
-        slice_C,
-        normalized_dim);
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{
+        .fp32_dest_acc_en = use_fp32_dest_acc,
+        .compile_args = operations::experimental::ccl::detail::get_line_reduce_compile_args(
+            input_cb_index,
+            intermediate_cb_index,
+            compute_output_cb_index,
+            tile_granularity,
+            input_tensor_B,
+            slice_B,
+            slice_C,
+            normalized_dim)
+    };
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
