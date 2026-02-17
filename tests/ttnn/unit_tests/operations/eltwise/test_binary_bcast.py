@@ -1708,6 +1708,7 @@ class TestBinaryRowMajor:
     @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
     @pytest.mark.parametrize("mode", ["native", "scalar", "row", "col"])
     def test_binary_row_major_broadcasts(self, device, shape, dtype_str, mode):
+        torch.manual_seed(0)
         N, C, H, W = shape
         dt_pt, dt_tt = self._get_dtypes(dtype_str)
 
@@ -1729,27 +1730,27 @@ class TestBinaryRowMajor:
 
         assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
 
-    # Separate test for Mixed because it involves specific reshape logic
+    # Separate test for mixed row/col broadcast behavior.
     @pytest.mark.parametrize("shape", TEST_SHAPES)
     @pytest.mark.parametrize("dtype_str", ["bfloat16", "float32"])
-    def test_binary_row_major_mixed_reshape(self, device, shape, dtype_str):
+    def test_binary_row_major_mixed_row_col_bcast(self, device, shape, dtype_str):
+        torch.manual_seed(0)
         N, C, H, W = shape
-        if H == 1 or W == 1:
-            pytest.skip("Dim=1 invalid for mixed reshape test")
-
         dt_pt, dt_tt = self._get_dtypes(dtype_str)
 
-        # A is full, B is (N,C,W,1) -> Reshape to (N,C,1,W)
-        pt_a, tt_a = self._make_tensor(device, shape, dt_pt, dt_tt)
-        pt_b, tt_b = self._make_tensor(device, (N, C, W, 1), dt_pt, dt_tt)
-
-        tt_b_reshaped = ttnn.reshape(tt_b, ttnn.Shape((N, C, 1, W)))
-        pt_b_reshaped = pt_b.reshape(N, C, 1, W)
-
+        # Mixed row/col broadcast: A has H=1, B has W=1.
+        pt_a, tt_a = self._make_tensor(device, (N, C, 1, W), dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, (N, C, H, 1), dt_pt, dt_tt)
         with ttnn.manage_config("throw_exception_on_fallback", False):
-            tt_out = ttnn.add(tt_a, tt_b_reshaped, use_legacy=None)
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
 
-        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b_reshaped))
+        # Swap roles to cover the inverse mixed broadcast.
+        pt_a, tt_a = self._make_tensor(device, (N, C, H, 1), dt_pt, dt_tt)
+        pt_b, tt_b = self._make_tensor(device, (N, C, 1, W), dt_pt, dt_tt)
+        with ttnn.manage_config("throw_exception_on_fallback", False):
+            tt_out = ttnn.add(tt_a, tt_b, use_legacy=None)
+        assert_with_pcc(ttnn.to_torch(tt_out), torch.add(pt_a, pt_b))
 
 
 @pytest.mark.parametrize(
