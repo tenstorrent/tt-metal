@@ -248,21 +248,21 @@ void kernel_main() {
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                              chunk_piece_idx++) {
-                            uint32_t first_tile_row_in_mm_M_block = 0;
-                            uint32_t first_chunk_col_in_tiles = 0;
-                            uint32_t first_mm_core_idx = 0;
+                            uint32_t tile_row_in_mm_M_unit_block = 0;
+                            uint32_t chunk_col_in_tiles = 0;
+                            uint32_t mm_core_idx = 0;
                             get_next_tile_coordinates(
-                                first_tile_row_in_mm_M_block,
-                                first_chunk_col_in_tiles,
-                                first_mm_core_idx,
+                                tile_row_in_mm_M_unit_block,
+                                chunk_col_in_tiles,
+                                mm_core_idx,
                                 effective_worker_id,
                                 effective_subchunk_size,
                                 effective_chunk_width_in_tiles,
                                 mm_block_ht);
                             uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                                first_tile_row_in_mm_M_block,
-                                first_chunk_col_in_tiles,
-                                first_mm_core_idx,
+                                tile_row_in_mm_M_unit_block,
+                                chunk_col_in_tiles,
+                                mm_core_idx,
                                 effective_advance_by_tiles,
                                 last_mm_core_idx,
                                 effective_subchunk_size,
@@ -283,10 +283,10 @@ void kernel_main() {
                                             : 1;
                                     tiles_remaining_in_step -= tiles_to_put_in_current_packet;
 
-                                    const auto tile_indices = coordinates_to_tile_indices(
-                                        first_tile_row_in_mm_M_block,
-                                        first_chunk_col_in_tiles,
-                                        first_mm_core_idx,
+                                    const auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
+                                        tile_row_in_mm_M_unit_block,
+                                        chunk_col_in_tiles,
+                                        mm_core_idx,
                                         chunk_piece_idx,
                                         m_block_iter,
                                         chunk_idx,
@@ -297,13 +297,11 @@ void kernel_main() {
                                         actual_slice_idx,
                                         slice_Wt,
                                         input_tensor_Wt);
-                                    const uint32_t slice_tile_idx = tile_indices.slice;
-                                    const uint32_t global_tile_idx = tile_indices.global;
 
                                     get_next_tile_coordinates(
-                                        first_tile_row_in_mm_M_block,
-                                        first_chunk_col_in_tiles,
-                                        first_mm_core_idx,
+                                        tile_row_in_mm_M_unit_block,
+                                        chunk_col_in_tiles,
+                                        mm_core_idx,
                                         effective_advance_by_tiles,
                                         effective_subchunk_size,
                                         effective_chunk_width_in_tiles,
@@ -315,10 +313,10 @@ void kernel_main() {
 
                                         switch (tiles_to_put_in_current_packet) {
                                             case 2: {
-                                                auto tile_indices_two = coordinates_to_tile_indices(
-                                                    first_tile_row_in_mm_M_block,
-                                                    first_chunk_col_in_tiles,
-                                                    first_mm_core_idx,
+                                                auto [_, global_tile_idx_two] = coordinates_to_tile_indices(
+                                                    tile_row_in_mm_M_unit_block,
+                                                    chunk_col_in_tiles,
+                                                    mm_core_idx,
                                                     chunk_piece_idx,
                                                     m_block_iter,
                                                     chunk_idx,
@@ -330,9 +328,9 @@ void kernel_main() {
                                                     slice_Wt,
                                                     input_tensor_Wt);
                                                 get_next_tile_coordinates(
-                                                    first_tile_row_in_mm_M_block,
-                                                    first_chunk_col_in_tiles,
-                                                    first_mm_core_idx,
+                                                    tile_row_in_mm_M_unit_block,
+                                                    chunk_col_in_tiles,
+                                                    mm_core_idx,
                                                     effective_advance_by_tiles,
                                                     effective_subchunk_size,
                                                     effective_chunk_width_in_tiles,
@@ -340,7 +338,7 @@ void kernel_main() {
 
                                                 auto noc_address1 =
                                                     tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                        intermediate_addrgen, tile_indices_two.global, 0);
+                                                        intermediate_addrgen, global_tile_idx_two, 0);
                                                 fabric_unicast_noc_scatter_write_with_state<
                                                     UnicastScatterWriteUpdateMask::DstAddrs>(
                                                     &mux_connection_handle,
@@ -388,11 +386,7 @@ void kernel_main() {
                             noc_async_write_barrier();
                         }
 
-                        if (direction) {
-                            slice_idx--;
-                        } else {
-                            slice_idx++;
-                        }
+                        slice_idx += direction ? -1 : 1;
                     }
                 }
             }

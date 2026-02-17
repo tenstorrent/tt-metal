@@ -24,9 +24,6 @@ void kernel_main() {
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
 
-    ASSERT(dim == 3);
-    ASSERT(slice_C == 1);
-
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
@@ -50,29 +47,29 @@ void kernel_main() {
                 for (uint32_t i = 1; i < ring_size; i++) {
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                          chunk_piece_idx++) {
-                        uint32_t first_tile_row_in_mm_M_block = 0;
-                        uint32_t first_chunk_col_in_tiles = 0;
-                        uint32_t first_mm_core_idx = 0;
+                        uint32_t tile_row_in_mm_M_unit_block = 0;
+                        uint32_t chunk_col_in_tiles = 0;
+                        uint32_t mm_core_idx = 0;
 
                         get_next_tile_coordinates(
-                            first_tile_row_in_mm_M_block,
-                            first_chunk_col_in_tiles,
-                            first_mm_core_idx,
+                            tile_row_in_mm_M_unit_block,
+                            chunk_col_in_tiles,
+                            mm_core_idx,
                             effective_worker_id,
                             effective_subchunk_size,
                             effective_chunk_width_in_tiles,
                             mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                            first_tile_row_in_mm_M_block,
-                            first_chunk_col_in_tiles,
-                            first_mm_core_idx,
+                            tile_row_in_mm_M_unit_block,
+                            chunk_col_in_tiles,
+                            mm_core_idx,
                             effective_advance_by_tiles,
                             last_mm_core_idx,
                             effective_subchunk_size,
                             effective_chunk_width_in_tiles);
 
                         while (tiles_to_read > 0) {
-                            uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
+                            const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
                             cb_wait_front(input_cb_id, tile_granularity);

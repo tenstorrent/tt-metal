@@ -98,31 +98,18 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
     /**
-    Note that each minimal matmul core outputs a "big" block of size mm_M_block_ht x mm_N_full_block_wt.
-    These are produced in mm_block_ht x mm_block_wt "unit" blocks in a block-row-major order.
-    There are mm_N_full_blocks_per_slice big blocks in a single slice along the width dimension
-    (mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt).
-    There are mm_M_unit_blocks_per_core unit blocks per minimal matmul core in the y-direction.
-    (mm_M_unit_blocks_per_core = slice_Ht / mm_block_ht / mm_cores_y).
-
-    TODO: change to matmul units
-    A chunk is defined as a strided block row of tiles produced by the matmul cores within a given number of steps.
-    More precisely, if chunk_width_in_tiles = t, then the first chunk contains
-    all tiles corresponding to this slice and produced by the matmul cores exactly after they produce t tiles each,
-    the second chunk contains subsequent tiles produced by the matmul cores after they produce 2t tiles each, etc.
-
-    The algorithm iterates over the chunks and reduces each chunk with the ring reduce scatter algorithm.
-    A full reduction is performed so that before going to the next chunk, all tiles in the current chunk
-    are reduced, i.e., each device stores the final reduced value of the given chunk.
-    (From the perspective of the reader kernel kernel, the chunk is fully taken care of.)
+    Iterate over chunks in the row-major order and reduce-scatter each chunk, one by one.
+    In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
     Note that each chunk can be composed of multiple pieces if mm_N_full_blocks_per_slice > 1.
     */
-    ASSERT(dim == 3);
-    ASSERT(slice_C == 1);
+    ASSERT(dim == 3);      // strided reduce-scatter only supports scattering on dim 3
+    ASSERT(slice_C == 1);  // note: this can be relaxed if needed but is omitted to avoid nested loops
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
     const uint32_t tiles_ht_per_core = mm_block_ht * mm_M_unit_blocks_per_core;
+
+    // Each worker handles every 'effective_advance_by_tiles'-th tile, starting from offset 'effective_worker_id'.
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
@@ -138,12 +125,14 @@ void kernel_main() {
                 const uint32_t effective_subchunk_size = mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+                // Run a full ring reduce-scatter for the current chunk.
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 
-                    // Wait for all chunk_piece_idx tiles for this ring iteration to be written
+                    // Wait for all chunk_piece_idx tiles for this ring iteration to be written by the neighboring
+                    // device
                     if (do_reduce) {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
@@ -152,22 +141,22 @@ void kernel_main() {
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                          chunk_piece_idx++) {
-                        uint32_t first_tile_row_in_mm_M_block = 0;
-                        uint32_t first_chunk_col_in_tiles = 0;
-                        uint32_t first_mm_core_idx = 0;
-                        // get the first tile coordinates for the current chunk piece
+                        uint32_t tile_row_in_mm_M_unit_block = 0;
+                        uint32_t chunk_col_in_tiles = 0;
+                        uint32_t mm_core_idx = 0;
+                        // Get the first tile coordinates for the current chunk piece
                         get_next_tile_coordinates(
-                            first_tile_row_in_mm_M_block,
-                            first_chunk_col_in_tiles,
-                            first_mm_core_idx,
+                            tile_row_in_mm_M_unit_block,
+                            chunk_col_in_tiles,
+                            mm_core_idx,
                             effective_worker_id,
                             effective_subchunk_size,
                             effective_chunk_width_in_tiles,
                             mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
-                            first_tile_row_in_mm_M_block,
-                            first_chunk_col_in_tiles,
-                            first_mm_core_idx,
+                            tile_row_in_mm_M_unit_block,
+                            chunk_col_in_tiles,
+                            mm_core_idx,
                             effective_advance_by_tiles,
                             last_mm_core_idx,
                             effective_subchunk_size,
@@ -186,10 +175,10 @@ void kernel_main() {
                             }
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
-                                auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
-                                    first_tile_row_in_mm_M_block,
-                                    first_chunk_col_in_tiles,
-                                    first_mm_core_idx,
+                                const auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
+                                    tile_row_in_mm_M_unit_block,
+                                    chunk_col_in_tiles,
+                                    mm_core_idx,
                                     chunk_piece_idx,
                                     m_block_iter,
                                     chunk_idx,
@@ -213,9 +202,9 @@ void kernel_main() {
                                 }
 
                                 get_next_tile_coordinates(
-                                    first_tile_row_in_mm_M_block,
-                                    first_chunk_col_in_tiles,
-                                    first_mm_core_idx,
+                                    tile_row_in_mm_M_unit_block,
+                                    chunk_col_in_tiles,
+                                    mm_core_idx,
                                     effective_advance_by_tiles,
                                     effective_subchunk_size,
                                     effective_chunk_width_in_tiles,
@@ -228,17 +217,11 @@ void kernel_main() {
                             }
                         }
                     }
-
-                    // Next slice idx
-                    if (direction) {
-                        slice_idx--;
-                    } else {
-                        slice_idx++;
-                    }
+                    slice_idx += direction ? -1 : 1;
                 }
             }
         }
-        // Reset the semaphore before the next batch
+        // Reset the semaphore before the next batch to avoid overflow
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
     }
