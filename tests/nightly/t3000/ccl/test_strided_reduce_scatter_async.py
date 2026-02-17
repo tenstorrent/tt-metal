@@ -841,6 +841,8 @@ def test_strided_reduce_scatter_async(
         (2, 8, 2, 8, 3),
         # Non-power-of-2 block width: chunk_w=3, N_block=8, chunks_per=3 (last chunk effective_w=2)
         (1, 4, 3, 8, 1),
+        # Chunk wider than N-block: chunk_w=16 > N_block=8, clamped to single chunk of effective_w=8
+        (1, 8, 2, 8, 8),
     ],
     ids=[
         "finest_granularity",
@@ -853,6 +855,7 @@ def test_strided_reduce_scatter_async(
         "large_chunk_width_in_mm_blocks",
         "partial_last_chunk",
         "non_power_of_2_block_wt",
+        "chunk_wider_than_N_block",
     ],
 )
 def test_strided_reduce_scatter_blocking_sweep(
@@ -927,6 +930,8 @@ def test_strided_reduce_scatter_blocking_sweep(
         (4, 8, 3, 16, 1),
         # Asymmetric tall-narrow: mm_block_ht=16 tall, mm_block_wt=2, many chunks
         (8, 16, 2, 16, 1),
+        # Chunk wider than N-block: chunk_w=32 > N_block=16, clamped to single chunk of effective_w=16
+        (1, 16, 2, 16, 16),
     ],
     ids=[
         "coarsest_single_block",
@@ -939,6 +944,7 @@ def test_strided_reduce_scatter_blocking_sweep(
         "partial_last_chunk",
         "non_power_of_2_block_wt",
         "asymmetric_tall_narrow",
+        "chunk_wider_than_N_block",
     ],
 )
 # @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
