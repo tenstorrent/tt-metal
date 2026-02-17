@@ -53,6 +53,7 @@ class PI0ModelTTNN:
         config: PI0ModelConfig,
         weight_loader: PI0WeightLoader,
         device: ttnn.Device,
+        enable_profiler_flush: bool = False,
     ):
         """
         Initialize PI0 model with TTNN.
@@ -61,10 +62,15 @@ class PI0ModelTTNN:
             config: Model configuration
             weight_loader: Loaded weights
             device: TTNN device
+            enable_profiler_flush: If True, flush device profiler buffer once per
+                denoising step and once after prefix processing. Default False
+                to avoid overhead in production. Enable when building profiler
+                perf sheets.
         """
         self.config = config
         self.weight_loader = weight_loader
         self.device = device
+        self.enable_profiler_flush = enable_profiler_flush
 
         # Initialize denoising config
         self.denoise_config = DenoiseConfig(
@@ -206,6 +212,9 @@ class PI0ModelTTNN:
         # Step 2: Forward prefix through VLM and cache KV
         _, prefix_kv_cache = self.backbone.forward_vlm(prefix_embs, use_cache=True)
 
+        if self.enable_profiler_flush:
+            ttnn.ReadDeviceProfiler(self.device)
+
         # Get timesteps using pure Python list (for control flow on host)
         num_steps = self.denoise_config.num_steps
         # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
@@ -266,10 +275,8 @@ class PI0ModelTTNN:
             velocity_scaled = ttnn.mul(velocity, dt)
             x_t_ttnn = ttnn.add(x_t_ttnn, velocity_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            # Clear profiler buffer after each denoising step (~500 ops)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
+            if self.enable_profiler_flush:
+                ttnn.ReadDeviceProfiler(self.device)
 
         # Convert back to PyTorch only at the very end (1 transfer instead of 10!)
         return x_t_ttnn
