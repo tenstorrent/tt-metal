@@ -120,7 +120,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
-    DPRINT << "DM-FW: waiting for TRISC0 to complete " << subordinate_sync->neo0_trisc0 << ENDL();
+    DPRINT << "DM-FW: waiting for TRISCs to complete" << ENDL();
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
