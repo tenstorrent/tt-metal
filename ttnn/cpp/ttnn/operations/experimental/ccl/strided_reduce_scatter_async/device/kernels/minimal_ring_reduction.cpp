@@ -9,7 +9,7 @@
 
 void kernel_main() {
     // Compile-time arguments (must match reader/writer on same device)
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
@@ -21,7 +21,6 @@ void kernel_main() {
     constexpr uint32_t mm_cores_y = get_compile_time_arg_val(9);
     constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(11);
-    constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
 
     uint32_t arg_idx = 0;
@@ -34,8 +33,8 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
-    add_tiles_init(input_cb_id, intermediate_cb, false);
+    binary_op_init_common(input_cb, intermediate_cb, output_cb);
+    add_tiles_init(input_cb, intermediate_cb, false);
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
@@ -72,16 +71,16 @@ void kernel_main() {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
-                            cb_wait_front(input_cb_id, tile_granularity);
+                            cb_wait_front(input_cb, tile_granularity);
                             cb_wait_front(intermediate_cb, tile_granularity);
                             cb_reserve_back(output_cb, tile_granularity);
                             acquire_dst();
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
-                                add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
+                                add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
                                 pack_tile(tile_id, output_cb);
                             }
                             release_dst();
-                            cb_pop_front(input_cb_id, tile_granularity);
+                            cb_pop_front(input_cb, tile_granularity);
                             cb_pop_front(intermediate_cb, tile_granularity);
                             cb_push_back(output_cb, tile_granularity);
                         }
