@@ -130,7 +130,8 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
         TT_METAL_ENABLE_ERISC_IRAM: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -159,14 +160,13 @@ jobs:
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-          # pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
 
-          # https://github.com/tenstorrent/tt-metal/issues/34990
-          # Disabling hanging decode and prefill for now while team works on other issues
-          # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
-          # pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          # Running only decode and prefill-128 tests with HF weights for moe and mlp layer
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.3 and (mode_decode or mode_prefill_seq_128)" --timeout 180 --durations=0;
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.0 and (mode_decode or mode_prefill_seq_128)" --timeout 60 --durations=0;
+
           # CCL smoke tests - exactly one representative test from each op category
-
           pytest "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x4[wormhole_b0-dram_in_l1_out_axis0-bfloat16-None-num_links_4-2-dense-s2-7000-8-256-32-8x4_grid-False-fabric_2d]" --timeout=300;
 
           pytest "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-mesh_device0-normal-2-1-1-fabric_linear-DRAM_memconfig-sd35_prompt_check-3links]" --timeout=300;
