@@ -366,6 +366,167 @@ class DecoderLayerTTWeights:
     # Optional routed MoE weights (layers >= first_k_dense_replace)
     moe: Optional[MoELayerTTWeights] = None
 
+    # Optional fused KV cache branch weights (pre-sharded for GLMKVCacheBranch fused op).
+    # When present: w_kv_a_fused (WIDTH_SHARDED), gamma_fused (HEIGHT_SHARDED on rmsnorm core),
+    # trans_mat_fused (WIDTH_SHARDED on rope cores), output_fused (pre-allocated output buffer).
+    fused_kv_branch: Optional[dict] = None
+
+
+def _prepare_fused_kv_branch_weights(
+    *,
+    device,
+    state: LazyStateDict,
+    layer_idx: int,
+    hparams: Glm4MoeLiteHParams,
+    cache_dir: Optional[Path],
+    dense_dtype: ttnn.DataType,
+    mesh_mapper: Any | None,
+) -> dict:
+    """Prepare pre-sharded weights for GLMKVCacheBranch fused op (batch=1 only).
+
+    Returns a dict with:
+      - w_kv_a: WIDTH_SHARDED (2048, 576) on 18-core grid with rope columns on rope cores
+      - gamma: HEIGHT_SHARDED on rmsnorm core (1 core)
+      - trans_mat: WIDTH_SHARDED on rope cores (2 cores)
+      - output: Pre-allocated output tensor on rmsnorm core
+      - spec_crs: Full 18-core grid (CoreRangeSet)
+      - rms_crs: RMSNorm core (CoreRangeSet)
+      - rope_crs: Rope cores (CoreRangeSet)
+    """
+    hidden_size = int(hparams.hidden_size)
+    kv_lora_rank = int(hparams.kv_lora_rank)
+    qk_rope_head_dim = int(hparams.qk_rope_head_dim)
+    kvpe_dim = kv_lora_rank + qk_rope_head_dim  # 576
+
+    # Grid: 6x3 = 18 cores (adapted from DSv3 9x2 to fit Wormhole 8x8 grid)
+    # Layout (row-major shard indices 0-17):
+    #   Row 0: cores (0,0)-(5,0) = indices 0-5   (knope/matmul)
+    #   Row 1: cores (0,1)-(5,1) = indices 6-11  (knope/matmul)
+    #   Row 2: cores (0,2)-(3,2) = indices 12-15 (knope/matmul),
+    #          cores (4,2)-(5,2) = indices 16-17 (rope)
+    #   RMSNorm core: (0,0) (first core, also a knope/matmul core)
+    spec_grid = (6, 3)
+    spec_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(spec_grid[0] - 1, spec_grid[1] - 1))}
+    )
+    rms_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}
+    )
+    rope_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(5, 2))}
+    )
+
+    num_cores = spec_crs.num_cores()  # 18
+    shard_width = kvpe_dim // num_cores  # 576/18 = 32
+    assert kvpe_dim % num_cores == 0, f"kvpe_dim={kvpe_dim} not divisible by num_cores={num_cores}"
+    assert shard_width == 32, f"Expected shard width 32, got {shard_width}"
+
+    TILE_1x32 = ttnn.Tile((1, 32))
+
+    # ---- W_kv_a: WIDTH_SHARDED weights ----
+    # HF weight: [kvpe_dim, hidden_size] -> TT linear convention: [hidden_size, kvpe_dim]
+    # Columns are sharded across 18 cores, 32 cols each.
+    # With 6x3 grid, row-major shard indices: 0-5 (row 0), 6-11 (row 1), 12-17 (row 2).
+    # Rope cores are at indices 16 and 17, which naturally map to cols 512-575 (the rope
+    # columns). No shard shuffling is needed -- the natural order places rope data on rope
+    # cores and knope data on knope/matmul cores.
+
+    kv_a_torch = state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"]
+    # HF layout: [kvpe_dim, hidden_size] = [576, 2048]
+    # TT linear: transpose to [hidden_size, kvpe_dim] = [2048, 576]
+    kv_a_shuffled = kv_a_torch.transpose(-2, -1).contiguous()  # [2048, 576]
+
+    W_shard_spec = ttnn.ShardSpec(spec_crs, (hidden_size, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    W_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, W_shard_spec)
+    is_mesh = _is_mesh_device(device)
+    # The fused op runs the full matmul on each device independently, so the
+    # weight must be REPLICATED across the mesh (not TP-sharded).  Ignore the
+    # caller-provided mesh_mapper which may be a TP row-parallel shard mapper.
+    w_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+
+    w_kv_a_fused = ttnn.from_torch(
+        kv_a_shuffled.unsqueeze(0).unsqueeze(0),  # [1, 1, 2048, 576]
+        dtype=dense_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=W_mem_config,
+        mesh_mapper=w_mapper if is_mesh else None,
+    )
+
+    # ---- Gamma: HEIGHT_SHARDED on rmsnorm core ----
+    gamma_key = f"model.layers.{layer_idx}.self_attn.kv_a_layernorm.weight"
+    gamma_torch = state[gamma_key].unsqueeze(0)  # [1, kv_lora_rank]
+    gamma_shard_spec = ttnn.ShardSpec(rms_crs, (1, kv_lora_rank), ttnn.ShardOrientation.ROW_MAJOR)
+    gamma_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gamma_shard_spec)
+    gamma_fused = ttnn.from_torch(
+        gamma_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=gamma_mem_config,
+        tile=TILE_1x32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+    )
+
+    # ---- Trans_mat: WIDTH_SHARDED on rope cores ----
+    from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+    trans_mat_torch = get_rot_transformation_mat()  # [1, 1, 32, 32]
+    num_rope_cores = rope_crs.num_cores()
+    trans_mat_replicated = trans_mat_torch.repeat(1, 1, 1, num_rope_cores)  # [1, 1, 32, 32*num_rope_cores]
+    trans_shard_spec = ttnn.ShardSpec(rope_crs, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+    trans_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
+    trans_mat_fused = ttnn.from_torch(
+        trans_mat_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=trans_mem_config,
+        tile=ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE)),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+    )
+
+    # ---- Pre-allocated nope output tensor on rmsnorm core ----
+    nope_output_shard_spec = ttnn.ShardSpec(rms_crs, (1, kv_lora_rank), ttnn.ShardOrientation.ROW_MAJOR)
+    nope_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, nope_output_shard_spec)
+    nope_output_fused = ttnn.from_torch(
+        torch.zeros((1, kv_lora_rank), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=nope_output_mem_config,
+        tile=TILE_1x32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+    )
+
+    # ---- Pre-allocated rope output tensor on rope cores ----
+    rope_output_shard_spec = ttnn.ShardSpec(
+        rope_crs, (1, qk_rope_head_dim // rope_crs.num_cores()), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    rope_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, rope_output_shard_spec
+    )
+    rope_output_fused = ttnn.from_torch(
+        torch.zeros((1, qk_rope_head_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=rope_output_mem_config,
+        tile=TILE_1x32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+    )
+
+    return {
+        "w_kv_a": w_kv_a_fused,
+        "gamma": gamma_fused,
+        "trans_mat": trans_mat_fused,
+        "nope_output": nope_output_fused,
+        "rope_output": rope_output_fused,
+        "spec_crs": spec_crs,
+        "rms_crs": rms_crs,
+        "rope_crs": rope_crs,
+        "epsilon": float(hparams.rms_norm_eps),
+    }
+
 
 def convert_decoder_layer_weights(
     *,
@@ -547,13 +708,29 @@ def convert_decoder_layer_weights(
         dtype=dense_dtype,
         mesh_mapper=w_kv_b1_mapper,
     )
-    # w_kv_b2 uses attn_proj_mapper (replicated when ATTN_DP=1).
+    # w_kv_b2: when HEAD_PARALLEL_KVB2=1, shard along the head dimension (dim=1)
+    # so each TP device gets H/tp_size heads (e.g. 32/8=4).  This lets the forward
+    # pass partition attn_latent by heads before the w_kv_b2 matmul, avoiding
+    # redundant head computation and eliminating the post-kv_b2 all_reduce.
+    # Otherwise use attn_proj_mapper (replicated when ATTN_DP=1, TP-sharded on
+    # kv_lora dim when ATTN_DP=0).
+    head_parallel_kvb2 = (
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1"
+        and tp_enabled
+        and tp_size > 1
+    )
+    if head_parallel_kvb2:
+        kvb2_mapper = _tp_mesh_mapper(device, shard_dim=1)  # shard heads across TP
+        kvb2_variant = f"{attn_variant}_headpar"
+    else:
+        kvb2_mapper = attn_proj_mapper
+        kvb2_variant = attn_proj_variant
     w_kv_b2 = _per_head_weight_tt(
         device=device,
         torch_weight=w_kv_b2_torch,
-        cache_file=c("w_kv_b2", attn_proj_variant),
+        cache_file=c("w_kv_b2", kvb2_variant),
         dtype=dense_dtype,
-        mesh_mapper=attn_proj_mapper,
+        mesh_mapper=kvb2_mapper,
     )
 
     # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
@@ -750,6 +927,19 @@ def convert_decoder_layer_weights(
             w1w3_experts=w1w3_experts_tt,
         )
 
+    # ---- Optional fused KV cache branch weights ----
+    fused_kv_branch: Optional[dict] = None
+    if os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() == "1":
+        fused_kv_branch = _prepare_fused_kv_branch_weights(
+            device=device,
+            state=state,
+            layer_idx=layer_idx,
+            hparams=hparams,
+            cache_dir=cache_dir,
+            dense_dtype=dense_dtype,
+            mesh_mapper=attn_proj_mapper,
+        )
+
     return DecoderLayerTTWeights(
         layer_idx=layer_idx,
         input_layernorm=input_layernorm,
@@ -768,4 +958,5 @@ def convert_decoder_layer_weights(
         w_mlp_down=w_mlp_down,
         w_mlp_gate_up=w_mlp_gate_up,
         moe=moe,
+        fused_kv_branch=fused_kv_branch,
     )

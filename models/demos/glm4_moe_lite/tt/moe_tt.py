@@ -327,11 +327,16 @@ def moe_topk_tt(
     routed_scaling_factor = float(getattr(hparams, "routed_scaling_factor", 1.8))
     norm_topk_prob = bool(getattr(hparams, "norm_topk_prob", True))
 
+    # For decode (T<=32), keep all intermediates in L1 to avoid DRAM round-trips.
+    # Tensors are tiny ([1,1,T,64] and [1,1,T,4]) so they easily fit.
+    use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
+    mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
+
     if compute_kernel_config is None:
-        logits = ttnn.linear(x, moe_w.w_gate)  # [1,1,T,E]
+        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
     else:
-        logits = ttnn.linear(x, moe_w.w_gate, compute_kernel_config=compute_kernel_config)  # [1,1,T,E]
-    scores = ttnn.sigmoid(logits)
+        logits = ttnn.linear(x, moe_w.w_gate, compute_kernel_config=compute_kernel_config, memory_config=mc)  # [1,1,T,E]
+    scores = ttnn.sigmoid(logits, memory_config=mc)
     ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias (broadcast over tokens)
@@ -351,7 +356,7 @@ def moe_topk_tt(
             ttnn.deallocate(bias_rm, force=False)
         bias_owned = True
 
-    scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16)
+    scores_with_bias = ttnn.add(scores, bias, dtype=ttnn.bfloat16, memory_config=mc)
     if bias_owned:
         ttnn.deallocate(bias, force=False)
 
@@ -360,17 +365,17 @@ def moe_topk_tt(
     ttnn.deallocate(scores_with_bias, force=False)
 
     # Gather weights from the *unbiased* sigmoid scores.
-    topk_weights = ttnn.gather(scores, dim=3, index=topk_indices)
+    topk_weights = ttnn.gather(scores, dim=3, index=topk_indices, memory_config=mc)
     ttnn.deallocate(scores, force=False)
 
     if norm_topk_prob:
-        denom = ttnn.sum(topk_weights, dim=3, keepdim=True)
+        denom = ttnn.sum(topk_weights, dim=3, keepdim=True, memory_config=mc)
         denom = ttnn.add(denom, 1e-20, output_tensor=denom)
-        topk_weights = ttnn.div(topk_weights, denom)
+        topk_weights = ttnn.div(topk_weights, denom, memory_config=mc)
         ttnn.deallocate(denom, force=False)
 
     if routed_scaling_factor != 1.0:
-        topk_weights = ttnn.mul(topk_weights, routed_scaling_factor)
+        topk_weights = ttnn.mul(topk_weights, routed_scaling_factor, memory_config=mc)
 
     return topk_weights, topk_indices
 
