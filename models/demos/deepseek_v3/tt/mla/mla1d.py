@@ -64,6 +64,108 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
+def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32):
+    """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
+
+    Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
+    cases for interleaved in0 + DRAM sharded in1.
+
+    Args:
+        seq_len: Sequence length (M dimension)
+        k: Inner dimension (K)
+        n: Output dimension (N)
+        batch: Batch dimension (1 for unbatched, >1 for batched)
+        tile_h: Tile height (default 32)
+        tile_w: Tile width (default 32)
+
+    Returns:
+        MatmulMultiCoreReuseMultiCastProgramConfig
+    """
+    M_tiles = seq_len // tile_h
+    K_tiles = k // tile_w
+    N_tiles = n // tile_w
+
+    # grid_x splits N dimension; grid_y splits M dimension
+    grid_x = 1
+    for x in range(min(8, N_tiles), 0, -1):
+        if N_tiles % x == 0:
+            grid_x = x
+            break
+
+    grid_y = 1
+    for y in range(min(8, M_tiles), 0, -1):
+        if M_tiles % y == 0:
+            grid_y = y
+            break
+
+    grid_size = (grid_x, grid_y)
+
+    in0_block_h = M_tiles // grid_y
+    out_block_h = in0_block_h
+    out_block_w = N_tiles // grid_x
+    per_core_M = in0_block_h
+    per_core_N = out_block_w
+
+    # in0_block_w (inner dim block) must divide K_tiles.
+    # Target: keep in1 CB tiles (in0_block_w * out_block_w * 2) under ~256 tiles
+    # while maximizing in0_block_w to minimize inner loop iterations.
+    max_in1_cb_tiles = 256
+    in0_block_w = K_tiles
+    while in0_block_w > 1:
+        if K_tiles % in0_block_w == 0 and in0_block_w * out_block_w * 2 <= max_in1_cb_tiles:
+            break
+        in0_block_w -= 1
+
+    # Ensure in0 CB is also reasonable
+    while in0_block_w > 1 and in0_block_h * in0_block_w * 2 > max_in1_cb_tiles:
+        in0_block_w = in0_block_w // 2
+        if K_tiles % in0_block_w != 0:
+            while in0_block_w > 1 and K_tiles % in0_block_w != 0:
+                in0_block_w -= 1
+
+    # Determine out_block_h to make sure the matmul will fit in L1.
+    max_l1_usage = 1200 * 1024  # ~1.2 MB target
+    actual_out_block_h = out_block_h
+    for candidate_h in range(out_block_h, 0, -1):
+        if out_block_h % candidate_h != 0:
+            continue
+        in0_cb = candidate_h * in0_block_w * 2 * 2048  # bf16 double-buffered
+        in1_cb = out_block_w * in0_block_w * 2 * 1088  # bf8b double-buffered
+        interm0_cb = candidate_h * out_block_w * 4096  # fp32
+        output_cb = candidate_h * out_block_w * 2048  # bf16
+        total = in0_cb + in1_cb + interm0_cb + output_cb
+        if total <= max_l1_usage:
+            actual_out_block_h = candidate_h
+            break
+
+    # Subblock calculation (h * w <= 4, hardware limit)
+    out_subblock_w = 1
+    for sw in range(min(out_block_w, 4), 0, -1):
+        if out_block_w % sw == 0:
+            out_subblock_w = sw
+            break
+    max_sh = 4 // out_subblock_w
+    out_subblock_h = 1
+    for sh in range(min(actual_out_block_h, max_sh), 0, -1):
+        if actual_out_block_h % sh == 0:
+            out_subblock_h = sh
+            break
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=actual_out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=(batch == 1),
+    )
+
+
 class MLA1D(AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
@@ -362,35 +464,43 @@ class MLA1D(AbstractModule):
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
+        # Compute kernel config for prefill matmuls (LoFi for performance)
+        prefill_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         # Fused wq_a and wkv_a config
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            compute_kernel_config=prefill_compute_kernel_config,
         )
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            compute_kernel_config=prefill_compute_kernel_config,
         )
 
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            compute_kernel_config=prefill_compute_kernel_config,
         )
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            compute_kernel_config=prefill_compute_kernel_config,
         )
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None,
+            compute_kernel_config=prefill_compute_kernel_config,
         )
 
         # FlashMLA
@@ -670,6 +780,19 @@ class MLA1D(AbstractModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b1_out_shard_spec
         )
 
+        # Input L1 HEIGHT sharded memory config for wkv_b1 in0 (activations)
+        # Place activations on optimal DRAM bank-to-worker cores for batched matmul
+        wkv_b1_in0_shard_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
+        )
+        wkv_b1_in0_shard_shape = [wkv_b1_batches_per_core * wkv_b1_m, wkv_b1_k]  # [2 * 32, 128] = [64, 128]
+        wkv_b1_in0_shard_spec = ttnn.ShardSpec(
+            wkv_b1_in0_shard_grid, wkv_b1_in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        wkv_b1_in0_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b1_in0_shard_spec
+        )
+
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wkv_b1_out_memory_config,
@@ -717,6 +840,19 @@ class MLA1D(AbstractModule):
 
         # Tiny tile for wkv_b2: 4x32 tiles for m=4 dimension
         wkv_b2_output_tile = ttnn.Tile((wkv_b2_tile_h, tile_size))
+
+        # Input L1 HEIGHT sharded memory config for wkv_b2 in0 (activations)
+        # Place activations on optimal DRAM bank-to-worker cores for batched matmul
+        wkv_b2_in0_shard_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
+        )
+        wkv_b2_in0_shard_shape = [wkv_b2_batches_per_core * wkv_b2_m, wkv_b2_k]  # [11 * 4, 512] = [44, 512]
+        wkv_b2_in0_shard_spec = ttnn.ShardSpec(
+            wkv_b2_in0_shard_grid, wkv_b2_in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        wkv_b2_in0_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_in0_shard_spec
+        )
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -1028,6 +1164,8 @@ class MLA1D(AbstractModule):
             "wq_kv_a_in0_memory_config": wq_kv_a_in0_memory_config,
             "wq_b_in0_memory_config": wq_b_in0_memory_config,
             "wo_in0_memory_config": wo_in0_memory_config,
+            "wkv_b1_in0_memory_config": wkv_b1_in0_memory_config,
+            "wkv_b2_in0_memory_config": wkv_b2_in0_memory_config,
             "wkv_b2_in0_tile": wkv_b2_output_tile,  # 4x32 tiny tile for wkv_b2 in0
         }
 
@@ -1308,9 +1446,12 @@ class MLA1D(AbstractModule):
             qk_rope_head_dim,
         )
 
-        # Q path: norm + wq_b
+        # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
-        tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
+        wq_b_program_config = build_prefill_matmul_program_config(
+            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim
+        )
+        tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
 
         tt_q = ttnn.reshape(tt_q, (1, seq_len, num_heads_local, qk_head_dim))
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, seq_len, qk_head_dim]
@@ -1318,8 +1459,23 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [1, num_heads_local, seq_len, qk_head_dim])
 
-        # wkv_b1
-        tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, seq_len, kv_lora_rank]
+        # wkv_b1 (interleaved in0 + DRAM HEIGHT sharded in1)
+        # Pad batch dimension to match DRAM sharded weight layout
+        num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
+        if num_heads_local_padded != num_heads_local:
+            pad_heads = num_heads_local_padded - num_heads_local
+            tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
+
+        wkv_b1_program_config = build_prefill_matmul_program_config(
+            seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
+        )
+        tt_q_nope = ttnn.linear(
+            tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
+        )  # [1, num_heads_local_padded, seq_len, kv_lora_rank]
+
+        # Slice off batch padding from wkv_b1 output
+        if num_heads_local_padded != num_heads_local:
+            tt_q_nope = ttnn.slice(tt_q_nope, [0, 0, 0, 0], [1, num_heads_local, seq_len, kv_lora_rank])
 
         # Q RoPE
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -1381,15 +1537,34 @@ class MLA1D(AbstractModule):
             attn_out, **ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
-        # wkv_b2
-        v_out = ttnn.linear(v_out, **cfg["wkv_b2"])  # [1, num_heads, seq_len, v_head_dim]
+        # wkv_b2 (interleaved in0 + DRAM HEIGHT sharded in1)
+        # Pad batch dimension to match DRAM sharded weight layout
+        num_heads_padded = pad_batch_to_dram_banks(num_heads)
+        if num_heads_padded != num_heads:
+            pad_heads = num_heads_padded - num_heads
+            v_out = ttnn.pad(v_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
+
+        wkv_b2_program_config = build_prefill_matmul_program_config(
+            seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
+        )
+        v_out = ttnn.linear(
+            v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
+        )  # [1, num_heads_padded, seq_len, v_head_dim]
         ttnn.deallocate(attn_out)
+
+        # Slice off batch padding from wkv_b2 output
+        if num_heads_padded != num_heads:
+            v_out = ttnn.slice(v_out, [0, 0, 0, 0], [1, num_heads, seq_len, v_head_dim])
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]
 
+        # wo matmul (interleaved in0 + DRAM WIDTH sharded in1)
         # Chunk the sequence dimension if needed to avoid OOM/hang in all_gather for large sequences
         # Strategy: Process each chunk independently to keep all_gather buffers small
+        wo_k = num_heads * v_head_dim
+        dim = x.shape[3]
+
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
             num_heads = v_out.shape[2]
@@ -1403,6 +1578,8 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
+            wo_chunk_program_config = build_prefill_matmul_program_config(SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim)
+
             output_chunks = []
             hidden_dim = num_heads * v_head_dim
             for chunk_idx in range(num_chunks):
@@ -1410,7 +1587,9 @@ class MLA1D(AbstractModule):
                 end = start + SEQ_LEN_CHUNK_SIZE
                 v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
                 v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
-                out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
+                out_chunk = ttnn.linear(
+                    v_chunk, **cfg["wo"], program_config=wo_chunk_program_config
+                )  # [1, 1, chunk_size, dim]
                 output_chunks.append(out_chunk)
                 ttnn.deallocate(v_chunk)
 
@@ -1427,7 +1606,8 @@ class MLA1D(AbstractModule):
         else:
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, seq_len, dim]
+            wo_program_config = build_prefill_matmul_program_config(seq_len, k=wo_k, n=dim)
+            out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)  # [1, 1, seq_len, dim]
             ttnn.deallocate(v_out)
 
         return out
@@ -1609,25 +1789,8 @@ class MLA1D(AbstractModule):
             pad_heads = num_heads_local_padded - num_heads_local
             tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
-        # Get optimal DRAM bank-to-worker core assignment for wkv_b1 sharding
-        mesh_device = cfg["mesh_device"]
-        optimal_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-        num_dram_banks = len(optimal_worker_cores)
-
-        # Set up L1 HEIGHT sharded memory config for wkv_b1 in0
-        wkv_b1_in0_shard_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
-        )
-        qk_nope_head_dim = cfg["qk_nope_head_dim"]
-        batches_per_core_wkv_b1 = num_heads_local_padded // num_dram_banks
-        wkv_b1_in0_shard_shape = [batches_per_core_wkv_b1 * bsz, qk_nope_head_dim]
-        wkv_b1_in0_shard_spec = ttnn.ShardSpec(
-            wkv_b1_in0_shard_grid, wkv_b1_in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-        )
-        wkv_b1_in0_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b1_in0_shard_spec
-        )
-        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=wkv_b1_in0_memory_config)
+        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
+        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
 
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
 
@@ -1707,30 +1870,12 @@ class MLA1D(AbstractModule):
             pad_heads = num_heads_padded - num_heads
             attn_out = ttnn.pad(attn_out, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
 
-        # Get optimal DRAM bank-to-worker core assignment for wkv_b2 sharding
-        mesh_device = cfg["mesh_device"]
-        optimal_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-        num_dram_banks = len(optimal_worker_cores)
-
-        # Set up L1 HEIGHT sharded memory config for wkv_b2 in0
-        wkv_b2_in0_shard_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
-        )
-        batches_per_core_wkv_b2 = num_heads_padded // num_dram_banks
-        wkv_b2_in0_shard_shape = [batches_per_core_wkv_b2 * bsz, kv_lora_rank]
-        wkv_b2_in0_shard_spec = ttnn.ShardSpec(
-            wkv_b2_in0_shard_grid, wkv_b2_in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-        )
-        wkv_b2_in0_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_in0_shard_spec
-        )
-
         # Retile in0 to 4x32 tiny tiles BEFORE sharding for wkv_b2 matmul
         wkv_b2_in0_tile = cfg["wkv_b2_in0_tile"]
         attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT, tile=wkv_b2_in0_tile)
 
-        # Now shard the retiled tensor
-        attn_out = ttnn.to_memory_config(attn_out, memory_config=wkv_b2_in0_memory_config)
+        # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
+        attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
 
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
 
@@ -1804,8 +1949,11 @@ class MLA1D(AbstractModule):
         kv_lora_rank: int,
         qk_rope_head_dim: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        # Fused wq_kv_a matmul
-        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+        # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
+        dim = x.shape[3]
+        qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
+        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n)
+        tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
         tt_q_kv = ttnn.experimental.all_gather_async(
