@@ -814,6 +814,153 @@ TEST_F(HDSocketFixture, D2HSocketPingBenchmark) {
     }
 }
 
+std::vector<uint64_t> benchmark_h2d_latency(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    std::size_t fifo_size,
+    std::size_t page_size,
+    uint32_t num_iterations,
+    H2DMode h2d_mode,
+    const MeshCoreCoord& recv_core) {
+    auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, fifo_size, h2d_mode);
+    input_socket.set_page_size(page_size);
+
+    // Recv data buffer: single page in L1 (kernel overwrites each iteration)
+    const ReplicatedBufferConfig buffer_config{.size = page_size};
+    auto shard_params =
+        ShardSpecBuffer(CoreRangeSet(recv_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig recv_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_local_config, mesh_device.get());
+
+    // Measurement buffer: one uint64_t per iteration
+    uint32_t measurement_buffer_size = num_iterations * sizeof(uint64_t);
+    const ReplicatedBufferConfig meas_buf_config{.size = measurement_buffer_size};
+    const DeviceLocalBufferConfig meas_local_config{
+        .page_size = measurement_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto measurement_buffer = MeshBuffer::create(meas_buf_config, meas_local_config, mesh_device.get());
+
+    const char* kernel_path =
+        (h2d_mode == H2DMode::DEVICE_PULL)
+            ? "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_data_ping_device_pull.cpp"
+            : "tests/tt_metal/tt_metal/test_kernels/misc/socket/h2d_socket_data_ping_host_push.cpp";
+    auto recv_program = CreateProgram();
+    CreateKernel(
+        recv_program,
+        kernel_path,
+        recv_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(input_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(recv_data_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(measurement_buffer->address()),
+                static_cast<uint32_t>(num_iterations),
+            }});
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
+    mesh_workload.add_program(devices, std::move(recv_program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    // Host side: write + barrier per page, matching kernel's warmup + timed iterations
+    constexpr uint32_t WARMUP_ITERS = 5;
+    uint32_t page_size_words = page_size / sizeof(uint32_t);
+    std::vector<uint32_t> src_vec(page_size_words);
+    for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
+        input_socket.write(src_vec.data(), 1);
+        input_socket.barrier();
+    }
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        input_socket.write(src_vec.data(), 1);
+        input_socket.barrier();
+    }
+
+    // Read back per-iteration cycle counts from device L1
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::vector<uint64_t> cycles(num_iterations);
+    cluster.read_core(
+        cycles.data(),
+        measurement_buffer_size,
+        tt_cxy_pair(
+            mesh_device->get_device(recv_core.device_coord)->id(),
+            mesh_device->worker_core_from_logical_core(recv_core.core_coord)),
+        measurement_buffer->address());
+
+    return cycles;
+}
+
+TEST_F(HDSocketFixture, H2DSocketLatencyBenchmark) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    std::vector<std::size_t> page_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
+    std::vector<std::size_t> fifo_sizes = {1024, 4096, 16384, 65536, 262144, 524288};
+    uint32_t num_iterations = 100;
+
+    std::optional<MeshCoordinate> recv_coord_opt;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (is_device_coord_mmio_mapped(mesh_device_, coord)) {
+            recv_coord_opt = coord;
+            break;
+        }
+    }
+    ASSERT_TRUE(recv_coord_opt.has_value()) << "No MMIO-mapped device found";
+    auto recv_coord = recv_coord_opt.value();
+    MeshCoreCoord recv_core = {recv_coord, CoreCoord(0, 0)};
+
+    std::cout << "page_size,socket_fifo_size,h2d_mode,num_iterations,"
+              << "avg_us,min_us,max_us,p50_us,p99_us,"
+              << "avg_cycles,min_cycles,max_cycles,device_coord" << std::endl;
+
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+        std::string mode_str = (h2d_mode == H2DMode::HOST_PUSH) ? "HOST_PUSH" : "DEVICE_PULL";
+        for (auto fifo_size : fifo_sizes) {
+            for (auto page_size : page_sizes) {
+                if (page_size > fifo_size) {
+                    continue;
+                }
+
+                auto cycles =
+                    benchmark_h2d_latency(mesh_device_, fifo_size, page_size, num_iterations, h2d_mode, recv_core);
+
+                auto sorted_cycles = cycles;
+                std::sort(sorted_cycles.begin(), sorted_cycles.end());
+                uint64_t min_c = sorted_cycles.front();
+                uint64_t max_c = sorted_cycles.back();
+                uint64_t p50_c = sorted_cycles[num_iterations / 2];
+                uint64_t p99_c = sorted_cycles[(num_iterations * 99) / 100];
+                double avg_c = 0;
+                for (auto c : cycles) {
+                    avg_c += c;
+                }
+                avg_c /= num_iterations;
+
+                double avg_us = avg_c / 1350.0;
+                double min_us = static_cast<double>(min_c) / 1350.0;
+                double max_us = static_cast<double>(max_c) / 1350.0;
+                double p50_us = static_cast<double>(p50_c) / 1350.0;
+                double p99_us = static_cast<double>(p99_c) / 1350.0;
+
+                std::cout << page_size << "," << fifo_size << "," << mode_str << "," << num_iterations << "," << avg_us
+                          << "," << min_us << "," << max_us << "," << p50_us << "," << p99_us << "," << avg_c << ","
+                          << min_c << "," << max_c << "," << recv_coord << std::endl;
+                std::cout.flush();
+            }
+        }
+    }
+}
+
 TEST_F(HDSocketFixture, H2DSocketLoopback) {
     // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
