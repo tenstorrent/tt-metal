@@ -75,8 +75,7 @@ def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_sha
     [
         ([1, 1, 1024, 1], [1, 1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
         ([1, 1024, 1], [1, 1024, 32], ttnn.CoreGrid(x=1, y=8), [1, 1024], [32, 1024], ttnn.CoreGrid(x=8, y=1)),
-        # ([1, 1, 1024], [1, 32, 1024], ttnn.CoreGrid(x=8, y=1), [1024, 1], [1024, 32], ttnn.CoreGrid(x=1, y=8)), (passes)
-        # ([1, 32, 512], [1, 32, 128], ttnn.CoreGrid(x=4, y=1), [512, 32], [128, 32], ttnn.CoreGrid(x=1, y=4)),
+        ([1, 32, 512], [32, 128], ttnn.CoreGrid(x=4, y=1), [512, 32], [128, 32], ttnn.CoreGrid(x=1, y=4)),
         ([1, 128, 64], [1, 1, 128, 64], ttnn.CoreGrid(x=1, y=1), [64, 128], [64, 128], ttnn.CoreGrid(x=1, y=1)),
     ],
 )
@@ -89,11 +88,13 @@ def test_reshape_block_shard(
         shape=input_shard_shape,
         core_grid=input_core_grid,
         strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=True,
     )
     output_block_sharded_config = ttnn.create_sharded_memory_config(
         shape=output_shard_shape,
         core_grid=output_core_grid,
         strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=True,
     )
     input_ttnn = ttnn.from_torch(
         input_torch,
@@ -102,6 +103,7 @@ def test_reshape_block_shard(
         device=device,
         memory_config=block_sharded_config,
     )
+
     output_tensor = ttnn.reshape(input_ttnn, output_shape, memory_config=output_block_sharded_config)
 
     expected_output = input_torch.reshape(output_shape)
