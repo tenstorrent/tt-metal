@@ -363,6 +363,7 @@ public:
 
 private:
     SearchState state_;  // Internal state for the search
+    bool quiet_mode_ = false;  // Quiet mode flag for suppressing log messages
     /**
      * @brief Hash state for memoization (FNV-1a hash)
      *

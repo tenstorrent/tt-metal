@@ -53,21 +53,21 @@ groupings {
 groupings {
   name: "pods"
   items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod contains 2 meshes (must have at least 2)
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod contains 2 meshes
   ]
 }
 
 groupings {
   name: "superpods"
   items: [
-    { grouping_ref { grouping_name: "pods" count: 3 } }  # Each superpod contains 3 pods (must have at least 2)
+    { grouping_ref { grouping_name: "pods" count: 3 } }  # Each superpod contains 3 pods
   ]
 }
 
 groupings {
   name: "clusters"
   items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster contains 2 superpods (must have at least 2)
+    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster contains 2 superpods
   ]
 }
 ```
@@ -117,7 +117,7 @@ groupings {
 
 ### Logical Groupings
 
-**Meshes**: The required logical grouping. Can be defined using hosts, trays, or ASIC locations. **Note**: Meshes can have 1 item (e.g., `count: 1`), but all other groupings (pods, superpods, clusters) must have at least 2 items.
+**Meshes**: The required logical grouping. Can be defined using hosts, trays, or ASIC locations. All groupings must have at least 1 item.
 
 ```protobuf
 groupings {
@@ -146,7 +146,7 @@ groupings {
 }
 ```
 
-**Pods**: Contains meshes. Defined using grouping references. **Must have at least 2 items.**
+**Pods**: Contains meshes. Defined using grouping references. Must have at least 1 item.
 
 ```protobuf
 groupings {
@@ -158,26 +158,26 @@ groupings {
 }
 ```
 
-**Superpods**: Contains pods and/or meshes. Can mix different grouping types. **Must have at least 2 items.**
+**Superpods**: Contains pods and/or meshes. Can mix different grouping types. Must have at least 1 item.
 
 ```protobuf
 groupings {
   name: "superpods"
   items: [
-    { grouping_ref { grouping_name: "pods" count: 3 } }  # Each superpod contains 3 pods (must have at least 2)
+    { grouping_ref { grouping_name: "pods" count: 3 } }  # Each superpod contains 3 pods
     # OR { grouping_ref { grouping_name: "meshes" count: 3 } }  # Each superpod contains 3 meshes directly
     # OR both: { grouping_ref { grouping_name: "pods" count: 2 } }, { grouping_ref { grouping_name: "meshes" count: 4 } }  # Mix and match
   ]
 }
 ```
 
-**Clusters**: Contains superpods, pods, and/or meshes. Can mix different grouping types. **Must have at least 2 items.**
+**Clusters**: Contains superpods, pods, and/or meshes. Can mix different grouping types. Must have at least 1 item.
 
 ```protobuf
 groupings {
   name: "clusters"
   items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster contains 2 superpods (must have at least 2)
+    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Each cluster contains 2 superpods
     # OR { grouping_ref { grouping_name: "pods" count: 6 } }  # Each cluster contains 6 pods directly
     # OR { grouping_ref { grouping_name: "meshes" count: 10 } }  # Each cluster contains 10 meshes directly
     # OR mix: { grouping_ref { grouping_name: "superpods" count: 2 } }, { grouping_ref { grouping_name: "pods" count: 2 } }, { grouping_ref { grouping_name: "meshes" count: 3 } }
@@ -242,7 +242,7 @@ groupings {
 3. **Grouping References**: All `grouping_name` values must reference an existing grouping
 4. **Count Validation**:
    - If `name == "meshes"`: `count >= 1` (meshes can have 1 item)
-   - Otherwise: `count >= 2` (all other groupings must have at least 2 items)
+   - All groupings: `count >= 1` (all groupings must have at least 1 item)
 5. **Grouping Structure**: Each item in `items` must be either `asic_location` or `grouping_ref` (enforced by oneof in schema)
 
 ## Complete Example

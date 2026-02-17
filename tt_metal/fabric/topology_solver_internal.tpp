@@ -742,7 +742,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Periodic progress logging (similar to topology_mapper_utils.cpp)
     state_.dfs_calls++;
-    if ((state_.dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
+    if (!quiet_mode_ && (state_.dfs_calls & PROGRESS_LOG_INTERVAL_MASK) == 0) {
         size_t assigned = 0;
         for (auto v : state_.mapping) {
             assigned += (v != -1);
@@ -849,6 +849,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
@@ -873,14 +874,16 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     std::string target_deg_hist = build_degree_histogram(graph_data.target_deg);
     std::string global_deg_hist = build_degree_histogram(graph_data.global_deg);
 
-    log_info(
-        tt::LogFabric,
-        "Topology mapping search starting: target_graph_nodes={}, global_graph_nodes={}, "
-        "target_degree_histogram={}, global_degree_histogram={}",
-        graph_data.n_target,
-        graph_data.n_global,
-        target_deg_hist,
-        global_deg_hist);
+    if (!quiet_mode) {
+        log_info(
+            tt::LogFabric,
+            "Topology mapping search starting: target_graph_nodes={}, global_graph_nodes={}, "
+            "target_degree_histogram={}, global_degree_histogram={}",
+            graph_data.n_target,
+            graph_data.n_global,
+            target_deg_hist,
+            global_deg_hist);
+    }
 
     // Check if global graph has enough nodes
     if (graph_data.n_global < graph_data.n_target) {
@@ -1082,7 +1085,9 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         global_node,
                         neighbor_global,
                         actual);
-                    log_info(tt::LogFabric, "{}", warning_msg);
+                    if (!quiet_mode) {
+                        log_info(tt::LogFabric, "{}", warning_msg);
+                    }
                     warnings->push_back(warning_msg);
                 }
             }
@@ -1387,23 +1392,25 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     result.stats.backtrack_count = state.backtrack_count;
 
     // Log success with statistics
-    log_info(
-        tt::LogFabric,
-        "Mapping validation succeeded: {} target nodes mapped to {} global nodes. "
-        "DFS calls: {}, backtracks: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
-        graph_data.n_target,
-        graph_data.n_global,
-        state.dfs_calls,
-        state.backtrack_count,
-        result.constraint_stats.required_satisfied,
-        result.constraint_stats.preferred_satisfied,
-        result.constraint_stats.preferred_total);
-
-    if (!result.warnings.empty()) {
+    if (!quiet_mode) {
         log_info(
             tt::LogFabric,
-            "Mapping completed with {} warning(s) about channel count mismatches (relaxed mode)",
-            result.warnings.size());
+            "Mapping validation succeeded: {} target nodes mapped to {} global nodes. "
+            "DFS calls: {}, backtracks: {}. Required constraints satisfied: {}, preferred constraints satisfied: {}/{}",
+            graph_data.n_target,
+            graph_data.n_global,
+            state.dfs_calls,
+            state.backtrack_count,
+            result.constraint_stats.required_satisfied,
+            result.constraint_stats.preferred_satisfied,
+            result.constraint_stats.preferred_total);
+
+        if (!result.warnings.empty()) {
+            log_info(
+                tt::LogFabric,
+                "Mapping completed with {} warning(s) about channel count mismatches (relaxed mode)",
+                result.warnings.size());
+        }
     }
 
     // Success!
