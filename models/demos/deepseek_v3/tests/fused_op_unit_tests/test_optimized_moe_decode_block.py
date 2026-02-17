@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import tt_to_torch_dtype
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U.py import (
     create_torch_w0,
     create_torch_w1,
@@ -17,16 +16,33 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U.py import (
 )
 
 
+def tt_to_torch_dtype(tt_dtype):
+    if tt_dtype == ttnn.bfloat16:
+        return torch.bfloat16
+    elif tt_dtype == ttnn.bfloat8_b:
+        return torch.bfloat16
+    elif tt_dtype == ttnn.float32:
+        return torch.float32
+    else:
+        raise ValueError(f"Invalid dtype: {tt_dtype}")
+
+
 def gen_torch_expert_mapping(scheme, devices, experts, experts_per_device, dtype):
     if scheme == "random":
         perm = torch.randperm(experts)
-        assignment = torch.empty(experts, dtype=tt_to_torch_dtype(torch.uint16))
+        assignment = torch.empty(experts, dtype=tt_to_torch_dtype(dtype))
         for d in range(devices):
             assignment[perm[d * experts_per_device : (d + 1) * experts_per_device]] = d
     else:
         assignment = torch.arange(experts) // experts_per_device
 
     return assignment.unsqueeze(0).repeat(devices, 1)
+
+
+def gen_torch_dispatch_input_tensors():
+    pass
+
+    # return (torch_dispatch_input_tensor, torch_dispatch_input_expert_indices_tensor, torch_dispatch_input_expert_scores_tensor)
 
 
 def gen_compute_matmul_cores(mesh_device):
@@ -94,6 +110,7 @@ def gen_torch_compute_matmul_weights(ring2cores, num_layers, experts_per_device,
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_performance", [False, True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -125,6 +142,7 @@ def test_optimized_moe_decode_block(
     combine_token_parallel_core_dim,
     combine_data_parallel_core_dim,
     enable_trace,
+    enable_performance,
 ):
     mesh_device.disable_and_clear_program_cache()
 
@@ -136,12 +154,15 @@ def test_optimized_moe_decode_block(
     dispatch_devices = mesh_shape[cluster_axis]
     batch = batches_per_device * dispatch_devices
     total_tokens = batch * seq
+    tokens_per_device = batch // devices
     experts_per_device = experts // devices
 
     if cluster_axis == 1:
         shard_dims = (None, shard_dim)
-    else:
+    elif cluster_axis == 0:
         shard_dims = (shard_dim, None)
+    else:
+        shard_dims = shard_dim
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet(
@@ -231,13 +252,98 @@ def test_optimized_moe_decode_block(
     # create dynamic input tensors & goldens
     ############################################
     logger.info(f"Begin creating dynamic input tensors and goldens")
+
+    # ------------------------------------------------------------------------
+    # Memory configs for dispatch input tensors
+    # ------------------------------------------------------------------------
+    dispatch_input_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    # Use L1 height sharded memory for indices and scores
+    # Height sharded with 1 row per core ensures 16B alignment and optimal memory access
+    num_cores_y = min(8, tokens_per_device)
+    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
+    dispatch_input_shard_core_range = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+    dispatch_input_shard_spec = ttnn.ShardSpec(
+        dispatch_input_shard_core_range,
+        [1, seq * select_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    dispatch_input_expert_indices_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        dispatch_input_shard_spec,
+    )
+
+    dispatch_input_expert_scores_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        dispatch_input_shard_spec,
+    )
+
+    # ------------------------------------------------------------------------
+    # How many sets of input tensors we need
+    # ------------------------------------------------------------------------
+    if enable_performance:
+        # only a single reused input for performance runs, so we don't have to move it into L1
+        num_input_sets = 1
+    else:
+        # need an additional set of inputs for the trace compile run (since we deallocate inputs after each iteration)
+        if enable_trace:
+            num_input_sets = num_iterations + 1
+        else:
+            num_input_sets = num_iterations
+
+    # ------------------------------------------------------------------------
+    # Generate the tensors
+    # ------------------------------------------------------------------------
     tt_dispatch_input_tensors = []
-    tt_dispatch_input_expert_indices = []
-    tt_dispatch_input_expert_scores = []
+    tt_dispatch_input_expert_indices_tensors = []
+    tt_dispatch_input_expert_scores_tensors = []
     torch_goldens = []
-    for iteration in range(num_iterations):
-        # TODO: (GR)
-        pass
+    for iteration in range(num_input_sets):
+        (
+            torch_dispatch_input_tensor,
+            torch_dispatch_input_expert_indices_tensor,
+            torch_dispatch_input_expert_scores_tensor,
+        ) = gen_torch_dispatch_input_tensors()
+
+        dispatch_input_dtype = ttnn.bfloat16
+        tt_dispatch_input_tensor = ttnn.from_torch(
+            torch_dispatch_input_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_input_dtype,
+            memory_config=dispatch_input_memory_config if enable_performance else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+        tt_dispatch_input_tensors.append(tt_dispatch_input_tensor)
+
+        dispatch_input_expert_indices_dtype = ttnn.uint16
+        tt_dispatch_input_expert_indices_tensor = ttnn.from_torch(
+            torch_dispatch_input_expert_indices_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_input_expert_indices_dtype,
+            memory_config=dispatch_input_expert_indices_memory_config
+            if enable_performance
+            else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+        tt_dispatch_input_expert_indices_tensors.append(tt_dispatch_input_expert_indices_tensor)
+
+        dispatch_input_expert_scores_dtype = ttnn.bfloat16
+        tt_dispatch_input_expert_scores_tensor = ttnn.from_torch(
+            torch_dispatch_input_expert_scores_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_input_expert_scores_dtype,
+            memory_config=dispatch_input_expert_scores_memory_config if enable_performance else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+        tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
     logger.info(f"Done creating dynamic input tensors and goldens")
 
@@ -260,15 +366,17 @@ def test_optimized_moe_decode_block(
         f"preallocated_dispatch_output_sparse_bufffer shape: {tt_preallocated_dispatch_output_sparse_buffer.shape}"
     )
 
-    dispatch_output_expert_indices_shard_spec = ttnn.ShardSpec(
+    # same shard spec for indices and scores
+    dispatch_output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(compute_tilize_drain_core, compute_tilize_drain_core)}),
         [total_tokens * devices, select_experts_k],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+
     dispatch_output_expert_indices_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        dispatch_output_expert_indices_shard_spec,
+        dispatch_output_shard_spec,
     )
     dispatch_output_expert_indices_dtype = ttnn.uint16
     disptach_output_expert_indices_shape = [devices, total_tokens, select_experts_k]
@@ -286,15 +394,10 @@ def test_optimized_moe_decode_block(
         f"preallocated_dispatch_output_expert_indices shape: {tt_preallocated_dispatch_output_expert_indices.shape}"
     )
 
-    dispatch_output_expert_scores_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(compute_tilize_drain_core, compute_tilize_drain_core)}),
-        [total_tokens * devices, select_experts_k],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
     dispatch_output_expert_scores_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        dispatch_output_expert_scores_shard_spec,
+        dispatch_output_shard_spec,
     )
     dispatch_output_expert_scores_dtype = ttnn.bfloat16
     disptach_output_expert_scores_shape = [devices, total_tokens, select_experts_k]
@@ -325,20 +428,45 @@ def test_optimized_moe_decode_block(
     logger.info(f"Begin running op iterations")
 
     def run_op(iteration):
+        # move dispatch inputs into L1
+        if enable_performance:
+            tt_dispatch_input_tensor = tt_dispatch_input_tensors[0]
+            tt_dispatch_input_expert_indices_tensor = tt_dispatch_input_expert_indices_tensors[0]
+            tt_dispatch_input_expert_scores_tensor = tt_dispatch_input_expert_scores_tensors[0]
+        else:
+            tt_dispatch_input_tensor = ttnn.to_memory_config(
+                tt_dispatch_input_tensors[iteration], memory_config=dispatch_input_memory_config
+            )
+            tt_dispatch_input_expert_indices_tensor = ttnn.to_memory_config(
+                tt_dispatch_input_expert_indices_tensors[iteration],
+                memory_config=dispatch_input_expert_indices_memory_config,
+            )
+            tt_dispatch_input_expert_scores_tensor = ttnn.to_memory_config(
+                tt_dispatch_input_expert_scores_tensors[iteration],
+                memory_config=dispatch_input_expert_scores_memory_config,
+            )
+
         # create persistent output tensor for combine
         # runtime since it needs to be a zeroed out tensor
         # allacote before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
-        # TODO: (GR)
-        tt_combine_output = ttnn.moreh_full()
+        # TODO: (GR) may have to create tiled, and then move to row-major
+        tt_combine_output = ttnn.moreh_full(
+            shape=[batch * seq, experts, hidden_size],
+            fill_value=0,
+            mesh_device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         (
             tt_dispatch_output_sparse_buffer,
             tt_dispatch_output_expert_indices,
             tt_dispatch_output_expert_scores,
         ) = ttnn.experimental.all_to_all_dispatch_metadata(
-            tt_dispatch_input_tensors[iteration],
-            tt_dispatch_input_expert_indices[iteration],
-            tt_dispatch_input_expert_scores[iteration],
+            tt_dispatch_input_tensor,
+            tt_dispatch_input_expert_indices_tensor,
+            tt_dispatch_input_expert_scores_tensor,
             tt_expert_mapping,
             cluster_axis=cluster_axis,
             num_links=4,
@@ -352,9 +480,10 @@ def test_optimized_moe_decode_block(
         # NOTE:
         # - deallocate inputs to dispatch that are allocated in L1
         # - needed to run multiple iterations since combine uses just about all of L1
-        ttnn.deallocate(tt_dispatch_input_tensors[iteration])
-        ttnn.deallocate(tt_dispatch_input_expert_indices[iteration])
-        ttnn.deallocate(tt_dispatch_input_expert_scores[iteration])
+        if not enable_performance:
+            ttnn.deallocate(tt_dispatch_input_tensor)
+            ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
+            ttnn.deallocate(tt_dispatch_input_expert_scores_tensor)
 
         (
             tt_compute_output_token_counts,
@@ -428,9 +557,10 @@ def test_optimized_moe_decode_block(
     ############################################
     # Validate output
     ############################################
-    logger.info(f"Begin validating output")
-    for iteration in range(num_iterations):
-        # TODO: (GR)
-        pass
+    if not enable_performance:
+        logger.info(f"Begin validating output")
+        for iteration in range(num_iterations):
+            # TODO: (GR)
+            pass
 
-    logger.info(f"Done validating output")
+        logger.info(f"Done validating output")
