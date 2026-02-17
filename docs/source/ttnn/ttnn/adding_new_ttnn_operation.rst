@@ -93,6 +93,15 @@ then handles program construction, caching, and buffer address patching on cache
        //     const operation_attributes_t& operation_attributes,
        //     const tensor_args_t& tensor_args,
        //     tensor_return_value_t& tensor_return_value);
+
+       // OPTIONAL: Only needed when create_descriptor requires a device-side
+       // resource (e.g. config tensor) not already in tensor_args or the output.
+       // Called once on cache miss. Return value is stored by the framework and
+       // passed as an extra argument to create_descriptor.
+       // static SomeResourceType prepare_resources(
+       //     const operation_attributes_t& operation_attributes,
+       //     const tensor_args_t& tensor_args,
+       //     tensor_return_value_t& tensor_return_value);
    };
 
 **Building a ProgramDescriptor:**
