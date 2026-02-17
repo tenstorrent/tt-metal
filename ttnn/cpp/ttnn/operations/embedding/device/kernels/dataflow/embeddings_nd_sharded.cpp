@@ -10,6 +10,20 @@
 
 //  output[idx][:] = weights[input[idx]][:];
 
+FORCE_INLINE uint32_t
+logical_to_tile_storage_index(uint32_t logical_idx, uint32_t tile_width, uint32_t face_height, uint32_t face_width) {
+    uint32_t row = logical_idx / tile_width;
+    uint32_t col = logical_idx % tile_width;
+    uint32_t faces_per_row = tile_width / face_width;
+    uint32_t face_row = row / face_height;
+    uint32_t face_col = col / face_width;
+    uint32_t face_id = face_row * faces_per_row + face_col;
+    uint32_t sub_row = row % face_height;
+    uint32_t sub_col = col % face_width;
+    uint32_t face_hw = face_height * face_width;
+    return face_id * face_hw + sub_row * face_width + sub_col;
+}
+
 void kernel_main() {
     using namespace ttnn::kernel_utils;
     using namespace ttnn::kernel;
@@ -47,7 +61,12 @@ void kernel_main() {
         auto output_page_iter = output_pages.begin();
 
         for (uint32_t index = 0; index < c_args.elems_per_page; ++index, ++output_page_iter) {
-            input_token_t weights_flatten_idx = index_cb_ptr[index];
+            uint32_t storage_index = index;
+            if (c_args.input_is_tile_layout) {
+                storage_index =
+                    logical_to_tile_storage_index(index, c_args.tile_width, c_args.face_height, c_args.face_width);
+            }
+            input_token_t weights_flatten_idx = index_cb_ptr[storage_index];
 
             uint64_t weight_noc_addr = get_token_noc_addr(weights_flatten_idx, weights);
             noc_async_read<c_args.weight_page_size>(weight_noc_addr, output_cb_addr, c_args.weight_page_size);

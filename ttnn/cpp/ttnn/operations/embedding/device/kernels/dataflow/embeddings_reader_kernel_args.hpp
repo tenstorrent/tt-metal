@@ -25,6 +25,10 @@ struct CompileTimeEmbeddingsReaderKernelArgs {
     uint32_t input_block_size_bytes;
     uint32_t input_buf_alignment;
     uint32_t output_cb_index;
+    uint32_t input_is_tile_layout;
+    uint32_t tile_width;
+    uint32_t face_height;
+    uint32_t face_width;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<EmbeddingsReaderKernelArgs>);

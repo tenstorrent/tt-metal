@@ -583,7 +583,20 @@ def test_embedding_oom(
         ),  # non-contiguous row
     ],
 )
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
 @pytest.mark.parametrize("tensors_nd_sharded", ["input_only", "output_only", "input_and_output"])
 def test_nd_sharded_embedding(
     device,
@@ -591,11 +604,17 @@ def test_nd_sharded_embedding(
     input_shard_shape,
     shard_orientation,
     shard_core_grid,
+    input_layout,
     output_layout,
     tensors_nd_sharded,
 ):
     if output_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Tile layout is not supported for ND-sharded tensors")
+
+    if input_layout == ttnn.TILE_LAYOUT and (
+        input_shard_shape[-1] % ttnn.TILE_SIZE != 0 or input_shard_shape[-2] % ttnn.TILE_SIZE != 0
+    ):
+        pytest.skip("input shard shape last two dimensions must be divisible by ttnn.TILE_SIZE")
 
     torch.manual_seed(1234)
 
@@ -643,9 +662,7 @@ def test_nd_sharded_embedding(
     else:
         output_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=in_mem_config
-    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=input_layout, memory_config=in_mem_config)
 
     weights = ttnn.as_tensor(
         torch_weights,

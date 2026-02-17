@@ -85,6 +85,7 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     // ********** Create Kernels **********
 
+    const auto tile = input_is_tile_layout ? input.tensor_spec().tile() : tt::tt_metal::Tile();
     std::vector<uint32_t> embedding_compile_time_args =
         ttnn::kernel_utils::to_vector(ttnn::kernel::CompileTimeEmbeddingsReaderKernelArgs{
             .input_cb_index = src1_cb_index,
@@ -93,7 +94,11 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
             .elems_per_page = index_elems_per_page,
             .input_block_size_bytes = index_elems_per_page * input_element_size_bytes,
             .input_buf_alignment = input.buffer()->alignment(),
-            .output_cb_index = output_cb_index});
+            .output_cb_index = output_cb_index,
+            .input_is_tile_layout = static_cast<uint32_t>(input_is_tile_layout),
+            .tile_width = input_is_tile_layout ? tile.get_width() : 0,
+            .face_height = input_is_tile_layout ? tile.get_face_shape()[0] : 0,
+            .face_width = input_is_tile_layout ? tile.get_face_shape()[1] : 0});
 
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);

@@ -102,10 +102,8 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    if (tensor_args.input_tensor_arg.nd_shard_spec().has_value() ||
-        operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR when ND-sharded output is requested");
-    } else {
+    if (!tensor_args.input_tensor_arg.nd_shard_spec().has_value() &&
+        !operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
         TT_FATAL(
             a.padded_shape().rank() < 3 || a.padded_shape().rank() == 4,
             "Input tensor must be 1D,2D or 4D, got {}",
