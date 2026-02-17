@@ -10,6 +10,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
+import models.experimental.ops.descriptors.composite as composite
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -601,20 +602,34 @@ class MLA1D(AbstractModule):
         )  # 1,4,128,576, height sharded 8x8 [32,576]
 
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        # Q slice: width sharded for Q norm (1536 width on 8x2 grid = 96 per core)
-        q_slice_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE), q_lora_rank),
-            core_grid=ttnn.CoreGrid(y=2, x=8),
-            strategy=ttnn.ShardStrategy.WIDTH,
+        # Q and KV nope use non-overlapping core grids so they can run parallel norms
+        # via composite.launch (which requires non-overlapping core ranges).
+        num_q_cores = 16
+        num_kv_nope_cores = 16
+        shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
+
+        # Q slice: WIDTH sharded on 4x4 grid (0,0)-(3,3) -> 16 cores, shard [32, 96]
+        q_slice_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+                [shard_height, q_lora_rank // num_q_cores],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         q_slice_config = SliceConfig(
             memory_config=q_slice_mem_config,
         )
-        # KV nope slice: width sharded for KV norm (512 width on 8x2 grid = 32 per core)
-        kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE), kv_lora_rank),
-            core_grid=ttnn.CoreGrid(y=8, x=2),
-            strategy=ttnn.ShardStrategy.WIDTH,
+        # KV nope slice: WIDTH sharded on 2x8 grid (5,0)-(6,7) -> 16 cores, shard [32, 32]
+        kv_nope_slice_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7))}),
+                [shard_height, kv_lora_rank // num_kv_nope_cores],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         kv_nope_slice_config = SliceConfig(
             memory_config=kv_nope_slice_mem_config,
