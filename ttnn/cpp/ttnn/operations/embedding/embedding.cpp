@@ -55,7 +55,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
     if (input_tensor.logical_shape().size() == 4 && input_tensor.logical_shape()[1] == 1 &&
         input_tensor.logical_shape()[2] == 1) {
         // Expected input shape:      (batch_size, 1, 1, sentence_size)
-        // Expected embedding shape:  (batch_size, 1, sentence_size, embedding_dim)
+        // Expected embedding shape:  (batch_size, sentence_size, embedding_dim)
         embeddings = ttnn::reshape(
             embeddings,
             ttnn::Shape({embeddings.logical_shape()[0], embeddings.logical_shape()[2], embeddings.logical_shape()[3]}));
