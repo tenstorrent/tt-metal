@@ -576,7 +576,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -717,6 +718,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
+    // Extract compute kernel config parameters
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
+    const MathFidelity math_fidelity = compute_kernel_config.has_value()
+        ? ttnn::get_math_fidelity(compute_kernel_config)
+        : MathFidelity::HiFi4;
+    // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
+    const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
+
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
 
@@ -725,7 +734,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
-    uint32_t tile_granularity = num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8;
+    uint32_t tile_granularity = std::min(
+        num_tiles_to_write_per_packet < 4 ? 4 * num_tiles_to_write_per_packet : 8,
+        max_dst_size);
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -915,17 +926,20 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
     // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_ring_reduce_compile_args(
-        input_cb_index,
-        intermediate_cb_index,
-        compute_output_cb_index,
-        tile_granularity,
-        ring_size,
-        input_tensor_B,
-        slice_B,
-        slice_C,
-        normalized_dim);
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .compile_args = operations::experimental::ccl::detail::get_ring_reduce_compile_args(
+            input_cb_index,
+            intermediate_cb_index,
+            compute_output_cb_index,
+            tile_granularity,
+            ring_size,
+            input_tensor_B,
+            slice_B,
+            slice_C,
+            normalized_dim)
+    };
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1164,7 +1178,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     /**
      * Line Reduce Scatter
      *
@@ -1278,12 +1293,19 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
+    // Extract compute kernel config parameters
+    const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(compute_kernel_config);
+    const MathFidelity math_fidelity = compute_kernel_config.has_value()
+        ? ttnn::get_math_fidelity(compute_kernel_config)
+        : MathFidelity::HiFi4;
+    // Hardware constraint: FP32 destination accumulator can only hold 4 tiles vs 8 for FP16
+    const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t max_scatter_write_pages = 2;
-    const uint32_t max_dst_size = 8;  // TODO: generalize based on arch and fp32 acc
     uint32_t tiles_to_write_per_packet = std::min(num_pages_per_packet, max_scatter_write_pages);
     uint32_t tile_granularity = std::min(4 * num_pages_per_packet, max_dst_size);
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
@@ -1530,16 +1552,19 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
 
     // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_line_reduce_compile_args(
-        input_cb_index,
-        intermediate_cb_index,
-        compute_output_cb_index,
-        tile_granularity,
-        input_tensor_B,
-        slice_B,
-        slice_C,
-        normalized_dim);
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .compile_args = operations::experimental::ccl::detail::get_line_reduce_compile_args(
+            input_cb_index,
+            intermediate_cb_index,
+            compute_output_cb_index,
+            tile_granularity,
+            input_tensor_B,
+            slice_B,
+            slice_C,
+            normalized_dim)
+    };
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1796,7 +1821,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset) {
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     return ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
@@ -1818,7 +1844,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         chunks_per_sync,
         num_workers_per_direction_opt,
         num_buffers_per_channel,
-        core_grid_offset);
+        core_grid_offset,
+        compute_kernel_config);
 }
 
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
@@ -1842,7 +1869,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset) {
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     return ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
@@ -1864,7 +1892,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         chunks_per_sync,
         num_workers_per_direction_opt,
         num_buffers_per_channel,
-        core_grid_offset);
+        core_grid_offset,
+        compute_kernel_config);
 }
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -1970,7 +1999,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
     tt::tt_metal::Program program{};
-    auto shared_vars = build_ring_reduce_scatter_minimal_async_program_artifacts(
+    auto shared_vars = ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
         intermediate_tensor,
@@ -1991,7 +2020,8 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        CoreCoord(0, 0));
+        CoreCoord(0, 0),
+        operation_attributes.compute_kernel_config);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -2064,7 +2094,7 @@ LineReduceScatterMeshWorkloadFactory::create_at(
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
     tt::tt_metal::Program program{};
-    auto shared_vars = build_line_reduce_scatter_minimal_async_program_artifacts(
+    auto shared_vars = ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
         intermediate_tensor,
@@ -2085,7 +2115,8 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
-        CoreCoord(0, 0));
+        CoreCoord(0, 0),
+        operation_attributes.compute_kernel_config);
 
     return {std::move(program), std::move(shared_vars)};
 }
