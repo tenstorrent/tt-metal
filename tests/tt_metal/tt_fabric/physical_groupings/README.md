@@ -211,7 +211,7 @@ groupings {
 
 ### Logical Groupings
 
-**Meshes**: The required logical grouping. Can be defined using hosts, trays, or ASIC locations. **Note**: Meshes can have 1 instance, but all other groupings (pods, superpods, clusters) must have at least 2 instances. Each instance must have a unique ID. Topology is defined in the connections section, not on individual instances.
+**Meshes**: The required logical grouping. Can be defined using hosts, trays, or ASIC locations. All groupings must have at least 1 instance. Each instance must have a unique ID. Topology is defined in the connections section, not on individual instances.
 
 ```protobuf
 # Using custom name
@@ -265,7 +265,7 @@ groupings {
 }
 ```
 
-**Pods**: Contains meshes. Defined using grouping references. **Must have at least 2 instances.** Each instance must have a unique ID. Can optionally define connections between instances.
+**Pods**: Contains meshes. Defined using grouping references. Must have at least 1 instance. Each instance must have a unique ID. Can optionally define connections between instances.
 
 ```protobuf
 groupings {
@@ -287,13 +287,13 @@ groupings {
 }
 ```
 
-**Superpods**: Contains pods and/or meshes. Can mix different grouping types. **Must have at least 2 instances.** Each instance must have a unique ID. Can use row-major-mesh connections.
+**Superpods**: Contains pods and/or meshes. Can mix different grouping types. Must have at least 1 instance. Each instance must have a unique ID. Can use row-major-mesh connections.
 
 ```protobuf
 groupings {
   custom_name: "superpods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "pods" } },  # Each superpod contains 3 pods (must have at least 2)
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Each superpod contains 3 pods
     { id: 1 grouping_ref { custom_name: "pods" } },
     { id: 2 grouping_ref { custom_name: "pods" } }
     # OR { id: 0 grouping_ref { custom_name: "meshes" } }, ...  # Each superpod contains meshes directly
@@ -307,13 +307,13 @@ groupings {
 }
 ```
 
-**Clusters**: Contains superpods, pods, and/or meshes. Can mix different grouping types. **Must have at least 2 instances.** Each instance must have a unique ID. Can use custom connections.
+**Clusters**: Contains superpods, pods, and/or meshes. Can mix different grouping types. Must have at least 1 instance. Each instance must have a unique ID. Can use custom connections.
 
 ```protobuf
 groupings {
   custom_name: "clusters"
   instances: [
-    { id: 0 grouping_ref { custom_name: "superpods" } },  # Each cluster contains 2 superpods (must have at least 2)
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Each cluster contains 2 superpods
     { id: 1 grouping_ref { custom_name: "superpods" } }
     # OR { id: 0 grouping_ref { custom_name: "pods" } }, ...  # Each cluster contains pods directly
     # OR { id: 0 grouping_ref { custom_name: "meshes" } }, ...  # Each cluster contains meshes directly
@@ -464,12 +464,11 @@ groupings {
 2. **Multiple Definitions**: The same grouping name can appear multiple times (explicitly allowed)
 3. **Grouping References**: All `grouping_name` values must reference an existing grouping
 4. **Instance Count Validation**:
-   - If `custom_name == "meshes"`: At least 1 instance required
-   - Otherwise: At least 2 instances required
+   - All groupings: At least 1 instance required
 5. **Instance ID Validation**: Each instance must have a unique `id` within its grouping
 6. **Grouping Structure**: Each instance in `instances` must be either `asic_location` or `grouping_ref` (enforced by oneof in schema)
 7. **Connection Validation**:
-   - `all_to_all`: Requires at least 2 instances
+   - `all_to_all`: Can be used with any number of instances (at least 1)
    - `row_major_mesh`: `dims` product must equal number of instances
    - `custom`: `src_instance` and `dst_instance` must reference valid instance IDs (must exist in the instances list)
 
@@ -574,7 +573,7 @@ groupings {
 groupings {
   custom_name: "pods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
@@ -585,7 +584,7 @@ groupings {
 groupings {
   custom_name: "superpods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "pods" } },  # Superpods must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Superpods must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "pods" } },
     { id: 2 grouping_ref { custom_name: "pods" } }
   ]
@@ -599,7 +598,7 @@ groupings {
 groupings {
   custom_name: "clusters"
   instances: [
-    { id: 0 grouping_ref { custom_name: "superpods" } },  # Clusters must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Clusters must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "superpods" } }
   ]
   connections {
@@ -625,7 +624,7 @@ groupings {
 groupings {
   custom_name: "pods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Each pod contains 2 meshes (must have at least 2)
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Each pod contains 2 meshes
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
@@ -651,7 +650,7 @@ groupings {
 groupings {
   custom_name: "pods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
@@ -662,7 +661,7 @@ groupings {
 groupings {
   custom_name: "superpods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Each superpod contains 3 meshes directly (must have at least 2)
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Each superpod contains 3 meshes directly
     { id: 1 grouping_ref { custom_name: "meshes" } },
     { id: 2 grouping_ref { custom_name: "meshes" } }
   ]
@@ -734,7 +733,7 @@ groupings {
 groupings {
   custom_name: "pods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Pods must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
@@ -745,7 +744,7 @@ groupings {
 groupings {
   custom_name: "superpods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "pods" } },  # Superpods must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Superpods must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "pods" } },
     { id: 2 grouping_ref { custom_name: "meshes" } },  # Also contains 4 meshes directly
     { id: 3 grouping_ref { custom_name: "meshes" } },
@@ -760,7 +759,7 @@ groupings {
 groupings {
   custom_name: "clusters"
   instances: [
-    { id: 0 grouping_ref { custom_name: "superpods" } },  # Clusters must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Clusters must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "superpods" } },
     { id: 2 grouping_ref { custom_name: "pods" } },  # Also contains 2 pods directly
     { id: 3 grouping_ref { custom_name: "pods" } },
@@ -880,7 +879,7 @@ groupings {
 groupings {
   custom_name: "pods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "meshes" } },  # Must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "meshes" } },  # Must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "meshes" } }
   ]
   connections {
@@ -891,7 +890,7 @@ groupings {
 groupings {
   custom_name: "superpods"
   instances: [
-    { id: 0 grouping_ref { custom_name: "pods" } },  # Must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "pods" } },  # Must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "pods" } },
     { id: 2 grouping_ref { custom_name: "meshes" } },  # Also contains 2 meshes directly
     { id: 3 grouping_ref { custom_name: "meshes" } }
@@ -904,7 +903,7 @@ groupings {
 groupings {
   custom_name: "clusters"
   instances: [
-    { id: 0 grouping_ref { custom_name: "superpods" } },  # Must have at least 2 instances
+    { id: 0 grouping_ref { custom_name: "superpods" } },  # Must have at least 1 instance
     { id: 1 grouping_ref { custom_name: "superpods" } },
     { id: 2 grouping_ref { custom_name: "pods" } },  # Also contains 2 pods directly
     { id: 3 grouping_ref { custom_name: "pods" } },

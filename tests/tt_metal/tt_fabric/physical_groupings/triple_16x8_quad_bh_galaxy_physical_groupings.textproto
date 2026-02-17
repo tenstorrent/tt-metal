@@ -50,8 +50,8 @@ groupings {
     { id: 0 asic_location: ASIC_LOCATION_1 },
     { id: 1 asic_location: ASIC_LOCATION_2 },
     { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_5 },
-    { id: 4 asic_location: ASIC_LOCATION_4 },
+    { id: 3 asic_location: ASIC_LOCATION_4 },
+    { id: 4 asic_location: ASIC_LOCATION_5 },
     { id: 5 asic_location: ASIC_LOCATION_6 },
     { id: 6 asic_location: ASIC_LOCATION_7 },
     { id: 7 asic_location: ASIC_LOCATION_8 }
@@ -95,6 +95,15 @@ groupings {
   }
 }
 
+# Custom hosts grouping (required)
+groupings {
+  name: "hosts_custom"
+  custom_type: "hosts"
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+
 # MESH preset groupings for different mesh sizes to cover all MGD cases
 
 # MESH: 1 tray (8 ASICs)
@@ -113,6 +122,19 @@ groupings {
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_1 } },
     { id: 1 grouping_ref { preset_type: TRAY_2 } }
+  ]
+  row_major_mesh {
+    dims: [2, 1]
+  }
+}
+
+# MESH: 2 trays (16 ASICs)
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_3 } },
+    { id: 1 grouping_ref { preset_type: TRAY_4 } }
   ]
   row_major_mesh {
     dims: [2, 1]
