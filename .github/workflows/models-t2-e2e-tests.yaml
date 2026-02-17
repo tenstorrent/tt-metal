@@ -1,4 +1,4 @@
-name: "Models End-To-End Tests"
+name: "[Tier 2] Models End-To-End Tests"
 
 on:
   push:
@@ -23,7 +23,6 @@ on:
         options:
           - all
           - "wh_llmbox_perf (T3000)"
-          - "wh_n150_civ2 (N150)"
       platform:
         required: false
         type: choice
@@ -62,7 +61,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_llmbox_perf,wh_n150_civ2"
+          ALL_SKUS="wh_llmbox_perf"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
@@ -91,3 +90,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
+      tests-yaml-path: "./tests/pipeline_reorg/models_t2_e2e_tests.yaml"

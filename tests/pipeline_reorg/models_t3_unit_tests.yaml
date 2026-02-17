@@ -1,0 +1,14 @@
+# This file defines the test matrix for the [Tier 3] Models Unit Tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# No tests defined yet for Tier 3
+[]

@@ -24,8 +24,6 @@
   skus:
     wh_llmbox_perf:
       timeout: 30
-    wh_n150_civ2:
-      timeout: 30
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 

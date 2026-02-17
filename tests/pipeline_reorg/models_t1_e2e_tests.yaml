@@ -1,4 +1,4 @@
-# This file defines the test matrix for the Models End-to-End Pipeline.
+# This file defines the test matrix for the [Tier 1] Models End-To-End Tests pipeline.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -16,20 +16,7 @@
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: llama3.1-8b
   skus:
-    wh_llmbox_perf:
-      timeout: 30
     wh_n150_civ2:
-      timeout: 30
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Llama 3.3-70B e2e tests
-  cmd: |
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
-  model: llama3.3-70b
-  skus:
-    wh_llmbox_perf:
       timeout: 30
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

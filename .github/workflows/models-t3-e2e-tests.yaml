@@ -1,4 +1,4 @@
-name: "Models Unit Tests"
+name: "[Tier 3] Models End-To-End Tests"
 
 on:
   push:
@@ -13,8 +13,6 @@ on:
         type: choice
         options:
           - all
-          - llama3.1-8b
-          - llama3.3-70b
       sku:
         description: "Select SKU to test"
         required: false
@@ -22,8 +20,6 @@ on:
         type: choice
         options:
           - all
-          - "wh_llmbox_perf (T3000)"
-          - "wh_n150_civ2 (N150)"
       platform:
         required: false
         type: choice
@@ -62,7 +58,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_llmbox_perf,wh_n150_civ2"
+          ALL_SKUS=""
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
@@ -81,13 +77,14 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  models-unit-tests:
+  models-e2e-tests:
     needs: [build-artifact, resolve-skus]
     secrets: inherit
-    uses: ./.github/workflows/models-unit-tests-impl.yaml
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
+      tests-yaml-path: "./tests/pipeline_reorg/models_t3_e2e_tests.yaml"

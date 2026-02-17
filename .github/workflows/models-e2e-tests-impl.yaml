@@ -24,6 +24,10 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
+      tests-yaml-path:
+        required: true
+        type: string
+        description: "Path to the tests YAML file defining the test matrix"
 
 jobs:
   load-test-matrix:
@@ -31,7 +35,7 @@ jobs:
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
