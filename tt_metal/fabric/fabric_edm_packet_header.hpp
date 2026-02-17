@@ -174,7 +174,7 @@ enum NocScatterWriteChunkEncoding : uint8_t {
     CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
 };
 
-inline constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
+constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
     const uint8_t e = static_cast<uint8_t>(encoding);
     return e | (e << 2) | (e << 4) | (e << 6);
 }
