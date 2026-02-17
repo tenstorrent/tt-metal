@@ -264,6 +264,122 @@ def _shard_kvpe_update_tensor(
     return kvpe_sharded
 
 
+def _fused_kv_branch_forward(
+    *,
+    device: Any,
+    x: ttnn.Tensor,
+    fused_kv: dict,
+    cos_batch: ttnn.Tensor,
+    sin_batch: ttnn.Tensor,
+) -> ttnn.Tensor:
+    """Execute fused KV cache branch: matmul + RMSNorm + RoPE in one dispatch.
+
+    Input x: [1,1,1,2048] in DRAM (batch=1 only).
+    Returns kvpe_new: [1,1,1,576] in DRAM (nope + rope concatenated).
+    """
+    from models.demos.glm4_moe_lite.fused_ops.kv_cache_branch.op import GLMKVCacheBranch
+
+    spec_crs = fused_kv["spec_crs"]
+    rope_crs = fused_kv["rope_crs"]
+
+    # 1. Replicate input x onto the 18-core grid (HEIGHT_SHARDED).
+    # x is [1,1,1,hidden] in DRAM. Each core needs the same [1, hidden] input row.
+    # Standard 32x32 tiles can't represent height-1 shards, so we roundtrip
+    # through torch to create a tensor with Tile((1,32)) directly via from_torch,
+    # then shard it.  (TODO: avoid host roundtrip once on-device tile conversion works)
+    num_cores = spec_crs.num_cores()
+    hidden_size = int(x.shape[-1])
+    TILE_1x32 = ttnn.Tile((1, 32))
+    is_mesh = hasattr(x.device(), 'shape')
+
+    def _to_torch_single(t):
+        """Read device tensor back to torch (device-0 only for mesh)."""
+        if is_mesh:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+        return ttnn.to_torch(t)
+
+    x_torch = _to_torch_single(x)
+    x_row = x_torch.reshape(1, hidden_size).expand(num_cores, hidden_size).contiguous()
+
+    input_shard_spec = ttnn.ShardSpec(spec_crs, (1, hidden_size), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+    x_sharded = ttnn.from_torch(
+        x_row,
+        dtype=x.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=TILE_1x32,
+        device=x.device(),
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
+    )
+
+    # 2. Shard cos/sin for current position onto rope cores.
+    # cos_batch/sin_batch: [1,1,1,64] in DRAM for batch=1.
+    # Shard shape (1, 32) requires 1x32 tile layout.  Same approach.
+    rope_dim = int(cos_batch.shape[-1])
+    num_rope_cores = rope_crs.num_cores()
+    cos_sin_shard_width = rope_dim // num_rope_cores
+    cos_sin_shard_spec = ttnn.ShardSpec(
+        rope_crs, (1, cos_sin_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    cos_sin_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
+    )
+
+    cos_torch = _to_torch_single(cos_batch)
+    cos_1d = cos_torch.reshape(1, rope_dim).contiguous()
+    cos_sharded = ttnn.from_torch(
+        cos_1d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=TILE_1x32,
+        device=x.device(),
+        memory_config=cos_sin_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
+    )
+
+    sin_torch = _to_torch_single(sin_batch)
+    sin_1d = sin_torch.reshape(1, rope_dim).contiguous()
+    sin_sharded = ttnn.from_torch(
+        sin_1d,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=TILE_1x32,
+        device=x.device(),
+        memory_config=cos_sin_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
+    )
+
+    # 3. Call fused op — returns (nope_sharded, rope_sharded) on their respective cores
+    nope_result, rope_result = GLMKVCacheBranch.op(
+        input_tensor=x_sharded,
+        dkv_matmul_weights_tensor=fused_kv["w_kv_a"],
+        gamma_tensor=fused_kv["gamma"],
+        cos_tensor=cos_sharded,
+        sin_tensor=sin_sharded,
+        trans_mat_tensor=fused_kv["trans_mat"],
+        nope_output_tensor=fused_kv["nope_output"],
+        rope_output_tensor=fused_kv["rope_output"],
+        epsilon=fused_kv["epsilon"],
+    )
+
+    # 4. Read sharded results back to DRAM, then concat
+    nope_dram = ttnn.sharded_to_interleaved(nope_result, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+    rope_dram = ttnn.sharded_to_interleaved(rope_result, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+    kvpe_new = ttnn.concat([nope_dram, rope_dram], dim=-1)  # [1,1,1,576]
+    ttnn.deallocate(nope_dram, force=False)
+    ttnn.deallocate(rope_dram, force=False)
+
+    # Cleanup sharded temporaries
+    ttnn.deallocate(x_sharded, force=False)
+    ttnn.deallocate(cos_sharded, force=False)
+    ttnn.deallocate(sin_sharded, force=False)
+
+    return kvpe_new
+
+
 @torch.no_grad()
 def run_decoder_layer_decode_one_step_update_cache_tt(
     *,
@@ -424,6 +540,11 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     concat_heads = _env_bool("GLM4_MOE_LITE_CONCAT_HEADS")
     skip_typecast = _env_bool("GLM4_MOE_LITE_SKIP_TYPECAST")
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
+    head_parallel_kvb2 = (
+        _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2")
+        and tp_enabled
+        and tp_size > 1
+    )
     fuse_mlp_moe_reduce = _env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE")
     fuse_shared_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP")
 
@@ -685,81 +806,98 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
 
     # ---- KVPE for new token -> update cache at cur_pos ----
     skip_kv_update = os.environ.get("GLM4_MOE_LITE_SKIP_KV_UPDATE", "").strip() == "1"
+    fused_kv_branch = getattr(w, "fused_kv_branch", None)
+    use_fused_kv = fused_kv_branch is not None and batch == 1
     q_a = None
     qkv = None
     if not skip_kv_update:
         t0 = time.perf_counter() if profile is not None else 0.0
-        kv = None
-        qkv = None
-        w_q_kv_a = getattr(w, "w_q_kv_a", None)
-        if w_q_kv_a is not None:
-            qkv = _attn_linear(x, w_q_kv_a, force_no_tp=attn_dp)  # [1,1,B,q_lora_rank+kvpe_dim]
 
-            if skip_defensive_clones:
-                # Skip clone: use slice results directly; keep qkv alive until q_a and kv are consumed.
-                q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
-                kv = ttnn.slice(
-                    qkv,
-                    [0, 0, 0, int(hparams.q_lora_rank)],
-                    [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
-                )
-                # qkv stays alive — deallocated later after q_a and kv are consumed
+        if use_fused_kv:
+            # ---- Fused KV Branch path (batch=1 only) ----
+            # When fused_kv_branch is active, always use separate q_a matmul (not fused QKV).
+            q_a = _attn_linear(x, w.w_q_a, force_no_tp=attn_dp)  # [1,1,1,q_lora_rank]
+
+            kvpe_new = _fused_kv_branch_forward(
+                device=device,
+                x=x,
+                fused_kv=fused_kv_branch,
+                cos_batch=cos_batch,
+                sin_batch=sin_batch,
+            )
+        else:
+            # ---- Original KV path ----
+            kv = None
+            qkv = None
+            w_q_kv_a = getattr(w, "w_q_kv_a", None)
+            if w_q_kv_a is not None:
+                qkv = _attn_linear(x, w_q_kv_a, force_no_tp=attn_dp)  # [1,1,B,q_lora_rank+kvpe_dim]
+
+                if skip_defensive_clones:
+                    # Skip clone: use slice results directly; keep qkv alive until q_a and kv are consumed.
+                    q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+                    kv = ttnn.slice(
+                        qkv,
+                        [0, 0, 0, int(hparams.q_lora_rank)],
+                        [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
+                    )
+                    # qkv stays alive — deallocated later after q_a and kv are consumed
+                else:
+                    # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
+                    # Materialize slices before freeing `qkv` to avoid intermittent corruption.
+                    q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
+                    kv_view = ttnn.slice(
+                        qkv,
+                        [0, 0, 0, int(hparams.q_lora_rank)],
+                        [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
+                    )
+                    q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
+                    ttnn.deallocate(qkv, force=False)
+                    qkv = None
             else:
-                # `slice` may return a view that aliases the `qkv` buffer (no refcounting).
-                # Materialize slices before freeing `qkv` to avoid intermittent corruption.
-                q_a_view = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
-                kv_view = ttnn.slice(
-                    qkv,
-                    [0, 0, 0, int(hparams.q_lora_rank)],
-                    [1, 1, batch, int(hparams.q_lora_rank) + kvpe_dim],
-                )
-                q_a = ttnn.clone(q_a_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                kv = ttnn.clone(kv_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                # NOTE: `q_a_view`/`kv_view` may alias `qkv`; do not deallocate them separately.
-                ttnn.deallocate(qkv, force=False)
-                qkv = None
-        else:
-            kv = _attn_linear(x, w.w_kv_a, force_no_tp=attn_dp)  # [1,1,B,kvpe_dim]
+                kv = _attn_linear(x, w.w_kv_a, force_no_tp=attn_dp)  # [1,1,B,kvpe_dim]
 
-        # `slice` may alias `kv`. Clone slices before freeing `kv`.
-        if skip_defensive_clones:
-            kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
-            kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
-            # kv stays alive — deallocated after kv_nope and kv_rope are consumed by layernorm/RoPE/concat
-        else:
-            kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
-            kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
-            kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
-            ttnn.deallocate(kv, force=False)
-            kv = None
+            # `slice` may alias `kv`. Clone slices before freeing `kv`.
+            if skip_defensive_clones:
+                kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+                kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+                # kv stays alive — deallocated after kv_nope and kv_rope are consumed by layernorm/RoPE/concat
+            else:
+                kv_nope_view = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
+                kv_rope_view = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
+                kv_nope = ttnn.clone(kv_nope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                kv_rope = ttnn.clone(kv_rope_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # NOTE: `kv_nope_view`/`kv_rope_view` may alias `kv`; do not deallocate them separately.
+                ttnn.deallocate(kv, force=False)
+                kv = None
 
-        kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
+            kv_nope = w.kv_a_layernorm(kv_nope, mode="decode")
 
-        # RoPE op requires BF16.
-        if not skip_typecast and kv_rope.dtype != ttnn.bfloat16:
-            kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
-        if use_decode_rope:
-            kv_rope = _rope_decode(kv_rope, heads=1)
-        else:
-            kv_rope = ttnn.experimental.rotary_embedding_llama(
-                kv_rope,
-                cos_batch,
-                sin_batch,
-                trans_matrix,
-                is_decode_mode=False,
-            )  # [1,1,B,rope_dim]
+            # RoPE op requires BF16.
+            if not skip_typecast and kv_rope.dtype != ttnn.bfloat16:
+                kv_rope = ttnn.typecast(kv_rope, dtype=ttnn.bfloat16)
+            if use_decode_rope:
+                kv_rope = _rope_decode(kv_rope, heads=1)
+            else:
+                kv_rope = ttnn.experimental.rotary_embedding_llama(
+                    kv_rope,
+                    cos_batch,
+                    sin_batch,
+                    trans_matrix,
+                    is_decode_mode=False,
+                )  # [1,1,B,rope_dim]
 
-        # Deferred kv deallocation: when skip_defensive_clones is True, kv_nope/kv_rope
-        # were views of kv. Now that layernorm and RoPE have consumed them, kv can be freed.
-        if kv is not None:
-            ttnn.deallocate(kv, force=False)
-            kv = None
+            # Deferred kv deallocation: when skip_defensive_clones is True, kv_nope/kv_rope
+            # were views of kv. Now that layernorm and RoPE have consumed them, kv can be freed.
+            if kv is not None:
+                ttnn.deallocate(kv, force=False)
+                kv = None
 
-        kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
-        ttnn.deallocate(kv_nope, force=False)
-        ttnn.deallocate(kv_rope, force=False)
+            kvpe_new = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [1,1,B,kvpe_dim]
+            ttnn.deallocate(kv_nope, force=False)
+            ttnn.deallocate(kv_rope, force=False)
 
         # Important: paged_update_cache requires the update tensor to be BF16/FP32,
         # even if the cache itself is BF8.
@@ -1102,29 +1240,66 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    if tp_enabled and not attn_dp:
-        v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
+    if head_parallel_kvb2:
+        # Head-parallel path: partition heads across TP devices BEFORE w_kv_b2
+        # matmul. Each device computes only H/tp_size heads (e.g. 4 of 32) and
+        # produces the exact activation slice needed for its w_o shard.
+        # This eliminates the post-kv_b2 all_reduce and the pre-w_o mesh_partition.
+        attn_latent = ttnn.mesh_partition(attn_latent, dim=1, cluster_axis=tp_axis)
+        # attn_latent: [1, H/tp, B, kv_lora_rank]
+        v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1, H/tp, B, v_head_dim]
+        ttnn.deallocate(attn_latent, force=False)
+        if skip_defensive_clones:
+            try:
+                ttnn.deallocate(attn_latent_padded, force=False)
+            except Exception:
+                pass
+        # Flatten heads: [1, H/tp, B, v_head_dim] -> [1, 1, B, (H/tp)*v_head_dim]
+        heads_per_dev = int(hparams.num_attention_heads) // tp_size
+        flat_dim = heads_per_dev * int(hparams.v_head_dim)
+        if concat_heads:
+            v = ttnn.transformer.concatenate_heads(v)
+            v = ttnn.reshape(v, (1, 1, batch, flat_dim))
+        else:
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.reshape(v, (1, batch, 1, flat_dim))
+            v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,flat_dim]
+        # Row-parallel w_o: matmul with TP-sharded w_o then all_reduce.
+        # v is already the right slice per device (no mesh_partition needed).
+        attn_out_partial = _mlp_linear(v, w.w_o)  # [1,1,B,hidden] partial
+        ttnn.deallocate(v, force=False)
+        attn_out = ttnn.all_reduce(
+            attn_out_partial,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=tp_axis,
+            memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_out_partial, force=False)
     else:
-        v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
-    ttnn.deallocate(attn_latent, force=False)
-    # Deferred attn_latent_padded deallocation: when skip_defensive_clones is True,
-    # attn_latent was a chain of views from attn_latent_padded. Now consumed by kv_b2 matmul.
-    if skip_defensive_clones:
-        try:
-            ttnn.deallocate(attn_latent_padded, force=False)
-        except Exception:
-            pass
+        if tp_enabled and not attn_dp:
+            v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
+        else:
+            v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
+        ttnn.deallocate(attn_latent, force=False)
+        # Deferred attn_latent_padded deallocation: when skip_defensive_clones is True,
+        # attn_latent was a chain of views from attn_latent_padded. Now consumed by kv_b2 matmul.
+        if skip_defensive_clones:
+            try:
+                ttnn.deallocate(attn_latent_padded, force=False)
+            except Exception:
+                pass
 
-    if concat_heads:
-        v = ttnn.transformer.concatenate_heads(v)  # [1, H, B, v_head_dim] -> [1, B, H*v_head_dim]
-        v = ttnn.reshape(v, (1, 1, batch, int(hparams.num_attention_heads * hparams.v_head_dim)))
-    else:
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
-        v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
+        if concat_heads:
+            v = ttnn.transformer.concatenate_heads(v)  # [1, H, B, v_head_dim] -> [1, B, H*v_head_dim]
+            v = ttnn.reshape(v, (1, 1, batch, int(hparams.num_attention_heads * hparams.v_head_dim)))
+        else:
+            v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
+            v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
+            v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
 
-    attn_out = _attn_linear(v, w.w_o)  # [1,1,B,hidden]
-    ttnn.deallocate(v, force=False)
+        attn_out = _attn_linear(v, w.w_o)  # [1,1,B,hidden]
+        ttnn.deallocate(v, force=False)
 
     x_attn_out = ttnn.add(residual, attn_out, memory_config=decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(attn_out, force=False)
