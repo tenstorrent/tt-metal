@@ -166,7 +166,7 @@ class TestSequentialChainInfrastructure:
 
     def test_chain_builder_with_real_descriptors(self, device, test_tensors):
         """Test building a chain with real LayerNorm/RMSNorm descriptors."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder, extract_cb_info
+        from models.experimental.ops.descriptors.sequential import chain_descriptors, extract_cb_info
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -199,17 +199,8 @@ class TestSequentialChainInfrastructure:
             epsilon=1e-5,
         )
 
-        # Build the chain
-        builder = SequentialChainBuilder()
-        builder.add_phase(ln1_desc)
-        builder.add_phase(rms_desc)
-        builder.add_phase(ln2_desc)
-
-        # Verify chain structure
-        assert len(builder.phases) == 3
-
-        # Build and verify we get a valid fused descriptor
-        fused = builder.build(device)
+        # Build the chain and verify we get a valid fused descriptor
+        fused = chain_descriptors([ln1_desc, rms_desc, ln2_desc], device)
         assert fused is not None
         assert hasattr(fused, "descriptor")
         num_kernels = len(fused.descriptor.kernels)
@@ -422,7 +413,7 @@ class TestSequentialChainExecution:
 
         REMAINING: Test actual kernel compilation and device execution.
         """
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -458,11 +449,7 @@ class TestSequentialChainExecution:
         )
 
         # Build chain
-        builder = SequentialChainBuilder()
-        builder.add_phase(ln1_desc)
-        builder.add_phase(rms_desc)
-        builder.add_phase(ln2_desc)
-        fused_desc = builder.build(device)
+        fused_desc = chain_descriptors([ln1_desc, rms_desc, ln2_desc], device)
 
         # Execute
         outputs = composite.launch([fused_desc])
@@ -553,7 +540,7 @@ class TestSequentialChainExecution:
 
     def test_two_phase_layernorm_chain_multicore(self, device, test_tensors):
         """Test 2-phase LN→LN chain on 2 cores to validate global barrier."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
         from models.experimental.ops.descriptors.normalization import layer_norm
         from models.experimental.ops.descriptors import composite
 
@@ -574,10 +561,7 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        builder = SequentialChainBuilder()
-        builder.add_phase(ln1_desc)
-        builder.add_phase(ln2_desc)
-        fused_desc = builder.build(device)
+        fused_desc = chain_descriptors([ln1_desc, ln2_desc], device)
 
         outputs = composite.launch([fused_desc])
         tt_output = outputs[0][0]
@@ -612,7 +596,7 @@ class TestSequentialChainExecution:
 
         Both execute in a single program via composite.launch().
         """
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
         from models.experimental.ops.descriptors import composite
 
@@ -650,11 +634,7 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        builder = SequentialChainBuilder()
-        builder.add_phase(ln1_desc)
-        builder.add_phase(rms_desc)
-        builder.add_phase(ln2_desc)
-        fused_chain = builder.build(device)
+        fused_chain = chain_descriptors([ln1_desc, rms_desc, ln2_desc], device)
 
         # Create parallel RMSNorm on parallel_cores
         parallel_rms = rms_norm.rms_norm(
@@ -864,16 +844,16 @@ class TestFusedKernelSource:
 
         fused = chain_descriptors([ln1, ln2], device)
 
-        # Check reader has barrier code
+        # Check reader has barrier code (multi-barrier uses __barrier_seg0)
         for kernel in fused.descriptor.kernels:
             source = kernel.kernel_source
-            if "__global_barrier" in source:
+            if "__barrier_seg0" in source:
                 assert "__cb_reset_to_empty" in source, "Reader should have CB reset"
                 assert "__compute_done" in source, "Reader should wait for compute_done"
                 assert "__writer_done" in source, "Reader should wait for writer_done"
                 break
         else:
-            pytest.fail("No kernel has __global_barrier")
+            pytest.fail("No kernel has __barrier_seg0")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -1085,7 +1065,7 @@ class TestParallelChains:
 
     def test_cb_overflow_validation(self, device, test_tensors):
         """Test that CB overflow is detected and reported clearly."""
-        from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
+        from models.experimental.ops.descriptors.sequential import chain_descriptors
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -1094,7 +1074,7 @@ class TestParallelChains:
         # Try to create a very long chain that would overflow CBs
         # Each LayerNorm uses ~6 CBs (input, output, gamma, beta, scaler, eps)
         # With remapping, this could potentially exceed 32 CBs
-        builder = SequentialChainBuilder()
+        descriptors = []
 
         # Add many phases - enough to potentially overflow
         # (The actual overflow depends on CB remapping strategy)
@@ -1108,7 +1088,6 @@ class TestParallelChains:
                     bias=test_tensors["tt_bias1"],
                     epsilon=1e-5,
                 )
-                builder.add_phase(desc)
             else:
                 desc = rms_norm.rms_norm(
                     prev_desc.output_tensors[0],
@@ -1117,13 +1096,13 @@ class TestParallelChains:
                     epsilon=1e-5,
                     compute_kernel_config=ln_compute_config,
                 )
-                builder.add_phase(desc)
+            descriptors.append(desc)
             prev_desc = desc
 
         # This should either succeed (if CB merging is efficient) or raise a clear error
         try:
-            fused = builder.build(device)
-            print(f"Successfully fused {len(builder.phases)} phases")
+            fused = chain_descriptors(descriptors, device)
+            print(f"Successfully fused {len(descriptors)} phases")
             # The build succeeded, so CBs should be within limits
             assert True, "Build succeeded without CB overflow"
         except (ValueError, RuntimeError) as e:
@@ -4630,23 +4609,21 @@ class TestOpGraphExecution:
         assert passing_b, f"Branch B PCC: {pcc_b}"
 
     def test_partial_coverage_branches(self, device, opgraph_tensors):
-        """Stem on 6 cores, branches only use 4 cores (partial coverage).
+        """Stem wider than branch union should be rejected.
 
-        The stem op is created on 6 cores but the branches only use the
-        first 4.  The fused kernel only runs on the 4 branch cores;
-        work that was assigned to the unused 2 cores is not executed.
-        This verifies that partial coverage doesn't cause hangs or errors.
+        The stem op is created on 6 cores but branches only cover 4.
+        _validate_stem_coverage rejects this because runtime args for
+        the 2 extra cores would be silently dropped, producing incorrect
+        results.  The user must create the stem for the branch union range.
         """
         from models.experimental.ops.descriptors.sequential import build_op_graph, BranchSpec
         from models.experimental.ops.descriptors.normalization import rms_norm
-        from models.experimental.ops.descriptors import composite
 
         t = opgraph_tensors
         # Stem on 6 cores, branches on 4
         stem_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
         branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
         branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
-        # Cores (4,0)-(5,0) intentionally unused
 
         stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=stem_range, weight=t["tt_weights"][0], epsilon=1e-5)
         branch_a_op = rms_norm.rms_norm(
@@ -4656,35 +4633,15 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
-            stem_phases=[stem_op],
-            branches=[
-                BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
-                BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
-            ],
-            device=device,
-        )
-        assert len(fused_ops) == 2
-
-        # Verify co-dispatch group is set
-        for op in fused_ops:
-            assert op.co_dispatch_group is not None
-            gid, expected = op.co_dispatch_group
-            assert expected == 2
-
-        outputs = composite.launch(fused_ops)
-        assert len(outputs) == 2
-
-        # Both branches should produce valid output (non-zero)
-        result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
-        assert result_a.abs().max().item() > 0, "Branch A output is all zeros"
-        assert result_b.abs().max().item() > 0, "Branch B output is all zeros"
-
-        # Compute golden values using the branch ranges (not stem range)
-        # Note: stem output on 4 cores may differ from 6-core stem, so
-        # we just check that results are numerically reasonable
-        print(f"Partial coverage: A max={result_a.abs().max():.4f}, B max={result_b.abs().max():.4f}")
+        with pytest.raises(ValueError, match="outside the leaf union"):
+            build_op_graph(
+                stem_phases=[stem_op],
+                branches=[
+                    BranchSpec(core_range=branch_a_range, phases=[branch_a_op]),
+                    BranchSpec(core_range=branch_b_range, phases=[branch_b_op]),
+                ],
+                device=device,
+            )
 
     def test_invalid_topology_overlapping_branches(self, device, opgraph_tensors):
         """Overlapping branch core ranges should raise ValueError before touching device."""
