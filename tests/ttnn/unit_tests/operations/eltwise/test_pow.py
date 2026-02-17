@@ -259,7 +259,7 @@ def test_special_input_fp32(device):
 
     output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
-    assert_allclose(torch_output_tensor, output, rtol=0.001, atol=1e-6)
+    assert_allclose(torch_output_tensor, output, rtol=9e-8, atol=9e-7)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
