@@ -182,10 +182,14 @@ class LMHead(LightweightModule):
 
         # Concatenate the outputs
         # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
+        # For large vocabs (e.g. 193k in Llasa-3B), the concat output exceeds L1 capacity.
+        # Use DRAM in that case. The result goes directly to all_reduce, so impact is minimal.
+        LLAMA_VOCAB_SIZE = 128256  # Standard LLaMA vocab that fits in L1
+        use_dram_concat = use_prefetcher or self.padded_vocab_size > LLAMA_VOCAB_SIZE
         output = ttnn.concat(
             outputs,
             dim=-1,
-            memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if use_dram_concat else ttnn.L1_MEMORY_CONFIG,
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
 
