@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 
 #include <array>
 #include <cstdint>
@@ -34,10 +32,9 @@ using ttnn::operations::conv::calculate_output_image_size;
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        // Use width sharded implementation
-        return Conv2dWidthShardedProgramFactory{};
-    }  // Use regular sharded implementation
-    return Conv2dShardedProgramFactory{};
+        return conv2d_detail::Conv2dWidthShardedDescriptorFactory{};
+    }
+    return conv2d_detail::Conv2dShardedDescriptorFactory{};
 }
 
 TensorSpec Conv2dDeviceOperation::compute_output_specs(

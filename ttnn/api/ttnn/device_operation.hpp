@@ -206,6 +206,15 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
     std::visit(
         [&]<typename T>(const T&) {
             if constexpr (ProgramFactoryConcept<T>) {
+                // DEPRECATED: The CachedProgram / ProgramFactoryConcept pattern is deprecated.
+                // Migrate to ProgramDescriptorFactoryConcept (create_descriptor).
+                // See docs/source/ttnn/ttnn/descriptor_migration_recipe.md
+                log_warning(
+                    tt::LogOp,
+                    "DEPRECATED: Factory '{}' uses the legacy CachedProgram pattern "
+                    "(ProgramFactoryConcept). Migrate to ProgramDescriptorFactoryConcept "
+                    "(create_descriptor). Support will be removed in a future release.",
+                    tt::stl::get_type_name<T>());
                 // Adapt ProgramFactory to MeshWorkloadFactory concept.
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
@@ -215,6 +224,17 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                     mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             } else if constexpr (MeshWorkloadFactoryConcept<T>) {
+                // Check if this MeshWorkloadFactory uses descriptors internally.
+                // Factories that have create_descriptor are using the new pattern.
+                // Factories without it are likely building programs imperatively (deprecated).
+                if constexpr (!requires { &T::create_descriptor; }) {
+                    log_warning(
+                        tt::LogOp,
+                        "DEPRECATED: MeshWorkloadFactory '{}' does not use ProgramDescriptor internally. "
+                        "Migrate to use create_descriptor for program construction. "
+                        "Support for imperative Program building will be removed in a future release.",
+                        tt::stl::get_type_name<T>());
+                }
                 fn.template operator()<T>();
             } else {
                 static_assert(

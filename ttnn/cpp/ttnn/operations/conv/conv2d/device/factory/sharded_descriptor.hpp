@@ -8,15 +8,15 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
-namespace ttnn::prim::conv2d_new_detail {
+namespace ttnn::prim::conv2d_detail {
 
-// ProgramDescriptorFactoryConcept factory for width-sharded conv2d.
+// ProgramDescriptorFactoryConcept factory for height-sharded and block-sharded conv2d.
 //
 // Uses the optional prepare_resources hook to create the sliding window config
 // tensor (a device-side allocation).  The framework's DescriptorMeshWorkloadFactoryAdapter
 // handles all cache-hit dispatch: buffer address patching, dynamic CB patching,
 // and resource lifetime management.
-struct Conv2dWidthShardedDescriptorFactory {
+struct Conv2dShardedDescriptorFactory {
     // Creates the sliding window config tensor (device-side allocation).
     // Called once on cache miss; the returned DeviceStorage is kept alive across
     // cache hits by the framework.
@@ -32,4 +32,4 @@ struct Conv2dWidthShardedDescriptorFactory {
         tt::tt_metal::DeviceStorage& resources);
 };
 
-}  // namespace ttnn::prim::conv2d_new_detail
+}  // namespace ttnn::prim::conv2d_detail

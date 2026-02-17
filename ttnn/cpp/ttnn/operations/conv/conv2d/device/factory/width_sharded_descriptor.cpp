@@ -32,7 +32,7 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::prim::conv2d_new_detail {
+namespace ttnn::prim::conv2d_detail {
 
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
@@ -840,4 +840,4 @@ tt::tt_metal::ProgramDescriptor Conv2dWidthShardedDescriptorFactory::create_desc
     return desc;
 }
 
-}  // namespace ttnn::prim::conv2d_new_detail
+}  // namespace ttnn::prim::conv2d_detail

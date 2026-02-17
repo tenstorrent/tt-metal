@@ -50,7 +50,84 @@ In order to add a new device operation, follow the directory structure shown bel
 .. note::
  Add as many program factories as needed. But the minimum requirement is one program factory.
 
+.. note::
+ **All new operations must use the ProgramDescriptor pattern** (see below).
+ The old ``CachedProgram`` / ``shared_variables_t`` pattern is legacy and should not
+ be used for new operations. See :doc:`descriptor_migration_recipe` for migrating
+ existing operations.
+
 A concrete example of a device operation can be found in `ttnn/cpp/ttnn/operations/examples/example/device`
+
+ProgramDescriptor Pattern (Recommended)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The **ProgramDescriptor** pattern is the recommended way to write program factories.
+Instead of imperatively constructing a ``Program`` object and returning a ``CachedProgram``,
+you declaratively describe the program using a ``ProgramDescriptor`` struct. The framework
+then handles program construction, caching, and buffer address patching on cache hits.
+
+**Key benefits:**
+
+- **No ``shared_variables_t``** — you don't need to store kernel handles or core lists.
+- **No manual buffer address patching** — the framework auto-patches buffer addresses on cache hits.
+- **No ``override_runtime_arguments`` for buffer addresses** — only implement it if you have
+  truly dynamic parameters (e.g., random seeds) that change on every call.
+- **Cleaner code** — the declarative style is easier to read and less error-prone.
+
+**ProgramFactory interface:**
+
+.. code-block:: cpp
+
+   struct ProgramFactory {
+       // Declare the program: circular buffers, kernels, and runtime args.
+       // Called on cache miss. The framework builds the Program from this descriptor.
+       static tt::tt_metal::ProgramDescriptor create_descriptor(
+           const operation_attributes_t& operation_attributes,
+           const tensor_args_t& tensor_args,
+           tensor_return_value_t& tensor_return_value);
+
+       // OPTIONAL: Only needed for truly dynamic parameters (random seeds, etc.)
+       // Buffer addresses are auto-patched — do NOT patch them here.
+       // static void override_runtime_arguments(
+       //     tt::tt_metal::Program& program,
+       //     const operation_attributes_t& operation_attributes,
+       //     const tensor_args_t& tensor_args,
+       //     tensor_return_value_t& tensor_return_value);
+   };
+
+**Building a ProgramDescriptor:**
+
+.. code-block:: cpp
+
+   ProgramDescriptor desc;
+
+   // 1. Declare circular buffers
+   desc.cbs.push_back(CBDescriptor{
+       .total_size = num_tiles * tile_size,
+       .core_ranges = all_cores,
+       .format_descriptors = {{CBFormatDescriptor{
+           .buffer_index = cb_id,
+           .data_format = data_format,
+           .page_size = tile_size,
+       }}},
+   });
+
+   // 2. Declare kernels with compile-time args and config
+   KernelDescriptor reader_desc;
+   reader_desc.kernel_source = "path/to/reader_kernel.cpp";
+   reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+   reader_desc.core_ranges = all_cores;
+   reader_desc.compile_time_args = {cb_id, ...};
+   reader_desc.config = ReaderConfigDescriptor{};
+
+   // 3. Add runtime args per core
+   reader_desc.runtime_args.emplace_back(
+       core, KernelDescriptor::CoreRuntimeArgs{buffer_addr, tiles_per_core, offset});
+
+   desc.kernels.push_back(std::move(reader_desc));
+   return desc;
+
+Full example files:
 
 .. literalinclude::  examples/example/device/example_device_operation.hpp
    :language: cpp

@@ -7,96 +7,102 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::examples {
-ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::SingleCore::create(
+
+using namespace tt;
+using namespace tt::tt_metal;
+
+ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
     auto* src_buffer = input_tensor.buffer();
     auto* dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t single_tile_size = tile_size(cb_data_format);
+    tt::DataFormat cb_data_format_output = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / constants::TILE_HW;
 
     CoreCoord compute_with_storage_grid_size = {1, 1};
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    // ---- Build the ProgramDescriptor ----
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    ProgramDescriptor desc;
 
+    // Circular buffers
+    constexpr uint32_t src0_cb_index = CBIndex::c_0;
+    constexpr uint32_t num_input_tiles = 2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+
+    constexpr uint32_t output_cb_index = CBIndex::c_2;
+    constexpr uint32_t num_output_tiles = 2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * single_tile_size_output,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = cb_data_format_output,
+            .page_size = single_tile_size_output,
+        }}},
+    });
+
+    // Reader kernel
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    // Writer kernel
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    // Compute kernel
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
         1                            // per_core_block_size
     };
 
-    bool math_approx_mode = false;
-    tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1});
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_group_1;
+    compute_desc.compile_time_args = compute_kernel_args_group_1;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+    };
 
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2});
-    }
-
+    // Runtime args per core
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
@@ -108,43 +114,25 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        reader_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+
         num_tiles_written += num_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-void ExampleDeviceOperation::SingleCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto& output_tensor = tensor_return_value;
-
-    auto* src_buffer = input_tensor.buffer();
-    auto* dst_buffer = output_tensor.buffer();
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = src_buffer->address();
-    }
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = dst_buffer->address();
-    }
-}
+// NOTE: No override_runtime_arguments needed here!
+// Buffer addresses are automatically patched by the framework on cache hits.
+// Only implement override_runtime_arguments(Program&, ...) if you have
+// truly dynamic parameters (e.g. random seeds) that change every call.
 
 }  // namespace ttnn::operations::examples
