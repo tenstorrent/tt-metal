@@ -1,10 +1,12 @@
-# This file defines the test matrix for the Models Unit Tests pipeline.
+# This file defines the test matrix for the Models Unit Tests pipelines.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
-#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 
@@ -22,8 +24,12 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.1-8b
   skus:
+    wh_n150_civ2:
+      timeout: 30
+      tier: 1
     wh_llmbox_perf:
       timeout: 30
+      tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -41,5 +47,6 @@
   skus:
     wh_llmbox_perf:
       timeout: 30
+      tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

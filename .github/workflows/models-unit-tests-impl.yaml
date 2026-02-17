@@ -24,18 +24,18 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      tests-yaml-path:
+      tier:
         required: true
         type: string
-        description: "Path to the tests YAML file defining the test matrix"
+        description: "Model tier to filter tests (1, 2, or 3)"
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.apply-model-filter.outputs.matrix }}
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_unit_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -61,20 +61,20 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply model filter
-        id: apply-model-filter
+      - name: Apply tier and model filters
+        id: apply-filters
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.model }}" = "all" ]; then
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$MATRIX" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          # Filter by tier
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
+          # Filter by model
+          if [ "${{ inputs.model }}" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+          fi
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
+            echo "matrix=[]" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
-            if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for model '${{ inputs.model }}'. Ensure the model is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
-              exit 1
-            fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$FILTERED" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
@@ -82,6 +82,7 @@ jobs:
 
   models-unit-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:

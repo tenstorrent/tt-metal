@@ -90,4 +90,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
-      tests-yaml-path: "./tests/pipeline_reorg/models_t2_e2e_tests.yaml"
+      tier: "2"
