@@ -58,7 +58,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
         // Expected embedding shape:  (batch_size, sentence_size, embedding_dim)
         embeddings = ttnn::reshape(
             embeddings,
-            ttnn::Shape({embeddings.logical_shape()[0], embeddings.logical_shape()[2], embeddings.logical_shape()[3]}));
+            ttnn::Shape(
+                {embeddings.logical_shape()[0], embeddings.logical_shape()[-2], embeddings.logical_shape()[-1]}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
