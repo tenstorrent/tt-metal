@@ -39,35 +39,37 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
 @pytest.mark.parametrize("momentum", [0.0, 0.1])
 @pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("testing_dtype2", ["float32", "bfloat16"])
 def test_batch_norm_tests(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype
+    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype, testing_dtype2
 ):
+    # Skip certain configurations that we don't want to test or support
+    if (not training) and ((not check_mean) or (not check_var)):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
+
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
     mean_data, mean_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
         if (check_mean)
         else (None, None)
     )
     var_data, var_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype)
+        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype2)
         if (check_var)
         else (None, None)
     )
     weight_data, weight_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
         if weight
         else (None, None)
     )
     bias_data, bias_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
         if bias
         else (None, None)
     )
-
-    if (not training) and ((not check_mean) or (not check_var)):
-        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
