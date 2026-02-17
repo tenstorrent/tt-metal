@@ -3,12 +3,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-Detect classes that implement the legacy concept OldDeviceOperation.
+Detect classes that implement legacy device operation patterns.
 
-Uses simple pattern matching (no clang) to find classes with any of these non-static methods:
-    - validate
-    - compute_output_specs
-    - create_program (or create_program_at)
+Checks for two legacy patterns:
+
+1. OldDeviceOperation concept: classes with non-static methods validate,
+   compute_output_specs, create_program, or create_program_at.
+
+2. ProgramFactoryConcept (CachedProgram pattern): factories that define
+   cached_program_t / shared_variables_t instead of using the modern
+   ProgramDescriptorFactoryConcept (create_descriptor).
 
 Checks specified .hpp files. Used by pre-commit hooks to detect legacy patterns in newly added files.
 """
@@ -22,6 +26,12 @@ import sys
 # Compile regex patterns once at module level for the methods we check
 _METHOD_NAMES = ["validate", "compute_output_specs", "create_program", "create_program_at"]
 _METHOD_PATTERNS = {name: re.compile(rf"\b{re.escape(name)}\s*[<(]") for name in _METHOD_NAMES}
+
+# Patterns that indicate the old ProgramFactoryConcept (CachedProgram pattern)
+_CACHED_PROGRAM_PATTERN = re.compile(r"\bcached_program_t\b")
+_SHARED_VARIABLES_PATTERN = re.compile(r"\bshared_variables_t\b")
+# Pattern that indicates the new ProgramDescriptorFactoryConcept
+_CREATE_DESCRIPTOR_PATTERN = re.compile(r"\bcreate_descriptor\b")
 
 
 def check_has_non_static_method(filepath, method_name):
@@ -67,6 +77,28 @@ def check_file_for_legacy_class(filepath):
         if check_has_non_static_method(filepath, method_name):
             return True
     return False
+
+
+def check_file_for_cached_program_factory(filepath):
+    """
+    Check if a file uses the legacy ProgramFactoryConcept (CachedProgram pattern)
+    without also providing create_descriptor.
+
+    Returns True if the file defines cached_program_t or shared_variables_t
+    but does NOT define create_descriptor.
+    """
+    try:
+        with open(filepath, "r") as f:
+            content = f.read()
+    except FileNotFoundError:
+        return False
+
+    has_cached_program = bool(_CACHED_PROGRAM_PATTERN.search(content))
+    has_shared_variables = bool(_SHARED_VARIABLES_PATTERN.search(content))
+    has_create_descriptor = bool(_CREATE_DESCRIPTOR_PATTERN.search(content))
+
+    # Flag if the file uses the old pattern without the new one
+    return (has_cached_program or has_shared_variables) and not has_create_descriptor
 
 
 def _file_exists_in_git(filepath, ref):
@@ -167,6 +199,7 @@ def main():
     args = parser.parse_args()
 
     legacy_files = []
+    cached_program_files = []
     for filepath in args.files:
         # If check-new-only is set, skip files that exist in from_ref (modified files)
         if args.check_new_only:
@@ -176,27 +209,58 @@ def main():
 
         if check_file_for_legacy_class(filepath):
             legacy_files.append(filepath)
+        elif check_file_for_cached_program_factory(filepath):
+            cached_program_files.append(filepath)
 
-    if not legacy_files:
-        return 0
+    failures = False
 
-    print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
-    print(
-        "   (class implements non-static member function(s): validate, compute_output_specs, create_program, or create_program_at)",
-        file=sys.stderr,
-    )
-    print("", file=sys.stderr)
-    print("Files with legacy classes:", file=sys.stderr)
-    for filepath in legacy_files:
-        print(f"  - {filepath}", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("Please follow the modern device operation pattern instead:", file=sys.stderr)
-    print(
-        "  - See documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html",
-        file=sys.stderr,
-    )
+    if legacy_files:
+        failures = True
+        print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
+        print(
+            "   (class implements non-static member function(s): validate, compute_output_specs, create_program, or create_program_at)",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+        print("Files with legacy classes:", file=sys.stderr)
+        for filepath in legacy_files:
+            print(f"  - {filepath}", file=sys.stderr)
+        print("", file=sys.stderr)
 
-    return 1
+    if cached_program_files:
+        failures = True
+        print(
+            "❌ ERROR: Detected new program factories using the deprecated CachedProgram pattern (ProgramFactoryConcept)",
+            file=sys.stderr,
+        )
+        print(
+            "   (file defines cached_program_t / shared_variables_t without create_descriptor)",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+        print("Files with deprecated CachedProgram factories:", file=sys.stderr)
+        for filepath in cached_program_files:
+            print(f"  - {filepath}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(
+            "   New operations must use ProgramDescriptorFactoryConcept (create_descriptor).",
+            file=sys.stderr,
+        )
+        print(
+            "   See migration recipe: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/descriptor_migration_recipe.html",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+
+    if failures:
+        print("Please follow the modern device operation pattern instead:", file=sys.stderr)
+        print(
+            "  - See documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
