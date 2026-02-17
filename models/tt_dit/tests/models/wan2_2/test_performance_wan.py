@@ -94,17 +94,8 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [
-            (2, 2),
-            (2, 2),
-            0,
-            1,
-            2,
-            False,
-            line_params,
-            ttnn.Topology.Linear,
-            True,
-        ],  # FSDP is needed with encoder now on device
+        # FSDP is needed for 2x2 with encoder now on device
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
