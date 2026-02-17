@@ -312,7 +312,7 @@ def run_test_linear(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y",
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
         [
             (2, 4),
@@ -324,6 +324,11 @@ def run_test_linear(
             1,
             4,
             4,
+            8,
+            8,
+            8,
+            2,
+            2,
         ],
         [
             (8, 4),
@@ -339,6 +344,11 @@ def run_test_linear(
             1,
             8,
             8,
+            8,
+            8,
+            8,
+            2,
+            2,
         ],
         [
             (8, 4),
@@ -354,6 +364,11 @@ def run_test_linear(
             1,
             8,
             8,
+            8,
+            8,
+            8,
+            2,
+            2,
         ],
         [
             (8, 4),
@@ -369,6 +384,11 @@ def run_test_linear(
             1,
             8,
             8,
+            8,
+            8,
+            8,
+            2,
+            2,
         ],
         [
             (8, 4),
@@ -384,6 +404,11 @@ def run_test_linear(
             1,
             12,
             9,
+            10,
+            8,
+            8,
+            2,
+            2,
         ],
     ],
     ids=[
@@ -409,10 +434,6 @@ def run_test_linear(
         "denseout",
         "ff1",
     ],
-)
-@pytest.mark.parametrize(
-    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [(8, 8, 8, 2, 2)],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
