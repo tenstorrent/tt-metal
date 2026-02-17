@@ -129,6 +129,33 @@ def load_h2d_latency_csv(path):
     return df
 
 
+def load_h2d_throughput_csv(path):
+    """Load H2D throughput benchmark CSV (with h2d_mode column)."""
+    with open(path) as f:
+        header = f.readline().strip()
+        rows = [l.strip().split(",") for l in f if l.strip()]
+
+    cols = [
+        "page_size",
+        "socket_fifo_size",
+        "h2d_mode",
+        "total_data",
+        "data_size",
+        "pages_per_iter",
+        "num_iterations",
+        "total_pages",
+        "avg_per_page_us",
+        "avg_per_page_cycles",
+        "throughput_gbps",
+    ]
+    nc = len(cols)
+    df = pd.DataFrame([r[:nc] for r in rows], columns=cols)
+    for c in cols:
+        if c != "h2d_mode":
+            df[c] = pd.to_numeric(df[c])
+    return df
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -451,9 +478,178 @@ def run_latency(path):
     lat_export_csv(df)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  H2D LATENCY
-# ══════════════════════════════════════════════════════════════════════════════
+# -- H2D throughput ----
+
+
+def h2d_median_over_fifo(df):
+    return (
+        df.groupby(["h2d_mode", "page_size", "total_data"])
+        .agg(throughput_gbps=("throughput_gbps", "median"), avg_per_page_us=("avg_per_page_us", "median"))
+        .reset_index()
+    )
+
+
+def h2d_tp_print_report(df):
+    modes = sorted(df.h2d_mode.unique())
+    nf = df.socket_fifo_size.nunique()
+    agg = h2d_median_over_fifo(df)
+
+    print(f"\n{'='*70}\n  H2D Steady-State Throughput  ({len(df)} rows)\n{'='*70}")
+    print(f"  Modes      : {modes}")
+    print(f"  Page sizes : {[human_bytes(x) for x in sorted(df.page_size.unique())]}")
+    print(
+        f"  FIFO sizes : {nf} values, {human_bytes(df.socket_fifo_size.min())} .. "
+        f"{human_bytes(df.socket_fifo_size.max())}"
+    )
+    print(f"  Total data : {[human_bytes(x) for x in sorted(df.total_data.unique())]}")
+
+    for mode in modes:
+        sub = df[df.h2d_mode == mode]
+        pk = sub.sort_values("throughput_gbps", ascending=False).iloc[0]
+        print(
+            f"\n  Peak {mode}: {pk.throughput_gbps:.3f} GB/s "
+            f"(page={human_bytes(pk.page_size)}, FIFO={human_bytes(pk.socket_fifo_size)}, "
+            f"total={human_bytes(pk.total_data)})"
+        )
+
+    tds = sorted(agg.total_data.unique())
+    for mode in modes:
+        m_agg = agg[agg.h2d_mode == mode]
+        hdr = f"  {'page':>6}" + "".join(f"{human_bytes(t):>8}" for t in tds)
+        print(f"\n  {mode} throughput (GB/s) -- median across {nf} FIFO sizes:\n{hdr}\n  {'-'*(len(hdr)-2)}")
+        for ps in sorted(m_agg.page_size.unique()):
+            row = f"  {human_bytes(ps):>6}"
+            for td in tds:
+                c = m_agg[(m_agg.page_size == ps) & (m_agg.total_data == td)]
+                row += f"{c.throughput_gbps.values[0]:>8.3f}" if len(c) else f"{'--':>8}"
+            print(row)
+
+    td = df.total_data.max()
+    for mode in modes:
+        sub = df[(df.total_data == td) & (df.h2d_mode == mode)]
+        if sub.empty:
+            continue
+        print(f"\n  {mode} FIFO impact at total_data={human_bytes(td)}:")
+        print(f"  {'page':>6} {'min':>8} {'median':>8} {'max':>8} {'CV%':>6}")
+        print(f"  {'-'*38}")
+        for ps in sorted(sub.page_size.unique()):
+            g = sub[sub.page_size == ps].throughput_gbps
+            cv = g.std() / g.mean() * 100 if g.mean() > 0 else 0
+            print(f"  {human_bytes(ps):>6} {g.min():>8.3f} {g.median():>8.3f} {g.max():>8.3f} {cv:>5.1f}%")
+
+    agg2 = h2d_median_over_fifo(df[df.total_data == td])
+    print(f"\n  Per-page timing (total_data={human_bytes(td)}, median over FIFO sizes):")
+    print(f"  {'page':>6} {'mode':>14} {'us/page':>10} {'cycles':>10} {'GB/s':>8}\n  {'-'*52}")
+    for ps in sorted(agg2.page_size.unique()):
+        for mode in modes:
+            r = agg2[(agg2.page_size == ps) & (agg2.h2d_mode == mode)]
+            if r.empty:
+                continue
+            r = r.iloc[0]
+            print(
+                f"  {human_bytes(r.page_size):>6} {mode:>14} {r.avg_per_page_us:>10.3f} "
+                f"{r.avg_per_page_us*1350:>10.0f} {r.throughput_gbps:>8.3f}"
+            )
+
+
+def h2d_tp_plot(df, out="h2d_throughput.png"):
+    td_max = df.total_data.max()
+    sub = df[df.total_data == td_max]
+    modes = sorted(sub.h2d_mode.unique())
+    agg = sub.groupby(["h2d_mode", "page_size"]).agg(throughput_gbps=("throughput_gbps", "median")).reset_index()
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for mode in modes:
+        g = agg[agg.h2d_mode == mode].sort_values("page_size")
+        ax.plot(g.page_size, g.throughput_gbps, "o-", label=mode, ms=5, lw=2)
+    ax.set(
+        xscale="log",
+        xlabel="Page Size",
+        ylabel="GB/s",
+        title=f"H2D Throughput (total_data={human_bytes(td_max)}, median over FIFO sizes)",
+    )
+    ax.set_xticks(t := sorted(agg.page_size.unique()))
+    ax.set_xticklabels([human_bytes(x) for x in t], rotation=45, fontsize=9)
+    ax.minorticks_off()
+    ax.set_ylim(bottom=0)
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"\n  Saved {out}")
+
+
+def h2d_tp_plot_vs_fifo(df, out="h2d_tp_vs_fifo.png"):
+    td = df.total_data.max()
+    sub = df[df.total_data == td]
+    modes = sorted(sub.h2d_mode.unique())
+    rep_pages = [p for p in [64, 256, 1024, 4096, 16384] if p in sub.page_size.values]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+    for idx, mode in enumerate(modes):
+        ax = axes[idx]
+        mode_df = sub[sub.h2d_mode == mode]
+        for ps in rep_pages:
+            g = mode_df[mode_df.page_size == ps].sort_values("socket_fifo_size")
+            if not g.empty:
+                ax.plot(g.socket_fifo_size, g.throughput_gbps, "o-", label=human_bytes(ps), ms=4, lw=1.5)
+        ax.set(xscale="log", xlabel="Socket FIFO Size", ylabel="GB/s" if idx == 0 else "", title=mode)
+        fifos = sorted(mode_df.socket_fifo_size.unique())
+        tick_fifos = fifos[:: max(1, len(fifos) // 6)]
+        ax.set_xticks(tick_fifos)
+        ax.set_xticklabels([human_bytes(x) for x in tick_fifos], rotation=45, fontsize=7)
+        ax.minorticks_off()
+        ax.set_ylim(bottom=0)
+        ax.grid(alpha=0.25)
+        ax.legend(loc="best", fontsize=9, title="Page Size")
+
+    fig.suptitle(f"H2D Throughput vs FIFO Size (total_data={human_bytes(td)})", fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"  Saved {out}")
+
+
+def h2d_tp_export_csv(df, out="h2d_throughput_summary.csv"):
+    modes = sorted(df.h2d_mode.unique())
+    nf = df.socket_fifo_size.nunique()
+    repr_fifos = [f for f in [1024, 16384, 524288] if f in df.socket_fifo_size.values]
+
+    def pivot_combined(sub, label):
+        parts = []
+        for mode in modes:
+            pv = sub[sub.h2d_mode == mode].pivot_table(
+                index="page_size", columns="total_data", values="throughput_gbps"
+            )
+            pv.columns = [f"{mode} {human_bytes(c)}" for c in pv.columns]
+            parts.append(pv)
+        merged = parts[0].join(parts[1:], how="outer")
+        merged.index.name = label
+        return merged
+
+    agg = h2d_median_over_fifo(df)
+    tables = [pivot_combined(agg, f"page_size (median over {nf} FIFO sizes)")]
+    for fs in repr_fifos:
+        sub = df[df.socket_fifo_size == fs]
+        if not sub.empty:
+            tables.append(pivot_combined(sub, f"page_size (FIFO={human_bytes(fs)})"))
+
+    with open(out, "w") as f:
+        for i, t in enumerate(tables):
+            if i > 0:
+                f.write("\n")
+            t.to_csv(f, float_format="%.6f")
+    print(f"  Saved {out}")
+
+
+def run_h2d_throughput(path):
+    df = load_h2d_throughput_csv(path)
+    h2d_tp_print_report(df)
+    h2d_tp_plot(df)
+    h2d_tp_plot_vs_fifo(df)
+    h2d_tp_export_csv(df)
+
+
+# -- H2D latency ----
 
 
 def h2d_print_report(df):
@@ -702,6 +898,7 @@ if __name__ == "__main__":
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--throughput", action="store_true", help="Analyze D2H throughput benchmark")
     mode.add_argument("--latency", action="store_true", help="Analyze D2H latency benchmark")
+    mode.add_argument("--h2d-throughput", action="store_true", help="Analyze H2D throughput benchmark")
     mode.add_argument("--h2d-latency", action="store_true", help="Analyze H2D latency benchmark")
     mode.add_argument("--ping", action="store_true", help="Analyze D2H pure ping benchmark")
     p.add_argument("csv", help="Path to benchmark CSV")
@@ -711,6 +908,8 @@ if __name__ == "__main__":
         run_throughput(args.csv)
     elif args.latency:
         run_latency(args.csv)
+    elif args.h2d_throughput:
+        run_h2d_throughput(args.csv)
     elif args.h2d_latency:
         run_h2d_latency(args.csv)
     else:
