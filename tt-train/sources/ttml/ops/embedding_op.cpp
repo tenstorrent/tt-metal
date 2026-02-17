@@ -13,25 +13,6 @@
 namespace ttml::ops {
 
 autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight) {
-    // embedding_op currently assumes a 4D input tensor and returns a 4D embedding tensor,
-    // which is not generally correct.
-    // The embedding shape should be: input_shape + (embedding_dim,).
-    // If we assume the first and second dimensions are always 1 for the 4D input tensor,
-    // the reshape is safe.
-    //
-    // Expected input shape:      (batch_size, 1, 1, sentence_size)
-    // Actual embedding shape:    (batch_size, 1, 1, sentence_size, embedding_dim)
-    // Expected embedding shape:  (batch_size, 1, sentence_size, embedding_dim)
-    TT_FATAL(
-        tensor->get_value().logical_shape().size() == 4,
-        "Input tensor must be 4D, got {}",
-        tensor->get_value().logical_shape().size());
-    TT_FATAL(
-        tensor->get_value().logical_shape()[1] == 1 && tensor->get_value().logical_shape()[2] == 1,
-        "Expected input dims[1] == dims[2] == 1, got {} and {}.",
-        tensor->get_value().logical_shape()[1],
-        tensor->get_value().logical_shape()[2]);
-
     // prepare for embedding
     auto weight_tensor = weight->get_value();
     weight_tensor = ttnn::untilize(weight_tensor);
@@ -40,8 +21,8 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
         ttnn::embedding(tensor->get_value(), weight_tensor, /* pad_token */ std::nullopt, ttnn::Layout::TILE);
     auto embeddings_shape = embeddings.logical_shape();
     auto batch_size = embeddings_shape[0];
-    auto sentence_size = embeddings_shape[-2];
-    auto embedding_dim = embeddings_shape[-1];
+    auto sentence_size = embeddings_shape[1];
+    auto embedding_dim = embeddings_shape[2];
 
     embeddings = ttnn::reshape(embeddings, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}));
     auto out = autograd::create_tensor(embeddings);
