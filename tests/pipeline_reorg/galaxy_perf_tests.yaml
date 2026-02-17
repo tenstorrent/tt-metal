@@ -97,7 +97,7 @@
   sku: wh_galaxy
   owner_id: U03HY7MK4BT
   team: models
-  timeout: 45
+  timeout: 20
   arch: wormhole_b0
   save-perf-data: true
   model-type: deepseek_v3
