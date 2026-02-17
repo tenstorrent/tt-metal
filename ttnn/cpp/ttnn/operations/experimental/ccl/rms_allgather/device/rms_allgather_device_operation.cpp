@@ -17,12 +17,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-RMSAllGatherDeviceOperation::program_factory_t RMSAllGatherDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return RMSAllGatherMeshWorkloadFactory{};
-}
-
 void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.input;
@@ -229,9 +223,6 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,
         args.output_mem_config,
@@ -247,8 +238,7 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.use_noc1_only,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

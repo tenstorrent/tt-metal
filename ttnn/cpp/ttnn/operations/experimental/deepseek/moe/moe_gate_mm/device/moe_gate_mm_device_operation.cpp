@@ -6,11 +6,6 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm {
 
-MoEGateMMDeviceOperation::program_factory_t MoEGateMMDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::MoEGateMMProgramFactory{};
-}
-
 void MoEGateMMDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);

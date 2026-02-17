@@ -83,6 +83,8 @@ struct UnaryDeviceOperation {
         program::UnaryShardedProgramFactory
     >;
 
+    // select_program_factory is only required when program_factory_t has more than one variant.
+    // For single-variant program_factory_t, the framework auto-selects the sole factory.
     static program_factory_t select_program_factory(
         const operation_attributes_t&,
         const tensor_args_t&);
@@ -221,11 +223,15 @@ using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
 **Note**: Prefer `spec_return_value_t` (TensorSpec) for newer operations as it provides more complete tensor metadata. Use `shape_return_value_t` only if maintaining compatibility with older patterns.
 
-### Step 4: Implement `select_program_factory`
+### Step 4: Implement `select_program_factory` (only for multi-variant `program_factory_t`)
 
-This method returns a `std::variant` listing all possible program factory types. The selection logic is usually straightforward based on tensor properties or operation attributes.
+`program_factory_t` is a `std::variant` listing all possible program factory types.
 
-**Example:**
+**If your operation has a single factory** (e.g., `using program_factory_t = std::variant<MyFactory>;`), you do **not** need to implement `select_program_factory` — the framework auto-selects the sole factory type.
+
+**If your operation has multiple factories**, you must implement `select_program_factory` to choose between them. If you forget, you'll get a clear compile error: *"DeviceOperation must implement select_program_factory when program_factory_t has more than one type."*
+
+**Example (multi-variant):**
 
 ```cpp
 UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
@@ -572,11 +578,14 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.legacy_shape();
 
-    auto program_factory = select_program_factory(args, tensor_args);
+    // For multi-variant program_factory_t, include the factory index in the hash:
+    //   auto program_factory = select_program_factory(args, tensor_args);
+    //   ... program_factory.index() ...
+    // For single-variant program_factory_t, the index is always 0.
 
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
         args,
-        program_factory.index(),  // Include program factory variant index
+        select_program_factory(args, tensor_args).index(),  // Include program factory variant index
         input_tensor.dtype(),     // impacts program in program factory
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
         compute_volume(input_shape)); // core groups depend on volume
@@ -653,7 +662,7 @@ Use this checklist to ensure all steps are completed:
 - [ ] **Step 3**: Defined `tensor_return_value_t` and `spec_return_value_t` appropriately
 - [ ] **Step 4**: Implemented `compute_output_specs`
 - [ ] **Step 5**: [Optional] Implemented `create_output_tensors` (if legacy had it)
-- [ ] **Step 6**: Implemented `select_program_factory` returning correct variant type
+- [ ] **Step 6**: [If multi-variant] Implemented `select_program_factory` returning correct variant type (not needed for single-variant `program_factory_t`)
 - [ ] **Step 6a**: [If needed] Created separate mesh workload factory for `mesh_coords` filtering support
 - [ ] **Step 7**: Implemented `validate_on_program_cache_miss`
 - [ ] **Step 8**: [Optional] Implemented `validate_on_program_cache_hit` (if legacy had it)

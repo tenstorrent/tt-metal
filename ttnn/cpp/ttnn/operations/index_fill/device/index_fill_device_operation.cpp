@@ -7,10 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::index_fill {
-IndexFillOperation::program_factory_t IndexFillOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MultiCore{};
-}
 
 void IndexFillOperation::validate(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

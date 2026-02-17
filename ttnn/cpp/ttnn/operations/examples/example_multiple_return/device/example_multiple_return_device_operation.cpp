@@ -8,11 +8,6 @@
 
 namespace ttnn::operations::examples {
 
-ExampleMultipleReturnDeviceOperation::program_factory_t ExampleMultipleReturnDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return SingleCore{};
-}
-
 void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(attributes, tensor_args);
