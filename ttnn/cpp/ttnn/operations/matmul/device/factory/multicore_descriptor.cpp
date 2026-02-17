@@ -109,7 +109,7 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     tt_metal::Buffer* src1_buffer = b.buffer();
 
     tt::tt_metal::IDevice* device = a.device();
-    const auto& cshape = output.padded_shape();
+    const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -127,6 +127,8 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    // C = A*B*...
+    // MN = MK*KN
     uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / TILE_WIDTH;
@@ -204,6 +206,8 @@ tt::tt_metal::ProgramDescriptor MultiCoreDescriptorFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // Compute kernel - group 1
+    // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop,
+    // so only set Nt for simplicity
     std::vector<uint32_t> compute_args_group_1 = {
         1,                                 // B
         1,                                 // Mt
