@@ -79,6 +79,33 @@ struct ProgramFactory {
   (random seeds, etc.) — not for buffer addresses.
 - Include `<tt-metalium/program_descriptors.hpp>`.
 
+**Optional `prepare_resources` hook:**
+
+If `create_descriptor` needs a device-side resource that isn't in `tensor_args` or
+the output tensor (e.g., a config tensor that must be allocated once and kept alive
+across cache hits), add a `prepare_resources` static method:
+
+```cpp
+struct ProgramFactory {
+    // Called once on cache miss. Return value is stored by the framework
+    // and passed to create_descriptor on that same cache miss.
+    static tt::tt_metal::DeviceStorage prepare_resources(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&);
+
+    // When prepare_resources exists, create_descriptor takes an extra parameter.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        tt::tt_metal::DeviceStorage& resources);  // from prepare_resources
+};
+```
+
+Most factories do NOT need this. It was needed for Conv2d because it allocates
+sliding-window config tensors that must live as long as the cached program.
+
 ### 1.3 Program factory implementation (`create_descriptor`)
 
 The descriptor declares everything in a `ProgramDescriptor` struct:
@@ -132,7 +159,9 @@ tt::stl::hash::hash_t MyNewDeviceOperation::compute_program_hash(
 }
 ```
 
-After migration (when the old op is deleted), you can remove the `type_hash<>` wrapper.
+Keep the `type_hash<>` after migration as well — it prevents collisions between
+different operations in the shared device cache. Rename it from `type_hash<MyNewOp>`
+to `type_hash<MyOp>` in Phase 3.
 
 ### 1.5 CMakeLists.txt
 
@@ -245,8 +274,11 @@ directory. Update:
 
 ### 3.3 Update `compute_program_hash`
 
-Remove the `type_hash<MyNewDeviceOperation>` wrapper that was added for coexistence.
-The hash no longer needs to differentiate old vs. new.
+Change `type_hash<MyNewDeviceOperation>` to `type_hash<MyDeviceOperation>` to match
+the renamed type. Keep the `type_hash` — it prevents cache collisions between
+different operations that happen to hash the same attributes. The default fallback
+in `compute_mesh_workload_hash` already includes `type_hash`, so custom hashes
+should too for consistency.
 
 ### 3.4 Update CMakeLists.txt
 
@@ -314,8 +346,10 @@ Both must succeed with zero errors.
    live in `tt::tt_metal::detail`. If your factory is in a namespace where `detail::`
    resolves differently, fully qualify as `tt::tt_metal::detail::`.
 
-3. **Cache collisions during coexistence.** Always include `type_hash<NewOp>` in
-   `compute_program_hash` while both old and new ops exist. Remove it after migration.
+3. **Cache collisions.** Always include `type_hash<YourOp>` in
+   `compute_program_hash`. During coexistence use `type_hash<NewOp>`; after migration
+   rename to `type_hash<Op>`. Do NOT remove `type_hash` — it prevents collisions
+   between different operations in the shared per-device program cache.
 
 4. **`override_runtime_arguments` signature.** The descriptor pattern uses
    `Program&` (not `cached_program_t&`). The kernel handle is an integer index
