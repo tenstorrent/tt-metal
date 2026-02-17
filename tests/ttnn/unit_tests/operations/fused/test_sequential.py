@@ -198,7 +198,7 @@ class TestSequentialChainInfrastructure:
         )
 
         # Build the chain and verify we get a valid fused descriptor
-        fused = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)[0]
+        fused = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)
         assert fused is not None
         assert hasattr(fused, "descriptor")
         num_kernels = len(fused.descriptor.kernels)
@@ -224,7 +224,7 @@ class TestSequentialChainInfrastructure:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1_desc, ln2_desc], [], device)[0]
+        fused = build_op_graph([ln1_desc, ln2_desc], [], device)
 
         # Verify we got a fused descriptor with kernels
         assert fused is not None
@@ -440,7 +440,7 @@ class TestSequentialChainExecution:
         )
 
         # Build chain
-        fused_desc = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)[0]
+        fused_desc = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)
 
         # Execute
         outputs = composite.launch([fused_desc])
@@ -514,7 +514,7 @@ class TestSequentialChainExecution:
         )
 
         # Fuse and execute
-        fused = build_op_graph([rms1, rms2, rms3, rms4], [], device)[0]
+        fused = build_op_graph([rms1, rms2, rms3, rms4], [], device)
         outputs = composite.launch([fused])
         tt_output = outputs[0][0]
         torch_output = ttnn.to_torch(tt_output)
@@ -551,7 +551,7 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        fused_desc = build_op_graph([ln1_desc, ln2_desc], [], device)[0]
+        fused_desc = build_op_graph([ln1_desc, ln2_desc], [], device)
 
         outputs = composite.launch([fused_desc])
         tt_output = outputs[0][0]
@@ -624,7 +624,7 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        fused_chain = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)[0]
+        fused_chain = build_op_graph([ln1_desc, rms_desc, ln2_desc], [], device)
 
         # Create parallel RMSNorm on parallel_cores
         parallel_rms = rms_norm.rms_norm(
@@ -800,7 +800,7 @@ class TestFusedKernelSource:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, ln2], [], device)
 
         # Verify fused kernels are SOURCE_CODE type with phase functions
         for kernel in fused.descriptor.kernels:
@@ -830,7 +830,7 @@ class TestFusedKernelSource:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, ln2], [], device)
 
         # Check reader has barrier code (multi-barrier uses __barrier_seg0)
         for kernel in fused.descriptor.kernels:
@@ -903,7 +903,7 @@ class TestParallelChains:
         chain2 = [rms2, ln2]
 
         # Create parallel chain descriptors
-        fused_descriptors = [build_op_graph(c, [], device)[0] for c in [chain1, chain2]]
+        fused_descriptors = [build_op_graph(c, [], device) for c in [chain1, chain2]]
 
         assert len(fused_descriptors) == 2
 
@@ -942,7 +942,7 @@ class TestParallelChains:
         )
 
         # Fuse the chain
-        fused = build_op_graph([ln1, rms1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms1, ln2], [], device)
 
         # Verify structure
         assert fused is not None
@@ -967,7 +967,7 @@ class TestParallelChains:
             epsilon=1e-5,
         )
 
-        fused = OpGraphBuilder(OpNode(ln)).build(device)[0]
+        fused = OpGraphBuilder(OpNode(ln)).build(device)
 
         # Should return the same descriptor
         assert fused is ln
@@ -1002,7 +1002,7 @@ class TestParallelChains:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, rms1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms1, ln2], [], device)
 
         output_dir = str(tmp_path / "gen_kernels")
         dump_fused_kernels(fused, output_dir, label="ln_rms_ln")
@@ -1082,7 +1082,7 @@ class TestParallelChains:
 
         # This should either succeed (if CB merging is efficient) or raise a clear error
         try:
-            fused = build_op_graph(descriptors, [], device)[0]
+            fused = build_op_graph(descriptors, [], device)
             # The build succeeded, so CBs should be within limits
             assert True, "Build succeeded without CB overflow"
         except (ValueError, RuntimeError) as e:
@@ -1113,7 +1113,7 @@ class TestParallelChains:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, ln2], [], device)
 
         # Check that fused kernels have phase-prefixed named args
         for kernel in fused.descriptor.kernels:
@@ -1185,7 +1185,7 @@ class TestParallelChainsExecution:
         chain_b = [rms_b, ln_b]
 
         # Fuse chains
-        fused = [build_op_graph(c, [], device)[0] for c in [chain_a, chain_b]]
+        fused = [build_op_graph(c, [], device) for c in [chain_a, chain_b]]
 
         # Execute in parallel
         outputs = composite.launch(fused)
@@ -1250,7 +1250,7 @@ class TestParallelChainsExecution:
             chains.append([ln_i, rms_i])
 
         # Fuse and execute
-        fused = [build_op_graph(c, [], device)[0] for c in chains]
+        fused = [build_op_graph(c, [], device) for c in chains]
         outputs = composite.launch(fused)
 
         assert len(outputs) == 4
@@ -1388,7 +1388,7 @@ class TestParallelExecutionProfiling:
 
         # Fuse the 3-phase norm chain (LN→RMS→LN)
         # Note: 4-phase chains with mixed LN/RMS hit CB limits due to phantom CB reservations
-        fused_norm_chain = build_op_graph([ln1_desc, rms1_desc, ln2_desc], [], device)[0]
+        fused_norm_chain = build_op_graph([ln1_desc, rms1_desc, ln2_desc], [], device)
 
         start_parallel = time.perf_counter()
 
@@ -1850,7 +1850,7 @@ class TestMatmulDescriptor:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused = build_op_graph([ln, rms], [], device)[0]
+        fused = build_op_graph([ln, rms], [], device)
 
         outputs = composite.launch([mm, fused])
         assert len(outputs) == 2
@@ -1915,7 +1915,7 @@ class TestStressInfrastructure:
             )
             chains.append([ln, rms])
 
-        fused = [build_op_graph(c, [], device)[0] for c in chains]
+        fused = [build_op_graph(c, [], device) for c in chains]
         outputs = composite.launch(fused)
         assert len(outputs) == n_chains
 
@@ -1959,7 +1959,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, rms1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms1, ln2], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2002,7 +2002,7 @@ class TestStressInfrastructure:
             descs.append(d)
             prev_input = d.output_tensors[0]
 
-        fused = build_op_graph(descs, [], device)[0]
+        fused = build_op_graph(descs, [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2040,7 +2040,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused_a = build_op_graph([ln_a, rms_a], [], device)[0]
+        fused_a = build_op_graph([ln_a, rms_a], [], device)
 
         # Chain B on core (5,0): RMS->LN (different order)
         cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
@@ -2065,7 +2065,7 @@ class TestStressInfrastructure:
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
         )
-        fused_b = build_op_graph([rms_b, ln_b], [], device)[0]
+        fused_b = build_op_graph([rms_b, ln_b], [], device)
 
         # Launch all 3 in parallel
         outputs = composite.launch([mm, fused_a, fused_b])
@@ -2123,7 +2123,7 @@ class TestStressInfrastructure:
             bias=test_tensors["tt_bias2"],
             epsilon=1e-5,
         )
-        fused = build_op_graph([ln1, rms1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms1, ln2], [], device)
 
         outputs = composite.launch([mm, fused])
         assert len(outputs) == 2
@@ -2163,7 +2163,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused_a = build_op_graph([ln_a, rms_a], [], device)[0]
+        fused_a = build_op_graph([ln_a, rms_a], [], device)
 
         # Chain B: 3-phase LN->RMS->LN on core (1,0)
         cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
@@ -2196,7 +2196,7 @@ class TestStressInfrastructure:
             bias=test_tensors["tt_bias2"],
             epsilon=1e-5,
         )
-        fused_b = build_op_graph([ln_b1, rms_b, ln_b2], [], device)[0]
+        fused_b = build_op_graph([ln_b1, rms_b, ln_b2], [], device)
 
         outputs = composite.launch([fused_a, fused_b])
         assert len(outputs) == 2
@@ -2245,7 +2245,7 @@ class TestStressInfrastructure:
                 epsilon=1e-5,
                 compute_kernel_config=ln_compute_config,
             )
-            fused = build_op_graph([ln1, rms1], [], device)[0]
+            fused = build_op_graph([ln1, rms1], [], device)
             outputs = composite.launch([fused])
             result = ttnn.to_torch(outputs[0][0])
 
@@ -2295,7 +2295,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused = build_op_graph([ln1, rms1], [], device)[0]
+        fused = build_op_graph([ln1, rms1], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2334,7 +2334,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, ln2, ln3], [], device)[0]
+        fused = build_op_graph([ln1, ln2, ln3], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2382,7 +2382,7 @@ class TestStressInfrastructure:
                 epsilon=1e-5,
                 compute_kernel_config=ln_compute_config,
             )
-            fused_chains.append(build_op_graph([ln, rms], [], device)[0])
+            fused_chains.append(build_op_graph([ln, rms], [], device))
 
         outputs = composite.launch([mm] + fused_chains)
         assert len(outputs) == 4
@@ -2427,7 +2427,7 @@ class TestStressInfrastructure:
             compute_kernel_config=ln_compute_config,
         )
 
-        fused = build_op_graph([ln, rms], [], device)[0]
+        fused = build_op_graph([ln, rms], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2469,7 +2469,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
         )
 
-        fused = build_op_graph([ln1, rms, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms, ln2], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2522,7 +2522,7 @@ class TestStressInfrastructure:
             )
             chains.append([ln, rms])
 
-        fused = [build_op_graph(c, [], device)[0] for c in chains]
+        fused = [build_op_graph(c, [], device) for c in chains]
         outputs = composite.launch(fused)
         assert len(outputs) == 3
 
@@ -2566,7 +2566,7 @@ class TestStressInfrastructure:
             descs.append(d)
             prev_input = d.output_tensors[0]
 
-        fused = build_op_graph(descs, [], device)[0]
+        fused = build_op_graph(descs, [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -2634,7 +2634,7 @@ class TestStressInfrastructure:
                 epsilon=1e-5,
                 compute_kernel_config=ln_compute_config,
             )
-            fused_chains.append(build_op_graph([ln, rms], [], device)[0])
+            fused_chains.append(build_op_graph([ln, rms], [], device))
 
         outputs = composite.launch(fused_chains)
         assert len(outputs) == 3
@@ -2700,7 +2700,7 @@ class TestStressInfrastructure:
                 bias=test_tensors["tt_bias2"],
                 epsilon=1e-5,
             )
-            fused_chains.append(build_op_graph([ln1, rms, ln2], [], device)[0])
+            fused_chains.append(build_op_graph([ln1, rms, ln2], [], device))
 
         outputs = composite.launch(fused_chains)
         assert len(outputs) == 2
@@ -2741,7 +2741,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused_a = build_op_graph([ln_a, rms_a], [], device)[0]
+        fused_a = build_op_graph([ln_a, rms_a], [], device)
 
         # Chain B on cores (4,0)-(6,0): RMS->LN
         cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0))})
@@ -2766,7 +2766,7 @@ class TestStressInfrastructure:
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
         )
-        fused_b = build_op_graph([rms_b, ln_b], [], device)[0]
+        fused_b = build_op_graph([rms_b, ln_b], [], device)
 
         # Launch all 3 in parallel
         outputs = composite.launch([mm, fused_a, fused_b])
@@ -2836,7 +2836,7 @@ class TestStressInfrastructure:
             )
             chains.append([ln, rms])
 
-        fused = [build_op_graph(c, [], device)[0] for c in chains]
+        fused = [build_op_graph(c, [], device) for c in chains]
         outputs = composite.launch(fused)
         assert len(outputs) == 4
 
@@ -2894,7 +2894,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused = build_op_graph([ln, rms], [], device)[0]
+        fused = build_op_graph([ln, rms], [], device)
 
         outputs = composite.launch([mm, fused])
         assert len(outputs) == 2
@@ -2955,7 +2955,7 @@ class TestStressInfrastructure:
             epsilon=1e-5,
             compute_kernel_config=ln_compute_config,
         )
-        fused_a = build_op_graph([ln_a, rms_a], [], device)[0]
+        fused_a = build_op_graph([ln_a, rms_a], [], device)
 
         # Chain B on (0,1)-(1,1) = 2 cores: RMS->LN
         cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1))})
@@ -2980,7 +2980,7 @@ class TestStressInfrastructure:
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
         )
-        fused_b = build_op_graph([rms_b, ln_b], [], device)[0]
+        fused_b = build_op_graph([rms_b, ln_b], [], device)
 
         # Single LN on (2,0)
         cores_c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))})
@@ -3079,7 +3079,7 @@ class TestStressInfrastructure:
             bias=test_tensors["tt_bias2"],
             epsilon=1e-5,
         )
-        fused = build_op_graph([ln1, rms1, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms1, ln2], [], device)
 
         outputs = composite.launch([mm, fused])
         assert len(outputs) == 2
@@ -3171,7 +3171,7 @@ class TestShardedSequentialFusion:
             program_config=program_config,
         )
 
-        fused = build_op_graph([ln_desc, rms_desc], [], device)[0]
+        fused = build_op_graph([ln_desc, rms_desc], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -3249,7 +3249,7 @@ class TestShardedSequentialFusion:
             program_config=program_config,
         )
 
-        fused = build_op_graph([rms_desc, ln_desc], [], device)[0]
+        fused = build_op_graph([rms_desc, ln_desc], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -3336,7 +3336,7 @@ class TestShardedSequentialFusion:
             program_config=program_config,
         )
 
-        fused = build_op_graph([ln1, rms, ln2], [], device)[0]
+        fused = build_op_graph([ln1, rms, ln2], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -3438,7 +3438,7 @@ class TestShardedSequentialFusion:
                 compute_kernel_config=compute_config,
                 program_config=program_config,
             )
-            chains_fused.append(build_op_graph([ln, rms], [], device)[0])
+            chains_fused.append(build_op_graph([ln, rms], [], device))
 
         outputs = composite.launch(chains_fused)
         assert len(outputs) == 2
@@ -3513,7 +3513,7 @@ class TestShardedSequentialFusion:
             descs.append(d)
             prev_input = d.output_tensors[0]
 
-        fused = build_op_graph(descs, [], device)[0]
+        fused = build_op_graph(descs, [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -3599,7 +3599,7 @@ class TestShardedSequentialFusion:
             program_config=program_config,
         )
 
-        fused = build_op_graph([ln, rms], [], device)[0]
+        fused = build_op_graph([ln, rms], [], device)
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
 
@@ -3723,7 +3723,7 @@ class TestShardedSequentialFusion:
                 compute_kernel_config=compute_config,
                 program_config=prog_cfg,
             )
-            chains_fused.append(build_op_graph([ln, rms], [], device)[0])
+            chains_fused.append(build_op_graph([ln, rms], [], device))
 
         outputs = composite.launch(chains_fused)
         assert len(outputs) == 3
@@ -3784,7 +3784,7 @@ class TestShardedSequentialFusion:
         d2 = rms_norm.rms_norm(
             d1.output_tensors[0], weight=tt_w2, epsilon=1e-5, compute_kernel_config=cc, program_config=pc
         )
-        fused = build_op_graph([d1, d2], [], device)[0]
+        fused = build_op_graph([d1, d2], [], device)
 
         outputs = composite.launch([fused])
         result = ttnn.to_torch(outputs[0][0])
@@ -4098,7 +4098,7 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(branch_a_op),
@@ -4106,17 +4106,15 @@ class TestOpGraphExecution:
             ],
             device=device,
         )
-        assert len(fused_ops) == 2
 
-        outputs = composite.launch(fused_ops)
-        assert len(outputs) == 2
+        outputs = composite.launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
         golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
 
         result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
+        result_b = ttnn.to_torch(outputs[0][1])
 
         passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
@@ -4145,7 +4143,7 @@ class TestOpGraphExecution:
             stem_op1.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][3], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op0, stem_op1],
             children=[
                 OpNode(branch_a_op),
@@ -4154,7 +4152,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch(fused_ops)
+        outputs = composite.launch([fused])
 
         golden_s0 = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_s1 = torch_rms_norm(golden_s0, t["torch_weights"][1])
@@ -4162,7 +4160,7 @@ class TestOpGraphExecution:
         golden_b = torch_rms_norm(golden_s1, t["torch_weights"][3])
 
         result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
+        result_b = ttnn.to_torch(outputs[0][1])
 
         passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
@@ -4192,7 +4190,7 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_c_range, weight=t["tt_weights"][3], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(branch_a_op),
@@ -4201,16 +4199,14 @@ class TestOpGraphExecution:
             ],
             device=device,
         )
-        assert len(fused_ops) == 3
 
-        outputs = composite.launch(fused_ops)
-        assert len(outputs) == 3
+        outputs = composite.launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         goldens = [torch_rms_norm(golden_stem, t["torch_weights"][i + 1]) for i in range(3)]
 
         for i, label in enumerate(["A", "B", "C"]):
-            result = ttnn.to_torch(outputs[i][0])
+            result = ttnn.to_torch(outputs[0][i])
             passing, pcc = comp_pcc(goldens[i], result, pcc=0.98)
             assert passing, f"Branch {label} PCC: {pcc}"
 
@@ -4247,7 +4243,7 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][4], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(
@@ -4261,10 +4257,8 @@ class TestOpGraphExecution:
             ],
             device=device,
         )
-        assert len(fused_ops) == 3
 
-        outputs = composite.launch(fused_ops)
-        assert len(outputs) == 3
+        outputs = composite.launch([fused])
 
         g_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         g_a = torch_rms_norm(g_stem, t["torch_weights"][1])
@@ -4276,7 +4270,7 @@ class TestOpGraphExecution:
         labels = ["A1", "A2", "B"]
 
         for i, (golden, label) in enumerate(zip(goldens, labels)):
-            result = ttnn.to_torch(outputs[i][0])
+            result = ttnn.to_torch(outputs[0][i])
             passing, pcc = comp_pcc(golden, result, pcc=0.98)
             assert passing, f"Branch {label} PCC: {pcc}"
 
@@ -4309,7 +4303,7 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        graph_ops = build_op_graph(
+        graph = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(branch_a_op),
@@ -4322,25 +4316,27 @@ class TestOpGraphExecution:
         indep_op1 = rms_norm.rms_norm(
             indep_op0.output_tensors[0], core_range_set=indep_range, weight=t["tt_weights"][1], epsilon=1e-5
         )
-        indep_fused = build_op_graph([indep_op0, indep_op1], [], device)[0]
+        indep_fused = build_op_graph([indep_op0, indep_op1], [], device)
 
-        all_ops = graph_ops + [indep_fused]
+        all_ops = [graph, indep_fused]
         outputs = composite.launch(all_ops)
-        assert len(outputs) == 3
+        assert len(outputs) == 2
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
         golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
         golden_indep = torch_rms_norm(torch_rms_norm(torch_input2, t["torch_weights"][0]), t["torch_weights"][1])
 
-        for result_idx, golden, label in [
-            (0, golden_a, "Graph A"),
-            (1, golden_b, "Graph B"),
-            (2, golden_indep, "Independent"),
-        ]:
-            result = ttnn.to_torch(outputs[result_idx][0])
-            passing, pcc = comp_pcc(golden, result, pcc=0.98)
-            assert passing, f"{label} PCC: {pcc}"
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[0][1])
+        result_indep = ttnn.to_torch(outputs[1][0])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        assert passing_a, f"Graph A PCC: {pcc_a}"
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        assert passing_b, f"Graph B PCC: {pcc_b}"
+        passing_indep, pcc_indep = comp_pcc(golden_indep, result_indep, pcc=0.98)
+        assert passing_indep, f"Independent PCC: {pcc_indep}"
 
     def test_single_core_branches(self, device, opgraph_tensors):
         """Stem (1 RMS on 2 cores) -> 2 branches of 1 core each.
@@ -4365,7 +4361,7 @@ class TestOpGraphExecution:
             stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(branch_a_op),
@@ -4374,14 +4370,14 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch(fused_ops)
+        outputs = composite.launch([fused])
 
         golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
         golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
 
         result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
+        result_b = ttnn.to_torch(outputs[0][1])
 
         passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
@@ -4416,7 +4412,7 @@ class TestOpGraphExecution:
             stem_op2.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][4], epsilon=1e-5
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op0, stem_op1, stem_op2],
             children=[
                 OpNode(branch_a_op),
@@ -4425,7 +4421,7 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch(fused_ops)
+        outputs = composite.launch([fused])
 
         golden = t["torch_input"]
         for i in range(3):
@@ -4434,7 +4430,7 @@ class TestOpGraphExecution:
         golden_b = torch_rms_norm(golden, t["torch_weights"][4])
 
         result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
+        result_b = ttnn.to_torch(outputs[0][1])
 
         passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
@@ -4480,7 +4476,7 @@ class TestOpGraphExecution:
             compute_kernel_config=ln_compute_config,
         )
 
-        fused_ops = build_op_graph(
+        fused = build_op_graph(
             root_phases=[stem_op],
             children=[
                 OpNode(branch_a_op),
@@ -4489,14 +4485,14 @@ class TestOpGraphExecution:
             device=device,
         )
 
-        outputs = composite.launch(fused_ops)
+        outputs = composite.launch([fused])
 
         golden_stem = torch_layer_norm(t["torch_input"], t["torch_weights"][0], t["torch_bias"])
         golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
         golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
 
         result_a = ttnn.to_torch(outputs[0][0])
-        result_b = ttnn.to_torch(outputs[1][0])
+        result_b = ttnn.to_torch(outputs[0][1])
 
         passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
         passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
