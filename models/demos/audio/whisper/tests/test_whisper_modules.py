@@ -100,7 +100,6 @@ def test_whisper_attention(
         kv_cache, _ = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
@@ -348,7 +347,6 @@ def test_decoder_layer(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
@@ -450,7 +448,6 @@ def test_decoder(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             weights_mesh_mapper=weights_mesh_mapper,
         )
@@ -534,7 +531,6 @@ def test_ttnn_whisper(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             weights_mesh_mapper=weights_mesh_mapper,
         )
@@ -625,7 +621,6 @@ def test_traced_decoder_executor(
     kv_cache, cross_attn_cache = init_kv_cache(
         config,
         mesh_device,
-        max_batch_size=batch_size_per_device,
         max_seq_len=512,
         weights_mesh_mapper=weights_mesh_mapper,
     )
