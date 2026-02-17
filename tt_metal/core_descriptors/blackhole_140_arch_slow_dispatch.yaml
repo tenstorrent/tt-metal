@@ -1,0 +1,45 @@
+# Anything using [[#, #]] is logical coordinates (Can be relative)
+# relative index: 0 means first row, -1 means last row of functional grid...
+
+# Slow dispatch YAML: no tensix column reserved for dispatch,
+# giving the full tensix grid for compute.
+
+# product name:
+#   num of HW command queues:
+#     core descriptor config
+
+unharvested:
+  col:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [13, 9]
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [13, 9]
+
+1xharvested:
+  col:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [12, 9]
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [12, 9]
+
+2xharvested:
+  col:
+    1:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [11, 9]
+
+    2:
+      compute_with_storage_grid_range: # Logical only start and end [x, y]
+        start: [0, 0]
+        end: [11, 9]

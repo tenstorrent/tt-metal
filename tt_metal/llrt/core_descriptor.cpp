@@ -88,7 +88,9 @@ inline std::string get_core_descriptor_file(
                     return core_desc_dir + "wormhole_b0_80_arch.yaml";
                 }
             case tt::ARCH::BLACKHOLE:
-                if (core_type == CoreType::ETH) {
+                if (!tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+                    return core_desc_dir + "blackhole_140_arch_slow_dispatch.yaml";
+                } else if (core_type == CoreType::ETH) {
                     return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
                 } else if (use_fabric_tensix) {
                     return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
@@ -238,7 +240,8 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
+        !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ||
+            !tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
