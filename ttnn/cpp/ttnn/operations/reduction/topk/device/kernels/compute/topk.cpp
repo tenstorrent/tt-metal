@@ -217,9 +217,6 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 read_cb_and_transpose(input_val_cb_index, DST_VAL);  // Values: dest regs 0,1
-
-                pack_reconfig_data_format(transposed_val_cb_index);
-
                 read_cb_and_transpose(input_ind_cb_index, DST_IND);  // Indices: dest regs 2,3
 
                 tile_regs_commit();
