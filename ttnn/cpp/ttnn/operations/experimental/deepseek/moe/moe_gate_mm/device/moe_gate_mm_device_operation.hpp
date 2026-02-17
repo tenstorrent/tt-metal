@@ -34,8 +34,8 @@ struct MoEGateMMDeviceOperation {
         const Tensor& input_tensor,
         const Tensor& w_tensor,
         const Tensor& output_tensor,
-        const uint32_t layer_id,
-        const uint32_t column_id);
+        uint32_t layer_id,
+        uint32_t column_id);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm
