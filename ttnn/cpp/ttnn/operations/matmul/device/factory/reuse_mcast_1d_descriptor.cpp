@@ -32,10 +32,7 @@ namespace ttnn::prim::matmul_detail {
 namespace {
 
 uint32_t get_preferred_noc(
-    const ttnn::CoreCoord src,
-    const ttnn::CoreCoord dst,
-    const tt_metal::IDevice* device,
-    const bool use_dedicated_noc = false) {
+    const CoreCoord src, const CoreCoord dst, const tt_metal::IDevice* device, const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
         NOC1: Preferred -y -> -x
