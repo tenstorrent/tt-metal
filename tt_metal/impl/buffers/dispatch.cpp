@@ -700,7 +700,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
 
     // Calculate base destination address for this core
-    uint32_t dst_base_address = buffer.address() + core_page_mapping.device_start_page * buffer.aligned_page_size();
+    uint32_t dst_base_address = buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
     if (buffer.is_dram()) {
         dst_base_address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
@@ -814,8 +814,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         const uint8_t* src_region_start = src_ptr + src_offset;
         uint64_t src_pinned_addr = pinned_src_addr_base + src_offset;
 
-        uint32_t dst_addr = dst_base_address + (host_range.device_page_offset - core_page_mapping.device_start_page) *
-                                                   buffer.aligned_page_size();
+        uint32_t dst_addr = dst_base_address + ((host_range.device_page_offset - core_page_mapping.device_start_page) *
+                                                buffer.aligned_page_size());
         uint32_t data_length = host_range.num_pages * buffer.page_size();
 
         // Assert alignments (should have been checked in write_to_device_buffer)
@@ -1222,7 +1222,7 @@ bool write_to_device_buffer(
                              buffer_page_mapping->core_page_mappings[core_id]) {
                             // Check destination L1 address alignment
                             uint32_t dst_address =
-                                buffer.address() + core_page_mapping.device_start_page * buffer.aligned_page_size();
+                                buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
                             if (buffer.is_dram()) {
                                 dst_address += buffer.device()->allocator()->get_bank_offset(
                                     BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
@@ -1270,7 +1270,7 @@ bool write_to_device_buffer(
             }
         }
 
-    ShardedBufferWriteDispatchParams dispatch_params(
+        ShardedBufferWriteDispatchParams dispatch_params(
             &buffer,
             buffer.size() / buffer.page_size(),
             cq_id,
