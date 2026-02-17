@@ -159,6 +159,7 @@ class PI0ModelTTNN:
         state: ttnn.Tensor,
         noisy_actions: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        state_emb: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
         """
         Embed suffix (state + noisy actions + timestep) using TTNN.
@@ -167,11 +168,13 @@ class PI0ModelTTNN:
             state: Robot state (TTNN)
             noisy_actions: Noisy actions (TTNN)
             timestep: Diffusion timestep (TTNN)
+            state_emb: Optional pre-computed state embedding to avoid
+                redundant projection when state is constant across steps.
 
         Returns:
             Tuple of (embeddings, padding_mask, attention_mask, adarms_cond)
         """
-        return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep)
+        return self.suffix_embedding.embed_suffix(state, noisy_actions, timestep, state_emb=state_emb)
 
     def sample_actions(
         self,
@@ -241,6 +244,9 @@ class PI0ModelTTNN:
         # The tensor is small (batch * 50 * 32 = 1600 floats), so transfer is negligible
         x_t_ttnn = self.x_t_ttnn
 
+        # OPTIMIZATION: Pre-compute state embedding once (constant across all denoising steps)
+        cached_state_emb = self.suffix_embedding.embed_state(state_ttnn)
+
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):
             t = timesteps[i]  # Already Python float
@@ -252,7 +258,10 @@ class PI0ModelTTNN:
             t_tensor = ttnn.reshape(t_tensor, (batch_size,))
 
             # Embed suffix (x_t_ttnn already on device - no transfer!)
-            suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(state_ttnn, x_t_ttnn, t_tensor)
+            # Pass cached state embedding to avoid redundant state_proj linear per step
+            suffix_embs, suffix_pad, suffix_att, _ = self.embed_suffix(
+                state_ttnn, x_t_ttnn, t_tensor, state_emb=cached_state_emb
+            )
 
             # Forward through expert with cached prefix KV
             expert_output, _ = self.backbone.forward_expert(

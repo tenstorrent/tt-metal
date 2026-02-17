@@ -198,6 +198,7 @@ class SuffixEmbeddingTTNN:
         state: ttnn.Tensor,
         noisy_actions: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        state_emb: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
         """
         Create suffix embeddings using TTNN operations.
@@ -206,6 +207,9 @@ class SuffixEmbeddingTTNN:
             state: TTNN tensor (batch_size, state_dim) or None
             noisy_actions: TTNN tensor (batch_size, action_horizon, action_dim)
             timestep: TTNN tensor (batch_size,)
+            state_emb: Optional pre-computed state embedding (batch_size, 1, expert_width).
+                When provided, skips the state_proj linear and uses this directly.
+                Useful for caching across denoising steps where state is constant.
 
         Returns:
             Tuple of (suffix_embs, pad_masks, att_masks, adarms_cond)
@@ -219,7 +223,8 @@ class SuffixEmbeddingTTNN:
 
         # Embed state (PI0 only, not PI05)
         if not self.config.pi05:
-            state_emb = self.embed_state(state)
+            if state_emb is None:
+                state_emb = self.embed_state(state)
             if state_emb is not None:
                 embs.append(state_emb)
 
