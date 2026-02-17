@@ -125,6 +125,12 @@ inline void llk_math_eltwise_unary_sfpu_typecast(uint dst_index, int vector_mode
         // no SFPU kernel needed, handled by unpacker/packer
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Bfp4_b) {
         // no SFPU kernel needed, handled by packer
+    } else if constexpr (
+        (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
+         in_format == DataFormat::Bfp4_b) &&
+        out_format == DataFormat::UInt8) {
+        _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+            ckernel::sfpu::calculate_typecast_fp32_to_uint8<APPROXIMATE, 8>, dst_index, vector_mode);
     }
 }
 
@@ -176,6 +182,12 @@ inline void llk_math_eltwise_unary_sfpu_typecast_init() {
         out_format == DataFormat::UInt16) {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
             ckernel::sfpu::init_typecast_fp32_to_uint16<APPROXIMATE>);
+    } else if constexpr (
+        (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
+         in_format == DataFormat::Bfp4_b) &&
+        out_format == DataFormat::UInt8) {
+        llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>(
+            ckernel::sfpu::init_typecast_fp32_to_uint8<APPROXIMATE>);
     } else {
         llk_math_eltwise_unary_sfpu_init<SfpuType::typecast, APPROXIMATE>();
     }
