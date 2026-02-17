@@ -20,6 +20,7 @@ import ttnn
 from models.common.generation_utils import get_logits_processor
 
 from . import ttnn_optimized_functional_whisper
+from .ttnn_optimized_functional_whisper import WHISPER_BATCH_SIZE
 
 
 @dataclass
