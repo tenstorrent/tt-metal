@@ -97,6 +97,26 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+    /**
+    Note that each minimal matmul core outputs a "big" block of size mm_M_block_ht x mm_N_block_wt.
+    These are produced in mm_block_ht x mm_block_wt "unit" blocks in a block-row-major order.
+    There are mm_N_blocks_per_slice big blocks in a single slice along the width dimension
+    (mm_N_blocks_per_slice = slice_Wt / mm_N_block_wt).
+    There are mm_M_blocks_per_core unit blocks per minimal matmul core in the y-direction.
+    (mm_M_blocks_per_core = slice_Ht / mm_block_ht / mm_cores_y).
+
+    TODO: change to matmul units
+    A chunk is defined as a strided block row of tiles produced by the matmul cores within a given number of steps.
+    More precisely, if chunk_width_in_tiles = t, then the first chunk contains
+    all tiles corresponding to this slice and produced by the matmul cores exactly after they produce t tiles each,
+    the second chunk contains subsequent tiles produced by the matmul cores after they produce 2t tiles each, etc.
+
+    The algorithm iterates over the chunks and reduces each chunk with the ring reduce scatter algorithm.
+    A full reduction is performed so that before going to the next chunk, all tiles in the current chunk
+    are reduced, i.e., each device stores the final reduced value of the given chunk.
+    (From the perspective of the reader kernel kernel, the chunk is fully taken care of.)
+    Note that each chunk can be composed of multiple pieces if mm_N_blocks_per_slice > 1.
+    */
     ASSERT(dim == 3);
     ASSERT(slice_C == 1);
 
@@ -203,7 +223,6 @@ void kernel_main() {
                             noc_async_read_barrier();
                             cb_push_back(cb_in0, tile_granularity);
                             if (do_reduce) {
-                                noc_async_read_barrier();
                                 cb_push_back(cb_intermediate_id, tile_granularity);
                             }
                         }
