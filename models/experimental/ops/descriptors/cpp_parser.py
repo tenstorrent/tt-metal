@@ -201,7 +201,7 @@ def _extract_variable_name_from_declaration(node, src_bytes: bytes) -> Optional[
     return None
 
 
-def _is_function_declaration(node, src_bytes: bytes) -> bool:
+def _is_function_declaration(node) -> bool:
     """Check if a declaration node is actually a function declaration (not a variable)."""
     declarator = node.child_by_field_name("declarator")
     if declarator and declarator.type == "function_declarator":
@@ -224,7 +224,11 @@ def _extract_template_function_name(node, src_bytes: bytes) -> Optional[str]:
 
 
 def _is_kernel_main_func(node, src_bytes: bytes) -> bool:
-    """Check if a function_definition node is kernel_main."""
+    """Check if a function_definition node is kernel_main.
+
+    Note: *src_bytes* is needed here because ``_find_function_name``
+    extracts the name text from the AST via byte slicing.
+    """
     return _find_function_name(node, src_bytes) == "kernel_main"
 
 
@@ -257,7 +261,7 @@ def categorize_pre_main(source: str) -> List[PreMainBlock]:
             blocks.append(PreMainBlock(text=text, kind="function", name=name))
 
         elif child.type == "declaration":
-            if _is_function_declaration(child, src):
+            if _is_function_declaration(child):
                 # Forward declaration — treat as shared/other
                 blocks.append(PreMainBlock(text=text, kind="other"))
             else:
@@ -340,6 +344,12 @@ def replace_in_code_only(source: str, old_name: str, new_name: str) -> str:
 
     Uses tree-sitter to identify string literals, char literals, and
     comments, then performs regex replacement only outside those ranges.
+
+    Note on byte vs char offsets: tree-sitter skip_ranges are in byte
+    offsets.  ``re.finditer`` yields char offsets.  We convert each match
+    start to a byte offset for the skip-range check, but all string
+    slicing (``source[last_end:match.start()]``) uses the original char
+    offsets, which is correct because ``source`` is a Python str.
     """
     tree, src = _parse(source)
     skip_ranges: List[Tuple[int, int]] = []
@@ -351,7 +361,7 @@ def replace_in_code_only(source: str, old_name: str, new_name: str) -> str:
     result = []
     last_end = 0
     for match in pattern.finditer(source):
-        # Convert character offset to byte offset for comparison
+        # Convert character offset to byte offset for skip-range comparison
         match_byte_start = len(source[: match.start()].encode("utf8"))
         if _in_skip_range(match_byte_start, skip_ranges):
             # Inside string/comment — keep original
@@ -496,7 +506,7 @@ def _resolve_body(body_start: int, body_end: int, body_children: list, src_bytes
 
     # Recursively collect all preproc node replacements within the body range
     replacements: List[Tuple[int, int, bytes]] = []
-    _collect_body_replacements(body_children, src_bytes, active_defines, replacements, body_start)
+    _collect_preproc_replacements(body_children, src_bytes, active_defines, replacements, body_start)
 
     replacements.sort(key=lambda r: r[0], reverse=True)
     for s, e, r in replacements:
@@ -504,36 +514,41 @@ def _resolve_body(body_start: int, body_end: int, body_children: list, src_bytes
     return text.decode("utf8")
 
 
-def _collect_body_replacements(
-    children: list, src_bytes: bytes, active_defines: set, replacements: List[Tuple[int, int, bytes]], offset: int
+def _collect_preproc_replacements(
+    children: list, src_bytes: bytes, active_defines: set, replacements: List[Tuple[int, int, bytes]], offset: int = 0
 ) -> None:
-    """Recursively walk children to find and resolve preproc nodes at any depth."""
+    """Recursively walk children to find and resolve preproc nodes at any depth.
+
+    Used both at the top-level (``resolve_ifdef_directives``, offset=0) and
+    inside resolved body ranges (``_resolve_body``, offset=body_start).
+    Recurses into all non-preproc children (for loops, compound statements,
+    etc.) to find deeply nested directives.
+    """
     for child in children:
         if child.type in ("preproc_ifdef", "preproc_if"):
             resolved = _resolve_preproc_node(child, src_bytes, active_defines)
             if resolved is not None:
                 replacements.append((child.start_byte - offset, child.end_byte - offset, resolved.encode("utf8")))
             else:
-                # Not resolvable — recurse into it to find nested resolvable nodes
-                _collect_nested_replacements(child, src_bytes, active_defines, replacements, offset)
+                # Not resolvable — recurse into preproc branches only
+                _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
         else:
             # Recurse into non-preproc nodes (for loops, if statements, etc.)
-            # to find deeply nested preproc directives
             if child.children:
-                _collect_body_replacements(child.children, src_bytes, active_defines, replacements, offset)
+                _collect_preproc_replacements(child.children, src_bytes, active_defines, replacements, offset)
 
 
-def _collect_nested_replacements(node, src_bytes: bytes, active_defines: set, replacements: list, offset: int) -> None:
-    """Recurse into a non-resolvable preproc node to find nested resolvable ones."""
+def _collect_preproc_in_branches(node, src_bytes: bytes, active_defines: set, replacements: list, offset: int) -> None:
+    """Recurse into branches of a non-resolvable preproc node to find nested resolvable ones."""
     for child in node.children:
         if child.type in ("preproc_ifdef", "preproc_if"):
             resolved = _resolve_preproc_node(child, src_bytes, active_defines)
             if resolved is not None:
                 replacements.append((child.start_byte - offset, child.end_byte - offset, resolved.encode("utf8")))
             else:
-                _collect_nested_replacements(child, src_bytes, active_defines, replacements, offset)
+                _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
         elif child.type in ("preproc_else", "preproc_elif"):
-            _collect_nested_replacements(child, src_bytes, active_defines, replacements, offset)
+            _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
 
 
 def _resolve_preproc_node(node, src_bytes: bytes, active_defines: set) -> Optional[str]:
@@ -636,27 +651,6 @@ def _resolve_elif_chain(node, src_bytes: bytes, active_defines: set, endif_start
     return ""
 
 
-def _collect_all_replacements(
-    node, src_bytes: bytes, active_defines: set, replacements: List[Tuple[int, int, bytes]]
-) -> None:
-    """Recursively walk the entire AST collecting byte-range replacements for resolvable preproc nodes.
-
-    Preprocessor directives can appear anywhere in the tree (top-level,
-    inside function bodies, etc.), so we must walk all children recursively.
-    """
-    for child in node.children:
-        if child.type in ("preproc_ifdef", "preproc_if"):
-            resolved = _resolve_preproc_node(child, src_bytes, active_defines)
-            if resolved is not None:
-                replacements.append((child.start_byte, child.end_byte, resolved.encode("utf8")))
-            else:
-                # Not resolvable — recurse to find nested resolvable nodes
-                _collect_all_replacements(child, src_bytes, active_defines, replacements)
-        else:
-            # Recurse into all other nodes (function bodies, compound statements, etc.)
-            _collect_all_replacements(child, src_bytes, active_defines, replacements)
-
-
 def resolve_ifdef_directives(source: str, active_defines: set) -> str:
     """Resolve preprocessor #ifdef/#ifndef/#if defined/#elif directives in source code.
 
@@ -680,7 +674,7 @@ def resolve_ifdef_directives(source: str, active_defines: set) -> str:
     tree = _parser.parse(src)
 
     replacements: List[Tuple[int, int, bytes]] = []
-    _collect_all_replacements(tree.root_node, src, active_defines, replacements)
+    _collect_preproc_replacements(tree.root_node.children, src, active_defines, replacements)
 
     # Apply replacements in reverse byte order to preserve offsets
     replacements.sort(key=lambda r: r[0], reverse=True)
@@ -725,18 +719,22 @@ def inline_local_includes(source: str, kernel_dir: Optional[str]) -> str:
                         with open(full_inc, "r") as f:
                             inc_content = f.read()
                         inc_lines = inc_content.split("\n")
-                        for il in inc_lines:
-                            ils = il.strip()
-                            if ils.startswith("#pragma once"):
+                        for inc_line in inc_lines:
+                            stripped_inc = inc_line.strip()
+                            if stripped_inc.startswith("#pragma once"):
                                 continue
-                            if ils.startswith('#include "'):
-                                nested_match = re.match(r'#include\s+"([^"]+)"', ils)
+                            if stripped_inc.startswith('#include "'):
+                                nested_match = re.match(r'#include\s+"([^"]+)"', stripped_inc)
                                 if nested_match:
                                     nested = nested_match.group(1)
                                     nested_full = os.path.normpath(os.path.join(os.path.dirname(full_inc), nested))
+                                    # Only skip nested includes that resolve to local files
+                                    # (those will be inlined separately). Non-existent paths
+                                    # are kept as-is — they may be system/SDK includes that
+                                    # the compiler resolves via its include path.
                                     if os.path.exists(nested_full):
                                         continue
-                            result.append(il)
+                            result.append(inc_line)
                         inlined.add(inc_path)
                         continue
         result.append(line)
@@ -795,3 +793,17 @@ def normalize_block(block: str) -> str:
         if normalized:
             lines.append(normalized)
     return "\n".join(lines)
+
+
+__all__ = [
+    "PreMainBlock",
+    "SOURCE_LEVEL_DEFINES",
+    "categorize_pre_main",
+    "collect_defines",
+    "collect_includes",
+    "extract_kernel_body",
+    "inline_local_includes",
+    "normalize_block",
+    "replace_in_code_only",
+    "resolve_ifdef_directives",
+]
