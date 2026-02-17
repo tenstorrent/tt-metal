@@ -6,11 +6,12 @@
 #include "api/debug/assert.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 
 /*
  * A test for the assert feature.
 */
-#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_TRISC)
 #include "api/compute/common.h"
 #endif
 
@@ -18,7 +19,13 @@ void kernel_main() {
     uint32_t a = get_arg_val<uint32_t>(0);
     uint32_t b = get_arg_val<uint32_t>(1);
     uint32_t assert_type = get_arg_val<uint32_t>(2);
-
+#if defined(COMPILE_FOR_DM)
+    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
+    uint64_t cpu_index = 0;
+    asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+    if(dm_id != cpu_index)
+        return;
+#endif
     // Conditionally enable using defines for each trisc
 #if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
     (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \

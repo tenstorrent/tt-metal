@@ -76,11 +76,13 @@ static void RunTest(
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM:
                     if (is_quasar) {
+                        uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
                         assert_kernel = experimental::quasar::CreateKernel(
                             program_,
                             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                             logical_core,
-                            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 8});
+                            experimental::quasar::QuasarDataMovementConfig{
+                                .num_processors_per_cluster = 8, .compile_args = {dm_id}});
                     } else {
                         DataMovementConfig dm_config{};
                         dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
@@ -97,8 +99,8 @@ static void RunTest(
                     break;
                 case HalProcessorClassType::COMPUTE:
                     // TODO: Watcher features are temporarily skipped on Quasar until basic runtime bring-up is complete
-                    if (is_quasar && processor.processor_type >= 3) {
-                        return;
+                    if (is_quasar) {
+                        GTEST_SKIP();
                     }
                     TT_FATAL(
                         0 <= processor.processor_type && processor.processor_type < 3,
@@ -167,7 +169,7 @@ static void RunTest(
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
     std::string expected;
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 58;
+        const uint32_t line_num = 65;
         expected = fmt::format(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
             "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
