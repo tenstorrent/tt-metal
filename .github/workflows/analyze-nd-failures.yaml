@@ -64,6 +64,10 @@ jobs:
           update_mode: ${{ inputs.update_mode || 'update' }}
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
+          github_repo_owner: "ebanerjeeTT"
+          github_repo_name: "issue_dump"
+          project_owner: "ebanerjeeTT"
+          project_name: "issue dump test"
           workflow_file: '.github/workflows/grouping-ci-failures.yaml'
 
       - name: Install infra dependencies
