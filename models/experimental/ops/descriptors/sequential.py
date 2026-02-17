@@ -9,6 +9,11 @@ Fuses multiple operations to run sequentially on the SAME cores within a
 single program.  All readers/writers run for every phase.  Data flows through
 DRAM between phases (Writer_N -> DRAM -> Reader_{N+1}).
 
+The fusion tree is a standard tree of OpNode objects.  Each node holds one
+operation and optional children.  Parent→child edges encode sequential
+ordering; sibling nodes run in parallel on disjoint core subsets.  A linear
+chain is a tree with branching factor 1.
+
 CB pool allocation: CBs from all phases are assigned to hardware slots based
 on a compatibility key (data_format, page_size, unpack_to_dest_mode).  Phases
 with matching configs share a slot; mismatches get separate slots.  Errors if
@@ -22,15 +27,13 @@ Two-level barrier synchronization between phases:
     serves as the phase release signal for compute/writer.
 
 Usage (linear chain):
-    >>> fused = chain_descriptors([op0_desc, op1_desc], device)
-    >>> outputs = composite.launch([fused])
+    >>> root = OpNode(op0_desc, children=[OpNode(op1_desc)])
+    >>> fused = OpGraphBuilder(root).build(device)
+    >>> outputs = composite.launch(fused)
 
 Usage (branching tree):
-    >>> builder = OpGraphBuilder()
-    >>> builder.add_stem_phase(op0_desc)
-    >>> builder.add_branch(branch_a_range, [op1_desc])
-    >>> builder.add_branch(branch_b_range, [op2_desc])
-    >>> paths = builder.build(device)
+    >>> root = OpNode(op0_desc, children=[OpNode(op1_desc), OpNode(op2_desc)])
+    >>> paths = OpGraphBuilder(root).build(device)
     >>> outputs = composite.launch(paths)
 """
 
@@ -120,16 +123,20 @@ class BarrierConfig:
 
 
 @dataclass
-class BranchSpec:
-    """A branch in an OpGraph tree.
+class OpNode:
+    """A node in the fusion tree.
 
-    Represents a subset of cores that diverge from the stem to run their
-    own phases.  Branches can nest via the ``children`` field.
+    Each node holds one operation.  Parent→child edges encode sequential
+    ordering (parent runs before child).  Sibling nodes run in parallel on
+    disjoint core subsets.  A leaf node has no children.
+
+    The node's core range is derived from its op's ProgramDescriptor
+    kernels via ``_get_node_core_range()`` — there is no separate
+    core_range field.
     """
 
-    core_range: Any  # CoreRangeSet for this branch's cores
-    phases: List[OpDescriptor] = field(default_factory=list)
-    children: List["BranchSpec"] = field(default_factory=list)
+    op: OpDescriptor
+    children: List["OpNode"] = field(default_factory=list)
 
 
 @dataclass
@@ -601,6 +608,35 @@ def _get_risc_type(kernel_desc: "ttnn.KernelDescriptor") -> str:
 def _core_ranges_key(core_ranges: Any) -> frozenset:
     """Create a hashable key from a CoreRangeSet for grouping."""
     return frozenset((cr.start.x, cr.start.y, cr.end.x, cr.end.y) for cr in core_ranges.ranges())
+
+
+def _same_core_range(a: Any, b: Any) -> bool:
+    """Compare two CoreRangeSets by their keys."""
+    return _core_ranges_key(a) == _core_ranges_key(b)
+
+
+def _coords_to_core_range_set(coords: Set[Tuple[int, int]]) -> Any:
+    """Convert a set of (x, y) tuples to a CoreRangeSet.
+
+    Each coordinate becomes a single-core CoreRange.  CoreRangeSet
+    merges adjacent ranges internally.
+    """
+    ranges = set()
+    for x, y in coords:
+        ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
+    return ttnn.CoreRangeSet(ranges)
+
+
+def _get_node_core_range(node: "OpNode") -> Any:
+    """Extract the core range from a node's op descriptor.
+
+    Returns the union of all kernel core_ranges in the node's
+    ProgramDescriptor.
+    """
+    all_coords: Set[Tuple[int, int]] = set()
+    for kernel in node.op.descriptor.kernels:
+        all_coords |= _core_range_set_to_coords(kernel.core_ranges)
+    return _coords_to_core_range_set(all_coords)
 
 
 def _get_role_key(
@@ -2349,89 +2385,49 @@ def _build_fused_descriptor(
 
 
 class OpGraphBuilder:
-    """Builds fused descriptors for OpGraph (branching tree) topologies.
+    """Builds fused descriptors from a tree of OpNode objects.
 
-    A shared stem of phases runs on ALL branch cores, then cores split
-    into disjoint branches each running their own subsequent phases.
-    Branches can nest via ``BranchSpec.children``.
-
-    For each root-to-leaf path through the tree, a separate fused kernel
-    binary is generated.  During stem phases, different kernel binaries
-    on different cores synchronize via shared GlobalSemaphore addresses.
-    After the split, each branch barriers independently within its core
-    subset.
+    The fusion tree is a standard tree where each node holds one operation.
+    Parent→child edges encode sequential ordering; sibling nodes run in
+    parallel on disjoint core subsets.  For each root-to-leaf path, a
+    separate fused kernel binary is generated.  Nodes sharing a path
+    segment synchronize via shared GlobalSemaphore addresses.
 
     Usage::
 
-        builder = OpGraphBuilder()
-        builder.add_stem_phase(ln_op)
-        builder.add_branch(cores_A, [rms_op_A])
-        builder.add_branch(cores_B, [rms_op_B])
-        fused_ops = builder.build(device)
+        root = OpNode(ln_op, children=[OpNode(rms_op_A), OpNode(rms_op_B)])
+        fused_ops = OpGraphBuilder(root).build(device)
         # Returns 2 OpDescriptors, suitable for composite.launch()
     """
 
-    def __init__(self):
-        self.stem_phases: List[OpDescriptor] = []
-        self.branches: List[BranchSpec] = []
+    def __init__(self, root: OpNode):
+        self._root = root
         self._built = False
-
-    def add_stem_phase(self, op: OpDescriptor) -> "OpGraphBuilder":
-        """Add a phase that runs on ALL branch cores before the split."""
-        self.stem_phases.append(op)
-        return self
-
-    def add_branch(
-        self,
-        core_range: Any,
-        phases: Optional[List[OpDescriptor]] = None,
-        children: Optional[List[BranchSpec]] = None,
-    ) -> "OpGraphBuilder":
-        """Add a top-level branch after the stem phases.
-
-        Args:
-            core_range: CoreRangeSet for this branch's cores.
-            phases: Sequential phases within this branch.
-            children: Sub-branches for nested splitting.
-        """
-        self.branches.append(BranchSpec(core_range, phases or [], children or []))
-        return self
 
     def build(self, device: Any) -> List[OpDescriptor]:
         """Build fused descriptors for all root-to-leaf paths.
 
         Returns a list of OpDescriptors, one per path, suitable for
-        ``composite.launch()``.  For linear chains (no branches), returns
-        a single-element list.
+        ``composite.launch()``.
         """
         if self._built:
             raise ValueError("Already built")
         self._built = True
 
-        if not self.stem_phases:
-            raise ValueError("No phases to fuse")
-
-        # Single-phase linear chain: return as-is
-        if len(self.stem_phases) == 1 and not self.branches:
-            return [self.stem_phases[0]]
+        # Single node with no children = nothing to fuse
+        if not self._root.children:
+            return [self._root.op]
 
         # Validate tree topology before doing any device allocation
-        if self.branches:
-            self._validate_topology()
+        self._validate_topology()
 
         # Trace all root-to-leaf paths
         paths = self._trace_paths()
 
-        # Compute union of all branch core ranges
+        # Compute union of all leaf core ranges
         union_range = self._compute_union_ranges()
 
-        # Validate that stem core ranges match the leaf union.
-        if self.branches:
-            self._validate_stem_coverage(union_range)
-
         # Allocate shared per-core monotonic semaphores on union range.
-        # compute_done and writer_done are per-core and don't involve cross-core
-        # communication, so they can be shared across all barrier segments.
         sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
         compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
@@ -2439,13 +2435,9 @@ class OpGraphBuilder:
         all_sem_refs = [sem_compute_done, sem_writer_done]
 
         # Pre-allocate barrier configs for each unique core range across all
-        # path segments.  Paths that share a segment (e.g. the stem) MUST use
-        # the same arrive/release GlobalSemaphore L1 addresses so that cores
-        # running different kernel binaries synchronize at the same barrier.
-        # Uses _create_barrier_segment_config (arrive + release only) instead
-        # of _create_barrier_config (which also allocates compute_done +
-        # writer_done per segment — those are shared and already allocated
-        # above on union_range).
+        # path segments.  Paths that share a segment MUST use the same
+        # arrive/release GlobalSemaphore L1 addresses so that cores running
+        # different kernel binaries synchronize at the same barrier.
         segment_cache: Dict[frozenset, BarrierConfig] = {}
         for path in paths:
             for core_range, _ in path:
@@ -2455,7 +2447,6 @@ class OpGraphBuilder:
                     all_sem_refs.extend(segment_cache[key]._sem_refs)
 
         # Assign co-dispatch group for barrier safety validation.
-        # All paths MUST be dispatched together via composite.launch().
         num_paths = len(paths)
         group_id = f"opgraph_{uuid.uuid4().hex[:8]}"
 
@@ -2464,9 +2455,8 @@ class OpGraphBuilder:
             # Save CB descriptor state before building each path.
             # _build_fused_descriptor mutates buffer_index, total_size, and
             # core_ranges IN-PLACE on the original CBDescriptors (can't
-            # deepcopy C++ bindings).  When paths share ops (e.g. stem),
+            # deepcopy C++ bindings).  When paths share ops (e.g. root),
             # the first path's mutations corrupt subsequent paths' cb_info.
-            # Collect all ProgramDescriptors in this path for save/restore
             path_prog_descs = [op.descriptor for _, phases in path for op in phases]
             saved_cb_state = _save_cb_state(path_prog_descs)
 
@@ -2493,214 +2483,121 @@ class OpGraphBuilder:
         """Trace all root-to-leaf paths through the tree.
 
         Returns a list of paths.  Each path is a list of
-        ``(core_range, [phases])`` segments from root (stem) to leaf.
+        ``(core_range, [phases])`` segments.  Consecutive nodes with the
+        same core range are grouped into one segment.
 
-        For linear chains (no branches), returns a single path with just
-        the stem segment.
-
-        For intermediate branches (those with children), the segment's
+        For intermediate nodes (those with children), the segment's
         core_range is the *effective* range — the union of descendant leaf
-        ranges — rather than the branch's own core_range.  This ensures
+        ranges — rather than the node's own core_range.  This ensures
         barrier scopes match the cores that actually run through each
-        segment, which is essential when children don't fully tile the
-        parent (unused parent cores don't participate in barriers).
+        segment.
         """
-        union_range = self._compute_union_ranges()
-        paths: List[List[Tuple[Any, List[OpDescriptor]]]] = []
+        raw_paths: List[List[Tuple[Any, OpDescriptor]]] = []
 
-        if not self.branches:
-            # Linear chain: single path = stem only
-            paths.append([(union_range, list(self.stem_phases))])
-            return paths
-
-        def _collect(branch: BranchSpec, prefix: List[Tuple[Any, List[OpDescriptor]]]):
-            if not branch.children:
-                # Leaf: use the branch's own core_range
-                current = prefix + [(branch.core_range, list(branch.phases))]
-                paths.append(current)
+        def _collect(node: OpNode, prefix: List[Tuple[Any, OpDescriptor]]):
+            if not node.children:
+                # Leaf: use the node's own core range
+                core_range = _get_node_core_range(node)
+                raw_paths.append(prefix + [(core_range, node.op)])
             else:
-                # Intermediate: use effective range (union of descendant leaves)
-                # so the barrier scope matches cores that actually run.
-                eff_coords = self._effective_leaf_range(branch)
-                eff_range = self._coords_to_core_range_set(eff_coords)
-                current = prefix + [(eff_range, list(branch.phases))]
-                for child in branch.children:
+                # Internal node: use effective range (union of descendant leaves)
+                eff_coords = self._effective_leaf_range(node)
+                eff_range = _coords_to_core_range_set(eff_coords)
+                current = prefix + [(eff_range, node.op)]
+                for child in node.children:
                     _collect(child, current)
 
-        stem_segment = (union_range, list(self.stem_phases))
-        for branch in self.branches:
-            _collect(branch, [stem_segment])
+        _collect(self._root, [])
+        return [self._group_into_segments(raw) for raw in raw_paths]
 
-        return paths
+    @staticmethod
+    def _group_into_segments(
+        raw_path: List[Tuple[Any, OpDescriptor]],
+    ) -> List[Tuple[Any, List[OpDescriptor]]]:
+        """Group consecutive same-range nodes into segments."""
+        segments: List[Tuple[Any, List[OpDescriptor]]] = []
+        for core_range, op in raw_path:
+            if segments and _same_core_range(segments[-1][0], core_range):
+                segments[-1][1].append(op)
+            else:
+                segments.append((core_range, [op]))
+        return segments
 
     def _compute_union_ranges(self) -> Any:
-        """Compute the union CoreRangeSet of all leaf branch core ranges.
+        """Compute the union CoreRangeSet of all leaf core ranges.
 
-        For linear chains (no branches), computes the union from all
-        kernels in stem phase 0.
-
-        Only leaf branches (those without children) contribute core ranges.
-        Intermediate branches' ranges overlap with their children, so
-        including both would trigger CoreRangeSet's overlap validation.
+        Only leaf nodes (those without children) contribute core ranges.
         """
-        if not self.branches:
-            # Linear chain: union from stem phase 0 kernels
-            all_coords: Set[Tuple[int, int]] = set()
-            for kernel_desc in self.stem_phases[0].descriptor.kernels:
-                for cr in kernel_desc.core_ranges.ranges():
-                    for y in range(cr.start.y, cr.end.y + 1):
-                        for x in range(cr.start.x, cr.end.x + 1):
-                            all_coords.add((x, y))
-            if not all_coords:
-                return self.stem_phases[0].descriptor.kernels[0].core_ranges
-            min_x = min(x for x, y in all_coords)
-            max_x = max(x for x, y in all_coords)
-            min_y = min(y for x, y in all_coords)
-            max_y = max(y for x, y in all_coords)
-            bounding_range = ttnn.CoreRange(
-                ttnn.CoreCoord(min_x, min_y),
-                ttnn.CoreCoord(max_x, max_y),
-            )
-            return ttnn.CoreRangeSet([bounding_range])
+        all_coords: Set[Tuple[int, int]] = set()
 
-        all_ranges = set()
+        def _collect_leaves(node: OpNode):
+            if not node.children:
+                all_coords.update(_core_range_set_to_coords(_get_node_core_range(node)))
+            else:
+                for child in node.children:
+                    _collect_leaves(child)
 
-        def _collect_leaf_ranges(branches: List[BranchSpec]):
-            for b in branches:
-                if b.children:
-                    _collect_leaf_ranges(b.children)
-                else:
-                    for cr in b.core_range.ranges():
-                        all_ranges.add(
-                            ttnn.CoreRange(
-                                ttnn.CoreCoord(cr.start.x, cr.start.y),
-                                ttnn.CoreCoord(cr.end.x, cr.end.y),
-                            )
-                        )
-
-        _collect_leaf_ranges(self.branches)
-        return ttnn.CoreRangeSet(all_ranges)
+        _collect_leaves(self._root)
+        return _coords_to_core_range_set(all_coords)
 
     def _validate_topology(self) -> None:
-        """Validate the OpGraph tree topology.
+        """Validate the tree topology.
 
         Checks:
         - Each child's core_range is a subset of its parent's range.
-        - Sibling branches have disjoint core ranges.
-        - All branch core_ranges are rectangular (NOC multicast safety).
+        - Sibling nodes have disjoint core ranges.
 
-        Empty leaf branches (no phases, no children) are allowed — they
-        participate in ancestor barriers via trailing barrier code, then exit.
-
-        Note: Children are NOT required to fully cover their parent's range.
-        Unused cores in the parent simply don't participate in branch phases.
-        The effective barrier scope for each segment is computed from
-        descendant leaf ranges, so gaps are handled correctly.
+        Children are NOT required to fully cover their parent's range.
+        Unused cores simply don't participate in child phases.
 
         Raises:
             ValueError: On any topology violation.
         """
 
-        def _validate_branch(branch: BranchSpec, parent_coords: Set[Tuple[int, int]], depth: int):
-            branch_coords = _core_range_set_to_coords(branch.core_range)
-            label = f"branch at depth {depth} (cores {sorted(branch_coords)})"
+        def _validate_children(node: OpNode, parent_coords: Set[Tuple[int, int]], depth: int):
+            if not node.children:
+                return
 
-            # Child must be a subset of parent
-            if not branch_coords.issubset(parent_coords):
-                extra = sorted(branch_coords - parent_coords)
-                raise ValueError(
-                    f"OpGraph topology error: {label} has cores {extra} "
-                    f"outside parent range {sorted(parent_coords)}"
-                )
-
-            # Validate children
-            if branch.children:
-                # Check sibling disjointness
-                seen_coords: Set[Tuple[int, int]] = set()
-                for i, child in enumerate(branch.children):
-                    child_coords = _core_range_set_to_coords(child.core_range)
-                    overlap = seen_coords & child_coords
-                    if overlap:
-                        raise ValueError(
-                            f"OpGraph topology error: sibling branches at depth {depth + 1} "
-                            f"have overlapping cores {sorted(overlap)}"
-                        )
-                    seen_coords |= child_coords
-
-                # Recurse into children
-                for child in branch.children:
-                    _validate_branch(child, branch_coords, depth + 1)
-
-        # Validate top-level branches: siblings must be disjoint
-        seen_top: Set[Tuple[int, int]] = set()
-        for i, branch in enumerate(self.branches):
-            branch_coords = _core_range_set_to_coords(branch.core_range)
-            overlap = seen_top & branch_coords
-            if overlap:
-                raise ValueError(
-                    f"OpGraph topology error: top-level branches have " f"overlapping cores {sorted(overlap)}"
-                )
-            seen_top |= branch_coords
-
-        # Validate each top-level branch recursively.
-        for branch in self.branches:
-            if branch.children:
-                branch_coords = _core_range_set_to_coords(branch.core_range)
-                _validate_branch(
-                    branch,
-                    branch_coords,
-                    depth=0,
-                )
-
-    def _validate_stem_coverage(self, union_range: Any) -> None:
-        """Validate that stem kernels don't extend beyond the leaf union.
-
-        The stem only runs on ``union_range`` cores.  If a stem op was
-        created for a wider range, the extra cores' work is silently
-        dropped, producing incorrect results.
-
-        Raises:
-            ValueError: If any stem kernel has cores outside union_range.
-        """
-        union_coords = _core_range_set_to_coords(union_range)
-        for i, stem_op in enumerate(self.stem_phases):
-            for kernel in stem_op.descriptor.kernels:
-                stem_coords = _core_range_set_to_coords(kernel.core_ranges)
-                extra = stem_coords - union_coords
-                if extra:
+            # Check sibling disjointness
+            seen_coords: Set[Tuple[int, int]] = set()
+            for child in node.children:
+                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
+                overlap = seen_coords & child_coords
+                if overlap:
                     raise ValueError(
-                        f"Stem phase {i} kernel has cores {sorted(extra)} "
-                        f"outside the leaf union {sorted(union_coords)}. "
-                        f"The stem only runs on the union of leaf core ranges. "
-                        f"Create the stem OpDescriptor for the leaf union range, "
-                        f"or add branches to cover the missing cores."
+                        f"OpGraph topology error: sibling nodes at depth {depth + 1} "
+                        f"have overlapping cores {sorted(overlap)}"
                     )
+                seen_coords |= child_coords
+
+            # Check each child is subset of parent, then recurse
+            for child in node.children:
+                child_coords = _core_range_set_to_coords(_get_node_core_range(child))
+                if not child_coords.issubset(parent_coords):
+                    extra = sorted(child_coords - parent_coords)
+                    raise ValueError(
+                        f"OpGraph topology error: node at depth {depth + 1} "
+                        f"(cores {sorted(child_coords)}) has cores {extra} "
+                        f"outside parent range {sorted(parent_coords)}"
+                    )
+                _validate_children(child, child_coords, depth + 1)
+
+        root_coords = _core_range_set_to_coords(_get_node_core_range(self._root))
+        _validate_children(self._root, root_coords, depth=0)
 
     @staticmethod
-    def _effective_leaf_range(branch: "BranchSpec") -> Set[Tuple[int, int]]:
+    def _effective_leaf_range(node: OpNode) -> Set[Tuple[int, int]]:
         """Compute the union of all descendant leaf core coordinates.
 
-        For leaf branches, returns the branch's own core coords.
-        For intermediate branches, returns the union of all leaf descendants.
+        For leaf nodes, returns the node's own core coords.
+        For internal nodes, returns the union of all leaf descendants.
         """
-        if not branch.children:
-            return _core_range_set_to_coords(branch.core_range)
+        if not node.children:
+            return _core_range_set_to_coords(_get_node_core_range(node))
         coords: Set[Tuple[int, int]] = set()
-        for child in branch.children:
+        for child in node.children:
             coords |= OpGraphBuilder._effective_leaf_range(child)
         return coords
-
-    @staticmethod
-    def _coords_to_core_range_set(coords: Set[Tuple[int, int]]) -> Any:
-        """Convert a set of (x, y) tuples to a CoreRangeSet.
-
-        Each coordinate becomes a single-core CoreRange.  CoreRangeSet
-        merges adjacent ranges internally.
-        """
-        ranges = set()
-        for x, y in coords:
-            ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)))
-        return ttnn.CoreRangeSet(ranges)
 
     def _build_path(
         self,
@@ -2827,90 +2724,45 @@ class OpGraphBuilder:
 # =============================================================================
 
 
-def chain_descriptors(descriptors: List[OpDescriptor], device: Any) -> OpDescriptor:
-    """Chain multiple OpDescriptors sequentially.
-
-    For phases 1+, the input tensor should be the previous phase's output
-    tensor.  This ensures each reader reads from the correct DRAM address.
-
-    Args:
-        descriptors: List of OpDescriptors to chain sequentially.
-        device: The device for GlobalSemaphore allocation.
-
-    Returns:
-        Fused OpDescriptor.
-    """
-    builder = OpGraphBuilder()
-    for desc in descriptors:
-        builder.add_stem_phase(desc)
-    results = builder.build(device)
-    # Linear chain produces exactly one path
-    return results[0]
-
-
-def create_parallel_chain_descriptors(
-    chains: List[List[OpDescriptor]],
-    device: Any,
-) -> List[OpDescriptor]:
-    """Create fused descriptors for multiple parallel chains.
-
-    Each chain is fused sequentially, and the resulting fused ops can be
-    run in parallel using composite.launch().
-
-    Args:
-        chains: List of chains, where each chain is a list of OpDescriptors.
-        device: The device for GlobalSemaphore allocation.
-
-    Returns:
-        List of fused OpDescriptors, one per chain.
-    """
-    fused_descriptors = []
-    for chain in chains:
-        if not chain:
-            continue
-        if len(chain) == 1:
-            fused_descriptors.append(chain[0])
-        else:
-            fused_descriptors.append(chain_descriptors(chain, device))
-    return fused_descriptors
-
-
 def build_op_graph(
-    stem_phases: List[OpDescriptor],
-    branches: List[BranchSpec],
+    root_phases: List[OpDescriptor],
+    children: List[OpNode],
     device: Any,
 ) -> List[OpDescriptor]:
-    """Build fused descriptors for an OpGraph (branching tree) topology.
+    """Build fused descriptors for a tree topology.
 
-    Convenience wrapper around :class:`OpGraphBuilder`.
+    Convenience wrapper around :class:`OpGraphBuilder`.  Converts
+    ``root_phases`` into a chain of nodes, attaches ``children`` to
+    the last root-phase node, then builds.
 
     Args:
-        stem_phases: Shared phases that run on all branch cores.
-        branches: List of BranchSpec defining the tree structure.
+        root_phases: Phases that run before the tree splits.  Converted
+            into a chain of OpNode objects.
+        children: Subtrees to attach to the last root-phase node.
         device: The device for GlobalSemaphore allocation.
 
     Returns:
         One OpDescriptor per root-to-leaf path, suitable for
         ``composite.launch()``.
     """
-    builder = OpGraphBuilder()
-    for op in stem_phases:
-        builder.add_stem_phase(op)
-    for branch in branches:
-        builder.add_branch(branch.core_range, branch.phases, branch.children)
-    return builder.build(device)
+    if not root_phases:
+        raise ValueError("root_phases cannot be empty")
+    # Last root phase gets children attached
+    last = OpNode(root_phases[-1], children=list(children))
+    node = last
+    for desc in reversed(root_phases[:-1]):
+        node = OpNode(desc, children=[node])
+    return OpGraphBuilder(node).build(device)
 
 
 __all__ = [
     # Core classes
     "OpGraphBuilder",
-    "BranchSpec",
+    "OpNode",
     "PhaseInfo",
     "CBInfo",
     "BarrierConfig",
     # Functions
-    "chain_descriptors",
-    "create_parallel_chain_descriptors",
     "build_op_graph",
     "extract_cb_info",
     "extract_cb_names_from_kernel",
