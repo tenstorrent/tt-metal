@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/kernel/kernel_utils.hpp"
-#include "embeddings_reader_kernel_args.hpp"
+#include "embeddings_nd_sharded_kernel_args.hpp"
 
 void kernel_main() {
     using namespace ttnn::kernel_utils;

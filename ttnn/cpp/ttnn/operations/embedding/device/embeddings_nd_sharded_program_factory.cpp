@@ -4,7 +4,7 @@
 
 #include "embeddings_nd_sharded_program_factory.hpp"
 
-#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_reader_kernel_args.hpp"
+#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_nd_sharded_kernel_args.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -119,7 +119,7 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_nd_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_nd_sharded_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
