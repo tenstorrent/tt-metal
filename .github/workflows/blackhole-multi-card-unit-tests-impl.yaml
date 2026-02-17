@@ -107,7 +107,7 @@ jobs:
           )
           all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
 
-          # Filter: fast-viommu runs only when runner-label contains viommu; when fast_only, run only fast + fast-viommu (on viommu)
+          # Filter: *-viommu test types run only when runner-label contains viommu; when fast_only, run only fast + fast-viommu (on viommu)
           fast_only="${{ inputs.fast-only }}"
           runner_label="${{ inputs.runner-label }}"
           viommu_json="false"
@@ -116,7 +116,7 @@ jobs:
           if [ "$fast_only" == "true" ]; then
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu))]')
           else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu") or $viommu)]')
+            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu)]')
           fi
 
           echo "Filtered tests: $filtered_tests"
