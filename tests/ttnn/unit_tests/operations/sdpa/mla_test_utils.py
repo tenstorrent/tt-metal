@@ -283,11 +283,8 @@ def run_flash_mla_decode_impl(
 
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    # For consistency across tests, use a max grid size of 8x8 across WH and BH
-    default_grid_size = (8, 8)
-
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=default_grid_size,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -305,7 +302,7 @@ def run_flash_mla_decode_impl(
         q_mem_config = ttnn.DRAM_MEMORY_CONFIG
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        num_cores_x, num_cores_y = default_grid_size
+        num_cores_x, num_cores_y = device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y
         if q_num_cores > num_cores_x * num_cores_y:
             pytest.skip(
                 f"Skipping test with q_num_cores {q_num_cores} > device compute grid size {num_cores_x * num_cores_y}."
@@ -320,17 +317,8 @@ def run_flash_mla_decode_impl(
 
         block_height = nearest_y(np.prod(q.shape[:-1]) // q_num_cores, ttnn.TILE_SIZE)
 
-        # Use the default grid size for Q and output shard grid
-        grid_x = num_cores_x
-        end_x = (q_num_cores - 1) % grid_x
-        end_y = (q_num_cores - 1) // grid_x
-        q_core_grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}
-            if end_y == 0
-            else {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, end_y - 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(0, end_y), ttnn.CoreCoord(end_x, end_y)),
-            }
+        q_core_grid = ttnn.num_cores_to_corerangeset(
+            q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
 
         q_mem_config = ttnn.create_sharded_memory_config(

@@ -100,9 +100,41 @@ inline TreeReductionParams get_tree_reduction_params(uint32_t core_id_in_group, 
         }
     }
 
+    // For non-power-of-two core counts, secondary roots need to send to the primary root (core 0).
+    // A secondary root is a core whose parent_vid would exceed num_cores_in_group.
+    // We need to collect all secondary roots at the primary root.
+    // The primary root (core 0, vid = num_cores_in_group - 1) receives from secondary roots
+    // in an additional round after the standard tree reduction.
+
     // Sender phase
     if (vid == root_vid) {
+        // This is the primary root (core 0)
         params.is_root = true;
+
+        // For non-power-of-two: find secondary roots and add them as children in the final round
+        // Secondary roots are cores whose parent_vid >= num_cores_in_group
+        // They have vid values where vid + (1 << trailing_zeros(~vid)) >= num_cores_in_group
+        for (uint32_t other_core = 1; other_core < num_cores_in_group; ++other_core) {
+            uint32_t other_vid = (num_cores_in_group - 1) - other_core;
+            uint32_t other_trailing_ones = count_trailing_zeros(~other_vid);
+            uint32_t other_step = 1u << other_trailing_ones;
+            uint32_t other_parent_vid = other_vid + other_step;
+            if (other_parent_vid >= num_cores_in_group && other_vid != root_vid) {
+                // This is a secondary root - add it as a child at the appropriate round
+                // Use the round corresponding to the secondary root's send_at_round
+                uint32_t round_for_secondary = other_trailing_ones;
+                if (round_for_secondary < MAX_TREE_REDUCTION_ROUNDS) {
+                    // Only add if we don't already have a child at this round
+                    if (params.children_per_round[round_for_secondary] == UINT32_MAX) {
+                        params.children_per_round[round_for_secondary] = other_core;
+                        params.num_children++;
+                        if (round_for_secondary + 1 > params.my_active_rounds) {
+                            params.my_active_rounds = round_for_secondary + 1;
+                        }
+                    }
+                }
+            }
+        }
     } else {
         uint32_t step = 1u << trailing_ones;
         uint32_t parent_vid = vid + step;
@@ -110,8 +142,11 @@ inline TreeReductionParams get_tree_reduction_params(uint32_t core_id_in_group, 
             params.parent_core_in_group = (num_cores_in_group - 1) - parent_vid;
             params.send_at_round = trailing_ones;
         } else {
-            // Non-power-of-two: this core becomes a secondary root.
-            params.is_root = true;
+            // Non-power-of-two: this core is a secondary root.
+            // Instead of being a root, it should send to the primary root (core 0).
+            params.parent_core_in_group = 0;  // Primary root is always core 0
+            params.send_at_round = trailing_ones;
+            // Note: is_root stays false, so this core will send to the primary root
         }
     }
     return params;
