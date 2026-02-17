@@ -16,9 +16,16 @@ def get_atol_rtol_pcc(golden, calculated):
         golden = golden.to(torch.float)
         calculated = calculated.to(torch.float)
 
-    # Calculate atol and rtol
-    cal_atol = torch.max(torch.abs(golden - calculated)).item()
-    cal_rtol = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
+    # Calculate atol and rtol. For RTOL, avoid divide-by-zero artifacts in logs:
+    # when calculated is zero, fall back to absolute error for that element.
+    abs_diff = torch.abs(golden - calculated)
+    abs_calculated = torch.abs(calculated)
+    cal_atol = torch.max(abs_diff).item()
+    rtol_tensor = torch.where(abs_calculated > 0, abs_diff / abs_calculated, abs_diff)
+    cal_rtol = torch.max(rtol_tensor).item()
+
+    golden_nonfinite_count = int((~torch.isfinite(golden)).sum().item())
+    calculated_nonfinite_count = int((~torch.isfinite(calculated)).sum().item())
 
     # Calculate PCC
     def get_pcc(golden, calculated):
@@ -91,12 +98,14 @@ def get_atol_rtol_pcc(golden, calculated):
 
     cal_pcc = get_pcc(golden, calculated)
 
-    return (
-        cal_atol,
-        cal_rtol,
-        cal_pcc,
-        f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}, PCC: {cal_pcc}",
-    )
+    output_str = f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}, PCC: {cal_pcc}"
+    if golden_nonfinite_count or calculated_nonfinite_count:
+        output_str += (
+            f", Non-finite values detected (golden={golden_nonfinite_count}, "
+            f"calculated={calculated_nonfinite_count})"
+        )
+
+    return (cal_atol, cal_rtol, cal_pcc, output_str)
 
 
 def comp_equal(golden, calculated):
