@@ -52,6 +52,14 @@ ttnn::Tensor EmbeddingOperation::invoke(
     auto embeddings = ttnn::prim::embedding(
         input_tensor, weight, fused_tilized, embeddings_type, memory_config, pad_token, optional_output_tensor);
 
+    if (input_tensor.logical_shape().size() == 4 && input_tensor.logical_shape()[1] == 1 &&
+        input_tensor.logical_shape()[2] == 1) {
+        // Expected input shape:      (batch_size, 1, 1, sentence_size)
+        // Expected embedding shape:  (batch_size, 1, sentence_size, embedding_dim)
+        embeddings = ttnn::reshape(
+            embeddings,
+            ttnn::Shape({embeddings.logical_shape()[0], embeddings.logical_shape()[2], embeddings.logical_shape()[3]}));
+    }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
         embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
