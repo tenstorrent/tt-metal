@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 
 
 def create_fabric_router_config(max_payload_size):
@@ -308,3 +309,157 @@ def test_lm_head_sampling(
         f"({num_matmul_cores} cores, [{M}, {K}] x [{K}, {N_total}], "
         f"mesh={mesh_rows}x{mesh_cols}, skip_ccl={skip_ccl})"
     )
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 573440,
+        }
+    ],
+    indirect=True,
+)
+def test_lm_head_sampling_fused_argmax_single_device(
+    bh_2d_mesh_device,
+    use_fp32,
+):
+    """Single-device fused LM-head + argmax sampling with pre-cached width-sharded indices."""
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    worker_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
+    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
+
+    M = 1
+    K = 7168
+    num_matmul_cores = 101
+    n_per_core = 128
+    n_total = num_matmul_cores * n_per_core
+
+    a_tile = ttnn.Tile([1, 32])
+    b_tile = ttnn.Tile([32, 32])
+    out_tile = ttnn.Tile([1, 32])
+
+    mcast_core_x = device_grid_size.x - 1
+    mcast_core_y = 9
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    matmul_core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+        ]
+    )
+    final_core = ttnn.CoreCoord(0, 0)
+
+    torch.manual_seed(123)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = torch.randn((K, n_total), dtype=torch.bfloat16)
+    torch_scores = LMHeadSampling.golden(torch_a.float(), torch_b.float()).bfloat16()
+    torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+    torch_expected_idx = SamplingOp.golden(torch_scores, torch_indices, k=1, p=1.0)
+
+    input_a_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    width_shard_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (K, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    indices_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(matmul_core_grid, (M, n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(final_core, final_core)]), (1, 1), ttnn.ShardOrientation.ROW_MAJOR
+        ),
+    )
+
+    input_tensor_mesh = ttnn.from_torch(
+        torch_a,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        torch.zeros_like(torch_a),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+    )
+    ttnn_b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=width_shard_mem_config,
+        tile=b_tile,
+    )
+    ttnn_scores = ttnn.from_torch(
+        torch.zeros((M, n_total), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=output_mem_config,
+        tile=out_tile,
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch_indices,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=indices_mem_config,
+    )
+    ttnn_output_index = ttnn.from_torch(
+        torch.zeros((1, 1), dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=output_index_mem_config,
+    )
+
+    LMHeadSampling.op(
+        input_tensor_mesh,
+        intermediate_tensor_mesh,
+        ttnn_b,
+        ttnn_scores,
+        sender_coord=ttnn.MeshCoordinate(0, 0),
+        indices_tensor=ttnn_indices,
+        output_index_tensor=ttnn_output_index,
+        argmax_final_core_coord=final_core,
+        semaphores=None,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=True,
+    )
+    ttnn.synchronize_device(submesh)
+
+    output_index_torch = ttnn.to_torch(ttnn_output_index).to(torch.uint32).reshape(1, 1)
+    assert torch.equal(
+        output_index_torch, torch_expected_idx
+    ), f"Fused argmax index mismatch. expected={torch_expected_idx.item()}, got={output_index_torch.item()}"
+
+    submesh.reset_sub_device_stall_group()
+    submesh.clear_loaded_sub_device_manager()

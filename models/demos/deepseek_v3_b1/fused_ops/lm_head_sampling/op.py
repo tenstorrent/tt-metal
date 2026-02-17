@@ -27,6 +27,7 @@ CB Layout:
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
@@ -64,6 +65,9 @@ class LMHeadSampling:
         vocab_tensor,
         output_tensor,
         sender_coord,
+        indices_tensor=None,
+        output_index_tensor=None,
+        argmax_final_core_coord=None,
         semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=None,
@@ -84,6 +88,9 @@ class LMHeadSampling:
             intermediate_tensor_mesh: Intermediate mesh tensor for CCL broadcast destination
             vocab_tensor: Vocab weights [K, N_total] width-sharded across matmul cores as [K, N_per_core]
             output_tensor: Pre-allocated output [1, N_total] width-sharded across matmul cores
+            indices_tensor: Optional pre-cached global indices tensor, width-sharded like output scores
+            output_index_tensor: Optional pre-allocated [1, 1] uint32 tensor for fused argmax output
+            argmax_final_core_coord: Optional final core for fused argmax reduction (defaults to first matmul core)
             sender_coord: Tuple (row, col) of sender device in mesh
             semaphores: List of global semaphores [out_ready, barrier, secondary_sync] for CCL
             cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
@@ -92,8 +99,12 @@ class LMHeadSampling:
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast (single-device mode)
         Returns:
-            Output tensor with matmul result
+            Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
+        enable_argmax = indices_tensor is not None or output_index_tensor is not None
+        if enable_argmax and (indices_tensor is None or output_index_tensor is None):
+            raise ValueError("indices_tensor and output_index_tensor must be provided together for fused argmax")
+
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
 
@@ -102,12 +113,16 @@ class LMHeadSampling:
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+        if enable_argmax and (mesh_rows != 1 or mesh_cols != 1 or not skip_ccl):
+            raise NotImplementedError("Fused LM-head argmax currently supports only single-device skip_ccl=True mode")
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
         vocab_tensors_per_device = ttnn.get_device_tensors(vocab_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
+        indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
+        output_index_tensors_per_device = ttnn.get_device_tensors(output_index_tensor) if enable_argmax else None
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -161,6 +176,9 @@ class LMHeadSampling:
         mcast_src_cb = 0  # input_tensor on sender core (tensor-backed)
         mcast_dst_cb = 1  # Mcast destination = matmul in0 (all mcast grid cores, intermediate)
         matmul_in1_cb = 2  # vocab_tensor weights on matmul cores (tensor-backed)
+        argmax_winner_cb = 3
+        argmax_gather_cb = 4
+        argmax_indices_cb = 5
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
@@ -171,6 +189,8 @@ class LMHeadSampling:
         # ====================================================================
         mcast_data_sender_semaphore_id = 0
         mcast_data_receiver_semaphore_id = 1
+        argmax_receiver_semaphore_id = 2
+        argmax_local_ready_semaphore_id = 3
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -197,6 +217,8 @@ class LMHeadSampling:
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
                 vocab_tensor_device = vocab_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
+                indices_tensor_device = indices_tensors_per_device[device_idx] if enable_argmax else None
+                output_index_tensor_device = output_index_tensors_per_device[device_idx] if enable_argmax else None
 
                 # Get device handle
                 device = input_tensor_device.device()
@@ -241,6 +263,8 @@ class LMHeadSampling:
 
                 # Matmul cores: from vocab_tensor (multiple cores with weight shards)
                 matmul_core_grid = vocab_tensor_device.memory_config().shard_spec.grid
+                argmax_core_grid = matmul_core_grid
+                argmax_cores_row_wise = ttnn.corerange_to_cores(argmax_core_grid, row_wise=True)
 
                 # Mcast grid = full device compute grid (includes sender + all matmul cores)
                 device_grid_size = device.compute_with_storage_grid_size()
@@ -263,6 +287,37 @@ class LMHeadSampling:
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
 
+                if enable_argmax:
+                    if indices_tensor_device.memory_config().shard_spec.grid != argmax_core_grid:
+                        raise ValueError("indices_tensor must be width-sharded on the same core grid as LM-head scores")
+                    if (
+                        indices_tensor_device.memory_config().shard_spec.shape
+                        != output_tensor_device.memory_config().shard_spec.shape
+                    ):
+                        raise ValueError("indices_tensor shard shape must match output_tensor shard shape")
+                    if indices_tensor_device.dtype != ttnn.uint32:
+                        raise ValueError("indices_tensor must be uint32")
+                    if output_index_tensor_device.memory_config().shard_spec.grid.num_cores() != 1:
+                        raise ValueError("output_index_tensor must be sharded on a single final core")
+                    if tuple(output_index_tensor_device.shape) != (1, 1):
+                        raise ValueError("output_index_tensor must have shape (1, 1)")
+
+                    output_index_core = output_index_tensor_device.memory_config().shard_spec.grid.ranges()[0].start
+                    argmax_final_core = (
+                        output_index_core if argmax_final_core_coord is None else argmax_final_core_coord
+                    )
+                    if not any(
+                        c.x == argmax_final_core.x and c.y == argmax_final_core.y for c in argmax_cores_row_wise
+                    ):
+                        raise ValueError("argmax_final_core_coord must be within the matmul core grid")
+                    if output_index_core.x != argmax_final_core.x or output_index_core.y != argmax_final_core.y:
+                        raise ValueError("output_index_tensor shard core must match argmax_final_core_coord")
+                    argmax_num_values = n_per_core
+                    argmax_num_senders = len(argmax_cores_row_wise)
+                    argmax_expected_remote_incs = argmax_num_senders - 1
+                    argmax_sender_idx_lookup = {(c.x, c.y): idx for idx, c in enumerate(argmax_cores_row_wise)}
+                    argmax_winner_page_bytes = 16
+
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
 
@@ -275,6 +330,7 @@ class LMHeadSampling:
                 # ================================================================
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
+                    ("enable_argmax", 1 if enable_argmax else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
@@ -293,8 +349,33 @@ class LMHeadSampling:
                     # Matmul
                     ("matmul_in0", mcast_dst_cb),  # Matmul reads from mcast destination
                     ("matmul_in1", matmul_in1_cb),
+                    ("matmul_out", matmul_out_cb),
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
+                    # Argmax sampling
+                    ("argmax_num_values", argmax_num_values if enable_argmax else 0),
+                    ("argmax_winner_page_bytes", argmax_winner_page_bytes if enable_argmax else 0),
+                    ("argmax_num_senders", argmax_num_senders if enable_argmax else 0),
+                    ("argmax_expected_remote_incs", argmax_expected_remote_incs if enable_argmax else 0),
+                    ("argmax_receiver_semaphore_id", argmax_receiver_semaphore_id if enable_argmax else 0),
+                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id if enable_argmax else 0),
+                    ("argmax_mesh_mode", 0),
+                    ("argmax_stage1_sender", 0),
+                    ("argmax_stage1_receiver", 0),
+                    ("argmax_stage2_sender", 0),
+                    ("argmax_stage2_receiver", 0),
+                    ("argmax_stage1_slot_base_offset", 0),
+                    ("argmax_stage1_num_slots", 0),
+                    ("argmax_stage1_expected_remote_incs", 0),
+                    ("argmax_stage1_local_slot_offset", 0),
+                    ("argmax_stage2_slot_base_offset", 0),
+                    ("argmax_stage2_num_slots", 0),
+                    ("argmax_stage2_expected_remote_incs", 0),
+                    ("argmax_stage2_local_slot_offset", 0),
+                    ("argmax_mesh_local_send_slot_offset", 0),
+                    ("argmax_sender_idx", 0),
+                    ("argmax_gather_cb", argmax_gather_cb if enable_argmax else 0),
+                    ("argmax_indices_cb", argmax_indices_cb if enable_argmax else 0),
                 ]
 
                 # ================================================================
@@ -302,6 +383,7 @@ class LMHeadSampling:
                 # ================================================================
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
+                    ("enable_argmax", 1 if enable_argmax else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
@@ -329,6 +411,8 @@ class LMHeadSampling:
                     ("mcast_src_num_pages", num_tiles_k),
                     ("mcast_dst_cb", mcast_dst_cb),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
+                    ("argmax_winner_page_bytes", argmax_winner_page_bytes if enable_argmax else 0),
+                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id if enable_argmax else 0),
                 ]
 
                 # ================================================================
@@ -336,6 +420,7 @@ class LMHeadSampling:
                 # ================================================================
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
+                    ("enable_argmax", 1 if enable_argmax else 0),
                     ("matmul_in0", mcast_dst_cb),  # Matmul reads from mcast destination
                     ("matmul_in1", matmul_in1_cb),
                     ("matmul_out", matmul_out_cb),
@@ -347,8 +432,25 @@ class LMHeadSampling:
                 # CCL Broadcast common runtime args
                 # ================================================================
                 if skip_ccl:
-                    ncrisc_bcast_common_args = []
-                    brisc_bcast_common_args = []
+                    if enable_argmax:
+                        final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
+                        ncrisc_bcast_common_args = [
+                            int(indices_tensor_device.buffer_address()),
+                            int(output_index_tensor_device.buffer_address()),
+                            int(final_core_phys.x),
+                            int(final_core_phys.y),
+                            0,
+                            0,
+                            0,
+                        ]
+                        brisc_bcast_common_args = [
+                            int(final_core_phys.x),
+                            int(final_core_phys.y),
+                            0,
+                        ]
+                    else:
+                        ncrisc_bcast_common_args = []
+                        brisc_bcast_common_args = []
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -426,6 +528,12 @@ class LMHeadSampling:
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
 
+                if enable_argmax:
+                    # CB 5: Argmax indices — tensor-backed on matmul/argmax cores
+                    argmax_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        argmax_indices_cb, indices_tensor_device
+                    )
+
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
 
@@ -436,6 +544,36 @@ class LMHeadSampling:
                     matmul_in1_cb_descriptor,
                     matmul_out_cb_descriptor,
                 ]
+                if enable_argmax:
+                    argmax_winner_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=argmax_winner_page_bytes,
+                        core_ranges=argmax_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=argmax_winner_cb,
+                                data_format=ttnn.uint32,
+                                page_size=argmax_winner_page_bytes,
+                            )
+                        ],
+                    )
+                    argmax_gather_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=argmax_winner_page_bytes * argmax_num_senders,
+                        core_ranges=argmax_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=argmax_gather_cb,
+                                data_format=ttnn.uint32,
+                                page_size=argmax_winner_page_bytes,
+                            )
+                        ],
+                    )
+                    cbs_list.extend(
+                        [
+                            argmax_winner_cb_descriptor,
+                            argmax_gather_cb_descriptor,
+                            argmax_indices_cb_descriptor,
+                        ]
+                    )
 
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
                 if not skip_ccl:
@@ -468,6 +606,21 @@ class LMHeadSampling:
                         initial_value=0,
                     ),
                 ]
+                if enable_argmax:
+                    semaphore_descriptors.extend(
+                        [
+                            ttnn.SemaphoreDescriptor(
+                                id=argmax_receiver_semaphore_id,
+                                core_ranges=argmax_core_grid,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=argmax_local_ready_semaphore_id,
+                                core_ranges=argmax_core_grid,
+                                initial_value=0,
+                            ),
+                        ]
+                    )
 
                 # ================================================================
                 # Unified kernel descriptor
@@ -505,7 +658,32 @@ class LMHeadSampling:
                             value=1,
                             other_value=0,
                         ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_argmax_core",
+                            core_range=argmax_core_grid,
+                            value=1 if enable_argmax else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_argmax_final_core",
+                            core_range=argmax_final_core if enable_argmax else mcast_sender_core,
+                            value=1 if enable_argmax else 0,
+                            other_value=0,
+                        ),
                     ],
+                    per_core_compile_time_descriptors=(
+                        []
+                        if not enable_argmax
+                        else [
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="argmax_sender_idx",
+                                core_values=[
+                                    (core, argmax_sender_idx_lookup[(core.x, core.y)]) for core in argmax_cores_row_wise
+                                ],
+                                other_value=0,
+                            )
+                        ]
+                    ),
                     # Per-core runtime args: empty for BRISC on worker_core (fabric args appended later)
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=[(worker_core, [])],
@@ -515,8 +693,66 @@ class LMHeadSampling:
                 # ================================================================
                 # Program descriptor
                 # ================================================================
+                kernel_result = unified_kernel.get_kernel_descriptors()
+                input_role_cores = set()
+                mcast_receiver_role_cores = set()
+                matmul_role_cores = set()
+                argmax_role_cores = set()
+                argmax_final_role_cores = set()
+                for group in kernel_result.groups:
+                    group_cores = ttnn.corerange_to_cores(group.core_range_set)
+                    if group.compile_time_arg_values.get("is_input_core", 0) == 1:
+                        input_role_cores.update((c.x, c.y) for c in group_cores)
+                    if group.compile_time_arg_values.get("is_mcast_receiver_core", 0) == 1:
+                        mcast_receiver_role_cores.update((c.x, c.y) for c in group_cores)
+                    if group.compile_time_arg_values.get("is_matmul_core", 0) == 1:
+                        matmul_role_cores.update((c.x, c.y) for c in group_cores)
+                    if group.compile_time_arg_values.get("is_argmax_core", 0) == 1:
+                        argmax_role_cores.update((c.x, c.y) for c in group_cores)
+                    if group.compile_time_arg_values.get("is_argmax_final_core", 0) == 1:
+                        argmax_final_role_cores.update((c.x, c.y) for c in group_cores)
+
+                expected_input_role_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(mcast_sender_core_grid)}
+                if input_role_cores != expected_input_role_cores:
+                    missing = sorted(expected_input_role_cores - input_role_cores)[:16]
+                    extra = sorted(input_role_cores - expected_input_role_cores)[:16]
+                    raise RuntimeError(
+                        "Unified kernel role mapping mismatch: "
+                        f"is_input_core core-set mismatch. missing={missing}, extra={extra}"
+                    )
+
+                expected_mcast_receiver_role_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(mcast_receiver_grid)}
+                if mcast_receiver_role_cores != expected_mcast_receiver_role_cores:
+                    missing = sorted(expected_mcast_receiver_role_cores - mcast_receiver_role_cores)[:16]
+                    extra = sorted(mcast_receiver_role_cores - expected_mcast_receiver_role_cores)[:16]
+                    raise RuntimeError(
+                        "Unified kernel role mapping mismatch: "
+                        f"is_mcast_receiver_core core-set mismatch. missing={missing}, extra={extra}"
+                    )
+
+                expected_matmul_role_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(matmul_core_grid)}
+                if matmul_role_cores != expected_matmul_role_cores:
+                    missing = sorted(expected_matmul_role_cores - matmul_role_cores)[:16]
+                    extra = sorted(matmul_role_cores - expected_matmul_role_cores)[:16]
+                    raise RuntimeError(
+                        "Unified kernel role mapping mismatch: "
+                        f"is_matmul_core core-set mismatch. missing={missing}, extra={extra}"
+                    )
+                if enable_argmax:
+                    if argmax_role_cores != expected_matmul_role_cores:
+                        missing = sorted(expected_matmul_role_cores - argmax_role_cores)[:16]
+                        extra = sorted(argmax_role_cores - expected_matmul_role_cores)[:16]
+                        raise RuntimeError(
+                            "Unified kernel role mapping mismatch: "
+                            f"is_argmax_core core-set mismatch. missing={missing}, extra={extra}"
+                        )
+                    if len(argmax_final_role_cores) != 1:
+                        raise RuntimeError(
+                            "Unified kernel role mapping mismatch: " "is_argmax_final_core must map to exactly one core"
+                        )
+
                 program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors().kernels,
+                    kernels=kernel_result.kernels,
                     cbs=cbs_list,
                     semaphores=semaphore_descriptors,
                 )
@@ -537,9 +773,9 @@ class LMHeadSampling:
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute generic op
-        result = ttnn.generic_op(
-            [input_tensor_mesh, intermediate_tensor_mesh, vocab_tensor, output_tensor],
-            mesh_program_descriptor,
-        )
+        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, vocab_tensor, output_tensor]
+        if enable_argmax:
+            io_tensors.extend([indices_tensor, output_index_tensor])
+        result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return result

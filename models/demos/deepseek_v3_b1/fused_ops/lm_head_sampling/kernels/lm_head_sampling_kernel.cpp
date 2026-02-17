@@ -35,6 +35,7 @@
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+#include "../../../unified_kernels/argmax.hpp"
 
 // Per-core role flags set by UnifiedCompileTimeCoreDescriptor in op.py.
 // Each flag is specialized per core group at compile time, enabling if constexpr
@@ -44,6 +45,9 @@ struct Core {
     static constexpr bool is_mcast_receiver_core = get_named_compile_time_arg_val("is_mcast_receiver_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
+    static constexpr bool enable_argmax = get_named_compile_time_arg_val("enable_argmax") == 1;
+    static constexpr bool is_argmax_core = is_matmul_core;
+    static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
 };
 
 void kernel_main() {
@@ -85,6 +89,28 @@ void kernel_main() {
     // Matmul reader args (NCRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ReaderCTArgs<
+        get_named_compile_time_arg_val("argmax_num_values"),
+        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
+        get_named_compile_time_arg_val("argmax_num_senders"),
+        get_named_compile_time_arg_val("argmax_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("argmax_mesh_mode"),
+        get_named_compile_time_arg_val("argmax_stage1_sender"),
+        get_named_compile_time_arg_val("argmax_stage1_receiver"),
+        get_named_compile_time_arg_val("argmax_stage2_sender"),
+        get_named_compile_time_arg_val("argmax_stage2_receiver"),
+        get_named_compile_time_arg_val("argmax_stage1_slot_base_offset"),
+        get_named_compile_time_arg_val("argmax_stage1_num_slots"),
+        get_named_compile_time_arg_val("argmax_stage1_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_stage1_local_slot_offset"),
+        get_named_compile_time_arg_val("argmax_stage2_slot_base_offset"),
+        get_named_compile_time_arg_val("argmax_stage2_num_slots"),
+        get_named_compile_time_arg_val("argmax_stage2_expected_remote_incs"),
+        get_named_compile_time_arg_val("argmax_stage2_local_slot_offset"),
+        get_named_compile_time_arg_val("argmax_mesh_local_send_slot_offset"),
+        get_named_compile_time_arg_val("argmax_sender_idx")>;
 
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register mcast_src CB (CB 0) backed by input_tensor (skip_ccl)
@@ -96,10 +122,20 @@ void kernel_main() {
     }
     // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
+        DPRINT << "LM Head Sampling Kernel: is_matmul_core" << ENDL();
         constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
+        DPRINT << "LM Head Sampling Kernel: setup_in1_done" << ENDL();
+    }
+    if constexpr (Core::enable_argmax && Core::is_matmul_core) {
+        // NCRISC consumes matmul_out CB via cb_wait_front/get_read_ptr for argmax.
+        // Initialize the tensor-backed output CB view on the reader side as well.
+        constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
+        constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+        unified_kernels::setup_sharded_buffer(matmul_out_cb, out_w);
+        DPRINT << "LM Head Sampling Kernel: setup_out_done" << ENDL();
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -170,6 +206,9 @@ void kernel_main() {
     // Matmul writer args (BRISC is a no-op for matmul; compute runs on TRISC)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
+    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
+        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
+        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // --- TRISC: Matmul compute ---
@@ -224,9 +263,15 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
+#if defined(COMPILE_FOR_NCRISC)
+    DPRINT << "LM Head Sampling Kernel: before_mcast" << ENDL();
+#endif
     mcast.init(mcast_args);
     mcast(mcast_args);
     mcast.teardown();
+#if defined(COMPILE_FOR_NCRISC)
+    DPRINT << "LM Head Sampling Kernel: after_mcast" << ENDL();
+#endif
 
     // ========================================================================
     // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
@@ -238,4 +283,61 @@ void kernel_main() {
     // ========================================================================
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, true> matmul;
     matmul(matmul_args);
+#if defined(COMPILE_FOR_NCRISC)
+    DPRINT << "LM Head Sampling Kernel: after_matmul" << ENDL();
+#endif
+
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    DPRINT << "LM Head Sampling Kernel: enable_argmax=" << ENDL();
+    if constexpr (Core::enable_argmax) {
+        DPRINT << "LM Head Sampling Kernel: enable_argmax" << ENDL();
+#if defined(COMPILE_FOR_NCRISC)
+        DPRINT << "LM Head Sampling Kernel: COMPILE_FOR_NCRISC" << ENDL();
+        DPRINT << "LM Head Sampling Kernel: role_bits matmul=" << (Core::is_matmul_core ? 1 : 0)
+               << " argmax=" << (Core::is_argmax_core ? 1 : 0) << " final=" << (Core::is_argmax_final_core ? 1 : 0)
+               << ENDL();
+        constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
+        uint32_t scores_addr = 0;
+        DPRINT << "LM Head Sampling Kernel: gather_cb=" << gather_cb << ENDL();
+        if constexpr (Core::is_matmul_core) {
+            DPRINT << "LM Head Sampling Kernel: is_matmul_core" << ENDL();
+            // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
+            constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
+            constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+            cb_wait_front(matmul_out_cb, out_w);
+            DPRINT << "LM Head Sampling Kernel: cb_wait_front" << ENDL();
+            scores_addr = get_read_ptr(matmul_out_cb);
+        }
+        deepseek_b1_ops::Sampling::ReaderArgs argmax_args{
+            scores_addr,
+            get_common_arg_val<uint32_t>(0),
+            get_common_arg_val<uint32_t>(1),
+            get_common_arg_val<uint32_t>(2),
+            get_common_arg_val<uint32_t>(3),
+            get_common_arg_val<uint32_t>(4),
+            get_common_arg_val<uint32_t>(5),
+            get_common_arg_val<uint32_t>(6),
+            get_write_ptr(gather_cb),
+        };
+#elif defined(COMPILE_FOR_BRISC)
+        DPRINT << "LM Head Sampling Kernel: COMPILE_FOR_BRISC" << ENDL();
+        deepseek_b1_ops::Sampling::WriterArgs argmax_args{
+            get_common_arg_val<uint32_t>(0),
+            get_common_arg_val<uint32_t>(1),
+            get_common_arg_val<uint32_t>(2),
+        };
+        DPRINT << "LM Head Sampling Kernel: argmax_args" << ENDL();
+#endif
+        DPRINT << "Is matmul core: " << (uint32_t)Core::is_matmul_core << ENDL();
+        deepseek_b1_ops::Sampling::Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, false> argmax;
+        argmax(argmax_args);
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_matmul_core) {
+            constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
+            constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+            cb_pop_front(matmul_out_cb, out_w);
+        }
+#endif
+    }
+#endif
 }
