@@ -37,10 +37,6 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
     uint32_t num_pages_per_core_group_1{}, num_pages_per_core_group_2{};
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::tie(
-        std::ignore, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2) =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, input.logical_volume());
-
     auto alignment = input.buffer()->alignment();
     uint32_t index_elems_per_page{};
     uint32_t input_page_size{};
@@ -64,6 +60,12 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
         input_page_size = tt::align(static_cast<uint32_t>(index_elems_per_page * input_element_size_bytes), alignment);
     }
 
+    uint32_t num_input_pages = input.logical_volume() / index_elems_per_page;
+
+    std::tie(
+        std::ignore, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2) =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_input_pages);
+
     //********** Create Buffers **********
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
@@ -78,8 +80,10 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_1;
     auto output_page_size = output.buffer()->aligned_page_size();
+    constexpr uint32_t output_cb_num_pages = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(output_page_size, {{output_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            output_cb_num_pages * output_page_size, {{output_cb_index, weights_cb_data_format}})
             .set_page_size(output_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
@@ -102,7 +106,6 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (input.dtype() == DataType::BFLOAT16) {
@@ -120,15 +123,36 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
+    // ********** Create Writer Kernel **********
+
+    std::vector<uint32_t> writer_compile_time_args =
+        ttnn::kernel_utils::to_vector(ttnn::kernel::CompileTimeEmbeddingsWriterKernelArgs{
+            .output_cb_index = output_cb_index,
+            .weight_page_size = weight_page_size,
+            .elems_per_page = index_elems_per_page});
+
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
+
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_nd_sharded_writer.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    // ********** Set Runtime Arguments per core **********
+
     auto reader_runtime_args = ttnn::kernel::EmbeddingsReaderKernelArgs{
         .input_buffer_src_addr = input.buffer()->address(),
         .weight_buffer_src_addr = weights.buffer()->address(),
-        .output_buffer_src_addr = out_buffer->address(),
         .input_page_id = 0,
         .num_of_pages = 0,
     };
 
-    //  ********** Set Runtime Arguments per core **********
+    auto writer_runtime_args = ttnn::kernel::EmbeddingsWriterKernelArgs{
+        .output_buffer_src_addr = out_buffer->address(),
+        .input_page_id = 0,
+        .num_of_pages = 0,
+    };
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t input_page_id = 0, core_id = 0; core_id < cores.size();
@@ -139,9 +163,16 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
         reader_runtime_args.num_of_pages = num_pages_per_core_group_1;
         tt::tt_metal::SetRuntimeArgs(
             program, reader_kernel_id, core, ttnn::kernel_utils::to_vector(reader_runtime_args));
+
+        writer_runtime_args.input_page_id = input_page_id;
+        writer_runtime_args.num_of_pages = num_pages_per_core_group_1;
+        tt::tt_metal::SetRuntimeArgs(
+            program, writer_kernel_id, core, ttnn::kernel_utils::to_vector(writer_runtime_args));
     }
 
-    return cached_program_t{std::move(program), {.reader_kernel_id = reader_kernel_id, .cores = cores}};
+    return cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
 }
 
 void EmbeddingsNDShardedProgramFactory::override_runtime_arguments(
@@ -152,6 +183,7 @@ void EmbeddingsNDShardedProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_variables = cached_program.shared_variables;
     const auto& reader_kernel_id = shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
     const auto& cores = shared_variables.cores;
 
     auto* output_buffer = tensor_return_value.buffer();
@@ -159,13 +191,17 @@ void EmbeddingsNDShardedProgramFactory::override_runtime_arguments(
     auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
 
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
     for (const auto& core : cores) {
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[0] = input_buffer_address;
             runtime_args[1] = weights_buffer_address;
-            runtime_args[2] = output_buffer->address();
+        }
+        {
+            auto& runtime_args = writer_runtime_args[core.x][core.y];
+            runtime_args[0] = output_buffer->address();
         }
     }
 }

@@ -33,19 +33,13 @@ void kernel_main() {
 
     constexpr auto input_args = TensorAccessorArgs<amount_of_fields(c_args)>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
 
     const auto input = TensorAccessor(input_args, args.input_buffer_src_addr, c_args.input_page_size);
     const auto weights = TensorAccessor(weights_args, args.weight_buffer_src_addr, c_args.weight_page_size);
-    const auto output = TensorAccessor(output_args, args.output_buffer_src_addr, c_args.weight_page_size);
 
     cb_reserve_back(c_args.input_cb_index, 1);
     uint32_t index_cb_addr = get_write_ptr(c_args.input_cb_index);
     volatile tt_l1_ptr input_token_t* index_cb_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(index_cb_addr);
-
-    uint32_t output_cb_addr = get_write_ptr(c_args.output_cb_index);
-    volatile tt_l1_ptr input_token_t* output_cb_ptr =
-        reinterpret_cast<volatile tt_l1_ptr input_token_t*>(output_cb_addr);
 
     for (uint32_t input_page_id = args.input_page_id; input_page_id < args.input_page_id + args.num_of_pages;
          input_page_id++) {
@@ -55,12 +49,7 @@ void kernel_main() {
         noc_async_read(input_page_iter->noc_addr(), index_cb_addr, c_args.input_page_size);
         noc_async_read_barrier();
 
-        auto flat_input_idx = input_page_id * c_args.elems_per_page;
-        auto output_page_id = flat_input_idx;
-        auto output_pages = output.pages(output_page_id, output_page_id + c_args.elems_per_page);
-        auto output_page_iter = output_pages.begin();
-
-        for (uint32_t index = 0; index < c_args.elems_per_page; ++index, ++output_page_iter) {
+        for (uint32_t index = 0; index < c_args.elems_per_page; ++index) {
             uint32_t storage_index = index;
             if (c_args.input_is_tile_layout) {
                 storage_index =
@@ -68,13 +57,14 @@ void kernel_main() {
             }
             input_token_t weights_flatten_idx = index_cb_ptr[storage_index];
 
+            cb_reserve_back(c_args.output_cb_index, 1);
+            uint32_t output_cb_addr = get_write_ptr(c_args.output_cb_index);
+
             uint64_t weight_noc_addr = get_token_noc_addr(weights_flatten_idx, weights);
             noc_async_read<c_args.weight_page_size>(weight_noc_addr, output_cb_addr, c_args.weight_page_size);
             noc_async_read_barrier();
 
-            noc_async_write<c_args.weight_page_size>(
-                output_cb_addr, output_page_iter->noc_addr(), c_args.weight_page_size);
-            noc_async_write_barrier();
+            cb_push_back(c_args.output_cb_index, 1);
         }
     }
 }
