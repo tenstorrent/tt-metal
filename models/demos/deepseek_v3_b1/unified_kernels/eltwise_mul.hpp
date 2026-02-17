@@ -132,6 +132,9 @@ struct EltwiseMul {
                 volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
                 uint16_t scalar_val = src_ptr[CTArgs::scalar_index_offset];
 
+                // Pop scalar source CB (populated by mcast, must drain for looping)
+                cb_pop_front(CTArgs::cb_scalar_src, 1);
+
                 // Write one value to destination CB (BroadcastType::SCALAR will broadcast)
                 cb_reserve_back(CTArgs::cb_scalar, 1);
                 uint32_t cb_write_addr = get_write_ptr(CTArgs::cb_scalar);

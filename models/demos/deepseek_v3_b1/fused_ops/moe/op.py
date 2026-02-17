@@ -2664,9 +2664,13 @@ class MoeOp:
         shared_n_parallel,
         epsilon=1e-6,
         use_hardcoded_expert_index=False,
+        num_iterations=1,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
+
+        Args:
+            num_iterations: Number of iterations to loop inside the kernel (default 1).
 
         Returns:
             (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
@@ -2915,6 +2919,11 @@ class MoeOp:
                 ncrisc_args += shared_ncrisc
                 brisc_args += shared_brisc
                 trisc_args += shared_trisc
+
+                # Loop iteration count (available to all RISCs in common section)
+                ncrisc_args += [("num_iterations", num_iterations)]
+                brisc_args += [("num_iterations", num_iterations)]
+                trisc_args += [("num_iterations", num_iterations)]
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(
