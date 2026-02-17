@@ -1,4 +1,4 @@
-name: "Model Unit Tests Pipeline"
+name: "Models Unit Tests"
 
 on:
   push:

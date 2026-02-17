@@ -1,4 +1,4 @@
-name: "Models End-to-End Pipeline"
+name: "Models End-To-End Tests"
 
 on:
   push:
