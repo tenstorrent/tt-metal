@@ -838,7 +838,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size.value_or(0),
-        num_tree_reduction_rounds,  // New: number of rounds for tree reduction
+        num_tree_reduction_rounds,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -998,7 +998,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
 
         // Calculate base index for this reduction group's cores in the physical coordinate arrays
-        // Each batch has multiple heads, each head has its own reduction group
         uint32_t reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
         log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
         // reader runtime args
@@ -1059,7 +1058,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         writer_rt_args.insert(writer_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
-        // compute runtime args - now includes tree reduction parameters
+        // compute runtime args
         std::vector<uint32_t> compute_rt_args = {
             do_reduce,
             do_output,
