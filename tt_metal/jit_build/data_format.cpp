@@ -122,8 +122,6 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float32),
             "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
-    } else if (is_bfp_format(src_format)) {
-        dst_format = is_exp_b_format(src_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
     }
 
     return dst_format;
