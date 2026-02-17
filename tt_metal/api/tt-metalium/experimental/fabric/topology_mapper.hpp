@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 namespace tt {
@@ -92,7 +93,9 @@ public:
         const LocalMeshBinding& local_mesh_binding,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
-    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
+    // Construct a TopologyMapper with fixed ASIC-position pinnings.
+    // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
+    // For one-to-one pinnings, use a vector with a single position.
     // These pins must reference devices on the current host; if infeasible, construction will throw with details.
     TopologyMapper(
         const tt::Cluster& cluster,
@@ -100,7 +103,7 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings,
+        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
         std::chrono::duration<float> timeout = std::chrono::duration<float>(60.0f));
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
@@ -382,8 +385,8 @@ private:
      */
     void populate_fabric_node_id_to_asic_id_mappings(
         MeshId mesh_id,
-        const PhysicalAdjacencyMap& adjacency_map_physical,
-        const LogicalAdjacencyMap& adjacency_map_logical,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
+        const AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
         const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
         const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
@@ -411,7 +414,7 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
-    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
     std::chrono::duration<float> topology_mapping_timeout_;
 
@@ -456,8 +459,8 @@ private:
      */
     void verify_topology_mapping(const Cluster& cluster) const;
 
-    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
-    void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
+    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
+    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric

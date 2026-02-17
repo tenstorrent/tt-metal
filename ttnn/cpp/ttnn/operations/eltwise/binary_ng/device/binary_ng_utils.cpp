@@ -400,7 +400,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER: return {"remainder_int32_tile_init();", "remainder_int32_tile"};
-        case FMOD: return {"fmod_int32_tile_init();", "fmod_int32_tile"};
+        case FMOD:
+            if (dtype == DataType::INT32) {
+                return {"fmod_int32_tile_init();", "fmod_int32_tile"};
+            } else {
+                return {"fmod_binary_tile_init();", "fmod_binary_tile"};
+            }
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (int_data_format) {

@@ -383,7 +383,10 @@ class MLA1D(AbstractModule):
         hidden_size_per_device = even_int_div(hf_config.hidden_size, mesh_shape[1])
 
         input_memory_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, hidden_size_per_device),
+            shape=(
+                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                hidden_size_per_device,
+            ),
             core_grid=ttnn.CoreGrid(y=7, x=4),
             strategy=ttnn.ShardStrategy.WIDTH,
         )
@@ -599,14 +602,18 @@ class MLA1D(AbstractModule):
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
         # Q slice: width sharded for Q norm (1536 width on 8x2 grid = 96 per core)
         q_slice_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, q_lora_rank), core_grid=ttnn.CoreGrid(y=2, x=8), strategy=ttnn.ShardStrategy.WIDTH
+            shape=(ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE), q_lora_rank),
+            core_grid=ttnn.CoreGrid(y=2, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
         )
         q_slice_config = SliceConfig(
             memory_config=q_slice_mem_config,
         )
         # KV nope slice: width sharded for KV norm (512 width on 8x2 grid = 32 per core)
         kv_nope_slice_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, kv_lora_rank), core_grid=ttnn.CoreGrid(y=8, x=2), strategy=ttnn.ShardStrategy.WIDTH
+            shape=(ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE), kv_lora_rank),
+            core_grid=ttnn.CoreGrid(y=8, x=2),
+            strategy=ttnn.ShardStrategy.WIDTH,
         )
         kv_nope_slice_config = SliceConfig(
             memory_config=kv_nope_slice_mem_config,
