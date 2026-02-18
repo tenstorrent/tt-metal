@@ -77,7 +77,7 @@ public:
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
     std::shared_ptr<ContextDescriptor> create_context_descriptor(
-        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) const;
+        int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
 
