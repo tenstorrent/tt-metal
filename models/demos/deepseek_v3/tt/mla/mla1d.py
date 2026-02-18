@@ -256,7 +256,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wq_b_dram_memory_config,
-                    (0, 0, 0, 0),  # n=3072 already aligned (multiple of 384), no padding needed
+                    (0, 0, 0),  # n=3072 already aligned (multiple of 384), no padding needed
                 ),
             },
             "wo": {
@@ -266,7 +266,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wo_dram_memory_config,
-                    (0, 0, 0, 256),  # Pad n from 896 to 1152 (multiple of 384)
+                    (0, 0, 256),  # Pad n from 896 to 1152 (multiple of 384)
                 ),
             },
         }
@@ -315,7 +315,7 @@ class MLA1D(AbstractModule):
                     (0, -2),  # Shard along input dim
                     mesh_device,
                     qkv_a_dram_memory_config,
-                    (0, 0, 0, 192),  # Pad n from 2112 to 2304 (multiple of 384)
+                    (0, 0, 192),  # Pad n from 2112 to 2304 (multiple of 384)
                 ),
             },
         }
@@ -387,7 +387,7 @@ class MLA1D(AbstractModule):
                     (0, -3),
                     mesh_device,
                     wkv_b1_dram_memory_config,
-                    (0, 8, 0, 0),  # Pad batch from 16 to 24
+                    (8, 0, 0),  # Pad batch from 16 to 24
                 ),
             },
             "wkv_b2": {
@@ -397,7 +397,7 @@ class MLA1D(AbstractModule):
                     (0, None),
                     mesh_device,
                     wkv_b2_dram_memory_config,
-                    (0, 4, 0, 0),  # Pad batch from 128 to 132
+                    (4, 0, 0),  # Pad batch from 128 to 132
                 ),
             },
         }
@@ -410,32 +410,8 @@ class MLA1D(AbstractModule):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
-        padding_needed: tuple[int, int, int, int] = (0, 0, 0, 0),
+        padding_needed: tuple[int, int, int] = (0, 0, 0),
     ) -> SavedWeight:
-        if padding_needed != (0, 0, 0, 0):
-            pad_extra, pad_depth, pad_width, pad_height = padding_needed
-            if pad_extra == 0:
-                if pad_depth == 0:
-                    torch_metaweight = torch.nn.functional.pad(
-                        torch_metaweight,
-                        (0, pad_width, 0, pad_height),
-                        mode="constant",
-                        value=0,
-                    )
-                else:
-                    torch_metaweight = torch.nn.functional.pad(
-                        torch_metaweight,
-                        (0, pad_depth, 0, pad_width, 0, pad_height),
-                        mode="constant",
-                        value=0,
-                    )
-            else:
-                torch_metaweight = torch.nn.functional.pad(
-                    torch_metaweight,
-                    (0, pad_extra, 0, pad_depth, 0, pad_width, 0, pad_height),
-                    mode="constant",
-                    value=0,
-                )
         return shard_and_save(
             path,
             torch_metaweight.transpose(-2, -1),
@@ -444,6 +420,7 @@ class MLA1D(AbstractModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=memory_config,
+            padding_needed=padding_needed,
         )
 
     @classmethod

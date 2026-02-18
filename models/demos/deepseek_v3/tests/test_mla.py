@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
@@ -336,6 +337,9 @@ BASE_TEST_CASES = [
 # Expand ranges into individual position_ids for pytest
 EXPANDED_TEST_CASES = expand_test_cases_with_position_ids_ranges(BASE_TEST_CASES)
 EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
+optimal_topology = (
+    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+)
 
 
 @pytest.mark.parametrize(
@@ -347,7 +351,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": optimal_topology,
         }
     ],
     indirect=True,
