@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 """
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Union, Optional, List
@@ -297,7 +298,104 @@ def import_devices(cursor: sqlite3.Cursor, devices: list) -> set:
     return imported_ids
 
 
-def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0) -> dict:
+def _compute_max_size_per_bank(size, page_size, buffer_type, layout, num_cores, dev_info):
+    """Compute per-bank buffer allocation from total size and device bank count."""
+    if page_size <= 0 or size <= 0:
+        return size
+
+    total_pages = size // page_size
+
+    if layout == "INTERLEAVED":
+        num_banks = dev_info.get("num_dram_channels", 0) if buffer_type == 0 else dev_info.get("l1_num_banks", 0)
+        if num_banks > 0:
+            pages_per_bank = math.ceil(total_pages / num_banks)
+            return pages_per_bank * page_size
+    elif num_cores > 0:
+        pages_per_core = math.ceil(total_pages / num_cores)
+        return pages_per_core * page_size
+
+    return size
+
+
+def _validate_graph_integrity(
+    operations_batch,
+    tensors_batch,
+    input_tensors_batch,
+    output_tensors_batch,
+    operation_arguments_batch,
+    device_tensors_batch,
+    buffers_batch,
+    devices,
+) -> list:
+    """
+    Validate referential integrity of imported graph data.
+    Returns a list of warning strings for any violations found.
+    """
+    warnings = []
+
+    operation_ids = {row[0] for row in operations_batch}
+    tensor_ids = {int(row[0]) if isinstance(row[0], str) else row[0] for row in tensors_batch}
+    device_ids = {dev.get("device_id", 0) for dev in devices} if devices else set()
+
+    # input_tensors.tensor_id must reference a known tensor
+    for op_id, idx, tid in input_tensors_batch:
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if tid_int not in tensor_ids:
+            warnings.append(
+                f"input_tensors references tensor_id={tid} (operation_id={op_id}, input_index={idx}) "
+                f"which does not exist in tensors table. "
+                f"This may indicate node counters are being stored instead of real tensor_ids."
+            )
+
+    # output_tensors.tensor_id must reference a known tensor
+    for op_id, idx, tid in output_tensors_batch:
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if tid_int not in tensor_ids:
+            warnings.append(
+                f"output_tensors references tensor_id={tid} (operation_id={op_id}, output_index={idx}) "
+                f"which does not exist in tensors table."
+            )
+
+    # input/output_tensors.operation_id must reference a known operation
+    for op_id, idx, tid in input_tensors_batch:
+        if op_id not in operation_ids:
+            warnings.append(f"input_tensors references operation_id={op_id} which does not exist in operations table.")
+
+    for op_id, idx, tid in output_tensors_batch:
+        if op_id not in operation_ids:
+            warnings.append(f"output_tensors references operation_id={op_id} which does not exist in operations table.")
+
+    # operation_arguments.operation_id must reference a known operation
+    for op_id, name, val in operation_arguments_batch:
+        if op_id not in operation_ids:
+            warnings.append(
+                f"operation_arguments references operation_id={op_id} which does not exist in operations table."
+            )
+            break  # one warning is enough for args
+
+    # device_tensors.tensor_id must reference a known tensor
+    for tid, dev_id, addr in device_tensors_batch:
+        tid_int = int(tid) if isinstance(tid, str) else tid
+        if tid_int not in tensor_ids:
+            warnings.append(f"device_tensors references tensor_id={tid} which does not exist in tensors table.")
+
+    # buffers.device_id should reference a known device (if device info available)
+    if device_ids:
+        bad_device_ids = set()
+        for row in buffers_batch:
+            dev_id = row[1]
+            if dev_id not in device_ids:
+                bad_device_ids.add(dev_id)
+        for dev_id in bad_device_ids:
+            warnings.append(
+                f"buffers references device_id={dev_id} which does not exist in devices table. "
+                f"Known devices: {sorted(device_ids)}"
+            )
+
+    return warnings
+
+
+def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0, devices: list = None) -> dict:
     """
     Import graph trace into database using batch inserts for performance.
 
@@ -308,6 +406,9 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
     - Operation arguments
     - Input/output tensor relationships
     - Graph edges
+
+    Args:
+        devices: Raw device info dicts from the report, used to compute per-bank buffer sizes.
 
     Returns dict with stats about what was imported.
     """
@@ -329,6 +430,16 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
         """INSERT INTO captured_graph VALUES (?, ?)""",
         (base_operation_id, json.dumps(graph)),
     )
+
+    # Build device bank info for per-bank buffer size computation
+    device_bank_info = {}
+    if devices:
+        for dev in devices:
+            dev_id = dev.get("device_id", 0)
+            device_bank_info[dev_id] = {
+                "num_dram_channels": dev.get("num_dram_channels", 0),
+                "l1_num_banks": dev.get("l1_num_banks", 0),
+            }
 
     # Track function start nodes to pair with function end
     function_stack = []
@@ -371,8 +482,13 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
                 for idx, arg in enumerate(start_node.get("arguments", [])):
                     operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
 
-                for idx, tensor_id in enumerate(start_node.get("input_tensors", [])):
-                    input_tensors_batch.append((operation_id, idx, tensor_id))
+                for idx, node_counter in enumerate(start_node.get("input_tensors", [])):
+                    if node_counter < len(graph):
+                        tensor_node = graph[node_counter]
+                        if tensor_node.get("node_type") == "tensor":
+                            real_tensor_id = tensor_node.get("params", {}).get("tensor_id", "")
+                            if real_tensor_id:
+                                input_tensors_batch.append((operation_id, idx, int(real_tensor_id)))
 
             # Output tensor relationships from connections
             connections = node.get("connections", [])
@@ -416,11 +532,21 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
             device_id = int(params.get("device_id", 0))
             address = int(params.get("address", 0))
             size = int(params.get("size", 0))
+            page_size = int(params.get("page_size", 0))
+            num_cores = int(params.get("num_cores", 0))
             buffer_type = 1 if params.get("type") == "L1" else 0
             layout = params.get("layout", "INTERLEAVED")
             layout_int = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 1, "WIDTH_SHARDED": 2, "BLOCK_SHARDED": 3}.get(layout, 0)
 
-            buffers_batch.append((base_operation_id, device_id, address, size, buffer_type, layout_int))
+            max_size_per_bank = _compute_max_size_per_bank(
+                size,
+                page_size,
+                buffer_type,
+                layout,
+                num_cores,
+                device_bank_info.get(device_id, {}),
+            )
+            buffers_batch.append((base_operation_id, device_id, address, max_size_per_bank, buffer_type, layout_int))
 
         elif node_type == "error":
             error_type = params.get("error_type", "unknown")
@@ -469,6 +595,20 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
     if edges_batch:
         cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
 
+    # Validate referential integrity
+    warnings = _validate_graph_integrity(
+        operations_batch,
+        tensors_batch,
+        input_tensors_batch,
+        output_tensors_batch,
+        operation_arguments_batch,
+        device_tensors_batch,
+        buffers_batch,
+        devices,
+    )
+    for w in warnings:
+        print(f"WARNING [graph import]: {w}")
+
     return {
         "operations": len(operations_batch),
         "tensors": len(tensors_batch),
@@ -478,6 +618,7 @@ def import_graph(cursor: sqlite3.Cursor, graph: list, base_operation_id: int = 0
         "edges": len(edges_batch),
         "stack_traces": len(stack_traces_batch),
         "errors": len(errors_batch),
+        "warnings": warnings,
     }
 
 
@@ -594,12 +735,13 @@ def import_report(
                 print(f"Warning: {rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
                 continue
 
-            if "devices" in report:
-                device_ids = import_devices(cursor, report["devices"])
+            devices_data = report.get("devices", [])
+            if devices_data:
+                device_ids = import_devices(cursor, devices_data)
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
-                stats = import_graph(cursor, report["graph"], base_operation_id=idx * 10000)
+                stats = import_graph(cursor, report["graph"], base_operation_id=idx * 10000, devices=devices_data)
                 total_stats["operations"] += stats["operations"]
                 total_stats["tensors"] += stats["tensors"]
                 total_stats["device_tensors"] = total_stats.get("device_tensors", 0) + stats.get("device_tensors", 0)
