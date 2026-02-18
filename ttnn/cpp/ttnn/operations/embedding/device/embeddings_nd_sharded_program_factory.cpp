@@ -4,7 +4,6 @@
 
 #include "embeddings_nd_sharded_program_factory.hpp"
 
-#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_nd_sharded_kernel_args.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -90,19 +89,18 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
     // ********** Create Kernels **********
 
     const auto tile = input_is_tile_layout ? input.tensor_spec().tile() : tt::tt_metal::Tile();
-    std::vector<uint32_t> embedding_compile_time_args =
-        ttnn::kernel_utils::to_vector(ttnn::kernel::CompileTimeEmbeddingsReaderKernelArgs{
-            .input_cb_index = src1_cb_index,
-            .input_page_size = input_page_size,
-            .weight_page_size = weight_page_size,
-            .elems_per_page = index_elems_per_page,
-            .input_block_size_bytes = index_elems_per_page * input_element_size_bytes,
-            .input_buf_alignment = input.buffer()->alignment(),
-            .output_cb_index = output_cb_index,
-            .input_is_tile_layout = static_cast<uint32_t>(input_is_tile_layout),
-            .tile_width = input_is_tile_layout ? tile.get_width() : 0,
-            .face_height = input_is_tile_layout ? tile.get_face_shape()[0] : 0,
-            .face_width = input_is_tile_layout ? tile.get_face_shape()[1] : 0});
+    auto embedding_compile_time_args = std::vector<uint32_t>{
+        src1_cb_index,
+        input_page_size,
+        weight_page_size,
+        index_elems_per_page,
+        index_elems_per_page * input_element_size_bytes,
+        input.buffer()->alignment(),
+        output_cb_index,
+        static_cast<uint32_t>(input_is_tile_layout),
+        input_is_tile_layout ? tile.get_width() : 0,
+        input_is_tile_layout ? tile.get_face_shape()[0] : 0,
+        input_is_tile_layout ? tile.get_face_shape()[1] : 0};
 
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
@@ -125,11 +123,7 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     // ********** Create Writer Kernel **********
 
-    std::vector<uint32_t> writer_compile_time_args =
-        ttnn::kernel_utils::to_vector(ttnn::kernel::CompileTimeEmbeddingsWriterKernelArgs{
-            .output_cb_index = output_cb_index,
-            .weight_page_size = weight_page_size,
-            .elems_per_page = index_elems_per_page});
+    auto writer_compile_time_args = std::vector<uint32_t>{output_cb_index, weight_page_size, index_elems_per_page};
 
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
 
@@ -141,17 +135,17 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
 
     // ********** Set Runtime Arguments per core **********
 
-    auto reader_runtime_args = ttnn::kernel::EmbeddingsReaderKernelArgs{
-        .input_buffer_src_addr = input.buffer()->address(),
-        .weight_buffer_src_addr = weights.buffer()->address(),
-        .input_page_id = 0,
-        .num_of_pages = 0,
+    auto reader_runtime_args = std::vector<uint32_t>{
+        input.buffer()->address(),
+        weights.buffer()->address(),
+        0,
+        0,
     };
 
-    auto writer_runtime_args = ttnn::kernel::EmbeddingsWriterKernelArgs{
-        .output_buffer_src_addr = out_buffer->address(),
-        .input_page_id = 0,
-        .num_of_pages = 0,
+    auto writer_runtime_args = std::vector<uint32_t>{
+        out_buffer->address(),
+        0,
+        0,
     };
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
@@ -161,15 +155,13 @@ EmbeddingsNDShardedProgramFactory::cached_program_t EmbeddingsNDShardedProgramFa
         const CoreCoord& core = cores[core_id];
         uint32_t num_of_pages = core_id < g1_num_cores ? num_pages_per_core_group_1 : num_pages_per_core_group_2;
 
-        reader_runtime_args.input_page_id = input_page_id;
-        reader_runtime_args.num_of_pages = num_of_pages;
-        tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core, ttnn::kernel_utils::to_vector(reader_runtime_args));
+        reader_runtime_args[2] = input_page_id;
+        reader_runtime_args[3] = num_of_pages;
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-        writer_runtime_args.input_page_id = input_page_id;
-        writer_runtime_args.num_of_pages = num_of_pages;
-        tt::tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, ttnn::kernel_utils::to_vector(writer_runtime_args));
+        writer_runtime_args[1] = input_page_id;
+        writer_runtime_args[2] = num_of_pages;
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         input_page_id += num_of_pages;
     }
