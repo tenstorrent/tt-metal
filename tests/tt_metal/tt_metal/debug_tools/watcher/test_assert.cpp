@@ -183,8 +183,7 @@ static void RunTest(
             risc);
         std::string after_line = fmt::format(
             ". Note that file name reporting is not yet implemented, and the reported line number for the assert may "
-            "be "
-            "from a different file. Current kernel: {}.",
+            "be from a different file. Current kernel: {}.",
             kernel);
         expected = regex_escape(before_line) + "\\d+" + regex_escape(after_line);
     } else {
