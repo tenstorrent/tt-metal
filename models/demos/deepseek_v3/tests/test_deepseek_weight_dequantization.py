@@ -90,6 +90,7 @@ def test_convert_checkpoint_dequantizes_and_drops_scale_inv(tmp_path: Path):
         out_dtype=torch.bfloat16,
         keep_scale_inv=False,
         max_output_shard_size_bytes=1024 * 1024,
+        num_workers=2,
     )
 
     index = json.loads((output_dir / "model.safetensors.index.json").read_text(encoding="utf-8"))
@@ -244,4 +245,20 @@ def test_convert_checkpoint_same_input_and_output_raises(tmp_path: Path):
             out_dtype=torch.bfloat16,
             keep_scale_inv=False,
             max_output_shard_size_bytes=1024 * 1024,
+        )
+
+
+def test_convert_checkpoint_num_workers_must_be_positive(tmp_path: Path):
+    input_dir = tmp_path / "input_ckpt"
+    output_dir = tmp_path / "output_ckpt"
+    _write_tiny_checkpoint(input_dir)
+
+    with pytest.raises(ValueError, match="num_workers must be > 0"):
+        convert_checkpoint(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            out_dtype=torch.bfloat16,
+            keep_scale_inv=False,
+            max_output_shard_size_bytes=1024 * 1024,
+            num_workers=0,
         )

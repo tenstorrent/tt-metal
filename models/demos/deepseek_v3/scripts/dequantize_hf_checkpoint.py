@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import shutil
 from collections import defaultdict
@@ -92,6 +93,12 @@ def parse_args() -> argparse.Namespace:
             "Lower values reduce peak host memory usage during conversion."
         ),
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel source-shard conversion workers. Use 1 for sequential mode.",
+    )
     return parser.parse_args()
 
 
@@ -111,6 +118,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Provide exactly one of --repo-id or --input-dir.")
     if args.max_output_shard_size_mb <= 0:
         raise ValueError("--max-output-shard-size-mb must be > 0.")
+    if args.num_workers <= 0:
+        raise ValueError("--num-workers must be > 0.")
 
 
 def resolve_input_dir(args: argparse.Namespace) -> Path:
@@ -315,9 +324,10 @@ class BufferedShardWriter:
     once a byte budget is reached.
     """
 
-    def __init__(self, output_dir: Path, max_shard_size_bytes: int):
+    def __init__(self, output_dir: Path, max_shard_size_bytes: int, temp_prefix: str = ".tmp-model"):
         self.output_dir = output_dir
         self.max_shard_size_bytes = max_shard_size_bytes
+        self.temp_prefix = temp_prefix
         self._buffer: dict[str, torch.Tensor] = {}
         self._buffer_bytes = 0
         self._tmp_shard_names: list[str] = []
@@ -347,7 +357,7 @@ class BufferedShardWriter:
         if not self._buffer:
             return
 
-        tmp_name = f".tmp-model-{self._next_tmp_idx:05d}.safetensors"
+        tmp_name = f"{self.temp_prefix}-{self._next_tmp_idx:05d}.safetensors"
         flushed_tensors = len(self._buffer)
         flushed_bytes = self._buffer_bytes
         save_file(self._buffer, str(self.output_dir / tmp_name))
@@ -360,23 +370,106 @@ class BufferedShardWriter:
             f"Flushed temporary output shard {tmp_name}: " f"{flushed_tensors} tensors, {format_bytes(flushed_bytes)}"
         )
 
-    def finalize(self) -> dict[str, str]:
+    def collect_tmp_entries(self) -> list[tuple[str, list[str]]]:
         self._flush()
+        return list(zip(self._tmp_shard_names, self._tmp_shard_keys))
 
-        num_shards = len(self._tmp_shard_names)
-        if num_shards == 0:
-            logger.info("No output tensors were produced.")
-            return {}
+    def finalize(self) -> dict[str, str]:
+        return finalize_output_shards(self.output_dir, self.collect_tmp_entries())
 
-        output_weight_map: dict[str, str] = {}
-        for idx, (tmp_name, keys) in enumerate(zip(self._tmp_shard_names, self._tmp_shard_keys), start=1):
-            final_name = f"model-{idx:05d}-of-{num_shards:05d}.safetensors"
-            (self.output_dir / tmp_name).replace(self.output_dir / final_name)
-            logger.info(f"Finalized output shard: {final_name} ({len(keys)} tensors)")
-            for key in keys:
-                output_weight_map[key] = final_name
 
-        return output_weight_map
+def finalize_output_shards(output_dir: Path, tmp_entries: list[tuple[str, list[str]]]) -> dict[str, str]:
+    num_shards = len(tmp_entries)
+    if num_shards == 0:
+        logger.info("No output tensors were produced.")
+        return {}
+
+    output_weight_map: dict[str, str] = {}
+    for idx, (tmp_name, keys) in enumerate(tmp_entries, start=1):
+        final_name = f"model-{idx:05d}-of-{num_shards:05d}.safetensors"
+        (output_dir / tmp_name).replace(output_dir / final_name)
+        logger.info(f"Finalized output shard: {final_name} ({len(keys)} tensors)")
+        for key in keys:
+            output_weight_map[key] = final_name
+    return output_weight_map
+
+
+def process_source_shard(
+    shard_idx: int,
+    shard_name: str,
+    keys: list[str],
+    input_dir: Path,
+    output_dir: Path,
+    weight_map: dict[str, str],
+    block_shape: tuple[int, ...],
+    out_dtype: torch.dtype,
+    keep_scale_inv: bool,
+    max_output_shard_size_bytes: int,
+) -> dict[str, Any]:
+    logger.info(f"[worker {shard_idx}] start {shard_name} ({len(keys)} tensor entries)")
+    reader = ShardTensorReader(input_dir, weight_map)
+    writer = BufferedShardWriter(
+        output_dir=output_dir,
+        max_shard_size_bytes=max_output_shard_size_bytes,
+        temp_prefix=f".tmp-s{shard_idx:05d}",
+    )
+
+    shard_seen = 0
+    shard_dequantized = 0
+    shard_scales_kept = 0
+    shard_passthrough = 0
+    try:
+        for key in keys:
+            shard_seen += 1
+            if key.endswith("_scale_inv"):
+                if keep_scale_inv:
+                    scale_tensor = reader.get_tensor(key)
+                    writer.add_tensor(key, scale_tensor)
+                    shard_scales_kept += 1
+                continue
+
+            tensor = reader.get_tensor(key)
+            scale_key = f"{key}_scale_inv"
+
+            if scale_key in weight_map:
+                if tensor.dtype not in FP8_DTYPES:
+                    raise ValueError(
+                        f"Tensor '{key}' has a scale tensor '{scale_key}' but dtype is {tensor.dtype}; "
+                        "expected FP8 payload for dequantization."
+                    )
+                inv_scale = reader.get_tensor(scale_key)
+                if not inv_scale.dtype.is_floating_point:
+                    raise ValueError(f"Scale tensor '{scale_key}' must be floating point, got {inv_scale.dtype}")
+                tensor_out = dequantize_tensor(tensor, inv_scale, block_shape).to(out_dtype)
+                shard_dequantized += 1
+            else:
+                is_fp8 = tensor.dtype in FP8_DTYPES
+                if is_fp8:
+                    logger.error(f"Missing inverse-scale for FP8 tensor: {key} (expected {scale_key})")
+                    raise KeyError(f"Missing inverse-scale tensor '{scale_key}' for float8 tensor '{key}'.")
+                tensor_out = tensor
+                shard_passthrough += 1
+
+            writer.add_tensor(key, tensor_out)
+    finally:
+        reader.close()
+
+    tmp_entries = writer.collect_tmp_entries()
+    logger.info(
+        f"[worker {shard_idx}] completed {shard_name}: seen={shard_seen}, "
+        f"dequantized={shard_dequantized}, passthrough={shard_passthrough}, "
+        f"scales_kept={shard_scales_kept}, tmp_shards={len(tmp_entries)}"
+    )
+    return {
+        "shard_idx": shard_idx,
+        "shard_name": shard_name,
+        "tmp_entries": tmp_entries,
+        "total_size_bytes": writer.total_size_bytes,
+        "seen": shard_seen,
+        "dequantized": shard_dequantized,
+        "passthrough": shard_passthrough,
+        "scales_kept": shard_scales_kept,
+    }
 
 
 def convert_checkpoint(
@@ -385,7 +478,10 @@ def convert_checkpoint(
     out_dtype: torch.dtype,
     keep_scale_inv: bool,
     max_output_shard_size_bytes: int,
+    num_workers: int = 1,
 ) -> None:
+    if num_workers <= 0:
+        raise ValueError("num_workers must be > 0.")
     output_dir.mkdir(parents=True, exist_ok=True)
     validate_input_output_paths(input_dir, output_dir)
 
@@ -397,70 +493,65 @@ def convert_checkpoint(
     keys_by_file = build_keys_by_file(weight_map)
     preflight_validate_checkpoint_structure(input_dir, weight_map, keys_by_file)
     logger.info(f"Discovered {len(keys_by_file)} source shard files")
+    logger.info(f"Conversion worker mode: num_workers={num_workers}")
+    shard_names = sorted(keys_by_file.keys())
+    work_items = [(idx, name, keys_by_file[name]) for idx, name in enumerate(shard_names, start=1)]
+    logger.info(f"Number of work items: {len(work_items)}")
 
-    reader = ShardTensorReader(input_dir, weight_map)
-    writer = BufferedShardWriter(output_dir=output_dir, max_shard_size_bytes=max_output_shard_size_bytes)
+    results: list[dict[str, Any]] = []
+    if num_workers == 1:
+        for idx, name, keys in work_items:
+            results.append(
+                process_source_shard(
+                    shard_idx=idx,
+                    shard_name=name,
+                    keys=keys,
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    weight_map=weight_map,
+                    block_shape=block_shape,
+                    out_dtype=out_dtype,
+                    keep_scale_inv=keep_scale_inv,
+                    max_output_shard_size_bytes=max_output_shard_size_bytes,
+                )
+            )
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [
+                executor.submit(
+                    process_source_shard,
+                    idx,
+                    name,
+                    keys,
+                    input_dir,
+                    output_dir,
+                    weight_map,
+                    block_shape,
+                    out_dtype,
+                    keep_scale_inv,
+                    max_output_shard_size_bytes,
+                )
+                for idx, name, keys in work_items
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+
+    results.sort(key=lambda r: r["shard_idx"])
+    tmp_entries: list[tuple[str, list[str]]] = []
     total_seen = 0
     total_dequantized = 0
     total_scales_kept = 0
     total_passthrough = 0
+    output_total_size = 0
+    for result in results:
+        tmp_entries.extend(result["tmp_entries"])
+        total_seen += result["seen"]
+        total_dequantized += result["dequantized"]
+        total_passthrough += result["passthrough"]
+        total_scales_kept += result["scales_kept"]
+        output_total_size += result["total_size_bytes"]
 
-    try:
-        shard_names = sorted(keys_by_file.keys())
-        for shard_idx, shard_name in enumerate(shard_names, start=1):
-            keys = keys_by_file[shard_name]
-            logger.info(f"[{shard_idx}/{len(shard_names)}] Processing {shard_name} ({len(keys)} tensors)")
-            shard_seen = 0
-            shard_dequantized = 0
-            shard_scales_kept = 0
-            shard_passthrough = 0
-
-            for key in keys:
-                shard_seen += 1
-                total_seen += 1
-                if key.endswith("_scale_inv"):
-                    if keep_scale_inv:
-                        scale_tensor = reader.get_tensor(key)
-                        writer.add_tensor(key, scale_tensor)
-                        shard_scales_kept += 1
-                        total_scales_kept += 1
-                    continue
-
-                tensor = reader.get_tensor(key)
-                scale_key = f"{key}_scale_inv"
-
-                if scale_key in weight_map:
-                    if tensor.dtype not in FP8_DTYPES:
-                        raise ValueError(
-                            f"Tensor '{key}' has a scale tensor '{scale_key}' but dtype is {tensor.dtype}; "
-                            "expected FP8 payload for dequantization."
-                        )
-                    inv_scale = reader.get_tensor(scale_key)
-                    if not inv_scale.dtype.is_floating_point:
-                        raise ValueError(f"Scale tensor '{scale_key}' must be floating point, got {inv_scale.dtype}")
-                    tensor_out = dequantize_tensor(tensor, inv_scale, block_shape).to(out_dtype)
-                    shard_dequantized += 1
-                    total_dequantized += 1
-                else:
-                    is_fp8 = tensor.dtype in FP8_DTYPES
-                    if is_fp8:
-                        logger.error(f"Missing inverse-scale for FP8 tensor: {key} (expected {scale_key})")
-                        raise KeyError(f"Missing inverse-scale tensor '{scale_key}' for float8 tensor '{key}'.")
-                    tensor_out = tensor
-                    shard_passthrough += 1
-                    total_passthrough += 1
-
-                writer.add_tensor(key, tensor_out)
-            logger.info(
-                f"Completed {shard_name}: seen={shard_seen}, "
-                f"dequantized={shard_dequantized}, passthrough={shard_passthrough}, "
-                f"scales_kept={shard_scales_kept}"
-            )
-    finally:
-        reader.close()
-
-    output_weight_map = writer.finalize()
-    output_total_size = writer.total_size_bytes
+    output_weight_map = finalize_output_shards(output_dir, tmp_entries)
 
     output_index = dict(index_obj)
     output_index["weight_map"] = output_weight_map
@@ -496,7 +587,8 @@ def main() -> None:
     logger.info(
         "Starting checkpoint conversion with options: "
         f"dtype={args.dtype}, keep_scale_inv={args.keep_scale_inv}, "
-        f"max_output_shard_size_mb={args.max_output_shard_size_mb}"
+        f"max_output_shard_size_mb={args.max_output_shard_size_mb}, "
+        f"num_workers={args.num_workers}"
     )
 
     convert_checkpoint(
@@ -505,6 +597,7 @@ def main() -> None:
         out_dtype=out_dtype,
         keep_scale_inv=args.keep_scale_inv,
         max_output_shard_size_bytes=args.max_output_shard_size_mb * 1024 * 1024,
+        num_workers=args.num_workers,
     )
 
 

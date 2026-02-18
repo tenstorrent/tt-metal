@@ -181,6 +181,7 @@ Implemented arguments:
 - `--keep-scale-inv`: retain `*_scale_inv` keys.
 - `--overwrite`: allow writing into non-empty output directory.
 - `--max-output-shard-size-mb`: output shard flush budget (default `5120` = 5 GiB).
+- `--num-workers`: number of parallel source-shard conversion workers (default `1`).
 
 Behavior rules:
 
@@ -229,7 +230,8 @@ Preflight:
 ## Time
 
 - Dominated by tensor IO and dequantization compute.
-- Parallelism should be conservative in v1 to avoid memory spikes.
+- Worker-level source-shard parallelism is available via `--num-workers`.
+- Keep `--num-workers` conservative relative to host RAM and storage bandwidth.
 
 ## Validation Plan
 
