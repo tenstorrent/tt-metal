@@ -75,12 +75,6 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
-void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
-    if (dir_path.compare(git_hash_path) != 0) {
-        std::filesystem::remove_all(dir_path);
-    }
-}
-
 }  // namespace
 
 std::string get_default_root_path() {
@@ -117,7 +111,9 @@ void JitBuildEnv::init(
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
         std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
+            if (dir_entry.path().compare(git_hash_path) != 0) {
+                std::filesystem::remove_all(dir_entry.path());
+            }
         });
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
