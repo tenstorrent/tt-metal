@@ -103,6 +103,7 @@ class MaskFormerTransformerDecoder:
         """Run a DETR-style decoder stack using TTNN ops."""
 
         _ = output_attentions  # attention tensors are not collected in this bring-up path
+        debug = os.environ.get("MASKFORMER_TT_DEBUG_DECODER", "0").strip() == "1"
         if self.device is None or ttnn is None:
             require_ttnn("run MaskFormer transformer decoder on device")
         if torch is None:
@@ -111,6 +112,15 @@ class MaskFormerTransformerDecoder:
             raise RuntimeError("Transformer decoder weights are not loaded.")
 
         dtype = self.dtype or DEFAULT_TT_DTYPE
+        if debug:
+            try:
+                feat_shape = tuple(int(x) for x in image_features.shape) if hasattr(image_features, "shape") else None
+            except Exception:
+                feat_shape = None
+            print(
+                f"[maskformer][decoder] forward_tt begin return_tt_tensor={return_tt_tensor} feat_shape={feat_shape}",
+                flush=True,
+            )
 
         # ------------------------------------------------------------------
         # 1) Input projection to hidden_dim (Conv1x1) and flatten to sequence
@@ -134,6 +144,8 @@ class MaskFormerTransformerDecoder:
         B = int(tt_in.shape[0])
         H = int(tt_in.shape[1])
         W = int(tt_in.shape[2])
+        if debug:
+            print(f"[maskformer][decoder] input_proj in BHW=({B},{H},{W}) C_in={int(tt_in.shape[-1])}", flush=True)
 
         tt_proj, [_out_h, _out_w], [self._input_proj_w, self._input_proj_b] = ttnn.conv2d(
             input_tensor=tt_in,
@@ -157,6 +169,8 @@ class MaskFormerTransformerDecoder:
 
         mem_seq = ttnn.reshape(tt_proj, (B, H * W, int(self.config.hidden_dim)))
         mem_seq = ttnn.to_layout(mem_seq, ttnn.TILE_LAYOUT)
+        if debug:
+            print(f"[maskformer][decoder] input_proj out seq_k={int(mem_seq.shape[1])} hidden_dim={int(mem_seq.shape[2])}", flush=True)
 
         # ------------------------------------------------------------------
         # 2) Queries (learned) + initial hidden state (zeros)
@@ -192,6 +206,14 @@ class MaskFormerTransformerDecoder:
         pos_cache_key = (B, H, W, mem_key, dtype_key)
         if not cache_disabled and pos_cache_key in self._tt_pos_cache:
             tt_mem_pos = self._tt_pos_cache[pos_cache_key]
+            # Defensive: avoid reusing the same cached TT tensors across forwards. Some TTNN builds have
+            # shown hangs when cached tensors are fed back into the decoder repeatedly.
+            try:
+                tt_mem_pos = ttnn.clone(tt_mem_pos, memory_config=seq_memory_cfg)
+            except Exception:
+                pass
+            if debug:
+                print("[maskformer][decoder] pos_cache hit", flush=True)
         else:
             pos_torch = self._build_sine_pos_embed(B, H, W, int(self.config.hidden_dim), dtype=torch.float32)
             tt_mem_pos = ttnn.from_torch(
@@ -203,10 +225,19 @@ class MaskFormerTransformerDecoder:
             )
             if not cache_disabled:
                 self._tt_pos_cache[pos_cache_key] = tt_mem_pos
+            if debug:
+                print("[maskformer][decoder] pos_cache miss -> built", flush=True)
 
         query_cache_key = (B, mem_key, dtype_key)
         if not cache_disabled and query_cache_key in self._tt_query_cache:
             tt_hidden, tt_qpos = self._tt_query_cache[query_cache_key]
+            try:
+                tt_hidden = ttnn.clone(tt_hidden, memory_config=seq_memory_cfg)
+                tt_qpos = ttnn.clone(tt_qpos, memory_config=seq_memory_cfg)
+            except Exception:
+                pass
+            if debug:
+                print("[maskformer][decoder] query_cache hit", flush=True)
         else:
             q_embed = self._queries_embed.detach().contiguous()
             q_embed = q_embed.unsqueeze(0).repeat(B, 1, 1).contiguous()  # [B, Q, C]
@@ -215,8 +246,12 @@ class MaskFormerTransformerDecoder:
             tt_qpos = to_tt_sequence(q_embed)
             if not cache_disabled:
                 self._tt_query_cache[query_cache_key] = (tt_hidden, tt_qpos)
+            if debug:
+                print(f"[maskformer][decoder] query_cache miss -> built Q={int(q_embed.shape[1])}", flush=True)
 
         tt_mem = ttnn.to_memory_config(mem_seq, seq_memory_cfg)
+        if debug:
+            print(f"[maskformer][decoder] mem_seq to {seq_memory_cfg}", flush=True)
 
         # ------------------------------------------------------------------
         # 3) Decoder stack
@@ -324,20 +359,46 @@ class MaskFormerTransformerDecoder:
                     pass
             return _merge_heads(tt_x)
 
-        def _manual_attention(attn_layer, q_in, k_in, v_in):
+        def _manual_attention(attn_layer, q_in, k_in, v_in, *, tag: str):
+            if debug:
+                print(f"[maskformer][decoder] {tag} proj_q", flush=True)
             q = _project(q_in, attn_layer["self_q_w"], attn_layer["self_q_b"], program=prog_cfg.matmul_qkv)
+            if debug:
+                print(f"[maskformer][decoder] {tag} proj_k", flush=True)
             k = _project(k_in, attn_layer["self_k_w"], attn_layer["self_k_b"], program=prog_cfg.matmul_qkv)
+            if debug:
+                print(f"[maskformer][decoder] {tag} proj_v", flush=True)
+            # Keep V input memory config aligned with Q/K to avoid matmul kernel selection corner-cases
+            # on repeated forwards.
+            try:
+                if hasattr(ttnn, "get_memory_config") and hasattr(ttnn, "to_memory_config"):
+                    q_mem = ttnn.get_memory_config(q_in)
+                    v_mem = ttnn.get_memory_config(v_in)
+                    if v_mem != q_mem:
+                        v_in = ttnn.to_memory_config(v_in, q_mem)
+            except Exception:
+                pass
             v = _project(v_in, attn_layer["self_v_w"], attn_layer["self_v_b"], program=prog_cfg.matmul_qkv)
+            if debug:
+                print(f"[maskformer][decoder] {tag} split_heads", flush=True)
             q = _split_heads(q)
             k = _split_heads(k)
             v = _split_heads(v)
             k_t = ttnn.permute(k, (0, 1, 3, 2))
+            if debug:
+                print(f"[maskformer][decoder] {tag} scores", flush=True)
             scores = ttnn.matmul(q, k_t, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs)
+            if debug:
+                print(f"[maskformer][decoder] {tag} softmax", flush=True)
             attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+            if debug:
+                print(f"[maskformer][decoder] {tag} ctx", flush=True)
             ctx = ttnn.matmul(attn, v, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
             return _merge_heads(ctx)
 
         for layer_idx in range(self.config.num_layers):
+            if debug:
+                print(f"[maskformer][decoder] layer {layer_idx} begin", flush=True)
             layer = self._tt_params["layers"][layer_idx]
 
             # Self-attention: Q,K from (hidden + qpos), V from hidden
@@ -361,7 +422,9 @@ class MaskFormerTransformerDecoder:
                 except Exception:
                     ctx = None
             if ctx is None:
-                ctx = _manual_attention(layer, qkv_in, qkv_in, tt_hidden)
+                ctx = _manual_attention(layer, qkv_in, qkv_in, tt_hidden, tag=f"layer{layer_idx}.self_attn")
+            if debug:
+                print(f"[maskformer][decoder] layer {layer_idx} self_attn done", flush=True)
             sa_out = _project(ctx, layer["self_out_w"], layer.get("self_out_b"), program=prog_cfg.matmul_out)
             sa_res = ttnn.add(tt_hidden, sa_out)
             tt_hidden = ttnn.layer_norm(sa_res, weight=layer["ln1_w"], bias=layer["ln1_b"], epsilon=1e-5)
@@ -399,7 +462,10 @@ class MaskFormerTransformerDecoder:
                     q_in,
                     k_in,
                     v_in,
+                    tag=f"layer{layer_idx}.cross_attn",
                 )
+            if debug:
+                print(f"[maskformer][decoder] layer {layer_idx} cross_attn done", flush=True)
             ca_out = _project(ctx, layer["cross_out_w"], layer.get("cross_out_b"), program=prog_cfg.matmul_out)
             ca_res = ttnn.add(tt_hidden, ca_out)
             tt_hidden = ttnn.layer_norm(ca_res, weight=layer["ln2_w"], bias=layer["ln2_b"], epsilon=1e-5)
@@ -410,6 +476,8 @@ class MaskFormerTransformerDecoder:
             mlp_2 = _project(mlp_hidden, layer["mlp_w2"], layer.get("mlp_b2"))
             mlp_res = ttnn.add(tt_hidden, mlp_2)
             tt_hidden = ttnn.layer_norm(mlp_res, weight=layer["ln3_w"], bias=layer["ln3_b"], epsilon=1e-5)
+            if debug:
+                print(f"[maskformer][decoder] layer {layer_idx} ffn done", flush=True)
 
             if output_hidden_states:
                 hidden_list.append(self._tt_to_torch(tt_hidden))
@@ -439,19 +507,16 @@ class MaskFormerTransformerDecoder:
         b = state["input_projection.bias"]
         if not isinstance(w, torch.Tensor) or not isinstance(b, torch.Tensor):
             raise TypeError("Expected torch tensors for input_projection.*")
+        # Keep raw conv weights on host; conv2d will prepare and cache device weights on first use.
         self._input_proj_w = ttnn.from_torch(
             w.detach().contiguous(),
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=mem_cfg,
         )
         self._input_proj_b = ttnn.from_torch(
             b.detach().contiguous().view(1, 1, 1, -1),
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=mem_cfg,
         )
 
         # Queries embedder
@@ -481,6 +546,9 @@ class MaskFormerTransformerDecoder:
             # Self-attention
             sa_q_w = state[f"{prefix}.self_attn.q_proj.weight"].detach().contiguous() * scale
             sa_q_b = _maybe_tensor(state.get(f"{prefix}.self_attn.q_proj.bias"))
+            if sa_q_b is not None:
+                # HF reference applies scaling after projection: (W x + b) * scale
+                sa_q_b = sa_q_b.detach().contiguous() * scale
             sa_k_w = state[f"{prefix}.self_attn.k_proj.weight"]
             sa_k_b = _maybe_tensor(state.get(f"{prefix}.self_attn.k_proj.bias"))
             sa_v_w = state[f"{prefix}.self_attn.v_proj.weight"]
@@ -509,6 +577,8 @@ class MaskFormerTransformerDecoder:
             # Cross-attention
             ca_q_w = state[f"{prefix}.encoder_attn.q_proj.weight"].detach().contiguous() * scale
             ca_q_b = _maybe_tensor(state.get(f"{prefix}.encoder_attn.q_proj.bias"))
+            if ca_q_b is not None:
+                ca_q_b = ca_q_b.detach().contiguous() * scale
             ca_k_w = state[f"{prefix}.encoder_attn.k_proj.weight"]
             ca_k_b = _maybe_tensor(state.get(f"{prefix}.encoder_attn.k_proj.bias"))
             ca_v_w = state[f"{prefix}.encoder_attn.v_proj.weight"]
