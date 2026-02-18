@@ -58,6 +58,58 @@ from loguru import logger
 import pytest
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
+from tracy.process_model_log import (
+    get_latest_ops_log_filename,
+    run_device_profiler,
+)
+
+
+def post_process_ops_log(
+    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
+):
+    """Process the ops log CSV and extract performance data."""
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    import pandas as pd
+
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    results = {}
+    if float_columns:
+        assert (
+            type(float_columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(float_columns)} was provided"
+        for col in float_columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            results[col] = df_filtered[col]
+    else:
+        results = df
+    return results
+
+
+from tracy.process_model_log import (
+    get_latest_ops_log_filename,
+    run_device_profiler,
+)
+
 
 def fa_rand(*shape):
     """
@@ -72,6 +124,113 @@ def fa_rand(*shape):
 def is_watcher_enabled():
     """Check if TT-Metal watcher debugging is enabled."""
     return os.environ.get("TT_METAL_WATCHER") is not None
+
+
+def post_process_ops_log(
+    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
+):
+    """Process the ops log CSV and extract performance data."""
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    import pandas as pd
+
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    results = {}
+    if float_columns:
+        assert (
+            type(float_columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(float_columns)} was provided"
+        for col in float_columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            results[col] = df_filtered[col]
+    else:
+        results = df
+    return results
+
+
+def compute_ring_joint_cores_used(seqlen, q_chunk_size, compute_cores, num_heads, ring_size):
+    """
+    Compute number of cores actually used for ring joint attention based on parallelization scheme.
+
+    Args:
+        seqlen: Total sequence length (across all devices in ring)
+        q_chunk_size: Query chunk size
+        compute_cores: Number of compute cores available (excluding CCL cores)
+        num_heads: Number of attention heads
+        ring_size: Number of devices in the ring
+
+    Returns:
+        cores_used: Number of compute cores actually used
+    """
+    import math
+
+    B = 1  # batch size
+    local_seq_len = seqlen // ring_size  # Local sequence per device
+    q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
+
+    # Ring joint attention parallelization hierarchy:
+    # 1. batch_parallel_factor = min(B, compute_cores)
+    # 2. nh_parallel_factor = min(compute_cores / batch_parallel_factor, num_heads)
+    # 3. q_parallel_factor = min(compute_cores / (batch * nh), q_num_chunks)
+
+    batch_parallel = min(B, compute_cores)
+    nh_parallel = min(compute_cores // batch_parallel, num_heads)
+    q_parallel = min(compute_cores // (batch_parallel * nh_parallel), q_num_chunks)
+
+    cores_used = batch_parallel * nh_parallel * q_parallel
+    return cores_used
+
+
+def compute_ring_joint_utilization(local_seqlen, total_seqlen, head_dim, num_heads_per_device, duration_ns, core_count):
+    """
+    Compute math utilization for ring joint attention.
+
+    Args:
+        local_seqlen: Local sequence length per device (what each device processes)
+        total_seqlen: Total sequence length across all devices (for K/V attention)
+        head_dim: Head dimension
+        num_heads_per_device: Number of attention heads per device
+        duration_ns: Measured kernel duration in nanoseconds
+        core_count: Number of compute cores used (excluding CCL cores)
+
+    Returns:
+        Utilization as a percentage (0-100)
+    """
+    # MM FLOPs for ring joint attention: Each device processes local_seqlen Q attending to total_seqlen K/V
+    # Formula: 4 * (Q_local * K_total * head_dim * heads_per_device)
+    mm_flops = 4 * local_seqlen * total_seqlen * head_dim * num_heads_per_device
+
+    # Convert nanoseconds to cycles (clock is 1.35 GHz = 1.35 cycles per ns)
+    cycles = duration_ns * 1.35
+
+    # Each compute core can perform 2048 MM flops per cycle
+    theoretical_flops = core_count * cycles * 2048
+
+    # Utilization percentage
+    utilization = (mm_flops / theoretical_flops) * 100
+
+    # breakpoint()
+
+    return utilization
 
 
 def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, num_devices):
@@ -116,6 +275,28 @@ def detect_available_devices():
         return 0
 
 
+def detect_devices_without_opening():
+    """
+    Detect the number of available TT devices WITHOUT opening them.
+    Uses /dev/tenstorrent/* device files to avoid holding device locks.
+    This is required for performance tests that use run_device_profiler().
+    """
+    import glob
+
+    try:
+        # Count /dev/tenstorrent/* device files (e.g., /dev/tenstorrent/0, /dev/tenstorrent/1, etc.)
+        device_files = glob.glob("/dev/tenstorrent/*")
+        device_count = len(device_files)
+        if device_count > 0:
+            return device_count
+        else:
+            logger.warning("No /dev/tenstorrent/* devices found, defaulting to 4")
+            return 4  # Default for development machine
+    except Exception as e:
+        logger.error(f"Failed to detect devices: {e}")
+        return 4  # Default fallback
+
+
 def calculate_mesh_config(num_devices):
     """
     Calculate mesh configuration based on available devices.
@@ -149,8 +330,11 @@ def generate_input_shapes():
     - Sequence length per device: 9472 or 2368
     - Heads per device: 10 (computation per device)
     - Total heads = 10 × tp_size (devices across TP share same heads)
+
+    NOTE: Uses detect_devices_without_opening() to avoid holding device locks
+    during pytest collection, which would block subprocess profiling.
     """
-    num_devices = detect_available_devices()
+    num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
     # Calculate total shapes based on per-device requirements
@@ -285,18 +469,14 @@ def run_ring_joint_sdpa(
             mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
             logger.info(f"Mesh device opened with shape {mesh_shape}")
 
-            # Auto-detect num_links based on hardware and column allocation capacity
+            # Always use num_links = 2 (fixed configuration)
+            num_links = 2
             full_compute_grid = mesh_device.compute_with_storage_grid_size()
             max_possible_links = full_compute_grid.y // 2  # Each link uses 2 cores, using full column height
 
-            if arch_type.startswith("galaxy") and num_devices == 32:
-                # Galaxy (32 devices): can use more links with column allocation
-                num_links = min(4, max_possible_links)  # Use up to 4 links or column height limit
-            else:
-                # QuietBox and smaller systems: use up to 2 links with column allocation
-                num_links = min(2, max_possible_links)  # Can use 2 links now with column allocation
-
-            logger.info(f"CCL links: {num_links} (max possible: {max_possible_links} based on column height)")
+            logger.info(
+                f"CCL links: {num_links} (FIXED TO 2, max possible: {max_possible_links} based on column height)"
+            )
 
     except Exception as e:
         logger.warning(f"Mesh device opening failed: {e}, falling back to single device")
@@ -305,7 +485,7 @@ def run_ring_joint_sdpa(
         tp_size = 1
         ring_size = 1
         arch_type = "single_device_fallback"
-        num_links = 1  # Single device fallback
+        num_links = 2  # Fixed to 2 even for single device fallback
 
     try:
         # Validate constraints for ring joint attention
@@ -753,3 +933,267 @@ def test_ring_joint_attention_sdpa_determinism(b, nh, s, d, q_chunk_size, k_chun
     """
     # Run single iteration test
     run_ring_joint_sdpa(b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
+
+
+# === TEST 4: PERFORMANCE TABLE GENERATOR ===
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    INPUT_SHAPES,
+    ids=INPUT_IDS,
+)
+def test_ring_joint_attention_create_perf_table(b, nh, s, d):
+    """
+    Sweep chunk sizes for ring joint attention SDPA and print a performance table.
+    Shows the best chunk size configurations ranked by kernel duration.
+
+    RING JOINT ATTENTION SPECIFIC CONSIDERATIONS:
+    - CCL cores reserved in last column: reduces available compute cores
+    - Multi-device coordination overhead: affects overall performance
+    - Ring size adaptation: performance scales with number of devices
+    - Joint tensors: dummy/empty tensors add minimal overhead (wan2.2 compatible)
+
+    CORE ALLOCATION STRATEGY (Example: 11x10 = 110 total cores):
+    - Last column (column 10): Reserved for CCL operations (10 cores)
+    - Compute columns (0-9): Available for SDPA computation (100 cores)
+    - Total usable compute cores: 100 (vs 110 for regular SDPA)
+
+    PERFORMANCE METRICS:
+    - Duration: Kernel execution time including CCL coordination
+    - Compute Core Usage: Excluding CCL-reserved cores
+    - CCL Overhead: Additional coordination time vs single-device SDPA
+    - Ring Efficiency: How well the workload scales across devices
+    """
+    # Auto-detect devices WITHOUT opening them (to avoid device lock conflicts with subprocess)
+    # NOTE: Uses subprocess detection to avoid TLB resource contention with run_device_profiler()
+    num_devices = detect_devices_without_opening()
+    sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
+    ring_size = sp_size
+
+    if ring_size < 2:
+        pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
+
+    # Estimate compute grid (cannot query device due to TLB conflicts with subprocess tests)
+    # Hardcoded for Blackhole: 11x10 grid with CCL in last column
+    if arch_type.startswith("galaxy"):
+        # Galaxy: 4x8 mesh, but each ring is still 1x8 for CCL purposes
+        full_grid_cols = 11  # Per-device grid
+        full_grid_rows = 10
+    else:
+        # Single ring: assume Blackhole grid
+        full_grid_cols = 11
+        full_grid_rows = 10
+
+    # CCL core allocation: last column reserved for CCL
+    ccl_column = full_grid_cols - 1  # Column 10 for CCL
+    compute_cols = ccl_column  # Columns 0-9 for compute
+    total_compute_cores = compute_cols * full_grid_rows  # 10 * 10 = 100 cores
+    ccl_cores = full_grid_rows  # Full column height for CCL
+    total_cores = full_grid_cols * full_grid_rows  # 110 total cores
+
+    logger.info(f"Ring Joint Attention Performance Analysis:")
+    logger.info(f"  Architecture: {arch_type}")
+    logger.info(f"  Ring size: {ring_size} devices")
+    logger.info(f"  Per-device grid: {full_grid_cols}x{full_grid_rows} = {total_cores} total cores")
+    logger.info(f"  Compute cores: columns 0-{compute_cols-1} = {total_compute_cores} cores")
+    logger.info(f"  CCL cores: column {ccl_column} = {ccl_cores} cores")
+    logger.info(f"  Local sequence per device: {s // ring_size}")
+
+    subdir = "ttnn_ring_joint_sdpa_performance"
+    perf_results = []
+
+    # Pre-calculate CCL overhead metrics for error handler
+    ccl_overhead_pct = (ccl_cores * 100.0) / total_cores  # Percentage of cores used for CCL
+
+    for q_chunk_size, k_chunk_size in product(Q_CHUNK_SIZES, K_CHUNK_SIZES):
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+        cols = ["ATTRIBUTES"]
+
+        # Build the test command for this specific configuration
+        test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
+        shape_id = INPUT_IDS[INPUT_SHAPES.index([b, nh, s, d])]
+        command = (
+            f"pytest tests/tt_eager/python_api_testing/unit_testing/"
+            f"test_ring_joint_attention_scaled_dot_product_attention_sprint.py::"
+            f"test_ring_joint_attention_sdpa_sweep_perf_impl"
+            f"[{shape_id}-{test_id}]"
+        )
+
+        try:
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+            r = post_process_ops_log(
+                subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+            )
+
+            # Extract performance metrics
+            measured_core_count = int(r["CORE COUNT"][0]) if len(r["CORE COUNT"]) > 0 else 0
+            duration_ns = (
+                int(r["DEVICE KERNEL DURATION [ns]"].min()) if len(r["DEVICE KERNEL DURATION [ns]"]) > 0 else 0
+            )
+
+            # Compute parallelization factors for ring joint attention
+            local_seq_len = s // ring_size  # Local sequence per device
+
+            B = 1  # batch size
+            batch_parallel = min(B, total_compute_cores)
+            nh_parallel = min(total_compute_cores // batch_parallel, nh)
+            max_q_parallel = total_compute_cores // (batch_parallel * nh_parallel)
+
+            # Compute cores actually used based on ring joint attention parallelization
+            cores_used = compute_ring_joint_cores_used(s, q_chunk_size, total_compute_cores, nh, ring_size)
+            cores_idle = total_compute_cores - cores_used  # Idle compute cores
+            compute_util_pct = (cores_used * 100.0) / total_compute_cores
+
+            # Compute iterations per core
+            k_num_chunks = math.ceil(s / k_chunk_size)  # Global K chunks
+            local_q_num_chunks = math.ceil(local_seq_len / q_chunk_size)  # Local Q chunks per device
+            q_per_core = math.ceil(local_q_num_chunks / max_q_parallel) if max_q_parallel > 0 else local_q_num_chunks
+            iters_per_core = q_per_core * k_num_chunks  # Each Q chunk attends to all K chunks in ring
+
+            # Compute padding waste
+            local_q_padded = local_q_num_chunks * q_chunk_size
+            global_k_padded = k_num_chunks * k_chunk_size
+            local_q_waste = local_q_padded - local_seq_len
+            global_k_waste = global_k_padded - s
+            actual_work = local_seq_len * s  # Local Q attending to global K
+            padded_work = local_q_padded * global_k_padded
+            total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
+
+            # Compute work distribution (slot) waste - based on local Q chunks
+            total_q_slots = max_q_parallel * q_per_core if max_q_parallel > 0 else local_q_num_chunks
+            wasted_q_slots = max(0, total_q_slots - local_q_num_chunks)
+            slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
+
+            # Compute math utilization (using actual measured core count)
+            effective_cores = measured_core_count if measured_core_count > 0 else cores_used
+            # Use per-device values for accurate ring attention utilization calculation
+            heads_per_device = nh  # All devices process all heads in this implementation
+            utilization = compute_ring_joint_utilization(
+                local_seq_len, s, d, heads_per_device, duration_ns, effective_cores
+            )
+
+            # Ring efficiency metrics
+            ring_efficiency = (cores_used * 100.0) / total_cores  # Percentage of all cores actively computing
+
+            perf_results.append(
+                {
+                    "q_chunk_size": q_chunk_size,
+                    "k_chunk_size": k_chunk_size,
+                    "measured_core_count": measured_core_count,
+                    "cores_used": cores_used,
+                    "cores_idle": cores_idle,
+                    "compute_util_pct": compute_util_pct,
+                    "ccl_cores": ccl_cores,
+                    "ccl_overhead_pct": ccl_overhead_pct,
+                    "ring_efficiency": ring_efficiency,
+                    "iters_per_core": iters_per_core,
+                    "local_q_waste": local_q_waste,
+                    "global_k_waste": global_k_waste,
+                    "total_waste_pct": total_waste_pct,
+                    "slot_waste_pct": slot_waste_pct,
+                    "duration_ns": duration_ns,
+                    "duration_ms": duration_ns / 1e6,
+                    "utilization": utilization,
+                }
+            )
+            logger.info(
+                f"q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
+                f"util={utilization:.1f}%, compute_cores={cores_used}/{total_compute_cores} ({compute_util_pct:.0f}%), "
+                f"ccl_cores={ccl_cores}, ring_eff={ring_efficiency:.0f}%, iters/core={iters_per_core}"
+            )
+
+        except Exception as e:
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            logger.error(
+                f"Error running ring joint SDPA with q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}: {e}"
+            )
+            perf_results.append(
+                {
+                    "q_chunk_size": q_chunk_size,
+                    "k_chunk_size": k_chunk_size,
+                    "measured_core_count": None,
+                    "cores_used": None,
+                    "cores_idle": None,
+                    "compute_util_pct": None,
+                    "ccl_cores": ccl_cores,
+                    "ccl_overhead_pct": ccl_overhead_pct,
+                    "ring_efficiency": None,
+                    "iters_per_core": None,
+                    "local_q_waste": None,
+                    "global_k_waste": None,
+                    "total_waste_pct": None,
+                    "slot_waste_pct": None,
+                    "duration_ns": None,
+                    "duration_ms": None,
+                    "utilization": None,
+                }
+            )
+
+    # Sort by duration (best first)
+    valid_results = [r for r in perf_results if r["duration_ns"] is not None]
+    valid_results.sort(key=lambda x: x["duration_ns"])
+
+    # Compute total MM FLOPs for reference (across all devices in ring)
+    # Each device: 4 * local_seq_len * total_seq_len * d * nh
+    # Ring total: 4 * (s/ring_size) * s * d * nh * ring_size = 4 * s * s * d * nh
+    mm_flops = 4 * s * s * d * nh
+
+    # Print summary table
+    print(f"\n{'='*190}")
+    print(f"Ring Joint Attention Performance Sweep: b={b}, nh={nh}, s={s}, d={d}")
+    print(f"Architecture: {arch_type}, Ring size: {ring_size} devices")
+    print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
+    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {nh} heads")
+    print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
+    print(f"{'='*190}")
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | Math Util |"
+    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|-----------|"
+    print(header)
+    print(sep)
+
+    for rank, result in enumerate(valid_results, 1):
+        q = result["q_chunk_size"]
+        k = result["k_chunk_size"]
+        dur_ms = result["duration_ms"]
+        compute_used = result["cores_used"]
+        compute_idle = result["cores_idle"]
+        compute_util = result["compute_util_pct"]
+        ccl_cores = result["ccl_cores"]
+        ring_eff = result["ring_efficiency"]
+        iters = result["iters_per_core"]
+        pad_waste = result["total_waste_pct"]
+        slot_waste = result["slot_waste_pct"]
+        math_util = result["utilization"]
+        print(
+            f"| {rank:4d} | {q:7d} | {k:7d} | {dur_ms:13.3f} | "
+            f"{compute_used:12d} | {compute_idle:12d} | {compute_util:11.0f}% | "
+            f"{ccl_cores:9d} | {ring_eff:7.0f}% | {iters:10d} | "
+            f"{pad_waste:8.1f}% | {slot_waste:9.1f}% | {math_util:8.1f}% |"
+        )
+
+    # Also show failed configs if any
+    failed_results = [r for r in perf_results if r["duration_ns"] is None]
+    if failed_results:
+        print(f"\nFailed configurations:")
+        for result in failed_results:
+            print(f"  q_chunk_size={result['q_chunk_size']}, k_chunk_size={result['k_chunk_size']}")
+
+    if valid_results:
+        best = valid_results[0]
+        print(
+            f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, "
+            f"k_chunk_size={best['k_chunk_size']} "
+            f"({best['duration_ms']:.3f} ms, {best['utilization']:.1f}% math util, "
+            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['ccl_cores']} CCL cores, "
+            f"{best['ring_efficiency']:.1f}% ring eff, {best['iters_per_core']} iters/core, "
+            f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
+        )
+
+        # Ring joint attention specific insights
+        print(f"\nRing Joint Attention Analysis:")
+        print(f"  Ring size: {ring_size} devices")
+        print(f"  CCL overhead: {best['ccl_cores']} cores ({best['ccl_overhead_pct']:.1f}% of total)")
+        print(f"  Per-device sequence: {s // ring_size} tokens")
+        print(f"  Total coordination: {ring_size} devices × {best['ccl_cores']} CCL cores each")
+
+    print(f"{'='*190}\n")
