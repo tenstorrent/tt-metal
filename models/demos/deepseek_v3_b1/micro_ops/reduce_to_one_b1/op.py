@@ -721,7 +721,6 @@ class ReduceToOneB1:
 
                 # Add D2H receiver kernel to ROOT1 device program if enabled
                 if is_root1 and d2h_infra is not None:
-                    # D2H page size is based on shard width (not tile width)
                     single_page_size_bytes = shard_width * element_size
 
                     d2h_kernel = ReduceToOneB1.create_d2h_receiver_kernel(

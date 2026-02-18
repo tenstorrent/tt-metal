@@ -218,8 +218,8 @@ def test_reduce_to_one_b1_with_sockets(bh_2d_mesh_device):
     # Terminate D2H operations
     logger.info("Terminating D2H operations...")
     ttnn.reset_global_semaphore_value(termination_semaphore, 1)
-    ttnn.synchronize_device(config["submesh_device"])  # The received tensor is already in the correct shape: [1, 7168]
-    # where 7168 = 8 pages * 896 elements per page
+    ttnn.synchronize_device(config["submesh_device"])
+
     logger.info(f"Received tensor shape: {received_buffer_torch.shape}")
 
     # Get reference output
