@@ -497,8 +497,17 @@ class CBPoolAllocator:
                 slot.source_phase = phase_idx
 
     def _allocate_new_slot(self, key: CBPoolKey, info: CBInfo, orig_idx: int, phase_idx: int) -> int:
-        """Allocate a fresh slot, raising ValueError on overflow."""
-        slot_idx = self._alloc_index()
+        """Allocate a fresh slot, raising ValueError on overflow.
+
+        Prefers identity mapping (orig_idx -> orig_idx) when the slot is free,
+        so that CBs keep their original hardware indices.  This avoids collisions
+        when different phases have non-overlapping CB index sets (e.g., matmul
+        uses {0,1,4,5} and RMS uses {0,2,3,5,...}).
+        """
+        if orig_idx not in self._allocated_indices and orig_idx < self.max_slots:
+            slot_idx = orig_idx
+        else:
+            slot_idx = self._alloc_index()
         if len(self._slots) + 1 > self.max_slots:
             breakdown = [
                 f"  slot {si}: fmt={sl.config.data_format}, "
@@ -548,8 +557,15 @@ class CBPoolAllocator:
 
         Returns one CBDescriptor per allocated slot, sorted by slot index.
         Uses the largest total_size and prefers phase 0's buffer-backed descriptor.
+
+        Two-phase approach: first collect all (slot, descriptor, format_descriptor)
+        tuples while buffer_indices are still at their original values, then apply
+        all in-place modifications.  This prevents earlier modifications from
+        making later searches find the wrong CBDescriptor (e.g., when slot N's
+        assigned index coincidentally equals another CB's original index).
         """
-        merged = []
+        # Phase 1: Collect all results while buffer_indices are unmodified
+        results = []
         for slot_idx in sorted(self._slots.keys()):
             slot = self._slots[slot_idx]
             ref = slot.cb_descriptor
@@ -558,24 +574,40 @@ class CBPoolAllocator:
 
             # Find the actual CBDescriptor from the phase's ProgramDescriptor
             best_desc = None
+            best_fmt = None
             for cb_desc in phase.op_descriptor.descriptor.cbs:
                 for fmt_desc in cb_desc.format_descriptors:
                     if fmt_desc.buffer_index == orig_idx:
                         best_desc = cb_desc
+                        best_fmt = fmt_desc
                         break
                 if best_desc is not None:
                     break
 
             if best_desc is not None:
-                # Update the format descriptor's buffer_index to the slot index
-                # We need to modify in-place since we can't deepcopy
-                for fmt_desc in best_desc.format_descriptors:
-                    if fmt_desc.buffer_index == orig_idx:
-                        fmt_desc.buffer_index = slot_idx
-                        break
-                # Update total_size to the max across phases
-                best_desc.total_size = slot.total_size
-                merged.append(best_desc)
+                results.append((slot_idx, slot.total_size, best_desc, best_fmt))
+
+        # Phase 2: Apply all in-place modifications.
+        # A single CBDescriptor can have multiple format_descriptors (e.g.,
+        # matmul's output and intermediate share one CBDescriptor at indices
+        # {4, 5}).  Each format_descriptor's buffer_index must be updated to
+        # its slot index, but the CBDescriptor must appear exactly once in the
+        # merged list.  Use id() tracking to avoid duplicates.
+        merged = []
+        seen_ids: Set[int] = set()
+        # Compute max total_size per CBDescriptor across all its slots
+        max_size_by_id: Dict[int, int] = {}
+        for slot_idx, total_size, cb_desc, fmt_desc in results:
+            fmt_desc.buffer_index = slot_idx
+            cid = id(cb_desc)
+            max_size_by_id[cid] = max(max_size_by_id.get(cid, 0), total_size)
+
+        for _, _, cb_desc, _ in results:
+            cid = id(cb_desc)
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                cb_desc.total_size = max_size_by_id[cid]
+                merged.append(cb_desc)
 
         return merged
 
@@ -1079,10 +1111,11 @@ def _offset_runtime_args_in_source(source: str, phase_idx: int) -> str:
     )
 
     # Handle incrementing variable pattern: uint32_t rt_args_idx = 0;
-    # Requires "arg" or "rt" in the variable name to avoid false positives
-    # on unrelated uint32_t initializations.
+    # Requires "arg" in the variable name to avoid false positives on
+    # unrelated uint32_t initializations (e.g., "start_dst_index" matched
+    # "rt" from "start" when we used (?:arg|rt)).
     source = re.sub(
-        r"(uint32_t\s+\w*(?:arg|rt)\w*\s*=\s*)0(\s*;)",
+        r"(uint32_t\s+\w*arg\w*\s*=\s*)0(\s*;)",
         rf"\g<1>{offset_name}\2",
         source,
     )
