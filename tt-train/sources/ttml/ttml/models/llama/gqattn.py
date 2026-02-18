@@ -25,9 +25,11 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> None:
         super().__init__()
 
-        assert (
-            embedding_size % num_heads == 0
-        ), "embedding_size must be divisible by num_heads"
+        if embedding_size % num_heads != 0:
+            raise ValueError(
+                "Embedding size must be divisible by the number of attention heads. "
+                f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
+            )
 
         self.embedding_size = embedding_size
         self.num_heads = num_heads

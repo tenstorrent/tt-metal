@@ -47,13 +47,33 @@ class LlamaConfig:
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
             raise ValueError(
-                "Max position embeddings should be divisible by 32 due to current limitations in tensor. "
+                "Max position embeddings must be divisible by 32 due to current limitations in tensor. "
                 f"Provided max_position_embeddings={self.max_position_embeddings}"
             )
         if self.hidden_size % 32 != 0:
             raise ValueError(
-                "Hidden size should be divisible by 32 due to current limitations in tensor. "
+                "Hidden size must be divisible by 32 due to current limitations in tensor. "
                 f"Provided hidden_size={self.hidden_size}"
+            )
+        if self.num_attention_heads <= 0:
+            raise ValueError(
+                "Number of attention heads must be a positive integer. "
+                f"Provided num_attention_heads={self.num_attention_heads}"
+            )
+        if self.num_key_value_heads <= 0:
+            raise ValueError(
+                "Number of key/value heads must be a positive integer. "
+                f"Provided num_key_value_heads={self.num_key_value_heads}"
+            )
+        if self.hidden_size % self.num_attention_heads != 0:
+            raise ValueError(
+                "Hidden size must be divisible by the number of attention heads. "
+                f"Provided hidden_size={self.hidden_size}, num_attention_heads={self.num_attention_heads}"
+            )
+        if self.num_attention_heads % self.num_key_value_heads != 0:
+            raise ValueError(
+                "Number of attention heads must be divisible by the number of key/value heads. "
+                f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
 
 

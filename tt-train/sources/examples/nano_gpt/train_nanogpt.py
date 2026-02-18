@@ -760,6 +760,12 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
         )
         return create_nanogpt(nanogpt_config)
     elif model_config.model_type == "llama":
+        if model_config.num_groups <= 0:
+            raise ValueError("model_config.num_groups must be a positive integer.")
+        if model_config.num_heads % model_config.num_groups != 0:
+            raise ValueError(
+                "model_config.num_heads must be divisible by model_config.num_groups."
+            )
         num_key_value_heads = model_config.num_heads // model_config.num_groups
         rope_scaling_config = LlamaRopeScalingConfig(
             scaling_factor=model_config.scaling_factor,
