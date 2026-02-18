@@ -66,14 +66,17 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     Returns:
         True if weights fit in global CB, False otherwise
     """
-    if not is_blackhole() or model_name not in VERIFIED_MODEL_CONFIGS:
+    verified_model_name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
+    if not is_blackhole() or verified_model_name is None:
         return False
-
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
     MAX_L1_PER_BANK = 1000000 if num_devices == 4 else 850000
-    kv_heads_divisible = VERIFIED_MODEL_CONFIGS[model_name]["n_kv_heads"] % num_devices == 0
-    dim, hidden_dim = VERIFIED_MODEL_CONFIGS[model_name]["dim"], VERIFIED_MODEL_CONFIGS[model_name]["hidden_dim"]
+    kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
+    dim, hidden_dim = (
+        VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
+        VERIFIED_MODEL_CONFIGS[verified_model_name]["hidden_dim"],
+    )
     n_per_device = hidden_dim // num_devices
     n_per_core = math.ceil(n_per_device / ring_size)
     n_per_core_padded = ((n_per_core + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
@@ -82,7 +85,6 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     w_tiles = n_padded // TILE_SIZE
     h_tiles_padded = ((h_tiles + ring_size - 1) // ring_size) * ring_size
     tiles_per_core = (h_tiles_padded * w_tiles) // ring_size
-
     # Check memory constraints and kv heads divisible by num_devices
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
