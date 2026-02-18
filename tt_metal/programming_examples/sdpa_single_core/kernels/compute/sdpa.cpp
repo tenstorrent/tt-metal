@@ -713,9 +713,9 @@ void sdpa_inner_loop(
         uint32_t q_index_offset = 0;
         uint32_t kt_index_offset = 0;
 
-        // Ping-pong row buffers for raw Q@KT matmul output
-        uint32_t ping = cb_qkt_row_A;
-        uint32_t pong = cb_qkt_row_B;
+        // Alternating row buffers for raw Q@KT matmul output
+        uint32_t alias_cur_qkt_row = cb_qkt_row_A;
+        uint32_t alias_prev_qkt_row = cb_qkt_row_B;
 
         exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
 
@@ -726,63 +726,57 @@ void sdpa_inner_loop(
         cb_wait_front(cb_kt_in, head_dim_t * Sk_chunk_t);
         cb_reserve_back(alias_cur_sum, Sq_chunk_t);
 
-        // ========== PHASE 1: Q@KT with ping-pong row buffers ==========
+        // ========== PHASE 1: Q@KT with alternating row buffers ==========
         for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
             DeviceZoneScopedN("Softmax(Q@KT)");
             cb_wait_front(cb_q_in, q_wait_tiles);
             kt_index_offset = 0;
 
-            // Reserve ping for current row's matmul output
-            cb_reserve_back(ping, row_tiles);
+            // Reserve current row buffer for matmul output
+            cb_reserve_back(alias_cur_qkt_row, row_tiles);
 
-            if (q_subblock > 0) {
-                uint32_t prev_q_subblock = q_subblock - 1;
-                // Interleave: sub_exp(prev row from pong) + matmul(cur row → ping)
-                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+            for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                if (q_subblock > 0) {
+                    uint32_t prev_q_subblock = q_subblock - 1;
                     MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                     sub_exp_block_bcast_cols<scale_fp32, sbh, qkt_subblock_w, true>(
-                        pong, alias_cur_max, cb_qkt_im, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
+                        alias_prev_qkt_row,
+                        alias_cur_max,
+                        cb_qkt_im,
+                        alias_cur_sum,
+                        Sk_chunk_t,
+                        prev_q_subblock,
+                        kt_subblock);
+                }
 
-                    SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
-                    blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true>(
-                        cb_q_in,
-                        cb_kt_in,
-                        ping,
-                        q_index_offset,
-                        kt_index_offset,
-                        q_subblock,
-                        kt_subblock * qkt_subblock_w);
-                    kt_index_offset += qkt_subblock_w;
-                }
-                // Push softmax'd prev row to cb_qkt_im, free prev row buffer
-                cb_push_back(cb_qkt_im, row_tiles);
-                cb_pop_front(pong, row_tiles);
-            } else {
-                // q_subblock == 0: just matmul, no sub_exp needed
-                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                    SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
-                    blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true>(
-                        cb_q_in,
-                        cb_kt_in,
-                        ping,
-                        q_index_offset,
-                        kt_index_offset,
-                        q_subblock,
-                        kt_subblock * qkt_subblock_w);
-                    kt_index_offset += qkt_subblock_w;
-                }
+                SDPA_DeviceZoneScopedN_1("Q@KT MM+Pack");
+                blocked_matmul_and_pack<true, qkt_subblock_w, sbh, in0_block_w, Sk_chunk_t, Sk_chunk_t, true>(
+                    cb_q_in,
+                    cb_kt_in,
+                    alias_cur_qkt_row,
+                    q_index_offset,
+                    kt_index_offset,
+                    q_subblock,
+                    kt_subblock * qkt_subblock_w);
+                kt_index_offset += qkt_subblock_w;
             }
 
-            // Push raw matmul row to ping (makes it available for max reduce read)
-            cb_push_back(ping, row_tiles);
+            if (q_subblock > 0) {
+                // Push softmax'd prev row to cb_qkt_im, free prev row buffer
+                cb_push_back(cb_qkt_im, row_tiles);
+                cb_pop_front(alias_prev_qkt_row, row_tiles);
+            }
 
-            // Max reduce: reads from ping (row buffer at row 0), writes to cur_max (sequential)
+            // Push raw matmul row (makes it available for max reduce read)
+            cb_push_back(alias_cur_qkt_row, row_tiles);
+
+            // Max reduce: reads from current row buffer, writes to cur_max (sequential)
             MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
             {
                 SDPA_DeviceZoneScopedN_1("Reduce max");
                 cb_reserve_back(alias_cur_max, sbh);
                 reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, sbh>(
-                    ping,
+                    alias_cur_qkt_row,
                     alias_cur_max,
                     alias_prev_max,
                     q_subblock,
@@ -791,8 +785,8 @@ void sdpa_inner_loop(
                 cb_push_back(alias_cur_max, sbh);
             }
 
-            // ping still has data (not popped) — will be read as pong in next iteration's sub_exp
-            std::swap(ping, pong);
+            // Current row still has data (not popped) — becomes prev row in next iteration's sub_exp
+            std::swap(alias_cur_qkt_row, alias_prev_qkt_row);
             q_index_offset += sbh * in0_block_w;
             q_wait_tiles += q_subblock_num_tiles;
         }
@@ -801,7 +795,7 @@ void sdpa_inner_loop(
         cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
 
         // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
-        // After Phase 1: pong holds the last raw matmul row (not yet softmax'd).
+        // After Phase 1: alias_prev_qkt_row holds the last raw matmul row (not yet softmax'd).
         // cb_qkt_im has (q_num_subblocks - 1) rows of softmax'd data pushed.
         MATH(DPRINT << "Starting QKT @ V computation" << ENDL());
         {
@@ -819,7 +813,7 @@ void sdpa_inner_loop(
             cb_wait_front(cb_v_in, Sv_chunk_t * head_dim_t);
             cb_reserve_back(alias_cur_out, qktv_output_num_tiles);
 
-            // ===== q_subblock 0: drain last row's sub_exp from pong + first QKT@V matmul =====
+            // ===== q_subblock 0: drain last row's sub_exp from alias_prev_qkt_row + first QKT@V matmul =====
             {
                 MATH(DPRINT << "QKT@V: Processing Q_subblock 0 (drain)" << ENDL());
                 DeviceZoneScopedN("Softmax(Q@KT)@V");
@@ -829,10 +823,16 @@ void sdpa_inner_loop(
                     constexpr uint32_t half_inner = qktv_in0_block_w / 2;
                     static_assert(kt_num_subblocks == 2, "Overlap drain requires kt_num_subblocks==2");
 
-                    // 1. sub_exp drain kt=0: reads pong → writes cb_qkt_im (sequential)
+                    // 1. sub_exp drain kt=0: reads alias_prev_qkt_row → writes cb_qkt_im (sequential)
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=0" << ENDL());
                     sub_exp_block_bcast_cols<scale_fp32, sbh, qkt_subblock_w, true>(
-                        pong, alias_cur_max, cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 0);
+                        alias_prev_qkt_row,
+                        alias_cur_max,
+                        cb_qkt_im,
+                        alias_cur_sum,
+                        Sk_chunk_t,
+                        q_num_subblocks - 1,
+                        0);
 
                     // 2. matmul first half — FPU overlaps with EXP(kt=0) on SFPU
                     // Wait for softmax'd tiles in cb_qkt_im (first row at position 0)
@@ -862,11 +862,17 @@ void sdpa_inner_loop(
                     // 3. sub_exp drain kt=1
                     MATH(DPRINT << "DRAIN OVERLAP: SUB_EXP kt=1" << ENDL());
                     sub_exp_block_bcast_cols<scale_fp32, sbh, qkt_subblock_w, true>(
-                        pong, alias_cur_max, cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, 1);
+                        alias_prev_qkt_row,
+                        alias_cur_max,
+                        cb_qkt_im,
+                        alias_cur_sum,
+                        Sk_chunk_t,
+                        q_num_subblocks - 1,
+                        1);
 
-                    // Push last softmax'd row, free pong, push accumulated sums
+                    // Push last softmax'd row, free prev row buffer, push accumulated sums
                     cb_push_back(cb_qkt_im, row_tiles);
-                    cb_pop_front(pong, row_tiles);
+                    cb_pop_front(alias_prev_qkt_row, row_tiles);
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
 
                     // 4. matmul second half with L1 accumulate
@@ -900,7 +906,7 @@ void sdpa_inner_loop(
                     MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "]" << ENDL());
                     for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
                         sub_exp_block_bcast_cols<scale_fp32, sbh, qkt_subblock_w, true>(
-                            pong,
+                            alias_prev_qkt_row,
                             alias_cur_max,
                             cb_qkt_im,
                             alias_cur_sum,
@@ -909,7 +915,7 @@ void sdpa_inner_loop(
                             kt_subblock);
                     }
                     cb_push_back(cb_qkt_im, row_tiles);
-                    cb_pop_front(pong, row_tiles);
+                    cb_pop_front(alias_prev_qkt_row, row_tiles);
                     cb_push_back(alias_cur_sum, Sq_chunk_t);
 
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
