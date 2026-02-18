@@ -795,12 +795,12 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wkv_b2_batch = num_heads  # 128
         wkv_b2_batch_padded = pad_batch_to_dram_banks(wkv_b2_batch)  # 132
-        wkv_b2_m = 4  # m dimension (tiny tile height)
+        wkv_b2_m = 32  # m dimension (tiny tile height)
         wkv_b2_k = kv_lora_rank  # 512
         wkv_b2_n = v_head_dim  # 128
         wkv_b2_in0_core_grid_x = 3
         wkv_b2_in0_core_grid_y = 4
-        wkv_b2_tile_h = 4  # Tiny tile for wkv_b2
+        wkv_b2_tile_h = 32  # Tiny tile for wkv_b2
 
         # Program config for wkv_b2 (batched DRAM sharded)
         wkv_b2_in0_block_w = 16  # 512 // 32 = 16
@@ -820,7 +820,7 @@ class MLA1D(AbstractModule):
         wkv_b2_out_shard_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
         )
-        wkv_b2_out_shard_shape = [wkv_b2_batches_per_core * wkv_b2_m, wkv_b2_n]  # [11 * 4, 128] = [44, 128]
+        wkv_b2_out_shard_shape = [wkv_b2_batches_per_core * wkv_b2_m, wkv_b2_n]  # [11 * 32, 128] = [352, 128]
         wkv_b2_out_shard_spec = ttnn.ShardSpec(
             wkv_b2_out_shard_grid, wkv_b2_out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
         )
@@ -858,15 +858,15 @@ class MLA1D(AbstractModule):
         wo_k = num_heads * v_head_dim  # 128 * 128 = 16384
         wo_n = dim  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
-        wo_in0_core_grid = ttnn.CoreGrid(y=1, x=8)
-        wo_out_core_grid = ttnn.CoreGrid(y=1, x=6)
+        wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
         wo_num_in0_cores = 8
-        wo_num_out_cores = 6
+        wo_num_out_cores = 12
 
         # Program config for wo
-        wo_in0_block_w = 64  # 16384 // 8 // 32 = 64
+        wo_in0_block_w = 32  # 16384 // 8 // 32 = 64
         wo_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wo_per_core_N = 6  # 1152 // 6 // 32 = 6
+        wo_per_core_N = 3  # 1152 // 6 // 32 = 6
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wo_in0_block_w // 2,
@@ -1623,6 +1623,7 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul
         # 1,1,32,896, width sharded 7x4 [32,32]
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"])
+        tt_q_kv = ttnn.to_memory_config(tt_q_kv, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
@@ -1783,6 +1784,7 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=cfg["wkv_b1_in0_memory_config"])
 
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local_padded, bsz, kv_lora_rank]
+        tt_q_nope = ttnn.to_memory_config(tt_q_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b1 output
         kv_lora_rank = cfg["kv_lora_rank"]
@@ -1862,12 +1864,12 @@ class MLA1D(AbstractModule):
 
         # Retile in0 to 4x32 tiny tiles BEFORE sharding for wkv_b2 matmul
         wkv_b2_in0_tile = cfg["wkv_b2_in0_tile"]
-        attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT, tile=wkv_b2_in0_tile)
+        # attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT, tile=wkv_b2_in0_tile)
 
         # Shard activations on optimal DRAM bank-to-worker cores for batched matmul
         attn_out = ttnn.to_memory_config(attn_out, memory_config=cfg["wkv_b2_in0_memory_config"])
-
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]
+        v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Slice off padding from wkv_b2 output
         if num_heads_padded != num_heads:
@@ -1925,6 +1927,8 @@ class MLA1D(AbstractModule):
         v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
+        out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         # 1,1,32,896 width sharded 7x4 [32,32]
         return out
 
