@@ -553,9 +553,12 @@ int main() {
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV ||
+                launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run
                 // if a valid launch message is sent.
+                // DISPATCH_MODE_NONE (e.g. during FW init) must also notify dispatcher and advance ring buffer,
+                // since all worker cores receive GO signals via multicast.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
@@ -566,10 +569,6 @@ int main() {
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-            } else if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
-                // DISPATCH_MODE_NONE entries should not be processed or advance the ring buffer.
-                // These are placeholder entries during firmware initialization that should be skipped.
-                // The dispatcher should not send GO signals for these entries.
             }
         }
     }
