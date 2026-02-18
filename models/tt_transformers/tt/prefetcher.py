@@ -49,7 +49,8 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
 
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    MAX_L1_PER_BANK = 1000000
+    MAX_L1_PER_BANK = 1000000 if num_devices == 4 else 850000
+    kv_heads_per_device = VERIFIED_MODEL_CONFIGS[model_name]["n_kv_heads"] % num_devices
     dim, hidden_dim = VERIFIED_MODEL_CONFIGS[model_name]["dim"], VERIFIED_MODEL_CONFIGS[model_name]["hidden_dim"]
     n_per_device = hidden_dim // num_devices
     n_per_core = math.ceil(n_per_device / ring_size)
@@ -64,8 +65,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK
-
-    return pages_ok and l1_ok
+    return pages_ok and l1_ok and kv_heads_per_device == 0
 
 
 @dataclass
