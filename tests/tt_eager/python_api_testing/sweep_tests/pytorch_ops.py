@@ -1438,6 +1438,51 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
+def _simulate_bfp4_quantization(x):
+    """Simulate bfp4 round-trip (float -> bfp4 -> float) on CPU."""
+    orig_shape = x.shape
+    x_f32 = x.to(torch.float32).contiguous().reshape(-1, 16)
+    x_bits = x_f32.view(torch.int32)
+
+    sign = (x_bits >> 31) & 1
+    exp = (x_bits >> 23) & 0xFF
+    man = x_bits & 0x7FFFFF
+
+    is_zero = exp == 0
+    exp_bfp = torch.clamp(exp - 112, 0, 31)  # rebias: -127 + 15 = -112
+    exp_bfp = torch.where(is_zero, torch.zeros_like(exp_bfp), exp_bfp)
+    man_full = torch.where(is_zero, torch.zeros_like(man), man | (1 << 23))
+
+    shared_exp = exp_bfp.max(dim=-1, keepdim=True).values
+    exp_diff = (shared_exp - exp_bfp).clamp(0, 31)
+    man_aligned = man_full >> exp_diff
+
+    # Round to 3 bits (banker's rounding)
+    SHIFT = 21  # 24 - 3
+    remainder = man_aligned & ((1 << SHIFT) - 1)
+    tie = 1 << (SHIFT - 1)
+    man_3 = man_aligned >> SHIFT
+    guard = man_3 & 1
+    man_3 = man_3 + ((remainder > tie) | ((remainder == tie) & (guard == 1))).to(torch.int32)
+    man_3 = man_3.clamp(max=7)
+    sign = torch.where(man_3 == 0, torch.zeros_like(sign), sign)
+
+    # Unpack: normalize 3-bit mantissa
+    bfp_zero = man_3 == 0
+    lz = torch.where(
+        man_3 <= 1,
+        torch.tensor(2, dtype=torch.int32),
+        torch.where(man_3 <= 3, torch.tensor(1, dtype=torch.int32), torch.tensor(0, dtype=torch.int32)),
+    )
+    lz = torch.where(bfp_zero, torch.zeros_like(lz), lz)
+    man_out = ((man_3 << lz) << 1) & 0x7
+    exp_out = shared_exp - lz + 112  # rebias to FP32: +127 - 15 = +112
+
+    result = (sign << 31) | (exp_out << 23) | (man_out << 20)
+    result = torch.where(bfp_zero, torch.zeros_like(result), result)
+    return result.view(torch.float32).reshape(orig_shape).to(torch.bfloat16)
+
+
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     if tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint16:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
@@ -1520,6 +1565,8 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_output_dtype[0] == ttnn.uint8:
+        if tt_input_dtype[0] == ttnn.bfloat4_b:
+            x = _simulate_bfp4_quantization(x)
         return x.to(torch.uint8)
     elif tt_input_dtype[0] == ttnn.uint8:
         if tt_output_dtype[0] == ttnn.float32:
