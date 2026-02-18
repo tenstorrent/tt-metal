@@ -111,7 +111,10 @@ class WanAttention:
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
-        self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        # Use column-based CCL allocation: reserve last column for CCL operations
+        # On Blackhole, last column (x=full_grid.x-1) contains dispatch cores, so use second-to-last column
+        self.ccl_column = full_grid.x - 2
+        self.sdpa_worker_grid = (self.ccl_column, full_grid.y)
         ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
             (
                 is_blackhole(),
@@ -288,7 +291,7 @@ class WanAttention:
                     mesh_device=self.mesh_device,
                     topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                    ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
+                    ccl_core_grid_offset=(self.ccl_column, 0),
                 )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
