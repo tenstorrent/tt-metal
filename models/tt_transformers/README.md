@@ -219,7 +219,7 @@ At the time of writing this covers the majority of popular HuggingFace text-gene
 
 On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs. These cache files only need to be created once for each model and device. These files are stored in one of three places:
 
-1. `TT_CACHE_PATH` if you have set it.
+1. `TT_CACHE_PATH/HF_MODEL/device_name` if you have set `TT_CACHE_PATH`.
 2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
 3. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
 
