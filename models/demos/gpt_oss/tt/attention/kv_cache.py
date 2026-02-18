@@ -95,7 +95,7 @@ def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_he
     Returns:
         Sharded memory config for KV tensors
     """
-    grid_size = mesh_device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(8, 8)
 
     # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
     kv_shape = (1, max_local_batch_size, num_local_kv_heads, head_dim)

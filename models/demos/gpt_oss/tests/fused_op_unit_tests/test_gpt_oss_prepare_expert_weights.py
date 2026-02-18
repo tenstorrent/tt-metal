@@ -81,23 +81,19 @@ def gpt_oss_prepare_expert_weights_reference(
 ) -> torch.Tensor:
     """PyTorch reference implementation for prepare_expert_weights.
 
-    Transforms routing weights from [B, 1, S, K] to [K, 1, B*S, H] format for
-    broadcasting with post-combine expert outputs.
+    Transforms routing weights from [1, 1, tokens, K] to [K, 1, tokens, 1] format.
+    In production, broadcasting in the subsequent ttnn.mul expands the last dim to H.
 
     Args:
-        topk_expert_weights: Routing weights [batch_size, 1, seq_len, num_experts_per_tok]
+        topk_expert_weights: Routing weights [1, 1, tokens_per_device, num_experts_per_tok]
         num_experts_per_tok: Number of experts selected per token (K)
-        hidden_size: Hidden dimension size (H)
+        hidden_size: Hidden dimension size (H) - unused, kept for API compat
 
     Returns:
-        Transformed weights tensor [K, 1, B*S, H]
+        Transformed weights tensor [K, 1, tokens, 1]
     """
-    # Reshape: [B, 1, S, K] -> [B*S, 1, 1, K]
-    weights = topk_expert_weights.reshape(-1, 1, 1, num_experts_per_tok)
-    # Repeat to expand hidden dimension: [B*S, 1, 1, K] -> [B*S, 1, H, K]
-    weights = weights.repeat(1, 1, hidden_size, 1)
-    # Permute to [K, 1, B*S, H]
-    weights = weights.permute(3, 1, 0, 2)
+    # Permute: [1, 1, tokens, K] -> [K, 1, tokens, 1]
+    weights = topk_expert_weights.permute(3, 1, 2, 0)
     return weights
 
 
@@ -342,18 +338,17 @@ def _run_prepare_expert_weights_test(
     """Run the prepare_expert_weights fused op test."""
     mesh_shape = mesh_device.shape
 
-    # Determine batch per device for row sharding
+    # Determine tokens per device (matching production shape from decode_forward)
     if batch_size > 32:
-        is_row_sharded = True
         assert batch_size % mesh_shape[0] == 0, "Batch size must be divisible by mesh rows"
         batch_size_per_device = batch_size // mesh_shape[0]
     else:
-        is_row_sharded = False
         batch_size_per_device = batch_size
+    tokens_per_device = batch_size_per_device * seq_len
 
-    # Create input tensor (topk_expert_weights)
-    # Shape: [B, 1, S, K] - routing weights from router
-    topk_weights_torch = torch.randn(batch_size, 1, seq_len, num_experts_per_tok, dtype=torch.bfloat16)
+    # Create input tensor matching production shape: [1, 1, tokens_per_device, K]
+    # In decode_forward, topk_expert_weights is reshaped to this before calling prepare_expert_weights
+    topk_weights_torch = torch.randn(1, 1, tokens_per_device, num_experts_per_tok, dtype=torch.bfloat16)
     # Normalize weights (as they would be in real model)
     topk_weights_torch = torch.softmax(topk_weights_torch.float(), dim=-1).to(torch.bfloat16)
 
@@ -364,19 +359,13 @@ def _run_prepare_expert_weights_test(
         hidden_size,
     )
 
-    # Convert to TTNN tensor
-    mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_shape, mesh_device=mesh_device)
-        if is_row_sharded
-        else None
-    )
-
+    # Convert to TTNN tensor (replicate across mesh - each device processes its own tokens independently)
     tt_topk_weights = ttnn.from_torch(
         topk_weights_torch,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # Run TTNN implementation
@@ -386,11 +375,10 @@ def _run_prepare_expert_weights_test(
         hidden_size,
     )
 
-    # Convert output to torch
-    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=tuple(mesh_shape))
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
-    # Slice to expected dimensions
-    tt_output_torch = tt_output_torch[:num_experts_per_tok, :1, : batch_size * seq_len, :hidden_size]
+    # Convert output to torch (get first device since all are identical)
+    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
+    # Slice to expected dimensions (remove tile padding)
+    tt_output_torch = tt_output_torch[:num_experts_per_tok, :1, :tokens_per_device, :1]
 
     # Compare with reference
     passing, pcc = _compare_with_reference(
@@ -401,10 +389,20 @@ def _run_prepare_expert_weights_test(
     )
     assert passing, f"prepare_expert_weights test failed. PCC: {pcc} < {expected_pcc}"
 
-    # Performance measurement
+    # Re-create input tensor for perf measurement since prepare_expert_weights deallocates it
+    tt_topk_weights = ttnn.from_torch(
+        topk_weights_torch,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # prepare_expert_weights deallocates its input internally, so we must
+    # clone the input tensor for each iteration to avoid "Buffer not allocated" errors.
     def op_fn():
         return gpt_oss_prepare_expert_weights_ttnn(
-            tt_topk_weights,
+            ttnn.clone(tt_topk_weights),
             num_experts_per_tok,
             hidden_size,
         )
@@ -628,9 +626,10 @@ def test_gpt_oss_prepare_expert_weights_single_device(
     hidden_size = config.hidden_size
     num_experts_per_tok = config.num_experts_per_tok
     batch_size_per_device = 32  # Single device batch size (128 / 4 rows)
+    tokens_per_device = batch_size_per_device * seq_len
 
-    # Create input tensor
-    topk_weights_torch = torch.randn(batch_size_per_device, 1, seq_len, num_experts_per_tok, dtype=torch.bfloat16)
+    # Create input tensor matching production shape: [1, 1, tokens_per_device, K]
+    topk_weights_torch = torch.randn(1, 1, tokens_per_device, num_experts_per_tok, dtype=torch.bfloat16)
     topk_weights_torch = torch.softmax(topk_weights_torch.float(), dim=-1).to(torch.bfloat16)
 
     # Reference computation
@@ -658,7 +657,7 @@ def test_gpt_oss_prepare_expert_weights_single_device(
 
     # Convert output to torch
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
-    tt_output_torch = tt_output_torch[:num_experts_per_tok, :1, : batch_size_per_device * seq_len, :hidden_size]
+    tt_output_torch = tt_output_torch[:num_experts_per_tok, :1, :tokens_per_device, :1]
 
     # Compare with reference
     passing, pcc = _compare_with_reference(

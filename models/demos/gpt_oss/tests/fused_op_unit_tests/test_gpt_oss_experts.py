@@ -131,7 +131,7 @@ def gpt_oss_experts_ttnn(
         hidden_states: Input tensor [batch_per_device, 1, seq_len, hidden_size]
         topk_expert_indices: Expert indices [batch_per_device, 1, seq_len, k]
         topk_expert_weights: Routing weights [batch_per_device, 1, seq_len, k]
-        weights: ThroughputExpertWeights with w1, w2, w3 and biases
+        weights: ThroughputExpertWeights with w2, w2_bias, and either fused or unfused gate/up weights
         config: ThroughputExpertConfig
         expert_mapping_tensors: Device-to-expert mapping
         remap_topk_mask: Mask for expert remapping
@@ -539,11 +539,36 @@ def _run_experts_test(
     )
     assert passing, f"Experts test failed. PCC: {pcc} < {expected_pcc}"
 
+    # Re-create input tensors for perf measurement since decode_forward deallocates them
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(1),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=mesh_mapper,
+    )
+    tt_routing_weights = ttnn.from_torch(
+        topk_weights_dense.unsqueeze(1).unsqueeze(1),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=mesh_mapper,
+    )
+    tt_router_indices = ttnn.from_torch(
+        router_indices.unsqueeze(1).unsqueeze(1),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.uint16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # decode_forward deallocates hidden_states, topk_expert_indices, and
+    # topk_expert_weights internally, so we must clone them each iteration.
     def op_fn():
         return gpt_oss_experts_ttnn(
-            tt_hidden_states,
-            tt_router_indices,
-            tt_routing_weights,
+            ttnn.clone(tt_hidden_states),
+            ttnn.clone(tt_router_indices),
+            ttnn.clone(tt_routing_weights),
             weights,
             throughput_config,
             expert_mapping_tensors,
