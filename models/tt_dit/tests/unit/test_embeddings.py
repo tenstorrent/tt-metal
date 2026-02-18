@@ -197,8 +197,8 @@ def test_timestep_encoding(
     torch_model.eval()
 
     # Create TT model
-    tt_model = Timesteps(num_channels=num_channels, mesh_device=mesh_device)
-    tt_model_bf16 = Timesteps(num_channels=num_channels, mesh_device=mesh_device, use_fp32=False)
+    tt_model = Timesteps(num_channels=num_channels, mesh_device=mesh_device, dtype=ttnn.float32)
+    tt_model_bf16 = Timesteps(num_channels=num_channels, mesh_device=mesh_device, dtype=ttnn.bfloat16)
 
     # Create input tensors
     torch.manual_seed(0)
