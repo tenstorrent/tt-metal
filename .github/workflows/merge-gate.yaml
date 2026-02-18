@@ -396,6 +396,7 @@ jobs:
         platform: [
           "N150",
           "N300",
+          "P150b",
         ]
     uses: ./.github/workflows/triage.yaml
     with:
