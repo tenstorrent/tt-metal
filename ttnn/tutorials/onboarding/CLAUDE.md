@@ -16,112 +16,31 @@ Program Factory (create CBs, configure kernels)
 Kernels (reader → compute → writer)
 ```
 
-## Key Patterns
+## Curriculum Overview
 
-### 1. Operation Registration (e03)
+### Fundamentals (e01-e04)
+- **e01**: Build and run tt-metal
+- **e02**: TTNN basics, pytest workflow
+- **e03**: Operation registration, Python bindings
+- **e04**: Custom kernels (reader/compute/writer)
 
-```cpp
-// Header: define struct with invoke()
-struct MatmulAdd {
-    static Tensor invoke(const Tensor& a, const Tensor& b, const Tensor& c);
-};
+### Debugging & Profiling (e05-e06)
+- **e05**: DPRINT debugging, tt-triage
+- **e06**: Tracy profiling, peak perf calculation
 
-// Register in ttnn namespace
-namespace ttnn {
-constexpr auto matmul_add = register_operation<"ttnn::matmul_add", MatmulAdd>();
-}
-```
+### Memory & Data Layout (e07-e09)
+- **e07**: L1 vs DRAM, memory banking
+- **e08**: Tile layout vs row-major, data formats
+- **e09**: Sharding (height, width, block)
 
-### 2. Python Bindings (e03)
+### Scaling (e10-e11)
+- **e10**: Multi-core, work splitting, multicast
+- **e11**: Multi-chip, CCLs
 
-```cpp
-NB_MODULE(_module_name, mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::matmul_add,
-        R"doc(Docstring)doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::matmul_add)& self,
-               const Tensor& a, const Tensor& b, const Tensor& c) {
-                return self(a, b, c);
-            },
-            nb::arg("a"), nb::arg("b"), nb::arg("c")});
-}
-```
-
-### 3. Device Operation (e04)
-
-```cpp
-struct MatmulAddOperation {
-    struct operation_attributes_t {};  // Compile-time config
-    struct tensor_args_t { Tensor a, b, c; };  // Input tensors
-
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
-
-    struct ProgramFactory {
-        struct shared_variables_t { /* cached data */ };
-        static cached_program_t create(...);
-        static void override_runtime_arguments(...);
-    };
-
-    static program_factory_t select_program_factory(...);
-    static void validate_on_program_cache_miss(...);
-    static spec_return_value_t compute_output_specs(...);
-    static tensor_return_value_t create_output_tensors(...);
-};
-```
-
-### 4. Kernel Pattern (e04)
-
-**Reader** (RISCV_1 - data movement):
-```cpp
-void kernel_main() {
-    // Get runtime args
-    auto a_addr = get_arg_val<uint32_t>(0);
-
-    // Wait for CB space, read from DRAM, push to CB
-    cb_reserve_back(cb_a, 1);
-    noc_async_read(...);
-    noc_async_read_barrier();
-    cb_push_back(cb_a, 1);
-}
-```
-
-**Compute** (TRISC - math):
-```cpp
-void kernel_main() {
-    // Init compute
-    mm_init(cb_a, cb_b, cb_out);
-
-    // Wait for data, compute, push result
-    tile_regs_acquire();
-    cb_wait_front(cb_a, 1);
-    cb_wait_front(cb_b, 1);
-    matmul_tiles(cb_a, cb_b, 0, 0, 0);
-    cb_pop_front(cb_a, 1);
-    cb_pop_front(cb_b, 1);
-    tile_regs_commit();
-
-    // Pack output
-    tile_regs_wait();
-    cb_reserve_back(cb_out, 1);
-    pack_tile(0, cb_out);
-    cb_push_back(cb_out, 1);
-    tile_regs_release();
-}
-```
-
-**Writer** (RISCV_0 - data movement):
-```cpp
-void kernel_main() {
-    // Wait for compute result, write to DRAM
-    cb_wait_front(cb_out, 1);
-    noc_async_write(...);
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, 1);
-}
-```
+### Advanced (e12-e14)
+- **e12**: Matmul variants (1d, 2d), math fidelity
+- **e13**: Kernel fusion (CCL + compute)
+- **e14**: Pipelining, double buffering
 
 ## Key APIs
 
@@ -157,7 +76,8 @@ void kernel_main() {
 ## Build Commands
 
 ```bash
-./build_metal.sh                                      # Build tt-metal (includes onboarding)
+./build_metal.sh                                      # Build tt-metal
+cmake --build build -- onboarding                     # Build exercises
 ttnn/tutorials/onboarding/run.sh "e04 and solution"  # Test
 ```
 
