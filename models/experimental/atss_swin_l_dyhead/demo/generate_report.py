@@ -76,7 +76,7 @@ def main():
         fpn_pccs.append((pnames[i], rf.shape[2], rf.shape[3], pcc(rf, tt)))
 
     # DyHead
-    tt_dyhead = ttnn_model.forward_dyhead_on_host(tt_fpn)
+    tt_dyhead = ttnn_model.forward_dyhead(tt_fpn)
     dy_pccs = []
     for i, (rf, tf) in enumerate(zip(ref_dyhead, tt_dyhead)):
         dy_pccs.append((i, pcc(rf, tf)))

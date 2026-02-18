@@ -97,7 +97,7 @@ def test_ttnn_atss_e2e_pcc(device, atss_ckpt_path, atss_ref_model):
     with torch.no_grad():
         ref_dy_feats = atss_ref_model.dyhead(list(ref_fpn_feats))
 
-    ttnn_dy_feats = ttnn_model.forward_dyhead_on_host(ttnn_fpn_feats)
+    ttnn_dy_feats = ttnn_model.forward_dyhead(ttnn_fpn_feats)
 
     assert len(ref_dy_feats) == len(ttnn_dy_feats) == 5
     for i, (rf, tf) in enumerate(zip(ref_dy_feats, ttnn_dy_feats)):

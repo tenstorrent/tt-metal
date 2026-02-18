@@ -15,7 +15,7 @@ Swin-L Backbone (TTNN)      → 3 feature maps (stages 1, 2, 3)
 FPN Neck (TTNN)              → 5 feature maps (P3..P7)
   │                            all 256 channels
   ▼
-DyHead Neck (PyTorch*)       → 5 refined feature maps
+DyHead Neck (Hybrid*)        → 5 refined feature maps
   │                            6 blocks, DCNv2 + scale/spatial/task attention
   ▼
 ATSS Head (TTNN)             → per-level: cls (80), reg (4), centerness (1)
@@ -24,8 +24,12 @@ ATSS Head (TTNN)             → per-level: cls (80), reg (4), centerness (1)
 Post-processing (CPU)        → bboxes, scores, labels
 ```
 
-*DyHead uses modulated deformable convolution (DCNv2) which does not have a
-native TTNN kernel yet. It runs on CPU via PyTorch as a fallback.
+*DyHead runs in hybrid mode by default:
+- **Spatial attention** (DCNv2) runs on CPU — no native TTNN kernel yet
+- **Scale-aware attention** (AvgPool + Conv + hardsigmoid) runs on TTNN
+- **Task-aware attention / DyReLU** (AvgPool + FC + hardsigmoid + element-wise) runs on TTNN
+
+Set `hybrid_dyhead=False` in `from_checkpoint()` to run the entire DyHead on CPU.
 
 ## Module Structure
 
@@ -44,6 +48,7 @@ models/experimental/atss_swin_l_dyhead/
 │   └── model.py                       #   Full model assembly + weight loading
 ├── tt/                                 # TTNN implementations
 │   ├── tt_fpn.py                      #   TTNN FPN
+│   ├── tt_dyhead.py                   #   Hybrid DyHead (scale/task on TTNN)
 │   ├── tt_atss_head.py                #   TTNN ATSS Head
 │   ├── tt_atss_model.py               #   Full TTNN model (hybrid)
 │   └── weight_loading.py              #   Weight loading for FPN/DyHead/Head
@@ -144,6 +149,15 @@ model = TtATSSModel.from_checkpoint(ATSS_CHECKPOINT, device)
 results = model.predict(image_tensor, img_shape=(H, W))
 ```
 ## Implementation Status
-Next TODOs
-- DyHead (currently PyTorch fallback — needs TTNN DCNv2)
-- TTNN Optimizations (sharding, precision, DyHead acceleration)
+
+- [x] Phase 0: Reference implementations (backbone, FPN, DyHead, head, postprocess)
+- [x] Phase 1: Swin-L backbone (TTNN) -- from standalone swin_l module
+- [x] Phase 2: FPN neck (TTNN)
+- [x] Phase 3: DyHead -- hybrid (scale/task attention on TTNN, DCNv2 spatial on CPU)
+- [x] Phase 4: ATSS Head (TTNN)
+- [x] Phase 5: Post-processing (CPU -- anchors, bbox decode, NMS)
+- [x] Phase 6: Full model integration (hybrid TTNN + PyTorch)
+
+### Next TODOs
+- Full DyHead on TTNN (requires native TTNN DCNv2 kernel)
+- Optimization (sharding, precision tuning, L1 memory persistence)
