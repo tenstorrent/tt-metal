@@ -319,7 +319,7 @@ RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
 
 void RotaryEmbeddingHfMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const RotaryEmbeddingHfParams& operation_attributes,
+    const RotaryEmbeddingHfParams& /* operation_attributes */,
     const RotaryEmbeddingHfInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::constants;
@@ -342,7 +342,6 @@ void RotaryEmbeddingHfMultiCore::override_runtime_arguments(
     const auto& num_rows_per_core_group_1 = cached_program.shared_variables.num_rows_per_core_group_1;
     const auto& num_rows_per_core_group_2 = cached_program.shared_variables.num_rows_per_core_group_2;
     const auto& Wt = cached_program.shared_variables.Wt;
-    const auto& Ht = cached_program.shared_variables.Ht;
     const auto& HtWt = cached_program.shared_variables.HtWt;
 
     if (in_sharded) {
