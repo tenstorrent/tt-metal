@@ -12,8 +12,15 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
+
+
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
 
 
 @pytest.mark.parametrize(
@@ -35,6 +42,16 @@ from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn
         ttnn.H2DMode.DEVICE_PULL,
     ],
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(7168),
+        }
+    ],
+    indirect=True,
+)
 def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -45,6 +62,11 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
     core_coord = ttnn.CoreCoord(0, 0)
     socket_core = ttnn.MeshCoreCoord(device_coord, core_coord)
 
+    fwd_core_coord_0 = ttnn.CoreCoord(1, 1)
+    fwd_core_coord_1 = ttnn.CoreCoord(2, 2)
+    fwd_core_0 = ttnn.MeshCoreCoord(device_coord, fwd_core_coord_0)
+    fwd_core_1 = ttnn.MeshCoreCoord(device_coord, fwd_core_coord_1)
+
     logger.info("Creating and Running Host Interface")
     h2d_socket = ttnn.H2DSocket(mesh_device, socket_core, ttnn.BufferType.L1, fifo_size, h2d_mode)
     d2h_socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size)
@@ -54,9 +76,22 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
         tensor_size_bytes,
         tensor_size_bytes,
         core_to_core_socket_buffer_size=fifo_size,
-        loopback_mode=True,
+        h2d_downstream_core=fwd_core_0,
+        d2h_upstream_core=fwd_core_1,
     )
+
+    socket_interface = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_0,
+        fwd_core_1,
+        upstream_socket=host_io.get_downstream_socket(),
+        downstream_socket=host_io.get_upstream_socket(),
+    )
+
     host_io.run()
+    socket_interface.run()
 
     logger.info(f"Transferring Data Over H <-> D Interface for {num_iterations} iterations")
     logger.info(f"Tensor Size: {tensor_size_bytes} bytes, FIFO Size: {fifo_size} bytes")
@@ -178,4 +213,8 @@ def test_host_io_loopback_with_embedding(
 
     logger.info(f"{vocab_size} token lookups verified successfully")
 
+    print("Terminating host interface")
     host_io.terminate()
+    print("Terminating socket interface")
+    socket_interface.terminate()
+    print("Done terminating")

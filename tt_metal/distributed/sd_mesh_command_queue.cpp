@@ -101,7 +101,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto lock = lock_api_function_();
-    wait_for_cores_idle();
+    // wait_for_cores_idle();
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->impl().is_local(coord)) {
