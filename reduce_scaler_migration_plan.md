@@ -1,5 +1,18 @@
 # Plan: Replace Legacy `generate_reduce_scaler_legacy` Calls
 
+## Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 0 | moreh_sum_h (proof of concept) | Done |
+| 1 | Remaining moreh ops (3 kernels, 2 host files) | Done |
+| 2 | Generic reduce ops (3 kernels, 3 host factories) | Pending |
+| 3 | SDPA + MOE + Sampling (7 files) | Pending |
+| 4 | Softmax (5 files) | Pending |
+| 5 | Layernorm (9 files) | Pending |
+| 6 | GroupNorm + Experimental + Tests (10 files) | Pending |
+| Post | Cleanup: remove legacy API + dead code | Pending |
+
 ## Context
 
 The codebase has 38 kernel files calling `dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_id, packed_scaler)`, which takes a pre-packed bf16 uint32_t. Two new APIs in `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp` replace it:

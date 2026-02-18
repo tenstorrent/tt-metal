@@ -16,13 +16,12 @@ void kernel_main() {
     const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    constexpr uint32_t scaler = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_id_scaler, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
