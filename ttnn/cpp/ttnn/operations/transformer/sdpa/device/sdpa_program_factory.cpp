@@ -1022,14 +1022,14 @@ void SDPAProgramFactory::override_runtime_arguments(
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
 
-    auto *q_buffer = tensor_args.q.buffer();
-    auto *k_buffer = tensor_args.k.buffer();
+    auto* q_buffer = tensor_args.q.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
     auto* v_buffer = tensor_args.v.value_or(tensor_args.k).buffer();
-    auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
-    auto *attention_sink_buffer =
+    auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
+    auto* attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
 
-    auto *out0_buffer = tensor_return_value.buffer();
+    auto* out0_buffer = tensor_return_value.buffer();
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
