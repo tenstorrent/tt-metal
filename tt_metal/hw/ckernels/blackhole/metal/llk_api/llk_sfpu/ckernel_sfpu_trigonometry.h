@@ -49,11 +49,11 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
 
         t = sfpi::approx_recip(r);
 
-        // Newton-Raphson refinement resulting in t = -1/r.
+        // Newton-Raphson refinement.
         // e = 1 - r*t, then t <- t*(1 + e) = t*(2 - r*t)
-        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
-        vFloat neg_t = -t;
-        t = t * neg_e + neg_t;
+        sfpi::vFloat e = -r * t + sfpi::vConst1;
+        // Negate to get t = -1/r.
+        t = -t * e - t;
 
         // Reconstruct tan from corrected reciprocal terms.
         r = r * t + sfpi::vConst1;
@@ -80,9 +80,9 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     v_if(i < 0) {
         t = sfpi::approx_recip(r);
         // Newton-Raphson refinement resulting in r = -1/r.
-        sfpi::vFloat neg_e = r * t + sfpi::vConstNeg1;
-        vFloat neg_t = -t;
-        r = t * neg_e + neg_t;
+        sfpi::vFloat e = -r * t + sfpi::vConst1;
+        // Negate to get t = -1/r.
+        r = -t * e - t;
     }
     v_endif;
 
