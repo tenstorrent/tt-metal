@@ -28,25 +28,35 @@ void kernel_main() {
     // CTArgs type alias (required for Op template)
     constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
     constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
-    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht>;
+    constexpr uint32_t cos_sin_page_size = get_named_compile_time_arg_val("cos_sin_page_size");
+    using RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<Wt, Ht, cos_sin_page_size>;
 
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
+    constexpr uint32_t cos_tensor_address = get_named_compile_time_arg_val("cos_tensor_address");
+    constexpr uint32_t sin_tensor_address = get_named_compile_time_arg_val("sin_tensor_address");
+    constexpr uint32_t position_ids_tensor_address = get_named_compile_time_arg_val("position_ids_tensor_address");
     constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-    // Setup sharded buffers: input CB contains Ht * Wt tiles total (consumed in Ht iterations),
-    // sin/cos CBs contain Wt tiles each (reused for all Ht heads)
+    constexpr uint32_t grid_start_x = get_named_compile_time_arg_val("grid_start_x");
+    constexpr uint32_t grid_start_y = get_named_compile_time_arg_val("grid_start_y");
+    constexpr uint32_t grid_end_x = get_named_compile_time_arg_val("grid_end_x");
+    constexpr uint32_t grid_end_y = get_named_compile_time_arg_val("grid_end_y");
+
     unified_kernels::setup_sharded_buffer(in_cb, Wt);
-    unified_kernels::setup_sharded_buffer(cos_cb, Wt);
-    unified_kernels::setup_sharded_buffer(sin_cb, Wt);
     unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
 
-    // Reader args: CB indices for sharded input signaling
+    uint32_t core_index = unified_kernels::linear_id_in_grid<true>(grid_start_x, grid_start_y, grid_end_x, grid_end_y);
+
     deepseek_b1_ops::Rope::ReaderArgs rope_args{
         .in_cb = in_cb,
         .cos_cb = cos_cb,
         .sin_cb = sin_cb,
+        .cos_tensor_address = cos_tensor_address,
+        .sin_tensor_address = sin_tensor_address,
+        .position_ids_tensor_address = position_ids_tensor_address,
         .trans_mat_cb = trans_mat_cb,
+        .cos_sin_start_page = core_index * Wt,
     };
 
 #elif defined(COMPILE_FOR_BRISC)

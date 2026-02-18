@@ -82,6 +82,7 @@ class RopeSingleCore:
         cos_tensor,
         sin_tensor,
         trans_mat_tensor,
+        position_ids_tensor,
         output_tensor,
         fp32_dest_acc_en=False,
     ):
@@ -144,10 +145,30 @@ class RopeSingleCore:
         input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
 
         # CB 1: Cos (sharded tensor)
-        cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cos_cb, cos_tensor)
+        cos_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_cb,
+            data_format=data_format,
+            page_size=tile_size,
+            tile=tile_descriptor,
+        )
+        cos_cb_descriptor = ttnn.CBDescriptor(
+            total_size=head_dim_per_core_t * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[cos_format],
+        )
 
         # CB 2: Sin (sharded tensor)
-        sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sin_cb, sin_tensor)
+        sin_format = ttnn.CBFormatDescriptor(
+            buffer_index=sin_cb,
+            data_format=data_format,
+            page_size=tile_size,
+            tile=tile_descriptor,
+        )
+        sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=head_dim_per_core_t * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[sin_format],
+        )
 
         # CB 3: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
@@ -198,14 +219,25 @@ class RopeSingleCore:
         # Unified Kernel Descriptor (handles NCRISC, BRISC, TRISC)
         # ========================================================================
 
+        # Grid bounds for per-core page offset computation
+        bbox = core_grid.bounding_box()
+
         # Named compile-time args for NCRISC
         ncrisc_named_compile_time_args = [
             ("in_cb", input_cb),
+            ("cos_tensor_address", cos_tensor.buffer_address()),
+            ("sin_tensor_address", sin_tensor.buffer_address()),
+            ("position_ids_tensor_address", position_ids_tensor.buffer_address()),
             ("cos_cb", cos_cb),
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
+            ("cos_sin_page_size", tile_size),
             ("Wt", head_dim_per_core_t),
             ("Ht", 1),
+            ("grid_start_x", bbox.start.x),
+            ("grid_start_y", bbox.start.y),
+            ("grid_end_x", bbox.end.x),
+            ("grid_end_y", bbox.end.y),
         ]
 
         # Named compile-time args for BRISC (empty - no-op)
