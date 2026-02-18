@@ -482,25 +482,37 @@ function deduplicateAndSortRuns(runs) {
 }
 
 /**
- * Computes the latest conclusion for a set of runs
+ * Computes the latest conclusion for a set of runs, skipping cancelled/skipped
+ * runs. This matches the fetch step's targetRun selection logic: cancelled runs
+ * don't produce useful failure data, so they shouldn't drive the success/failure
+ * determination.
  * @param {Array} runs - Array of workflow runs
  * @returns {string|null} 'success', 'failure', or null
  */
 function computeLatestConclusion(runs) {
   const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns[0];
+  const latest = mainBranchRuns.find(r => {
+    const conc = r && r.conclusion;
+    return conc !== 'cancelled' && conc !== 'skipped';
+  });
   if (!latest) return null;
   return latest.conclusion === 'success' ? 'success' : 'failure';
 }
 
 /**
- * Gets the latest run info for a set of runs
+ * Gets the latest run info for a set of runs, skipping cancelled/skipped runs.
+ * This matches the fetch step's targetRun selection logic so that the run_id
+ * used for error-snippet lookups corresponds to a run we actually downloaded
+ * annotations/logs for.
  * @param {Array} runs - Array of workflow runs
  * @returns {Object|null} Run info object or null
  */
 function computeLatestRunInfo(runs) {
   const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns[0];
+  const latest = mainBranchRuns.find(r => {
+    const conc = r && r.conclusion;
+    return conc !== 'cancelled' && conc !== 'skipped';
+  });
   if (!latest) return null;
   return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
 }
