@@ -12,7 +12,9 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.dino_5scale_swin_l.common import (
-    DINO_INPUT_H, DINO_INPUT_W, SWIN_L_EMBED_DIM,
+    DINO_INPUT_H,
+    DINO_INPUT_W,
+    SWIN_L_EMBED_DIM,
 )
 from loguru import logger
 
@@ -39,11 +41,14 @@ def test_ttnn_swin_mlp_pcc(device, swin_l_ref, swin_l_ckpt_path, reset_seeds):
     ttnn_mlp = TtSwinMLP(device, block_params["mlp"], dim=SWIN_L_EMBED_DIM, mlp_ratio=4.0)
 
     # Apply norm2 first (same as reference)
-    ttnn_x = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-                              memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_x = ttnn.from_torch(
+        x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     ttnn_x = ttnn.to_layout(ttnn_x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn_normed = ttnn.layer_norm(
-        ttnn_x, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"],
+        ttnn_x,
+        weight=block_params["norm2"]["weight"],
+        bias=block_params["norm2"]["bias"],
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_out = ttnn_mlp(ttnn_normed)

@@ -33,11 +33,11 @@ def _nearest_32_per_core(x, core):
 # These are used to precompute reciprocals for Welford GN.
 DINO_NECK_LEVEL_SHAPES = {
     # level: (N, C, H, W)
-    0: (1, 256, 200, 334),   # P2
-    1: (1, 256, 100, 167),   # P3
-    2: (1, 256, 50, 84),     # P4
-    3: (1, 256, 25, 42),     # P5
-    4: (1, 256, 13, 21),     # P6
+    0: (1, 256, 200, 334),  # P2
+    1: (1, 256, 100, 167),  # P3
+    2: (1, 256, 50, 84),  # P4
+    3: (1, 256, 25, 42),  # P5
+    4: (1, 256, 13, 21),  # P6
 }
 
 
@@ -72,9 +72,7 @@ class TtDINONeck:
             self.parameters["convs"][i]["conv"]["weight"] = ttnn.from_device(
                 self.parameters["convs"][i]["conv"]["weight"]
             )
-            self.parameters["convs"][i]["conv"]["bias"] = ttnn.from_device(
-                self.parameters["convs"][i]["conv"]["bias"]
-            )
+            self.parameters["convs"][i]["conv"]["bias"] = ttnn.from_device(self.parameters["convs"][i]["conv"]["bias"])
         self.parameters["extra_convs"][0]["conv"]["weight"] = ttnn.from_device(
             self.parameters["extra_convs"][0]["conv"]["weight"]
         )
@@ -107,8 +105,12 @@ class TtDINONeck:
             gn_w = parameters["convs" if lvl < 4 else "extra_convs"][lvl if lvl < 4 else 0]["gn"]["_torch_w"]
             gn_b = parameters["convs" if lvl < 4 else "extra_convs"][lvl if lvl < 4 else 0]["gn"]["_torch_b"]
             [gamma, beta], input_mask = ttnn.dram_group_norm_params_from_torch(
-                [gn_w, gn_b], out_channels, num_groups, device,
-                core_grid=self.gn_core_grid, return_mask=True,
+                [gn_w, gn_b],
+                out_channels,
+                num_groups,
+                device,
+                core_grid=self.gn_core_grid,
+                return_mask=True,
             )
             self.gn_params_per_level[lvl] = {
                 "weight": gamma,
@@ -117,9 +119,7 @@ class TtDINONeck:
             }
 
             if use_welford:
-                torch_recip = ttnn.create_group_norm_reciprocals(
-                    N, C, H, W, num_groups, self.gn_core_grid
-                )
+                torch_recip = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, self.gn_core_grid)
                 inner_dim = torch_recip.shape[1]
                 page_bytes = inner_dim * 4
                 if page_bytes % 64 != 0:
@@ -171,9 +171,7 @@ class TtDINONeck:
         padded_h = _nearest_32_per_core(spatial, grid_x)
         padded_w = _nearest_32_per_core(C, grid_y)
         out_shape = [N, 1, padded_h, padded_w]
-        x = ttnn.tilize_with_val_padding(
-            x, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
-        )
+        x = ttnn.tilize_with_val_padding(x, output_tensor_shape=out_shape, pad_value=0, use_multicore=True)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
