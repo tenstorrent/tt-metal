@@ -198,6 +198,8 @@ class TtBarkAttention:
             new_value = ttnn.concat([past_value, value], dim=-2, memory_config=memory_config)
             ttnn.deallocate(key)
             ttnn.deallocate(value)
+            ttnn.deallocate(past_key)
+            ttnn.deallocate(past_value)
             key, value = new_key, new_value
 
         layer_present = (key, value) if use_cache else None
@@ -273,28 +275,41 @@ class TtBarkBlock:
         memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> tuple:
         """Forward pass through one transformer block."""
-        # Pre-norm + attention + residual
-        residual = hidden_states
-        normed = ttnn.layer_norm(
-            hidden_states, epsilon=1e-5, weight=self.ln1_weight, bias=self.ln1_bias, memory_config=memory_config
+        # Fused MLP structure: Norm -> FC1 -> Activation -> FC2 -> Residual
+        prev_hidden = hidden_states
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            epsilon=self.config.layer_norm_epsilon,
+            weight=self.ln1_weight,
+            bias=self.ln1_bias,
+            memory_config=memory_config,
         )
+        # Self-Attention
         attn_output, layer_present = self.attn(
-            normed, layer_past=layer_past, use_cache=use_cache, memory_config=memory_config
+            hidden_states, layer_past=layer_past, use_cache=use_cache, memory_config=memory_config
         )
-        ttnn.deallocate(normed)
-        hidden_states = ttnn.add(residual, attn_output, memory_config=memory_config)
-        ttnn.deallocate(residual)
+        ttnn.deallocate(hidden_states)
+
+        # Residual 1
+        hidden_states = ttnn.add(prev_hidden, attn_output, memory_config=memory_config)
+        ttnn.deallocate(prev_hidden)
         ttnn.deallocate(attn_output)
 
-        # Pre-norm + MLP + residual
-        residual = hidden_states
-        normed = ttnn.layer_norm(
-            hidden_states, epsilon=1e-5, weight=self.ln2_weight, bias=self.ln2_bias, memory_config=memory_config
+        prev_hidden = hidden_states
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            epsilon=self.config.layer_norm_epsilon,
+            weight=self.ln2_weight,
+            bias=self.ln2_bias,
+            memory_config=memory_config,
         )
-        mlp_output = self.mlp(normed, memory_config=memory_config)
-        ttnn.deallocate(normed)
-        hidden_states = ttnn.add(residual, mlp_output, memory_config=memory_config)
-        ttnn.deallocate(residual)
+        # MLP
+        mlp_output = self.mlp(hidden_states, memory_config=memory_config)
+        ttnn.deallocate(hidden_states)
+
+        # Residual 2
+        hidden_states = ttnn.add(prev_hidden, mlp_output, memory_config=memory_config)
+        ttnn.deallocate(prev_hidden)
         ttnn.deallocate(mlp_output)
 
         return hidden_states, layer_present
@@ -411,9 +426,11 @@ class TtBarkGPT:
                 layer_present.append(present)
 
         # Final layer norm
+        prev_hidden = tt_hidden
         tt_hidden = ttnn.layer_norm(
             tt_hidden, epsilon=1e-5, weight=self.ln_f_weight, bias=self.ln_f_bias, memory_config=memory_config
         )
+        ttnn.deallocate(prev_hidden)
 
         # LM head
         logits = ttnn.linear(

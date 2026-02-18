@@ -47,7 +47,10 @@ def device():
 @pytest.fixture(scope="module")
 def hf_model():
     """Load HuggingFace reference model."""
-    return load_bark_reference("suno/bark-small")
+    try:
+        return load_bark_reference("suno/bark-small")
+    except Exception as exc:
+        pytest.skip(f"Skipping Bark tests: failed to load HuggingFace reference model 'suno/bark-small': {exc}")
 
 
 class TestBarkSemantic:
