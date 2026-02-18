@@ -18,16 +18,22 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-from tests.sweep_framework.framework.constants import LEAD_MODELS
 
-# Add repo root to sys.path to enable tests.sweep_framework imports
+# Add repo root and current dir to sys.path BEFORE dependent imports
 _current_file = os.path.abspath(__file__)
 _current_dir = os.path.dirname(_current_file)
 _repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
 
-import tests.sweep_framework.lead_models_filter as lead_models_filter
+from tests.sweep_framework.framework.constants import LEAD_MODELS
+
+try:
+    import tests.sweep_framework.lead_models_filter as lead_models_filter
+except ModuleNotFoundError:
+    import lead_models_filter
 
 # Set up logger
 logger = logging.getLogger(__name__)

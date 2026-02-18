@@ -21,14 +21,19 @@ from pathlib import Path
 from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
-# Add repo root to sys.path to enable tests.sweep_framework imports
+# Add repo root and current dir to sys.path BEFORE dependent imports
 _current_file = os.path.abspath(__file__)
 _current_dir = os.path.dirname(_current_file)
 _repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
 
-import tests.sweep_framework.lead_models_filter as lead_models_filter
+try:
+    import tests.sweep_framework.lead_models_filter as lead_models_filter
+except ModuleNotFoundError:
+    import lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
