@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "pcie_noc_utils.h"
+#include "api/debug/dprint.h"
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -31,6 +32,7 @@ FORCE_INLINE bool cb_wait_for_pages_with_termination(
 }
 
 void kernel_main() {
+    DPRINT << "Starting d2h sender kernel" << ENDL();
     // Get this value from MeshSocket struct on host
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);

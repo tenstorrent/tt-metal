@@ -137,6 +137,18 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Returns the L1 address of the socket configuration buffer on the device.
                 This address is passed to device kernels to access socket metadata.
+            )doc")
+        .def(
+            "get_active_cores",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_active_cores(); },
+            R"doc(
+                Returns the active cores of the socket.
+            )doc")
+        .def(
+            "get_mesh_device",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_mesh_device(); },
+            R"doc(
+                Returns the mesh device of the socket.
             )doc");
 }
 

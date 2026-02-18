@@ -36,6 +36,131 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_interleaved_t
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
 
+class SocketInterface:
+    def __init__(
+        self,
+        page_size,
+        socket_fifo_size,
+        data_size_per_transfer,
+        send_core_coord,
+        recv_core_coord,
+        upstream_socket=None,
+        downstream_socket=None,
+    ):
+        self.upstream_socket = upstream_socket
+        self.downstream_socket = downstream_socket
+        self.page_size = page_size
+        self.send_core_coord = send_core_coord
+        self.recv_core_coord = recv_core_coord
+
+        assert self.upstream_socket.get_active_cores()[0] == send_core_coord
+        assert self.downstream_socket.get_active_cores()[0] == recv_core_coord
+
+        # Create a socket between the sender and receiver cores
+        socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
+        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+
+        socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+
+        self.socket_pair = ttnn.create_socket_pair(
+            self.upstream_socket.get_mesh_device(), self.downstream_socket.get_mesh_device(), socket_config
+        )
+
+    def run(self):
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.upstream_socket.get_mesh_device()
+        )
+
+        # Upstream sender connects to this socket
+        upstream_socket_config_addr = (
+            self.upstream_socket.get_config_buffer_address()
+        )  # self.socket_pair[0].get_config_buffer_address()
+        # Downstream receiver connects to this socket
+        downstream_socket_config_addr = (
+            self.downstream_socket.get_config_buffer_address()
+        )  # self.socket_pair[1].get_config_buffer_address()
+        # Intermed socket sender uses this socket to forward data to receiver
+        intermed_send_socket_config_addr = self.socket_pair[0].get_config_buffer_address()
+        # Intermed socket receiver uses this socket to handshake with sender
+        intermed_recv_socket_config_addr = self.socket_pair[1].get_config_buffer_address()
+
+        self.termination_semaphore = ttnn.create_global_semaphore(
+            self.upstream_socket.get_mesh_device(),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
+                    ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord),
+                ]
+            ),
+            0,
+            ttnn.BufferType.L1,
+        )
+        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        num_whole_fabric_packets = self.page_size // fabric_max_payload_size
+        partial_packet_size = self.page_size % fabric_max_payload_size
+
+        sender_kernel_ct_args = [
+            intermed_send_socket_config_addr,
+            upstream_socket_config_addr,
+            ttnn.get_global_semaphore_address(self.termination_semaphore),
+            self.page_size,
+            num_whole_fabric_packets,
+            fabric_max_payload_size,
+            partial_packet_size,
+        ]
+
+        receiver_kernel_ct_args = [
+            downstream_socket_config_addr,
+            intermed_recv_socket_config_addr,
+            ttnn.get_global_semaphore_address(self.termination_semaphore),
+            self.page_size,
+            num_whole_fabric_packets,
+            fabric_max_payload_size,
+            partial_packet_size,
+        ]
+
+        sender_kernel = ttnn.KernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2d_exchange.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=ttnn.CoreRangeSet(
+                [ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord)]
+            ),
+            compile_time_args=sender_kernel_ct_args,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+
+        receiver_kernel = ttnn.KernelDescriptor(
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2d_exchange.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=ttnn.CoreRangeSet(
+                [ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord)]
+            ),
+            compile_time_args=receiver_kernel_ct_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+
+        program = ttnn.ProgramDescriptor(
+            kernels=[sender_kernel, receiver_kernel],
+            semaphores=[],
+            cbs=[],
+        )
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        mesh_program_descriptor[
+            ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
+        ] = program
+
+        io_tensors = [
+            dummy_tensor,
+            dummy_tensor,
+        ]
+        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+
+    def terminate(self):
+        ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        ttnn.synchronize_device(self.upstream_socket.get_mesh_device())
+        ttnn.synchronize_device(self.downstream_socket.get_mesh_device())
+
+
 class HostInterface:
     def __init__(
         self,
@@ -44,8 +169,8 @@ class HostInterface:
         h2d_page_size,
         d2h_page_size,
         core_to_core_socket_buffer_size=1024,
-        h2d_downstream_core=ttnn.CoreCoord(0, 0),
-        d2h_upstream_core=ttnn.CoreCoord(0, 0),
+        h2d_downstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
+        d2h_upstream_core=ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)),
         embedding_tensor=None,
         loopback_mode=False,
     ):
@@ -79,14 +204,12 @@ class HostInterface:
         # For real workloads, downstream/upstream cores connect to H2D receiver and D2H sender via D2D sockets
         # NOTE: Downstream and upstream cores must be on the same device as the host I/O core (single-chip constraint)
         if not loopback_mode:
-            downstream_core = ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, h2d_downstream_core)
-            upstream_core = ttnn.MeshCoreCoord(self.mesh_core_coord.device_coord, d2h_upstream_core)
             downstream_socket_connection = ttnn.SocketConnection(
                 self.mesh_core_coord,
-                downstream_core,
+                h2d_downstream_core,
             )
             upstream_socket_connection = ttnn.SocketConnection(
-                upstream_core,
+                d2h_upstream_core,
                 self.mesh_core_coord,
             )
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
@@ -243,8 +366,14 @@ class HostInterface:
 
         return ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
+    def get_downstream_socket(self):
+        return self.downstream_socket_pair[1]
+
+    def get_upstream_socket(self):
+        return self.upstream_socket_pair[0]
+
     def terminate(self):
         self.h2d_socket.barrier()
         self.d2h_socket.barrier()
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
-        ttnn.synchronize_device(self.mesh_device)
+        # ttnn.synchronize_device(self.mesh_device)
