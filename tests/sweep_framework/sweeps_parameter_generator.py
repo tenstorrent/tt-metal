@@ -19,7 +19,7 @@ from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -94,10 +94,6 @@ def group_vectors_by_mesh_shape(vectors):
 
 # Generate vectors from module parameters
 def generate_vectors(module_name, model_traced, suite_name=None):
-    # Configure MasterConfigLoader filter BEFORE importing sweep modules
-    # This replaces the previous environment variable approach for cleaner control
-    MasterConfigLoader.set_lead_models_filter(model_traced == "lead")
-
     # Import or reload the module to pick up the filter setting
     # Note: Reload is still needed because sweep modules define parameters at import time
     module_path = "sweeps." + module_name
@@ -422,6 +418,17 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
+
+    # Configure lead models filter if --model-traced lead is specified
+    # This must be set BEFORE any sweep modules are imported
+    if model_traced == "lead":
+        MasterConfigLoader.set_lead_models_filter(True)
+        print("=" * 80)
+        print("🔧 LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations")
+        print("=" * 80)
+        logger.info("Lead models filter enabled: Only loading DeepSeek V3 configurations")
+    else:
+        MasterConfigLoader.set_lead_models_filter(False)
 
     if suite_name:
         logger.info(f"Filtering to suite: {suite_name}")
