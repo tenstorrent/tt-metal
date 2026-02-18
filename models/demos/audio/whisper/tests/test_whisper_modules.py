@@ -100,12 +100,11 @@ def test_whisper_attention(
         kv_cache, _ = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
         )
-        kv_cache = kv_cache[0]  # Get first layer's cache for attention test
+        kv_cache = kv_cache[batch_size_per_device][0]  # Get first layer's cache for attention test
         current_decode_pos = ttnn.from_torch(
             torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
         )
@@ -348,13 +347,12 @@ def test_decoder_layer(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             n_layers=1,
             weights_mesh_mapper=weights_mesh_mapper,
         )
-        kv_cache = kv_cache[0]
-        cross_attn_cache = cross_attn_cache[0]
+        kv_cache = kv_cache[batch_size_per_device][0]
+        cross_attn_cache = cross_attn_cache[batch_size_per_device][0]
         current_decode_pos = ttnn.from_torch(
             torch.zeros(batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
         )
@@ -450,7 +448,6 @@ def test_decoder(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             weights_mesh_mapper=weights_mesh_mapper,
         )
@@ -463,8 +460,8 @@ def test_decoder(
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=ttnn_encoder_hidden_states,
-        kv_cache=kv_cache if use_kv_cache else None,
-        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        kv_cache=kv_cache[batch_size_per_device] if use_kv_cache else None,
+        cross_attn_cache=cross_attn_cache[batch_size_per_device] if use_kv_cache else None,
         cross_attn_cache_valid=False,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
@@ -534,7 +531,6 @@ def test_ttnn_whisper(
         kv_cache, cross_attn_cache = init_kv_cache(
             config,
             mesh_device,
-            max_batch_size=batch_size_per_device,
             max_seq_len=512,
             weights_mesh_mapper=weights_mesh_mapper,
         )
@@ -547,8 +543,8 @@ def test_ttnn_whisper(
         input_embeds,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
-        kv_cache=kv_cache if use_kv_cache else None,
-        cross_attn_cache=cross_attn_cache if use_kv_cache else None,
+        kv_cache=kv_cache[batch_size_per_device] if use_kv_cache else None,
+        cross_attn_cache=cross_attn_cache[batch_size_per_device] if use_kv_cache else None,
         current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
@@ -625,7 +621,6 @@ def test_traced_decoder_executor(
     kv_cache, cross_attn_cache = init_kv_cache(
         config,
         mesh_device,
-        max_batch_size=batch_size_per_device,
         max_seq_len=512,
         weights_mesh_mapper=weights_mesh_mapper,
     )
@@ -684,8 +679,8 @@ def test_traced_decoder_executor(
                 hidden_states=decoder_hidden_states,
                 decoder_attention_mask=None,
                 encoder_hidden_states=ttnn_encoder_hidden_states,
-                kv_cache=kv_cache,
-                cross_attn_cache=cross_attn_cache,
+                kv_cache=kv_cache[batch_size_per_device],
+                cross_attn_cache=cross_attn_cache[batch_size_per_device],
                 cross_attn_cache_valid=cross_attn_cache_valid,
                 current_decode_pos=current_decode_pos,
                 parameters=ttnn_parameters,
@@ -706,8 +701,8 @@ def test_traced_decoder_executor(
                         hidden_states=hidden_states,
                         decoder_attention_mask=None,
                         encoder_hidden_states=ttnn_encoder_hidden_states,
-                        kv_cache=kv_cache,
-                        cross_attn_cache=cross_attn_cache,
+                        kv_cache=kv_cache[batch_size_per_device],
+                        cross_attn_cache=cross_attn_cache[batch_size_per_device],
                         cross_attn_cache_valid=True,  # Cache is now populated
                         current_decode_pos=current_decode_pos,
                         parameters=ttnn_parameters,
