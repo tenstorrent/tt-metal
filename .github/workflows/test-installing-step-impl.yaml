@@ -65,7 +65,7 @@ jobs:
 
       - name: Download Falcon 7B weights from LFC
         shell: bash
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
@@ -82,7 +82,7 @@ jobs:
           sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
-        timeout-minutes: 60
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
