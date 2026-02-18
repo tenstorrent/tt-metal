@@ -195,7 +195,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
-        # [torch.bfloat16, ttnn.bfloat16],
+        [torch.bfloat16, ttnn.bfloat16],
         # works, but time consuming
         # [torch.float32, ttnn.float32],
         [torch.bfloat16, ttnn.bfloat8_b],
@@ -4559,7 +4559,6 @@ def test_multiply_bfloat8_b_bcast_scalarsharded(device):
     torch.manual_seed(42)
 
     # Configuration from SD model for seq_len=64 case
-    seq_len = 64
     key_len = 96  # 77 actual + padding to 96 for tile alignment
     dim_head = 160  # For seq_len=64
     tiles_per_shard = 1  # From SD model calculation

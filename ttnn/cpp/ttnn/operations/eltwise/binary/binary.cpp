@@ -196,10 +196,7 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
             return true;
         }
     }
-
-    // return false;
-    // TODO: soon remove this, as it will always return true
-    //  confirm after all CI passes
+    // TODO: soon remove the whole function when legacy binary is fully deprecated, as it will always return true now
     return true;
 }
 
@@ -304,8 +301,6 @@ inline auto invoke_binary_ng(
         }
     }
     const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
-
-    const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 
     if (dtype.has_value() && output_preallocated) {
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
