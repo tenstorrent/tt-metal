@@ -45,8 +45,8 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);

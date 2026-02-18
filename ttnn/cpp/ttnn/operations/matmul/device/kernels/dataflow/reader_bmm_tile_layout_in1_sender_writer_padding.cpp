@@ -97,7 +97,7 @@ void kernel_main() {
 
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
-    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
@@ -161,7 +161,7 @@ void kernel_main() {
 #endif  // BIAS_SHARDED
 #endif  // FUSE_BIAS
 
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
@@ -177,13 +177,13 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
     //  WRITER
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
     const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 
     // sparsity accessor
-    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_7;
+    constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
@@ -352,7 +352,8 @@ void kernel_main() {
                         // Operand 1 - interleaved
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 #ifdef INTERMEDIATE_CB_READ
-                        constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+                        constexpr uint32_t in1_intermediate_cb_index =
+                            get_named_compile_time_arg_val("cb_in1_intermediate");
                         cb_reserve_back(in1_intermediate_cb_index, one_tile);
                         uint32_t l1_write_addr_helper = get_write_ptr(in1_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ

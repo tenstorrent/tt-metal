@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t in1_shard_width_in_dram = get_compile_time_arg_val(10);
 
     uint32_t rt_args_idx = 0;
-    constexpr bool needs_signaler = get_compile_time_arg_val(15) == 1;
+    constexpr bool needs_signaler = get_compile_time_arg_val(11) == 1;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
@@ -98,11 +98,11 @@ void kernel_main() {
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(11);
-    constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
-    constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
-    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
-    constexpr auto in1_args = TensorAccessorArgs<16>();
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
+    constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
+    constexpr auto in1_args = TensorAccessorArgs<12>();
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 

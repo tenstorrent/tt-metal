@@ -44,14 +44,14 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t in3_page_size = get_compile_time_arg_val(9);
     constexpr uint32_t in3_num_pages = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
     constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
 #endif
 
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_4;
-    constexpr uint32_t cb_id_out_reshard = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
