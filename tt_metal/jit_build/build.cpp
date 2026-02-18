@@ -102,24 +102,32 @@ void JitBuildEnv::init(
     this->arch_ = arch;
     this->max_cbs_ = max_cbs;
 
+    // Check if git hash should be disabled (useful for CI to improve cache reuse)
+    const static bool disable_git_hash = std::getenv("TT_METAL_DISABLE_GIT_HASH") != nullptr;
+
 #ifndef GIT_COMMIT_HASH
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
 #else
-    std::string git_hash(GIT_COMMIT_HASH);
+    if (!disable_git_hash) {
+        std::string git_hash(GIT_COMMIT_HASH);
 
-    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-    std::filesystem::path root_path(this->out_root_);
-    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            if (dir_entry.path().compare(git_hash_path) != 0) {
-                std::filesystem::remove_all(dir_entry.path());
-            }
-        });
+        std::filesystem::path git_hash_path(this->out_root_ + git_hash);
+        std::filesystem::path root_path(this->out_root_);
+        if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
+            std::ranges::for_each(
+                std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+                    if (dir_entry.path().compare(git_hash_path) != 0) {
+                        std::filesystem::remove_all(dir_entry.path());
+                    }
+                });
+        } else {
+            log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+        }
+
+        this->out_root_ = this->out_root_ + git_hash + "/";
     } else {
-        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+        log_info(tt::LogBuildKernels, "Git hash disabled via TT_METAL_DISABLE_GIT_HASH");
     }
-
-    this->out_root_ = this->out_root_ + git_hash + "/";
 #endif
 
     // Tools

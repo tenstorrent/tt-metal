@@ -487,7 +487,7 @@ jobs:
             build_args+=("--enable-lto")
           fi
           # Disable git hash in CI to avoid cache invalidation across builds
-          build_args+=("--disable-git-hash")
+          export TT_METAL_DISABLE_GIT_HASH=1
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
 

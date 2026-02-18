@@ -137,6 +137,7 @@ runs:
         echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
         echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+        echo "TT_METAL_DISABLE_GIT_HASH=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
         echo "CCACHE_DEBUG=1" >> $GITHUB_ENV
         echo "CCACHE_LOGFILE=/tmp/ccache/ccache.log" >> $GITHUB_ENV

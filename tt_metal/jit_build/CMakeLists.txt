@@ -27,7 +27,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
 )
 
-if(DEFINED VERSION_HASH AND VERSION_HASH)
+if(DEFINED VERSION_HASH)
     target_compile_definitions(jit_build PRIVATE "-DGIT_COMMIT_HASH=\"${VERSION_HASH}\"")
 endif()
 
