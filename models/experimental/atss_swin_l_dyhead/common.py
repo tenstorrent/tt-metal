@@ -5,8 +5,16 @@
 ATSS-specific config and constants.
 The Swin-L backbone itself lives in models/experimental/swin_l/ —
 this file only contains ATSS detection model settings.
+
+Environment variable overrides
+-------------------------------
+ATSS_CHECKPOINT   Path to the .pth checkpoint file. If set and the file
+                  exists, it is used directly (skipping auto-download).
+ATSS_CONFIG       Path to the mmdet config .py file. If set and the file
+                  exists, it is used directly.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -80,7 +88,17 @@ def _download_checkpoint():
 
 
 def get_checkpoint_path() -> str:
-    """Return the path to the ATSS .pth checkpoint, downloading if necessary."""
+    """Return the path to the ATSS .pth checkpoint.
+
+    Resolution order:
+      1. ATSS_CHECKPOINT env var (if set and file exists)
+      2. Local weights/ directory
+      3. Auto-download via ``mim download mmdet``
+    """
+    env = os.environ.get("ATSS_CHECKPOINT")
+    if env and Path(env).is_file():
+        return env
+
     path = _WEIGHTS_DIR / _CHECKPOINT_FILENAME
     if path.is_file():
         return str(path)
@@ -89,17 +107,26 @@ def get_checkpoint_path() -> str:
         return str(path)
     raise FileNotFoundError(
         f"Checkpoint not found at {path} even after download attempt.\n"
-        f"Manually place the file or run:\n"
+        f"Set ATSS_CHECKPOINT env var, manually place the file, or run:\n"
         f"  mim download mmdet --config {_MMDET_CONFIG_NAME} --dest {_WEIGHTS_DIR}"
     )
 
 
 def get_config_path() -> str:
-    """Return the path to the ATSS mmdet config .py file."""
+    """Return the path to the ATSS mmdet config .py file.
+
+    Resolution order:
+      1. ATSS_CONFIG env var (if set and file exists)
+      2. Local weights/ directory
+    """
+    env = os.environ.get("ATSS_CONFIG")
+    if env and Path(env).is_file():
+        return env
+
     path = _WEIGHTS_DIR / _CONFIG_FILENAME
     if path.is_file():
         return str(path)
-    raise FileNotFoundError(f"Config not found at {path}.")
+    raise FileNotFoundError(f"Config not found at {path}.\n" f"Set ATSS_CONFIG env var or place the file manually.")
 
 
 ATSS_CHECKPOINT = get_checkpoint_path()
