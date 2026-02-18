@@ -297,7 +297,6 @@ static std::vector<Tensor> pool2d_L1(
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-        input_tensor_sharded.memory_config(),
         is_out_tiled,
         config_tensor_in_dram);
 
@@ -823,13 +822,6 @@ static std::vector<Tensor> pool2d_DRAM(
         output_width,
         channels);
 
-    // Verify that return_indices operations can fit in a single slice
-    TT_FATAL(
-        !return_indices || dram_slice_config.num_slices == 1,
-        "Max pool with return_indices=True requires {} slices to fit in L1 memory. "
-        "DRAM pooling with return_indices=True and multiple slices is not supported yet. ",
-        dram_slice_config.num_slices);
-
     // If automatic determination resulted in num_slices=1, use L1 path for efficiency
     if (dram_slice_config.num_slices == 1) {
         return pool2d_L1(
@@ -990,7 +982,8 @@ static std::vector<Tensor> pool2d(
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
 
-    auto exec_path = determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);
+    auto exec_path =
+        return_indices ? Pool2dExecutionPath::L1 : determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);
     if (exec_path == Pool2dExecutionPath::L1) {
         auto result = pool2d_L1(
             input_tensor_4d,
@@ -1045,7 +1038,7 @@ static std::vector<Tensor> pool2d(
     return result;
 }
 
-std::vector<Tensor> MaxPool2DOp::invoke(
+std::vector<Tensor> max_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -1092,7 +1085,7 @@ std::vector<Tensor> MaxPool2DOp::invoke(
     return result;
 }
 
-Tensor AvgPool2DOp::invoke(
+Tensor avg_pool2d(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,

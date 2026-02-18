@@ -12,21 +12,15 @@
 #include "internal/debug/stack_usage.h"
 #include "tt_metal/hw/firmware/src/trisc.cc"
 
-// Those values come from generated files, so hardcode values here
+// Those values come from generated chlkc_descriptors.h, so hardcode values here for fake JIT builds
 
-// chlkc_dst_accum_mode.h
+// chlkc_descriptors.h (scalars)
 constexpr bool DST_ACCUM_MODE = false;
-
-// chlkc_dst_sync_mode.h
 #define DST_SYNC_MODE DstSync::SyncHalf
-
-// chlkc_math_approx_mode.h
 constexpr bool APPROX = true;
-
-// chlkc_math_fidelity.h
 constexpr std::int32_t MATH_FIDELITY = 255;
 
-// chlkc_pack_data_format.h
+// chlkc_descriptors.h (pack data format arrays)
 constexpr unsigned char pack_src_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -36,7 +30,7 @@ constexpr unsigned char pack_dst_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
 
-// chlkc_pack_tile_dims.h
+// chlkc_descriptors.h (pack tile dim arrays)
 constexpr uint8_t pack_tile_num_faces[32] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 };
@@ -63,7 +57,7 @@ constexpr uint16_t pack_tile_size[32] = {
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
 };
 
-// chlkc_unpack_data_format.h
+// chlkc_descriptors.h (unpack data format arrays)
 constexpr std::int32_t unpack_src_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -73,7 +67,7 @@ constexpr std::int32_t unpack_dst_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
 
-// chlkc_unpack_tile_dims.h
+// chlkc_descriptors.h (unpack tile dim arrays)
 constexpr uint8_t unpack_tile_num_faces[32] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 };

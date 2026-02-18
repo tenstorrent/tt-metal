@@ -1,4 +1,4 @@
-name: Aggregate Workflow Data
+name: (triage) Aggregate Workflow Data
 on:
   push:
     branches:

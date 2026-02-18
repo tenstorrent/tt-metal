@@ -436,7 +436,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     return src_addr;
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -444,7 +444,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (use_vc) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
@@ -805,7 +805,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_vc = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -815,13 +815,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t read_req_vc = 1) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
+        ncrisc_noc_fast_read<noc_mode, use_vc>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
         src_addr += NOC_MAX_BURST_SIZE;
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
+    ncrisc_noc_fast_read<noc_modem use_vc>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
@@ -1003,6 +1003,56 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (!posted) {
             noc_nonposted_atomics_acked[noc] += 1;
+        }
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
+inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t addr,
+    uint32_t vc,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    uint32_t num_dests,
+    bool multicast_path_reserve,
+    bool posted = false) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if (!posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, num_dests);
+        }
+    }
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, 0);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_CTRL_LO,
+        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
+            (multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET |
+            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC));
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        cmd_buf,
+        NOC_AT_LEN,
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if (!posted) {
+            noc_nonposted_atomics_acked[noc] += num_dests;
         }
     }
 }

@@ -46,6 +46,16 @@ static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(9);
 static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(10);
 static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);
 
+// Scatter phase compile-time arguments (for distributing output rows to dest cores)
+// scatter_num_rows = 0 disables the scatter phase entirely.
+static constexpr uint32_t cb_l_out = get_compile_time_arg_val(12);
+static constexpr uint32_t scatter_num_tiles = get_compile_time_arg_val(13);
+static constexpr uint32_t scatter_src_tile_size = get_compile_time_arg_val(14);
+static constexpr uint32_t scatter_dst_tile_size = get_compile_time_arg_val(15);
+static constexpr uint32_t scatter_face_size = get_compile_time_arg_val(16);
+static constexpr uint32_t scatter_row_face_size = get_compile_time_arg_val(17);
+static constexpr uint32_t scatter_num_rows = get_compile_time_arg_val(18);
+
 static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
 // Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
@@ -354,4 +364,74 @@ void kernel_main() {
     sender.finish_round();
 
     noc_async_full_barrier();
+
+    // ==========================================================================
+    // SCATTER PHASE: Distribute output rows to destination cores
+    // Each row of the [batch, width] output is reformatted from batch×32 tiles
+    // to 1×32 tiles and written to a unique destination core via NOC.
+    //
+    // Tile format:
+    //   Source (8×32): Face0 [8×16] at offset 0, Face1 [8×16] at scatter_face_size
+    //   Dest   (1×32): Face0 [1×16] at offset 0, Face1 [1×16] at scatter_row_face_size
+    //
+    // For each row j (0..scatter_num_rows-1):
+    //   1. Local reorder: extract row j from each source tile into 1×32 tile format
+    //   2. NOC write the reordered tiles to the destination core
+    // ==========================================================================
+    if constexpr (scatter_num_rows > 0) {
+        // Read scatter runtime args (only present when scatter is enabled)
+        const uint32_t scatter_dest_l1_addr = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t scatter_dest_noc_x[scatter_num_rows];
+        uint32_t scatter_dest_noc_y[scatter_num_rows];
+        for (uint32_t i = 0; i < scatter_num_rows; i++) {
+            scatter_dest_noc_x[i] = get_arg_val<uint32_t>(arg_idx++);
+            scatter_dest_noc_y[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+
+        // Wait for all compute output tiles
+        cb_wait_front(cb_l_out, scatter_num_tiles);
+        uint32_t src_base = get_read_ptr(cb_l_out);
+
+        // Reuse R1 result L buffer as temp scratch for reordering
+        // (no longer needed after R2 streaming send; size >= scatter_num_tiles * scatter_dst_tile_size)
+        uint32_t temp_base = get_read_ptr(cb_r1_result_l);
+
+        constexpr uint32_t row_face_words = scatter_row_face_size / sizeof(uint32_t);
+        constexpr uint32_t scatter_payload_bytes = scatter_num_tiles * scatter_dst_tile_size;
+
+        for (uint32_t row = 0; row < scatter_num_rows; row++) {
+            // Reorder: extract row from each source tile into dest tile format
+            for (uint32_t t = 0; t < scatter_num_tiles; t++) {
+                uint32_t src_tile = src_base + t * scatter_src_tile_size;
+                uint32_t dst_tile = temp_base + t * scatter_dst_tile_size;
+
+                // Copy Face 0 row: src face0[row] -> dst face0
+                volatile tt_l1_ptr uint32_t* src_f0 =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_tile + row * scatter_row_face_size);
+                volatile tt_l1_ptr uint32_t* dst_f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile);
+#pragma GCC unroll 8
+                for (uint32_t w = 0; w < row_face_words; w++) {
+                    dst_f0[w] = src_f0[w];
+                }
+
+                // Copy Face 1 row: src face1[row] -> dst face1
+                volatile tt_l1_ptr uint32_t* src_f1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    src_tile + scatter_face_size + row * scatter_row_face_size);
+                volatile tt_l1_ptr uint32_t* dst_f1 =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_tile + scatter_row_face_size);
+#pragma GCC unroll 8
+                for (uint32_t w = 0; w < row_face_words; w++) {
+                    dst_f1[w] = src_f1[w];
+                }
+            }
+
+            // Write reordered row to destination core
+            uint64_t dest_noc_addr =
+                get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], scatter_dest_l1_addr);
+            noc_async_write(temp_base, dest_noc_addr, scatter_payload_bytes);
+            noc_async_writes_flushed();  // Ensure temp buffer can be reused for next row
+        }
+
+        noc_async_write_barrier();  // Ensure all scatter writes complete
+    }
 }

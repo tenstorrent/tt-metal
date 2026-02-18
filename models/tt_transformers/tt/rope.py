@@ -413,9 +413,12 @@ class RotarySetup(LightweightModule):
             )
         else:
             self.batch_size_per_device_group = self.doubled_batch_size
+        # Always use (8, 8) on wormhole (compute_with_storage_grid_size returns (8, 9) on Galaxy)
+        self.core_grid = (
+            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
+        )
 
         self.start_core = ttnn.CoreCoord(1, 0)
-        self.core_grid = device.compute_with_storage_grid_size()
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
             head_dim=head_dim,
@@ -455,7 +458,7 @@ class RotarySetup(LightweightModule):
                 return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
 
         self.batch_grid = get_batch_grid(
-            self.doubled_batch_size,
+            self.batch_size_per_device_group,
             self.core_grid,
             self.start_core,
             self.batch_size_per_device_group,
