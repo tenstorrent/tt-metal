@@ -20,6 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from tests.sweep_framework.framework.constants import LEAD_MODELS
 
+# Add repo root to sys.path to enable tests.sweep_framework imports
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 import tests.sweep_framework.lead_models_filter as lead_models_filter
 
 # Set up logger
