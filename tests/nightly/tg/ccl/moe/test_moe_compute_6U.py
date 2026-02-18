@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
@@ -350,6 +350,7 @@ def validate_matmul(
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
+            allclose_passed, allclose_val = comp_allclose(torch_layer_output, tt_layer_output)
             std = torch_layer_output.std().item()
             relative_rmse_val = (
                 (torch.nn.functional.mse_loss(torch_layer_output, tt_layer_output).sqrt().item() / std)
@@ -363,6 +364,7 @@ def validate_matmul(
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                    f" Allclose passed: {allclose_passed} allclose value: {allclose_val}"
                 )
 
     return matmul_all_passed
