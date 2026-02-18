@@ -54,8 +54,9 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_2, scaler);
+        uint32_t scaler_bits = get_arg_val<uint32_t>(4);
+        float scaler_f = __builtin_bit_cast(float, scaler_bits);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2>(scaler_f);
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);

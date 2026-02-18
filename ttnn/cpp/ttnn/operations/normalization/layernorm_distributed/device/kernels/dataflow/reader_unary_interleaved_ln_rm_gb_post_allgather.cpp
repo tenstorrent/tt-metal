@@ -64,8 +64,9 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    uint32_t scaler = get_arg_val<uint32_t>(5);
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_reduce, scaler);
+    uint32_t scaler_bits = get_arg_val<uint32_t>(5);
+    float scaler_f = __builtin_bit_cast(float, scaler_bits);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce>(scaler_f);
     const uint32_t eps = get_arg_val<uint32_t>(6);
     generate_bcast_col_scalar(cb_eps, eps);
 

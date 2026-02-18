@@ -56,10 +56,12 @@ void kernel_main() {
         // Scaler(s) for reduce
         constexpr uint32_t cb_in_2 = 2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
-        dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_2, scaler);
+        float scaler_f = __builtin_bit_cast(float, scaler);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2>(scaler_f);
         const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
         if (partial_last_tile_cols > 0) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            uint32_t packed_scaler = get_arg_val<uint32_t>(10);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, packed_scaler, partial_last_tile_cols);
         }
     }
     constexpr uint32_t eps_cb_id = 3;

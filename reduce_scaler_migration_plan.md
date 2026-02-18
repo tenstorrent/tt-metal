@@ -9,7 +9,7 @@
 | 2 | Generic reduce ops (3 kernels, 3 host factories) | Pending |
 | 3 | SDPA + MOE + Sampling (7 files) | Done |
 | 4 | Softmax (5 files) | Done |
-| 5 | Layernorm (9 files) | Pending |
+| 5 | Layernorm (9 files) | Done |
 | 6 | GroupNorm + Experimental + Tests (10 files) | Pending |
 | Post | Cleanup: remove legacy API + dead code | Pending |
 

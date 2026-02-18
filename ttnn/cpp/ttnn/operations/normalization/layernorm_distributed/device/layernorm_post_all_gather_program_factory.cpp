@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
+#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
@@ -21,31 +22,7 @@ using namespace tt::constants;
 namespace ttnn::prim {
 
 namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
+namespace CMAKE_UNIQUE_NAMESPACE {}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 // =============================================================================
@@ -431,8 +408,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
     uint32_t curr_row = 0;
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
+    uint32_t winv_bits = std::bit_cast<uint32_t>(winv);
     union {
         float f;
         uint32_t u;
@@ -463,7 +439,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tiles_per_core_y,
                      tile_offset,
                      stats_offset,
-                     packed_winv_value,
+                     winv_bits,
                      e.u,
                      gamma_dram_addr,
                      beta_dram_addr,
@@ -500,7 +476,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  Wt,
                  tile_offset,
                  stats_offset,
-                 packed_winv_value,
+                 winv_bits,
                  e.u,
                  gamma_dram_addr,
                  beta_dram_addr,

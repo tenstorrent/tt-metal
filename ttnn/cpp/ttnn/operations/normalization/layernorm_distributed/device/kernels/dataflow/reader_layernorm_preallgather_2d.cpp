@@ -47,11 +47,12 @@ void kernel_main() {
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
     // Generate constant tiles for reduce scalar
-    uint32_t scaler = get_arg_val<uint32_t>(8);
+    uint32_t scaler_bits = get_arg_val<uint32_t>(8);
+    float scaler_f = __builtin_bit_cast(float, scaler_bits);
 
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_reduce, scaler);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_reduce>(scaler_f);
     if (is_merge_core) {
-        dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_zero, 0);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_zero>(0.0f);
     }
 
     uint32_t inp_tile_idx = tile_offset;
