@@ -561,7 +561,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         total_prompts = len(all_input_prompts)
         num_devices = self.mesh_device.shape[1 - self.parallel_config.tensor_parallel.mesh_axis]
 
-        # Pad batch list of prompts to ensure proper shadding on batch dimension.
+        # Pad batch list of prompts to ensure proper sharding on batch dimension.
         all_input_prompts += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
         all_prompt_embeds = self._get_t5_prompt_embeds(
             prompt=all_input_prompts,
