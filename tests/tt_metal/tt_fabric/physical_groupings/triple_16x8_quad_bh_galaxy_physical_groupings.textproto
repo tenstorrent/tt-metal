@@ -227,7 +227,7 @@ groupings {
     { id: 3 grouping_ref { preset_type: HOSTS } }
   ]
   row_major_mesh {
-    dims: [4, 1]
+    dims: [1, 4]
   }
 }
 
