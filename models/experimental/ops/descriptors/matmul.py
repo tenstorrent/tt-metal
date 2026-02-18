@@ -78,7 +78,8 @@ def matmul(
     # Create output tensors
     output_tensors = ttnn.MatmulDeviceOperation.create_output_tensors(operation_params, tensor_args)
 
-    # Create descriptor via the factory
+    # Create descriptor via the factory.
+    # Only MatmulMultiCoreReuseOptimizedProgramFactory is supported for now.
     program_descriptor = ttnn.MatmulMultiCoreReuseOptimizedProgramFactory.create_descriptor(
         operation_params, tensor_args, output_tensors, core_range_set
     )
