@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -121,6 +120,8 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
 tt::tt_fabric::Topology get_fabric_topology();
+
+tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
  * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
