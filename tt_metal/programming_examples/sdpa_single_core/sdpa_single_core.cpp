@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/core_coord.hpp"
@@ -19,38 +17,9 @@ using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Reference implementation of matrix multiplication.
-// Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
-// The implementation is bare bones and does not include optimizations such as tiling or vectorization.
-// This is intended to be used as a golden reference for testing the Metalium implementation.
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
-
-// void golden_sdpa(
-//     const std::vector<bfloat16>& a,
-//     const std::vector<bfloat16>& b,
-//     std::vector<bfloat16>& output,
-//     uint32_t M,
-//     uint32_t N,
-//     uint32_t K) {
-//     std::vector<bfloat16> c_bf(M * N, 0);
-
-//     for (int i = 0; i < M; i++) {
-//         for (int j = 0; j < N; j++) {
-//             std::uint32_t idx_c = j + (i * N);
-//             std::uint32_t idx_a = i * K;
-//             std::uint32_t idx_b = j;
-//             float c_f = 0;
-//             for (int k_m = 0; k_m < K; k_m++) {
-//                 c_f += static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
-//                 idx_a += 1;
-//                 idx_b += N;
-//             }
-//             output.at(idx_c) = bfloat16(c_f);
-//         }
-//     }
-// }
 
 void sdpa_single_core(
     const uint32_t Sq_chunk_t,
@@ -75,21 +44,31 @@ void sdpa_single_core(
     const MathFidelity math_fidelity = MathFidelity::HiFi2;
     const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    const uint32_t q_buffer_size = 2 * Sq_chunk_t * head_dim_t * single_tile_size;
-    const uint32_t kt_buffer_size = 2 * Sk_chunk_t * head_dim_t * single_tile_size;
-    const uint32_t v_buffer_size = 2 * Sv_chunk_t * head_dim_t * single_tile_size;
-    const uint32_t out_buffer_size = Sq_chunk_t * head_dim_t * single_tile_size;
+    // DRAM data sizes (one chunk each)
+    const uint32_t q_num_tiles = Sq_chunk_t * head_dim_t;
+    const uint32_t kt_num_tiles = head_dim_t * Sk_chunk_t;
+    const uint32_t v_num_tiles = Sv_chunk_t * head_dim_t;
+    const uint32_t out_num_tiles = Sq_chunk_t * head_dim_t;
+
+    const uint32_t q_data_size = q_num_tiles * single_tile_size;
+    const uint32_t kt_data_size = kt_num_tiles * single_tile_size;
+    const uint32_t v_data_size = v_num_tiles * single_tile_size;
+    const uint32_t out_data_size = out_num_tiles * single_tile_size;
+
+    // CB sizes (double-buffered for Q, KT, V)
+    const uint32_t q_cb_size = 2 * q_data_size;
+    const uint32_t kt_cb_size = 2 * kt_data_size;
+    const uint32_t v_cb_size = 2 * v_data_size;
 
     const uint32_t num_iter = 16;
 
-    // We'll use these later on to check for correctness.
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    distributed::ReplicatedBufferConfig buffer_config_Q{.size = q_buffer_size};
-    distributed::ReplicatedBufferConfig buffer_config_KT{.size = kt_buffer_size};
-    distributed::ReplicatedBufferConfig buffer_config_V{.size = v_buffer_size};
-    distributed::ReplicatedBufferConfig buffer_config_out{.size = out_buffer_size};
+    distributed::ReplicatedBufferConfig buffer_config_Q{.size = q_data_size};
+    distributed::ReplicatedBufferConfig buffer_config_KT{.size = kt_data_size};
+    distributed::ReplicatedBufferConfig buffer_config_V{.size = v_data_size};
+    distributed::ReplicatedBufferConfig buffer_config_out{.size = out_data_size};
 
     auto q_dram_buffer = distributed::MeshBuffer::create(buffer_config_Q, dram_config, mesh_device.get());
     auto kt_dram_buffer = distributed::MeshBuffer::create(buffer_config_KT, dram_config, mesh_device.get());
@@ -98,14 +77,12 @@ void sdpa_single_core(
 
     const uint32_t q_cb_index = CBIndex::c_0;
     CircularBufferConfig cb_q_config =
-        CircularBufferConfig(q_buffer_size, {{q_cb_index, cb_data_format}})
-            .set_page_size(q_cb_index, single_tile_size);
+        CircularBufferConfig(q_cb_size, {{q_cb_index, cb_data_format}}).set_page_size(q_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_q_config);
 
     const uint32_t kt_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_kt_config =
-        CircularBufferConfig(kt_buffer_size, {{kt_cb_index, cb_data_format}})
-            .set_page_size(kt_cb_index, single_tile_size);
+        CircularBufferConfig(kt_cb_size, {{kt_cb_index, cb_data_format}}).set_page_size(kt_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_kt_config);
 
     const uint32_t qkt_cb_index = CBIndex::c_2;
@@ -116,7 +93,7 @@ void sdpa_single_core(
 
     const uint32_t v_cb_index = CBIndex::c_3;
     CircularBufferConfig cb_v_config =
-        CircularBufferConfig(v_buffer_size, {{v_cb_index, cb_data_format}}).set_page_size(v_cb_index, single_tile_size);
+        CircularBufferConfig(v_cb_size, {{v_cb_index, cb_data_format}}).set_page_size(v_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_v_config);
 
     // cb_qkt_row_A — ping buffer for raw matmul output of one QKT row
@@ -145,15 +122,13 @@ void sdpa_single_core(
     CreateCircularBuffer(program, core, c_identity_scalar_config);
 
     const uint32_t cb_prev_out_index = CBIndex::c_25;
-    CircularBufferConfig cb_prev_out_config =
-        CircularBufferConfig(out_buffer_size, {{cb_prev_out_index, cb_data_format}})
-            .set_page_size(cb_prev_out_index, single_tile_size);
+    CircularBufferConfig cb_prev_out_config = CircularBufferConfig(out_data_size, {{cb_prev_out_index, cb_data_format}})
+                                                  .set_page_size(cb_prev_out_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_prev_out_config);
 
     const uint32_t cb_curr_out_index = CBIndex::c_26;
-    CircularBufferConfig cb_curr_out_config =
-        CircularBufferConfig(out_buffer_size, {{cb_curr_out_index, cb_data_format}})
-            .set_page_size(cb_curr_out_index, single_tile_size);
+    CircularBufferConfig cb_curr_out_config = CircularBufferConfig(out_data_size, {{cb_curr_out_index, cb_data_format}})
+                                                  .set_page_size(cb_curr_out_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_curr_out_config);
 
     // cb_prev_max
@@ -259,13 +234,28 @@ void sdpa_single_core(
     // been set at compile time. The compute kernel does not need any runtime arguments to execute. And so we can skip
     // this step.
 
-    // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
-    // buffer
-    //distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    //distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    // Create zero-filled input data, tilize, and upload to DRAM
+    const uint32_t q_rows = Sq_chunk_t * TILE_HEIGHT;
+    const uint32_t q_cols = head_dim_t * TILE_WIDTH;
+    std::vector<bfloat16> q_data(q_rows * q_cols, bfloat16(0.0f));
+    q_data = tilize_nfaces(q_data, q_rows, q_cols);
+
+    const uint32_t kt_rows = head_dim_t * TILE_HEIGHT;
+    const uint32_t kt_cols = Sk_chunk_t * TILE_WIDTH;
+    std::vector<bfloat16> kt_data(kt_rows * kt_cols, bfloat16(0.0f));
+    kt_data = tilize_nfaces(kt_data, kt_rows, kt_cols);
+
+    const uint32_t v_rows = Sv_chunk_t * TILE_HEIGHT;
+    const uint32_t v_cols = head_dim_t * TILE_WIDTH;
+    std::vector<bfloat16> v_data(v_rows * v_cols, bfloat16(0.0f));
+    v_data = tilize_nfaces(v_data, v_rows, v_cols);
+
+    distributed::EnqueueWriteMeshBuffer(cq, q_dram_buffer, q_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, kt_dram_buffer, kt_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, v_dram_buffer, v_data, false);
+
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    //distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////
@@ -284,49 +274,7 @@ int main() {
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
         constexpr uint32_t subblock_h = 1;
 
-        // // input vectors with various ranges of values
-        // std::mt19937 rng(std::random_device{}());
-        // std::uniform_real_distribution<float> dist(0.f, 1.0f);
-        // std::vector<bfloat16> src0_vec(M * K);
-        // std::vector<bfloat16> src1_vec(K * N);
-
-        // for (bfloat16& v : src0_vec) {
-        //     v = bfloat16(dist(rng));
-        // }
-        // for (bfloat16& v : src1_vec) {
-        //     v = bfloat16(dist(rng));
-        // }
-
-        // // Golden Matmul running on CPU so we can compare later
-        // std::vector<bfloat16> golden_vec(M * N, 0);
-        // golden_sdpa(src0_vec, src1_vec, golden_vec, M, N, K);
-
-        // Tilize the input vectors to match the expected tiled layout for the device
-        // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
-        // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
-        // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
-        // (32x32 elements) is stored contiguously. This matches the native data access patterns of the matrix engine
-        // and enables efficient operations on the accelerator.
-        // src0_vec = tilize_nfaces(src0_vec, M, K);
-        // src1_vec = tilize_nfaces(src1_vec, K, N);
-
-        // Invoke the matrix multiplication on the device
-        //std::vector<bfloat16> result_vec(M * N, 0);
-
-        //sdpa_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
         sdpa_single_core(Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, mesh_device);
-
-        // // Reverse the tilization to get the result in the row-major format that the CPU expects
-        // result_vec = untilize_nfaces(result_vec, M, N);
-
-        // fmt::print("Output vector of size {}\n", result_vec.size());
-
-        // // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
-        // // This is a measure of how similar the two vectors are.
-        // // A PCC close to 1 indicates that the two vectors are very similar.
-        // float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
-        // fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
-        // TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
         pass &= mesh_device->close();
 
