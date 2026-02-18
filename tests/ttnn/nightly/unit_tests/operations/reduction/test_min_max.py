@@ -53,7 +53,6 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
 
     input_shape = (N, C, H, W)
     torch_input = 1.0 + torch.rand(input_shape).bfloat16()
-    print("HERE0")
 
     if kind == "max":
         torch_output = torch_input.max()
@@ -67,7 +66,6 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     # print(f"x.max/min = {value}")
 
     tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).to(layout).to(device)
-    print("HERE1")
     if kind == "max":
         tt_npu = ttnn.max(tt_input)
     elif kind == "min":
@@ -75,15 +73,9 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
     else:
         assert kind == "mean"
         tt_npu = ttnn.mean(tt_input)
-    print("HERE2")
-    print(tt_npu)
-    print("HERE2b")
 
     tt_output = tt_npu.cpu().to_torch()
-    print("HERE3")
     comparison_fn = torch.equal
-    print("HERE3b")
     if kind == "mean":
         comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)
-    print("HERE4")
     assert comparison_fn(tt_output, torch_output)
