@@ -659,6 +659,51 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
+// Temporary: pre-populate prev buffers so the first iteration is numerically correct without
+// special-casing it inside the inner loop (which would make the first pass faster and pollute
+// worst-case timing measurements). In production the inner loop would handle initialization
+// in its first pass instead.
+template <uint32_t Sq_chunk_t, uint32_t head_dim_t>
+void InitPrevBuffers(uint32_t cb_sum, uint32_t cb_out, uint32_t cb_max, uint32_t cb_neginf) {
+    // prev_sum: zeros (Sq_chunk_t tiles)
+    cb_reserve_back(cb_sum, Sq_chunk_t);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+        pack_tile<false>(0, cb_sum);
+    }
+    tile_regs_release();
+    cb_push_back(cb_sum, Sq_chunk_t);
+
+    // prev_out: zeros (Sq_chunk_t * head_dim_t tiles)
+    cb_reserve_back(cb_out, Sq_chunk_t * head_dim_t);
+    tile_regs_acquire();
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < Sq_chunk_t * head_dim_t; i++) {
+        pack_tile<false>(0, cb_out);
+    }
+    tile_regs_release();
+    cb_push_back(cb_out, Sq_chunk_t * head_dim_t);
+
+    // prev_max: -inf (Sq_chunk_t tiles)
+    // Writer produces a -inf tile in cb_neginf; we copy it to DST then pack to cb_max.
+    cb_wait_front(cb_neginf, 1);
+    copy_tile_to_dst_init_short(cb_neginf);
+    cb_reserve_back(cb_max, Sq_chunk_t);
+    tile_regs_acquire();
+    copy_tile(cb_neginf, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+        pack_tile<false>(0, cb_max);
+    }
+    tile_regs_release();
+    cb_push_back(cb_max, Sq_chunk_t);
+    cb_pop_front(cb_neginf, 1);
+}
+
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -1077,17 +1122,14 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
 
+    constexpr uint32_t cb_neginf = tt::CBIndex::c_7;
+
     mm_init(cb_q_in, cb_kt_in, cb_qkt_im);
 
-    // Dummy pre-populate "prev" CBs.
-    cb_reserve_back(cb_max_A, Sq_chunk_t);
-    cb_push_back(cb_max_A, Sq_chunk_t);
-
-    cb_reserve_back(cb_sum_A, Sq_chunk_t);
-    cb_push_back(cb_sum_A, Sq_chunk_t);
-
-    cb_reserve_back(cb_out_A, Sq_chunk_t * head_dim_t);
-    cb_push_back(cb_out_A, Sq_chunk_t * head_dim_t);
+    // Temporary: pre-populate prev buffers before the inner loop so that the first iteration
+    // is numerically correct without special-casing it. In production the inner loop's first
+    // pass would handle this, but we don't want that shorter pass to pollute worst-case timing.
+    InitPrevBuffers<Sq_chunk_t, head_dim_t>(cb_sum_A, cb_out_A, cb_max_A, cb_neginf);
 
     sdpa_inner_loop<
         Sq_chunk_t,
