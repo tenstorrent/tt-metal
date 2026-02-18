@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
 
 
 class LMHead(LightweightModule):
@@ -169,18 +169,16 @@ class LMHead(LightweightModule):
             outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
         )
 
-        output = tt_all_reduce(
+        output = tt_all_gather(
             output,
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            dim=3 if self.args.is_galaxy else 0,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
+            dim=3,  # vocab is last dim
+            num_links=self.args.num_all_gather_links,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
             sharded=False,
-            use_composite=True,
+            dtype=self.args.ccl_dtype,
         )
 
         return output

@@ -1708,13 +1708,21 @@ class ModelArgs:
             self.sliding_window = text_config.get("sliding_window", None)
 
             # Configurable MLP activation type
-            self.mlp_activation_type = self._get_hidden_activation_type(text_config)
+            hf_model = os.getenv("HF_MODEL", "")
+            is_phi1 = hf_model == "microsoft/Phi-1"
+            if is_phi1:
+                self.mlp_activation_type = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
+            else:
+                self.mlp_activation_type = self._get_hidden_activation_type(text_config)
+            
 
             self._set_vision_params(config)
             self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
             self.state_dict_text_prefix = self._get_text_prefix()
             self.state_dict_vision_prefix = self._get_vision_prefix()
+            
+
 
             self._set_model_specific_params()
 
@@ -1951,23 +1959,23 @@ class ModelArgs:
                 logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
 
-            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
+
         else:
             model_cls = self.get_hf_model_cls()
             model = model_cls.from_pretrained(
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                local_files_only=os.getenv("CI") == "true",
             )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
+
             state_dict = model.state_dict()
-            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+
+            # IMPORTANT: compute MoE flag AFTER the possible fallback
+            self.is_mixture_of_experts = any(".experts." in k for k in state_dict.keys())
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -1976,21 +1984,28 @@ class ModelArgs:
             else:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
-            self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
-            self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+            self.fuse_qkv = any("qkv" in layer_name for layer_name in state_dict.keys())
+            self.fuse_mlp = any("gate_up" in layer_name for layer_name in state_dict.keys())
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            #with open("state_dict_log.txt", "a") as f:
+                #f.write(f"state dic after convert_hf_to_meta: {state_dict}\n")
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
-            if any([r in k for r in remv]):
+            if any(r in k for r in remv):
                 state_dict.pop(k)
+
         if getattr(self, "is_mixture_of_experts", False):
             self.initialize_mixture_of_experts_configs()
             self.moe = True
             self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
+
+        #with open("state_dict_log.txt", "a") as f:
+            #f.write(f"state dic at the end (before return): {state_dict}\n")
         return state_dict
+
 
     def initialize_mixture_of_experts_configs(self):
         # Porting mixtral to llama
@@ -2028,6 +2043,8 @@ class ModelArgs:
             fused_activation=None,
             mcast_in0=True,
         )
+        is_phi1 = os.getenv("HF_MODEL", "").strip() == "microsoft/Phi-1"
+        mlp_act = ttnn.UnaryOpType.GELU if is_phi1 else ttnn.UnaryOpType.SILU
         self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # how much inner dim you take each time
@@ -2036,7 +2053,7 @@ class ModelArgs:
             per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=56,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
-            fused_activation=ttnn.UnaryOpType.SILU,
+            fused_activation=mlp_act,
             fuse_batch=False,
         )
         self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -2381,6 +2398,13 @@ class ModelArgs:
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
+        
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        is_phi1 = hf_model == "microsoft/Phi-1"
+
+        # Force Phi-1 tokenizer from the same repo as weights
+        if is_phi1:
+            self.TOKENIZER_PATH = "microsoft/Phi-1"
 
         try:
             # Try to load tokenizer from the original model path
@@ -2445,6 +2469,13 @@ class ModelArgs:
             # Phi-3-mini uses "<|end|>" as EOS token
             if "phi-3-mini" in self.base_model_name.lower():
                 tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
+
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        is_phi1 = hf_model == "microsoft/Phi-1"
+
+        if is_phi1 and tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token  
+                  
         return tokenizer
 
     def create_processor(self):

@@ -8,12 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False, ag_config_key=None, force_local_norm: bool = False):
+    def __init__(self, norm, args, tt_ccl, TG=False, ag_config_key=None):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
         self.ag_config_key = ag_config_key
-        self.force_local_norm = force_local_norm
 
         if TG:
             core_grid_ln = (
@@ -46,37 +45,38 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
+        self._use_tg_rmsnorm_kernels = TG and hasattr(norm, "weight_distributed") and hasattr(norm, "_distributed_rmsnorm")
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
-        # Phi-1 override: treat norm as non-distributed even if args.is_distributed_norm(mode) is True
-        effective_distributed = self.args.is_distributed_norm(mode) and (not self.force_local_norm)
         if self.TG:
-            if mode == "decode":
-                return tt_sharded_distributed_rmsnorm(
-                    x,
-                    epsilon=self.norm.eps,
-                    gamma=self.norm.weight_distributed,
-                    mesh_device=self.args.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                    ln_sharded_progcfg=self.ln_prg_cfg,
-                    ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
-                )
-            else:
-                return tt_distributed_rmsnorm(
-                    x,
-                    epsilon=self.norm.eps,
-                    gamma=self.norm.weight_distributed,
-                    mesh_device=self.args.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    compute_kernel_config=self.ln_cfg,
-                )
+            if self._use_tg_rmsnorm_kernels:
+                if mode == "decode":
+                    return tt_sharded_distributed_rmsnorm(
+                        x,
+                        epsilon=self.norm.eps,
+                        gamma=self.norm.weight_distributed,
+                        mesh_device=self.args.mesh_device,
+                        tt_ccl=self.tt_ccl,
+                        ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                        ln_sharded_progcfg=self.ln_prg_cfg,
+                        ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    )
+                else:
+                    return tt_distributed_rmsnorm(
+                        x,
+                        epsilon=self.norm.eps,
+                        gamma=self.norm.weight_distributed,
+                        mesh_device=self.args.mesh_device,
+                        tt_ccl=self.tt_ccl,
+                        compute_kernel_config=self.ln_cfg,
+                    )
+
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
-        if self.args.is_multichip and not effective_distributed:
+        if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
@@ -102,7 +102,7 @@ class DistributedNorm(LightweightModule):
         x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
 
         # Distributed norm requires a gather
-        if effective_distributed:
+        if self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

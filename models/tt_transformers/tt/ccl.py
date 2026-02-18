@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import os
 
 
 class TT_CCL:
@@ -33,12 +32,6 @@ class TT_CCL:
         self.rs_semaphores_idx = [0, 0, 0]
         self.rs_semaphore_handles = [[], [], []]
 
-        # Check the HF_MODEL environment variable
-        hf_model = os.getenv("HF_MODEL", "").strip()
-        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
-        self.is_phi1 = hf_model in {"microsoft/Phi-1"}
-
-
         # cluster-axis-0, cluster-axis-1, no-cluster-axis
         for i in range(3):
             # double buffered semaphores
@@ -54,31 +47,21 @@ class TT_CCL:
                 self.rs_semaphore_handles[i].append(
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
-                
-    def _semaphore_index(self, cluster_axis):
-        # Original behavior (default for existing models):
-        # cluster_axis=0 behaves like "no cluster axis" (index 2)
-        if not getattr(self, "is_phi1", False):
-            return 2 if not cluster_axis else cluster_axis
-
-        # Phi-1 behavior:
-        # only None means "no cluster axis"; 0 is a valid axis
-        return 2 if cluster_axis is None else cluster_axis
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
-        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        semaphore_index = 2 if not cluster_axis else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % 2
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        semaphore_index = 2 if not cluster_axis else cluster_axis
         current_idx = self.ag_semaphores_idx[semaphore_index]
         self.ag_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.ag_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if cluster_axis is None else cluster_axis
+        semaphore_index = 2 if not cluster_axis else cluster_axis
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
@@ -112,81 +95,29 @@ def tt_all_reduce(
             input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-    
     # N300 and T3K: reduce_scatter
     if 1 in list(mesh_device.shape):
-        if getattr(tt_ccl, "is_phi1", False):
-            # --- Phi-1 path (your edited behavior) ---
-            shards = None
-            if hasattr(ttnn, "get_device_tensors"):
-                try:
-                    shards = ttnn.get_device_tensors(input_tensor)
-                except Exception:
-                    shards = None
+        if input_tensor.is_sharded() and not sharded:
+            input_tensor_sharded = input_tensor
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
+            input_tensor_sharded.deallocate(True)
 
-            if not isinstance(shards, (list, tuple)) or len(shards) <= 1:
-                if original_shape[0] != 1 or original_shape[1] != 1:
-                    input_tensor = ttnn.reshape(input_tensor, original_shape)
-                return input_tensor
-
-            if input_tensor.is_sharded() and not sharded:
-                input_tensor_sharded = input_tensor
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
-                input_tensor_sharded.deallocate(True)
-
-            mesh_shape = list(mesh_device.shape)  # (rows, cols)
-            inferred_cluster_axis = 0 if mesh_shape[0] > 1 else 1
-
-            reduced = ttnn.experimental.reduce_scatter_minimal_async(
-                input_tensor,
-                persistent_output_buffers=None,
-                dim=dim,
-                cluster_axis=inferred_cluster_axis,
-                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(inferred_cluster_axis),
-                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(inferred_cluster_axis),
-                num_links=num_reduce_scatter_links,
-                memory_config=memory_config,
-                intermediate_memory_config=rs_memory_config,
-                topology=topology,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=2,
-            )
-            input_tensor.deallocate(True)
-
-            if original_shape[0] != 1 or original_shape[1] != 1:
-                reduced = ttnn.reshape(reduced, original_shape)
-
-            return reduced
-
-        else:
-            # --- default path (original behavior for other models) ---
-            if input_tensor.is_sharded() and not sharded:
-                input_tensor_sharded = input_tensor
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
-                input_tensor_sharded.deallocate(True)
-
-            reduced = ttnn.experimental.reduce_scatter_minimal_async(
-                input_tensor,
-                persistent_output_buffers=None,
-                dim=dim,
-                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                num_links=num_reduce_scatter_links,
-                memory_config=memory_config,
-                intermediate_memory_config=rs_memory_config,
-                topology=topology,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=2,
-            )
-            input_tensor.deallocate(True)
-            return reduced
-
-
-
-
-
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor,
+            persistent_output_buffers=None,
+            dim=dim,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=num_reduce_scatter_links,
+            memory_config=memory_config,
+            intermediate_memory_config=rs_memory_config,
+            topology=topology,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=2,
+        )
+        input_tensor.deallocate(True)
+        return reduced
 
     # TG: all_reduce
     # Cast to CCL dtype

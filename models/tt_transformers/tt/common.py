@@ -146,6 +146,10 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
+    # Phi 1 case
+    hf_model = os.getenv("HF_MODEL", "").strip()
+    is_phi1 = hf_model == "microsoft/Phi-1"
+    
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
     for m_args in model_args:
@@ -159,10 +163,25 @@ def preprocess_inputs_prefill(
         max_prefill_len > 0
     ), f"max_prefill_len ({max_prefill_len + max_generated_tokens}) must be greater than max_generated_tokens ({max_generated_tokens})"
 
-    encoded_prompts = [
-        model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
-        for idx, prompt in enumerate(input_prompts)
-    ]
+    encoded_prompts = []
+
+    for idx, prompt in enumerate(input_prompts):
+        tokens = model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+
+        tokenizer = model_args[idx % len(model_args)].tokenizer
+
+        print("\n========== TOKEN DEBUG ==========")
+        print("Prompt repr:", repr(prompt))
+        print("Prompt len:", len(prompt))
+        print("Tokenizer class:", tokenizer.__class__.__name__)
+        print("tokenizer.vocab_size:", tokenizer.vocab_size)
+        print("len(tokenizer):", len(tokenizer))
+        print("First 64 tokens:", tokens[:64])
+        print("Max token id:", max(tokens))
+        print("=================================\n")
+
+        encoded_prompts.append(tokens)
+
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -226,9 +245,26 @@ def preprocess_inputs_prefill(
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Initial prefill tensors full of pad tokens
-        input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
+        if is_phi1:
+            pad_id = getattr(tokenizer, "pad_token_id", None)
+            if pad_id is None:
+                pad_id = getattr(tokenizer, "eos_token_id", 0)
+            input_tokens_prefill_i = torch.full((1, max_prompt_len), pad_id, dtype=torch.int32)
+        else:
+            input_tokens_prefill_i = torch.full((1, max_prompt_len), 0, dtype=torch.int32)
+
         input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
         input_tokens_prefill.append(input_tokens_prefill_i)
+
+        # DEBUG: verify raw padded ids at a specific prompt position
+        debug_pos = 16
+        if debug_pos < input_tokens_prefill_i.shape[1]:
+            print("RAW padded ids @16:", int(input_tokens_prefill_i[0, debug_pos].item()))
+            print("RAW first 32 ids:", input_tokens_prefill_i[0, :32].tolist())
+            print("RAW nonpad count (approx):", int((input_tokens_prefill_i[0] != input_tokens_prefill_i[0, -1]).sum().item()))
+        else:
+            print("RAW padded ids @16: OOR (shape:", tuple(input_tokens_prefill_i.shape), ")")
+        
 
         # Keep the correct decoding position of each user
         decoding_pos.append(len(encoded))
@@ -729,6 +765,52 @@ def create_tt_model(
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
+        #with open("debug_phi1.txt", "a") as f:    
+        #    f.write(f"state dict: {state_dict['tok_embeddings.weight'].shape[0]}\n")
+        # ===== DEBUG: final norm stats (converted dict) =====
+        def _stat(name):
+            import torch
+            t = state_dict[name].float()
+            print(name, "shape", tuple(t.shape), "min", float(t.min()), "max", float(t.max()), "mean", float(t.mean()))
+        
+        print("\n=== NORM KEY STATS (converted dict) ===")
+        for k in ["norm.weight", "norm.bias", "layers.0.attention_norm.weight", "layers.0.attention_norm.bias"]:
+            if k in state_dict:
+                _stat(k)
+            else:
+                print(k, "MISSING")
+        print("=== END NORM KEY STATS ===\n")
+        
+        try:
+            import torch
+            w = state_dict["norm.weight"]
+            b = state_dict["norm.bias"]
+            print("\n=== FINAL NORM PARAM STATS (converted dict) ===")
+            print("norm.weight shape:", tuple(w.shape),
+                  "min:", float(w.min()), "max:", float(w.max()), "mean:", float(w.mean()))
+            print("norm.bias   shape:", tuple(b.shape),
+                  "min:", float(b.min()), "max:", float(b.max()), "mean:", float(b.mean()))
+            print("=== END FINAL NORM PARAM STATS ===\n")
+        except Exception as e:
+            print("FINAL NORM PARAM STATS failed:", repr(e))
+        # ===== END DEBUG =====
+        
+        
+        
+    te_key = "tok_embeddings.weight"
+    out_key = "output.weight"
+
+    assert te_key in state_dict, f"Missing {te_key} in state_dict keys (sample: {list(state_dict)[:20]})"
+    assert out_key in state_dict, f"Missing {out_key} in state_dict keys (sample: {list(state_dict)[:20]})"
+
+    te = state_dict[te_key].detach().cpu()
+    out = state_dict[out_key].detach().cpu()
+
+    print("TT tok_embeddings:", tuple(te.shape), "norm", float(torch.norm(te)))
+    print("TT output:", tuple(out.shape), "norm", float(torch.norm(out)))
+    print("TT tied allclose:", bool(torch.allclose(te, out, atol=0, rtol=0)))
+    print("TT max abs diff:", float((te - out).abs().max()))
+
 
     model = Transformer(
         args=tt_model_args,

@@ -236,19 +236,53 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
         )
+        model_i._supports_on_device_sampling = False
         model_args.append(model_args_i)
         model.append(model_i)
         tt_kv_cache.append(tt_kv_cache_i)
+
+
+    hf_model = model_args[0].reference_transformer(wrap=False)
+    hf_model.eval()
+
+    w_in = hf_model.get_input_embeddings().weight.detach().cpu()
+    w_out = hf_model.lm_head.weight.detach().cpu()
+
+    print("HF embed:", tuple(w_in.shape), "norm", float(torch.norm(w_in)))
+    print("HF head :", tuple(w_out.shape), "norm", float(torch.norm(w_out)))
+    print("HF tied allclose:", bool(torch.allclose(w_in, w_out, atol=0, rtol=0)))
+    print("HF max abs diff:", float((w_in - w_out).abs().max()))
 
     page_table = create_tt_page_table(
         global_batch_size=global_batch_size,
         data_parallel=data_parallel,
         paged_attention_config=paged_attention_config,
     )
-    # Host code, safe to reuse tokenizer from the 1st model
+        # Host code, safe to reuse tokenizer from the 1st model
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
+
+    # mimic ModelArgs.create_tokenizer behavior
+    if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
+        tokenizer.stop_tokens = [tokenizer.eos_token_id]
+
+    # embedding rows are 51200 for your checkpoint
+    vocab_rows = 51200  # or infer from state_dict["tok_embeddings.weight"].shape[0]
+    
+    # fail-fast: tokenizer must not emit ids >= vocab_rows
+    ids = tokenizer.encode("sanity check", add_special_tokens=False)
+    assert max(ids) < vocab_rows, f"Tokenizer produced id {max(ids)} >= embedding rows {vocab_rows}"
+
+
+
+    with open("debug_phi1.txt", "a") as f:
+        f.write(f"model_args: {model_args}\n")
+
+    #with open("debug_phi1.txt", "a") as f:
+        #f.write(f"tokenizer class: {len(tokenizer)}\n")
+        #f.write(f"tokenizer name_or_path: {getattr(tokenizer, 'name_or_path', 'N/A')}\n")
+
     processor = model_args[0].processor
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
@@ -279,7 +313,7 @@ def prepare_generator_args(
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
@@ -292,7 +326,7 @@ def prepare_generator_args(
             1,
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -318,7 +352,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -342,7 +376,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -361,7 +395,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -380,13 +414,13 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
             1,  # batch_size
@@ -399,7 +433,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -421,7 +455,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -440,7 +474,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -459,7 +493,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -478,7 +512,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -497,7 +531,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -516,7 +550,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -535,7 +569,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -554,7 +588,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -573,7 +607,7 @@ def prepare_generator_args(
             16,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -592,7 +626,7 @@ def prepare_generator_args(
             32,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -611,7 +645,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             True,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -649,7 +683,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -668,7 +702,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -687,7 +721,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             10,  # num_layers, if None -> defaults to all layers
             "prefill",  # mode
         ),
@@ -706,7 +740,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False, # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -807,7 +841,7 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    print_to_file = False  # Enable this flag to print the output of all users to a file
+    print_to_file = True  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -1050,6 +1084,12 @@ def test_demo_text(
             else:
                 logits = prefill_out
                 prefilled_token = torch.argmax(logits, dim=-1)
+                
+            tt_next_id = int(prefilled_token[0].item())    
+            with open("tt_next_token.txt", "a") as f:
+                f.write(f"TT next_token_id: {tt_next_id}\n")
+                if tokenizer is not None:
+                    f.write(f"TT next_token_text: {repr(tokenizer.decode([tt_next_id]))}\n")    
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
         else:

@@ -9,6 +9,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -100,28 +101,54 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-        self.norm = DistributedNorm(
-            RMSNorm(
+        
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        is_phi1 = (hf_model == "microsoft/Phi-1")
+
+        final_norm_impl = (
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
-                eps=args.norm_eps,
+                eps=args.norm_eps if args.norm_eps is not None else 1e-5,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", None),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
+                # Keep these so DistributedNorm maintains the same decode layout behavior
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                is_distributed=self.args.is_distributed_norm,
+                ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
+            )
+            if is_phi1
+            else RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps if args.norm_eps is not None else 1e-5,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", None),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                force_weight_tile=is_phi1,
-                is_distributed=(False if is_phi1 else self.args.is_distributed_norm),
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            self.tt_ccl,
-            args.is_galaxy,
+            )
         )
+
+        self.norm = DistributedNorm(
+            final_norm_impl,
+            args,
+            tt_ccl=self.tt_ccl,
+            TG=args.is_galaxy,
+            # no ag_config_key needed unless you have a specific one for final norm
+        )
+
 
         self.lm_head = LMHead(
             args=args,
@@ -153,6 +180,14 @@ class Transformer(LightweightModule):
             self.sampling = None
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        # DEBUG: block selection contract
+        get_last_token = (last_token_idx // 32) * 32
+        print(
+            f"[BLOCK CONTRACT trace] last_token_idx={last_token_idx} "
+            f"get_last_token={get_last_token} idx_in_block={last_token_idx % 32} "
+            f"(block covers [{get_last_token}..{get_last_token+31}])"
+        )
+        
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,
@@ -186,12 +221,42 @@ class Transformer(LightweightModule):
         tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
-
+        # ===== DEBUG: tokens entering prepare_inputs_prefill (trace path only) =====
+        try:
+            import torch
+            if trace_enabled and isinstance(tokens, torch.Tensor):
+                flat = tokens.reshape(-1)
+                nnz = int(torch.count_nonzero(flat).item())
+                if nnz != 0:
+                    print("\n=== PREPARE_INPUTS_PREFILL TOKENS (TRACE, TORCH) ===")
+                    print("shape:", tuple(tokens.shape), "dtype:", tokens.dtype, "nonzero:", nnz)
+                    print("first 32:", flat[:32].tolist())
+                    print("id @16:", int(flat[16].item()) if flat.numel() > 16 else "OOR")
+                    print("pos token_id 11 (first512):", (flat[:512] == 11).nonzero(as_tuple=False)[:10].reshape(-1).tolist())
+                    print("=== END PREPARE_INPUTS_PREFILL TOKENS ===\n")
+        except Exception as e:
+            print("PREPARE_INPUTS_PREFILL TRACE debug failed:", repr(e))
+        # ===== END DEBUG =====
+        
         # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
         # We will send them to device later (copy_host_to_device)
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
+        # ===== DEBUG: torch tokens before converting to TT =====
+        try:
+            import torch
+            flat = tokens.reshape(-1).tolist()
+            print("\n=== PREPARE_INPUTS_PREFILL (TORCH TOKENS) ===")
+            print("trace_enabled:", trace_enabled)
+            print("torch tokens shape:", tuple(tokens.shape), "dtype:", tokens.dtype)
+            print("first 32 ids:", flat[:32])
+            print("pos of token_id 11 (first512):", next((i for i, t in enumerate(flat[:512]) if t == 11), None))
+            print("=== END PREPARE_INPUTS_PREFILL (TORCH TOKENS) ===\n")
+        except Exception as e:
+            print("PREPARE_INPUTS_PREFILL torch-token debug failed:", repr(e))
+        # ===== END DEBUG =====
+        
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
@@ -201,6 +266,7 @@ class Transformer(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        
 
         # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
@@ -342,13 +408,26 @@ class Transformer(LightweightModule):
         Concatenate the output of the devices into a single host tensor.
         """
         torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
+
+        # Decide concat dims FIRST
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
         else:
             row_dim, col_dim = (1, -1)
 
+        # Debug prints
+        print("=== CONCAT DEBUG ===")
+        print("num tensors:", len(torch_out_tensors))
+        for i, t in enumerate(torch_out_tensors):
+            print("tensor", i, "shape", tuple(t.shape),
+                  "min", float(t.min()), "max", float(t.max()))
+        print("row_dim", row_dim, "col_dim", col_dim)
+        print("cluster_shape", self.args.cluster_shape, "is_log_probs", is_log_probs)
+        print("====================")
+
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
+
         if is_log_probs:
             row_concatenated = []
             for row in mesh_shape:
@@ -357,15 +436,82 @@ class Transformer(LightweightModule):
         else:
             row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
 
-        return torch.cat(row_concatenated, dim=row_dim)
+        full = torch.cat(row_concatenated, dim=row_dim)
 
-    def process_output_prefill(self, tt_out, last_token_idx):
+        # Final debug print (THIS is your “full logits shape”)
+        print("FULL concat shape:", tuple(full.shape),
+              "min", float(full.min()), "max", float(full.max()))
+        print("=== END CONCAT DEBUG ===")
+
+        return full
+
+
+    def process_output_prefill(self, tt_out, last_token_idx, tokenizer=None, debug=True):
         """
         Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
         assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
-        return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
+    
+        full_logits = self.concat_host_output(tt_out)  # (B, 1, seq, vocab)
+    
+        if debug:
+            import torch
+    
+            B, one, seq_len, vocab_dim = full_logits.shape
+            print("\n=== PREFILL DEBUG ===")
+            print("full_logits shape:", tuple(full_logits.shape))
+            print("self.vocab_size:", self.vocab_size, "vocab_dim:", vocab_dim)
+            print("seq_len:", seq_len, "last_token_idx:", last_token_idx, "max_idx:", seq_len - 1)
+    
+            if not (0 <= last_token_idx < seq_len):
+                print("WARNING: last_token_idx out of range!")
+    
+            # Slice logits at requested index
+            logits_at_idx = full_logits[0, 0, last_token_idx, : self.vocab_size]
+            # ===== DEBUG: SHARD ORDER SWAP TEST (2-dev only) =====
+            try:
+                import torch
+                if self.args.cluster_shape == [1, 2] and self.vocab_size == 51200:
+                    half = 25600
+                    probe_ids = [17851, 37661, 293, 21852, 756]  # HF Top5 @ idx=112
+                    print("\n=== SHARD SWAP PROBE ===")
+                    for k in probe_ids:
+                        v0 = float(logits_at_idx[k].item())
+                        v1 = float(logits_at_idx[(k + half) % (2 * half)].item())
+                        print(f"id {k:5d}: logit[{k}]={v0: .6f}  logit[{k+half}]={v1: .6f}  (diff={v0-v1: .6f})")
+                    print("=== END SHARD SWAP PROBE ===\n")
+            except Exception as e:
+                print("SHARD SWAP PROBE failed:", repr(e))
+            # ===== END DEBUG =====
+            
+    
+            # Top-5 at requested index
+            top5 = torch.topk(logits_at_idx, 5).indices.tolist()
+            print("TOP5 ids @ idx:", top5)
+    
+            if tokenizer is not None:
+                try:
+                    print("TOP5 text @ idx:", [tokenizer.decode([i]) for i in top5])
+                except Exception as e:
+                    print("decode failed:", e)
+    
+            # Also show top-5 at the *last position* in the block for comparison
+            logits_last = full_logits[0, 0, seq_len - 1, : self.vocab_size]
+            top5_last = torch.topk(logits_last, 5).indices.tolist()
+            print("TOP5 ids @ (seq_len-1):", top5_last)
+            if tokenizer is not None:
+                try:
+                    print("TOP5 text @ (seq_len-1):", [tokenizer.decode([i]) for i in top5_last])
+                except Exception:
+                    pass
+    
+            # Quick numeric sanity
+            print("logits@idx min/max:", float(logits_at_idx.min()), float(logits_at_idx.max()))
+            print("=== END PREFILL DEBUG ===\n")
+    
+        return full_logits[0, 0, last_token_idx, : self.vocab_size]
+    
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
@@ -530,6 +676,48 @@ class Transformer(LightweightModule):
 
         # Output norm
         x = self.norm(x, mode=mode)
+
+        # ---- DEBUG: dump FINAL_NORM output at the real prompt position (non-trace path) ----
+        import os
+        if os.getenv("TT_DUMP_FINAL_NORM", "0") == "1" and mode == "prefill":
+            try:
+                import torch  # ok: doesn't shadow anything
+        
+                # You expect: true_last=112 -> get_last_token=96 -> idx_in_block=16
+                expected_get_last = int(os.getenv("TT_EXPECT_GET_LAST", "96"))
+                probe_idx_in_block = int(os.getenv("TT_PROBE_IDX_IN_BLOCK", "16"))
+        
+                print("\n=== TT FINAL_NORM DUMP (post-norm, pre-lm_head) ===")
+                print("mode:", mode, "get_last_token:", get_last_token, "probe_idx_in_block:", probe_idx_in_block)
+                print("x.shape:", x.shape, "x.dtype:", x.dtype, "x.layout:", x.layout)
+                print("num_devices:", getattr(self.args, "num_devices", 1))
+        
+                # Gather hidden across devices if needed (Phi-1 hidden is split across 2 devices in your setup)
+                if getattr(self.args, "num_devices", 1) > 1:
+                    shards = []
+                    for di, t in enumerate(ttnn.get_device_tensors(x)):
+                        ht = ttnn.to_torch(t).float()  # [1,1,32,H_shard]
+                        v = ht[0, 0, probe_idx_in_block, :]
+                        shards.append(v)
+                        print(f"  shard{di}: shape={tuple(v.shape)} norm={float(v.norm()):.6f}")
+                    vec = torch.cat(shards, dim=-1)
+                else:
+                    ht = ttnn.to_torch(x).float()
+                    vec = ht[0, 0, probe_idx_in_block, :]
+        
+                print("full vec shape:", tuple(vec.shape))
+                print("full vec norm :", float(vec.norm()))
+                print("full vec first8:", vec[:8].tolist())
+        
+                # Optional: quick sanity check that we're dumping the correct block
+                if expected_get_last != -1 and int(get_last_token) != expected_get_last:
+                    print(f"WARNING: expected get_last_token={expected_get_last} but got {int(get_last_token)}")
+        
+                print("=== END TT FINAL_NORM DUMP ===\n")
+            except Exception as e:
+                print("TT_DUMP_FINAL_NORM failed:", repr(e))
+        # ---- END DEBUG ----
+        
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])

@@ -42,7 +42,8 @@ class Attention(LightweightModule):
         # If the model explicitly matches Phi-1 or Phi-1.5, set flag
         self.is_phi1 = hf_model in {"microsoft/Phi-1"}        
         # Phi-1 uses partial rotary: rotary_dim = head_dim * partial_rotary_factor (0.5 => 32 when head_dim=64)
-        self.rotary_dim = getattr(configuration, "rotary_dim", self.head_dim)
+        if self.is_phi1:
+            self.rotary_dim = self.head_dim // 2
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
@@ -404,94 +405,178 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
+    def _rope_interleaved_to_grouped(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Convert last-dim from NeoX interleaved layout:
+          [x0, x1, x2, x3, ...]  (pairs: even/odd)
+        to grouped layout:
+          [x_even..., x_odd...]
+        """
+        d = x.shape[-1]
+        assert d % 2 == 0, f"head_dim must be even, got {d}"
+
+        # [.., d] -> [.., d/2, 2]
+        x5 = ttnn.reshape(x, (*tuple(x.shape)[:-1], d // 2, 2))
+
+        # swap the last two dims: [.., d/2, 2] -> [.., 2, d/2]
+        x5 = ttnn.permute(x5, (*range(len(x5.shape) - 2), len(x5.shape) - 1, len(x5.shape) - 2))
+
+        # flatten back: [.., 2, d/2] -> [.., d]
+        return ttnn.reshape(x5, (*tuple(x.shape)[:-1], d))
+
+    def _rope_grouped_to_interleaved(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Inverse of _rope_interleaved_to_grouped.
+
+        Convert last-dim from grouped (NeoX half-split) layout:
+          [x_even..., x_odd...]   (size d/2 + d/2)
+        back to interleaved layout:
+          [x0, x1, x2, x3, ...]   (pairs: even/odd)
+        """
+        d = x.shape[-1]
+        assert d % 2 == 0, f"head_dim must be even, got {d}"
+
+        # [.., d] -> [.., 2, d/2]
+        x5 = ttnn.reshape(x, (*tuple(x.shape)[:-1], 2, d // 2))
+
+        # swap the last two dims: [.., 2, d/2] -> [.., d/2, 2]
+        x5 = ttnn.permute(x5, (*range(len(x5.shape) - 2), len(x5.shape) - 1, len(x5.shape) - 2))
+
+        # flatten back: [.., d/2, 2] -> [.., d]
+        return ttnn.reshape(x5, (*tuple(x.shape)[:-1], d))
+    
+
     def _apply_partial_rope(
         self,
-        x: ttnn.Tensor,
+        x,
         rot_mats,
-        transformation_mat,
+        transformation_mat,  # unused; kept for signature compatibility
         is_decode_mode: bool,
+        current_pos=None,
     ):
         """
-        Apply rotary embeddings only on the first `rotary_dim` features.
-        Used ONLY for Phi-1.
+        Phi-1 partial RoPE, NeoX half-split pairing.
 
-        IMPORTANT:
-          On some tt-metal versions, ttnn.slice/ttnn.concat on a multi-device tensor can
-          break the distributed tensor config (collapse to single device / change mapping),
-          which later causes failures (e.g., residual ttnn.add).
-          So if x is multi-device, we do the operation per-device shard and re-aggregate.
+        Assumptions:
+          - x last dim is head_dim D and is already in NeoX half-split order:
+              x = [x1 (0..D/2-1), x2 (D/2..D-1)]
+          - rot_mats = (cos, sin) are in llama/meta "pairwise duplicated" layout along last dim:
+              [c0, c0, c1, c1, c2, c2, ...]  (same for sin)
+            We convert to per-pair vectors by taking even indices: cos_pair = cos[..., 0::2]
         """
+        
+        D = self.head_dim
+        half = D // 2
+        assert D % 2 == 0
+        assert self.rotary_dim % 2 == 0
+        assert self.rotary_dim <= D
 
-        def _get_device_tensors(t: ttnn.Tensor):
-            if hasattr(ttnn, "get_device_tensors"):
-                return ttnn.get_device_tensors(t)
-            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "get_device_tensors"):
-                return ttnn.distributed.get_device_tensors(t)
-            return None
+        # number of complex pairs to rotate (per half)
+        rot_pairs = self.rotary_dim // 2
+        assert rot_pairs <= half
 
-        def _aggregate_as_tensor(device_tensors, like_tensor: ttnn.Tensor):
-            # Different tt-metal versions expose this either as ttnn.aggregate_as_tensor
-            # or under ttnn.distributed.aggregate_as_tensor
-            cfg = like_tensor.distributed_tensor_config()
-            if hasattr(ttnn, "aggregate_as_tensor"):
-                return ttnn.aggregate_as_tensor(device_tensors, cfg)
-            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "aggregate_as_tensor"):
-                return ttnn.distributed.aggregate_as_tensor(device_tensors, cfg)
-            raise RuntimeError("No aggregate_as_tensor found in this tt-metal/ttnn version")
+        restore_memcfg = x.memory_config()
+        restore_layout = x.layout
+        restore_dtype = x.dtype
 
-        x_shards = _get_device_tensors(x)
-
-        # Single-device path: keep your original logic
-        if not x_shards or not isinstance(x_shards, (list, tuple)) or len(x_shards) == 1:
-            x_rope = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], self.rotary_dim))
-            x_pass = ttnn.slice(x, (0, 0, 0, self.rotary_dim), (x.shape[0], x.shape[1], x.shape[2], self.head_dim))
-
-            x_rope = ttnn.experimental.rotary_embedding_llama(
-                x_rope,
-                rot_mats[0],
-                rot_mats[1],
-                transformation_mat,
-                is_decode_mode=is_decode_mode,
+        def ensure_interleaved(t):
+            # Keep it simple/robust: do RoPE in interleaved
+            return (
+                ttnn.sharded_to_interleaved(t, ttnn.DRAM_MEMORY_CONFIG, t.dtype)
+                if t.is_sharded()
+                else t
             )
 
-            out = ttnn.concat([x_rope, x_pass], dim=3)
-            ttnn.deallocate(x_rope)
-            ttnn.deallocate(x_pass)
-            return out
+        x_i = ensure_interleaved(x)
+        # If x is interleaved, convert to grouped (NeoX half-split) before applying partial RoPE
+        x_i = self._rope_interleaved_to_grouped(x_i)
 
-        # Multi-device path: do per-device work and re-aggregate
-        out_shards = []
-        for shard in x_shards:
-            shard_rope = ttnn.slice(
-                shard,
-                (0, 0, 0, 0),
-                (shard.shape[0], shard.shape[1], shard.shape[2], self.rotary_dim),
-            )
-            shard_pass = ttnn.slice(
-                shard,
-                (0, 0, 0, self.rotary_dim),
-                (shard.shape[0], shard.shape[1], shard.shape[2], self.head_dim),
-            )
 
-            shard_rope = ttnn.experimental.rotary_embedding_llama(
-                shard_rope,
-                rot_mats[0],
-                rot_mats[1],
-                transformation_mat,
-                is_decode_mode=is_decode_mode,
-            )
+        # --- Prepare cos/sin in "per-pair" form ---
+        cos = ensure_interleaved(rot_mats[0])
+        sin = ensure_interleaved(rot_mats[1])
 
-            shard_out = ttnn.concat([shard_rope, shard_pass], dim=3)
+        # Convert llama/meta duplicated layout -> per-pair vectors
+        # cos_pair shape: [..., half], sin_pair shape: [..., half]
+        cos_pair = ttnn.slice(cos, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], cos.shape[3]))
+        sin_pair = ttnn.slice(sin, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], sin.shape[3]))
+        # take even indices along last dim
+        cos_pair = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos.shape[0], cos.shape[1], cos.shape[2], D), (1, 1, 1, 2))
+        sin_pair = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin.shape[0], sin.shape[1], sin.shape[2], D), (1, 1, 1, 2))
+        # Now last dim == half
 
-            ttnn.deallocate(shard_rope)
-            ttnn.deallocate(shard_pass)
+        # Prefill: trim cos/sin seq len to match x seq len if needed
+        if not is_decode_mode:
+            # Your code assumes seq dim at index 2; keep that convention.
+            S = x_i.shape[2]
+            if cos_pair.shape[2] != S:
+                cos_pair = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos_pair.shape[0], cos_pair.shape[1], S, cos_pair.shape[3]))
+                sin_pair = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin_pair.shape[0], sin_pair.shape[1], S, sin_pair.shape[3]))
 
-            out_shards.append(shard_out)
+        # Decode: gather the right row(s) using current_pos
+        if is_decode_mode:
+            assert current_pos is not None, "decode mode needs current_pos"
+            assert cos_pair.shape[0] == 1 and cos_pair.shape[1] == 1
 
-        out = _aggregate_as_tensor(out_shards, x)
-        return out
+            # table: [max_seq, half]
+            cos_tbl = ttnn.reshape(cos_pair, (cos_pair.shape[2], cos_pair.shape[3]))
+            sin_tbl = ttnn.reshape(sin_pair, (sin_pair.shape[2], sin_pair.shape[3]))
 
-    
+            pos = current_pos
+            if pos.is_sharded():
+                pos = ttnn.sharded_to_interleaved(pos, ttnn.DRAM_MEMORY_CONFIG, pos.dtype)
+            if pos.layout != ttnn.TILE_LAYOUT:
+                pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
+            if pos.dtype != ttnn.uint32:
+                pos = ttnn.typecast(pos, ttnn.uint32)
+
+            # [B] -> [B, half]
+            cos_bd = ttnn.embedding(pos, cos_tbl)
+            sin_bd = ttnn.embedding(pos, sin_tbl)
+
+            # reshape to broadcast with x decode shape [1, H, B, D]
+            cos_pair = ttnn.reshape(cos_bd, (1, 1, cos_bd.shape[0], cos_bd.shape[1]))
+            sin_pair = ttnn.reshape(sin_bd, (1, 1, sin_bd.shape[0], sin_bd.shape[1]))
+
+        # --- NeoX half-split rotate on rotary prefix ---
+        # Split x: x1|x2, each [..., half]
+        x1 = ttnn.slice(x_i, (0, 0, 0, 0), (x_i.shape[0], x_i.shape[1], x_i.shape[2], half))
+        x2 = ttnn.slice(x_i, (0, 0, 0, half), (x_i.shape[0], x_i.shape[1], x_i.shape[2], D))
+
+        # rotary prefix and passthrough tail within each half
+        x1r = ttnn.slice(x1, (0, 0, 0, 0), (x1.shape[0], x1.shape[1], x1.shape[2], rot_pairs))
+        x2r = ttnn.slice(x2, (0, 0, 0, 0), (x2.shape[0], x2.shape[1], x2.shape[2], rot_pairs))
+        x1p = ttnn.slice(x1, (0, 0, 0, rot_pairs), (x1.shape[0], x1.shape[1], x1.shape[2], half))
+        x2p = ttnn.slice(x2, (0, 0, 0, rot_pairs), (x2.shape[0], x2.shape[1], x2.shape[2], half))
+
+        cos_r = ttnn.slice(cos_pair, (0, 0, 0, 0), (cos_pair.shape[0], cos_pair.shape[1], cos_pair.shape[2], rot_pairs))
+        sin_r = ttnn.slice(sin_pair, (0, 0, 0, 0), (sin_pair.shape[0], sin_pair.shape[1], sin_pair.shape[2], rot_pairs))
+
+        # y1 = x1*cos - x2*sin
+        # y2 = x2*cos + x1*sin
+        y1r = ttnn.sub(ttnn.mul(x1r, cos_r), ttnn.mul(x2r, sin_r))
+        y2r = ttnn.add(ttnn.mul(x2r, cos_r), ttnn.mul(x1r, sin_r))
+
+        y1 = ttnn.concat([y1r, x1p], dim=-1)
+        y2 = ttnn.concat([y2r, x2p], dim=-1)
+        y  = ttnn.concat([y1, y2], dim=-1)
+
+
+        y = self._rope_grouped_to_interleaved(y)
+
+        # Restore layout/dtype (best-effort)
+        if y.layout != restore_layout:
+            y = ttnn.to_layout(y, restore_layout)
+        if y.dtype != restore_dtype:
+            y = ttnn.typecast(y, restore_dtype)
+
+        # Reshard if original was sharded
+        if x.is_sharded():
+            y = ttnn.interleaved_to_sharded(y, restore_memcfg)
+
+        return y
+
+
 
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
@@ -577,10 +662,10 @@ class Attention(LightweightModule):
         # ORIGINAL non-fused path, except Phi-1 uses partial rotary
         if self.is_phi1:
             q_heads_1BQD = self._apply_partial_rope(
-                q_heads_pre_rot_1BQD, rot_mats, self.transformation_mats["decode"], is_decode_mode=True
+                q_heads_pre_rot_1BQD, rot_mats, self.transformation_mats["decode"], is_decode_mode=True, current_pos=current_pos
             )
             k_heads_1BKD = self._apply_partial_rope(
-                k_heads_pre_rot_1BKD, rot_mats, self.transformation_mats["decode"], is_decode_mode=True
+                k_heads_pre_rot_1BKD, rot_mats, self.transformation_mats["decode"], is_decode_mode=True, current_pos=current_pos
             )
         else:
             # ORIGINAL calls (unchanged)
@@ -787,6 +872,12 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+
+        #with open("x_11SH_meta2.txt", "w") as f:
+        #    shards = ttnn.get_device_tensors(x_11SH)
+        #    f.write(f"num_device_tensors={len(shards)}\n")
+        #    f.write("\n".join(repr(getattr(s, "device", None)()) if hasattr(s, "device") else "no_device" for s in shards))
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -859,6 +950,8 @@ class Attention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
         if self.is_phi1:
+            #with open("self_prefill.txt", "a") as f:
+                #f.write(f"self prefill q_heads_1QSD block: {self.__dict__}\n")
             q_heads_1QSD = self._apply_partial_rope(
                 q_heads_1QSD_pre_rot,
                 rot_mats,
@@ -880,6 +973,8 @@ class Attention(LightweightModule):
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
         if self.is_phi1:
+            #with open("self_prefill.txt", "a") as f:
+                #f.write(f"self prefill k_heads_1KSD block: {self.__dict__}\n")
             k_heads_1KSD = self._apply_partial_rope(
                 k_heads_1KSD_pre_rot,
                 rot_mats,

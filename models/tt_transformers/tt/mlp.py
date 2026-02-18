@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
+import os
 import torch
 
 import ttnn
@@ -73,10 +73,13 @@ class MLP(LightweightModule):
         ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )
-
+        # Check the HF_MODEL environment variable
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
+        is_phi1 = hf_model in {"microsoft/Phi-1"}
         # Phi-1 uses a *2-layer* MLP (fc1 -> act -> fc2) i.e. it does NOT have the gated-SiLU "w3/up_proj" path.
         # In our meta-style state_dict mapping, that shows up as feed_forward.w1 + feed_forward.w2 without feed_forward.w3.
-        self.is_two_layer_mlp = f"{state_dict_prefix}.w3.weight" not in state_dict
+        self.is_two_layer_mlp = is_phi1
 
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, dims=w1_dims
@@ -85,9 +88,14 @@ class MLP(LightweightModule):
         self.w3 = None if self.is_two_layer_mlp else as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
-        self.activation_type = (
-            args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
-        )
+        if self.is_two_layer_mlp:  # Phi-1 path
+            self.activation_type = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)
+        else:
+            self.activation_type = (
+                args.mlp_activation_type
+                if hasattr(args, "mlp_activation_type")
+                else ttnn.UnaryOpType.SILU
+            )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
