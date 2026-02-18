@@ -7,7 +7,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
-import numpy as np
+import math
 
 
 def test_base_case(device):
@@ -634,10 +634,10 @@ def test_nd_sharded_embedding(
 
     out_shard_shape = input_shard_shape + (hidden_embedding_dim,)  # don't shard width for output tensor yet
 
-    numel = int(np.prod(input_shape))
+    numel = int(math.prod(input_shape))
     torch_input_tensor = (torch.arange(numel, dtype=torch.long) % weights_shape[0]).reshape(input_shape)
 
-    numel = int(np.prod(weights_shape))
+    numel = int(math.prod(weights_shape))
     torch_weights = torch.arange(numel, dtype=torch.int16).reshape(weights_shape).to(torch.bfloat16)
 
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
@@ -720,7 +720,7 @@ def test_nd_sharded_embedding_uneven_work_split(
 
     max_compute_cores = compute_grid_size.x * compute_grid_size.y
     index_elems_per_page = input_shard_shape[-1]
-    num_input_pages = int(np.prod(input_shape)) // index_elems_per_page
+    num_input_pages = int(math.prod(input_shape)) // index_elems_per_page
     if num_input_pages <= max_compute_cores or num_input_pages % max_compute_cores == 0:
         pytest.skip(
             f"num_input_pages ({num_input_pages}) does not exercise core_group_2 "
@@ -735,10 +735,10 @@ def test_nd_sharded_embedding_uneven_work_split(
     output_shape = input_shape + (weights_shape[-1],)
     out_shard_shape = input_shard_shape + (hidden_embedding_dim,)
 
-    numel = int(np.prod(input_shape))
+    numel = int(math.prod(input_shape))
     torch_input_tensor = (torch.arange(numel, dtype=torch.long) % weights_shape[0]).reshape(input_shape)
 
-    numel = int(np.prod(weights_shape))
+    numel = int(math.prod(weights_shape))
     torch_weights = torch.arange(numel, dtype=torch.int16).reshape(weights_shape).to(torch.bfloat16)
 
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
