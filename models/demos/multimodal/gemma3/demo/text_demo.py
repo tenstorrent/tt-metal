@@ -896,6 +896,7 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            warmup_prefill=False,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
@@ -907,6 +908,7 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            warmup_prefill=False,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
