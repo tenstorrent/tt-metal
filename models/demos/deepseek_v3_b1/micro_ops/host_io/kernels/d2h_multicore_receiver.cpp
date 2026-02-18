@@ -23,7 +23,6 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
 }
 
 void kernel_main() {
-    DPRINT << "start of d2h_multicore_receiver" << "\n";
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
@@ -38,24 +37,8 @@ void kernel_main() {
     constexpr uint32_t upstream_socket_6_config_addr = get_compile_time_arg_val(11);
     constexpr uint32_t upstream_socket_7_config_addr = get_compile_time_arg_val(12);
 
-    DPRINT << "ct args:\n";
-    DPRINT << "send_socket_config_addr: " << (uint32_t)send_socket_config_addr << "\n";
-    DPRINT << "termination_semaphore_addr: " << (uint32_t)termination_semaphore_addr << "\n";
-    DPRINT << "page_size: " << (uint32_t)page_size << "\n";
-    DPRINT << "upstream_page_size: " << (uint32_t)upstream_page_size << "\n";
-    DPRINT << "num_upstream_sockets: " << (uint32_t)num_upstream_sockets << "\n";
-    DPRINT << "upstream_socket_0_config_addr: " << (uint32_t)upstream_socket_0_config_addr << "\n";
-    DPRINT << "upstream_socket_1_config_addr: " << (uint32_t)upstream_socket_1_config_addr << "\n";
-    DPRINT << "upstream_socket_2_config_addr: " << (uint32_t)upstream_socket_2_config_addr << "\n";
-    DPRINT << "upstream_socket_3_config_addr: " << (uint32_t)upstream_socket_3_config_addr << "\n";
-    DPRINT << "upstream_socket_4_config_addr: " << (uint32_t)upstream_socket_4_config_addr << "\n";
-    DPRINT << "upstream_socket_5_config_addr: " << (uint32_t)upstream_socket_5_config_addr << "\n";
-    DPRINT << "upstream_socket_6_config_addr: " << (uint32_t)upstream_socket_6_config_addr << "\n";
-    DPRINT << "upstream_socket_7_config_addr: " << (uint32_t)upstream_socket_7_config_addr << "\n";
-
     SocketSenderInterface sender_socket = create_sender_socket_interface(send_socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
-    DPRINT << "after sender socket init\n";
 
     // Create receiver socket interfaces for all upstream sockets
     SocketReceiverInterface receiver_sockets[8];
@@ -67,18 +50,15 @@ void kernel_main() {
     receiver_sockets[5] = create_receiver_socket_interface(upstream_socket_5_config_addr);
     receiver_sockets[6] = create_receiver_socket_interface(upstream_socket_6_config_addr);
     receiver_sockets[7] = create_receiver_socket_interface(upstream_socket_7_config_addr);
-    DPRINT << "after receiver socket init\n";
 
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
     }
-    DPRINT << "after setting page size for all sockets\n";
 
     uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
     uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
-    DPRINT << "after noc_write_init_state\n";
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
@@ -89,11 +69,8 @@ void kernel_main() {
 
     // Collect data from all upstream sockets into a single 14KB page
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-        DPRINT << "Waiting for page from upstream socket: " << (uint32_t)current_socket_idx << "\n";
-
         // Wait for pages in current upstream socket with termination checks
         if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
-            DPRINT << "D2H socket terminated early\n";
             break;
         }
 
@@ -101,7 +78,6 @@ void kernel_main() {
         uint32_t skt_offset = current_socket_idx * upstream_page_size;  // Offset in D2H socket for this upstream socket
 
         // Write to D2H socket at the appropriate offset
-        DPRINT << "Writing to D2H socket at offset: " << (uint32_t)skt_offset << "\n";
         noc_async_wide_write_any_len_with_state(
             NOC_INDEX,
             read_addr,
@@ -110,35 +86,24 @@ void kernel_main() {
                 sender_socket.write_ptr + skt_offset,
             upstream_page_size);
 
-        DPRINT << "after noc_async_wide_write_any_len_with_state\n";
-
         // Pop from current upstream socket
         socket_pop_pages(receiver_sockets[current_socket_idx], 1);
         noc_async_writes_flushed();
         socket_notify_sender(receiver_sockets[current_socket_idx]);
 
-        DPRINT << "after socket_pop_pages\n";
-
         // Move to next socket in round-robin
         current_socket_idx = (current_socket_idx + 1) % num_upstream_sockets;
-        DPRINT << "completed socket: " << (uint32_t)i << ", next socket: " << (uint32_t)current_socket_idx << "\n";
     }
-
-    DPRINT << "All upstream sockets processed, pushing to D2H\n";
 
     // Push to D2H socket and notify
     socket_push_pages(sender_socket, 1);
     socket_notify_receiver(sender_socket);
-    DPRINT << "after socket_push_pages\n";
 
     invalidate_l1_cache();
-    DPRINT << "after invalidate_l1_cache\n";
 
     update_socket_config(sender_socket);
     socket_barrier(sender_socket);
-    DPRINT << "after socket_barrier\n";
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    DPRINT << "end of d2h_multicore_receiver\n";
 }

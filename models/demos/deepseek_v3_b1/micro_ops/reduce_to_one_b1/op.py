@@ -164,13 +164,10 @@ class ReduceToOneB1:
         d2h_socket_core = ttnn.MeshCoreCoord(device_coord, d2h_core)
 
         # Create D2H socket
-        print("page size bytes:", page_size_bytes)
         d2h_socket_fifo_size = page_size_bytes * 16  # Buffer for 16 pages
-        print("d2h_socket_fifo_size:", d2h_socket_fifo_size)
         d2h_socket = ttnn.D2HSocket(submesh_device, d2h_socket_core, d2h_socket_fifo_size)
 
         d2d_socket_buffer_size = page_size_bytes * 2  # Buffer for 2 pages per socket
-        print("d2d_socket_buffer_size:", d2d_socket_buffer_size)
         d2d_socket_pairs = []
 
         for worker_core in shard_cores:
@@ -769,4 +766,6 @@ class ReduceToOneB1:
         ]
         ttnn.generic_op(input_list, mesh_program_descriptor)
 
-        return (output_tensor, d2h_infra)
+        if enable_d2h_output:
+            return (output_tensor, d2h_infra)
+        return output_tensor
