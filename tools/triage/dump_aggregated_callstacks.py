@@ -10,6 +10,7 @@ Usage:
 Options:
     --all-cores                      Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
+
 Description:
     Aggregates callstacks by (Kernel Id, normalized PC, RISC Name) and shows:
       - Kernel Id / Kernel Name
@@ -19,6 +20,8 @@ Description:
       - RISC Name
       - Locations or device visualizations (if --device-visualization)
     This significantly reduces the number of rows vs raw dump_callstacks.
+
+    By default, the locations are trimmed to 10 entries. Use -v or -vv to show all locations.
 
     When --device-visualization is specified, the last column ("Locations")
     will show per-device ASCII visualizations (device grid)
@@ -55,6 +58,7 @@ script_config = ScriptConfig(
 )
 
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+DEFAULT_MAX_LOCATIONS = 10
 
 
 def _render_device_for_bucket(
@@ -103,6 +107,7 @@ class AggregatedCallstackRow:
     callstack: KernelCallstackWithMessage = triage_field("Kernel Callstack", format_callstack_with_message)
     core_count: int = triage_field("# of Cores")
     risc_name: str = triage_field("RISC Name")
+    devices: str = triage_field("Devices")
     locations: str = triage_field("Locations")
 
 
@@ -119,24 +124,23 @@ class AggregationBucket:
 
         # Existing aggregation for plain text mode
         self.core_locations: set[str] = set()
+        self.device_labels: set[str] = set()
 
         # Helper for device visualization mode
         self.per_core_hits: dict[int, set[tuple[int, int]]] = defaultdict(set)
 
-    def add_core(self, location: OnChipCoordinate, device_label: str | None):
+    def add_core(self, location: OnChipCoordinate, device_label: str):
         """Add a core to this aggregation bucket."""
 
         coord_str = location.to_str("noc0")
-        if device_label:
-            self.core_locations.add(f"{device_label}:{coord_str}")
-        else:
-            self.core_locations.add(coord_str)
+        self.core_locations.add(f"{device_label}:{coord_str}")
+        self.device_labels.add(device_label)
 
         dev_id = location._device.id
         x, y = location._noc0_coord
         self.per_core_hits[dev_id].add((x, y))
 
-    def to_row(self, visualize_devices: bool, context: Context) -> AggregatedCallstackRow:
+    def to_row(self, visualize_devices: bool, verbose: bool, context: Context) -> AggregatedCallstackRow:
         """Convert the bucket to an immutable row for display."""
 
         if visualize_devices:
@@ -151,7 +155,13 @@ class AggregationBucket:
 
             locations_str = "\n\n".join(device_blocks) if device_blocks else ""
         else:
-            locations_str = ", ".join(sorted(self.core_locations))
+            locations = self.core_locations
+            if not verbose and len(locations) > DEFAULT_MAX_LOCATIONS:
+                locations_str = ", ".join(list(locations)[:DEFAULT_MAX_LOCATIONS]) + ", ..."
+            else:
+                locations_str = ", ".join(list(locations))
+
+        devices_str = ", ".join(sorted(self.device_labels)) if self.device_labels else ""
 
         return AggregatedCallstackRow(
             kernel_id=self.kernel_id,
@@ -160,6 +170,7 @@ class AggregationBucket:
             callstack=self.callstack,
             core_count=len(self.core_locations),
             risc_name=self.risc_name,
+            devices=devices_str,
             locations=locations_str,
         )
 
@@ -169,6 +180,7 @@ def _collect_aggregated(
     run_checks,
     show_all_cores: bool,
     visualize_devices: bool,
+    verbose: bool,
     context: Context,
 ) -> list[AggregatedCallstackRow] | None:
     """Collect callstacks and aggregate by (kernel_id, normalized_pc, op_id)."""
@@ -229,14 +241,15 @@ def _collect_aggregated(
         )
 
     # Sort descending by # of cores
-    sorted_buckets = sorted(buckets.values(), key=lambda b: len(b.core_locations), reverse=True)
-    return [b.to_row(visualize_devices, context) for b in sorted_buckets]
+    sorted_buckets = sorted(buckets.values(), key=lambda b: b.op_id)
+    return [b.to_row(visualize_devices, verbose, context) for b in sorted_buckets]
 
 
 def run(args, context: Context):
     """Main entry point for the script."""
     show_all_cores: bool = args["--all-cores"]
     visualize_devices: bool = args["--device-visualization"]
+    verbose: bool = args["-v"] >= 1
 
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
@@ -246,6 +259,7 @@ def run(args, context: Context):
         run_checks=run_checks,
         show_all_cores=show_all_cores,
         visualize_devices=visualize_devices,
+        verbose=verbose,
         context=context,
     )
 
