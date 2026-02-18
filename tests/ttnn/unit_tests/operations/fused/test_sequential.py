@@ -5426,3 +5426,1591 @@ class TestMatmulFusionChains:
         passing_norm, pcc_norm = comp_pcc(golden_norm, ttnn.to_torch(outputs[1][0]), pcc=0.98)
         assert passing_mm, f"Matmul chain PCC: {pcc_mm}"
         assert passing_norm, f"Norm chain PCC: {pcc_norm}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestMatmulFusionStress:
+    """Stress tests for matmul fusion.
+
+    Exercises deep chains, mixed op types, non-trivial bias/residual,
+    different shapes, multi-core grids, and error detection.
+    """
+
+    def _make_mm_config(self, grid_x=1, grid_y=1, in0_block_w=4, per_core_M=1, per_core_N=4):
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=min(per_core_N, 4),
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+
+    def _make_compute_config(self, fp32=False, math_approx_mode=True):
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=math_approx_mode,
+            fp32_dest_acc_en=fp32,
+        )
+
+    def _tt(self, t, device):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    # ------------------------------------------------------------------ #
+    # 4-phase chains
+    # ------------------------------------------------------------------ #
+
+    def test_four_phase_mm_ln_rms_mm(self, device):
+        """4-phase: MM → LN(nonzero bias) → RMS → MM.
+
+        Exercises: deep chain, LN bias code path with non-trivial values,
+        mixed norm types, matmul bookending norms.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        torch_a = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16) * 0.1  # non-zero bias
+
+        mm1 = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute,
+        )
+        ln = layer_norm.layer_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        mm2 = matmul_desc(
+            rms.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute,
+        )
+
+        fused = Sequential(mm1, ln, rms, mm2).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_a.float() @ torch_b1.float()
+        t = torch_layer_norm(t, torch_w.float(), torch_bias.float())
+        t = torch_rms_norm(t, torch_w.float())
+        golden = t @ torch_b2.float()
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"MM→LN(bias)→RMS→MM PCC: {pcc}"
+
+    def test_four_phase_mm_rms_mm_rms(self, device):
+        """4-phase: MM → RMS → MM → RMS (double matmul sandwich).
+
+        Exercises: runtime arg offsets for 2 matmuls in one fused kernel,
+        CB remapping for repeated matmul op, 4 phases.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_a = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        mm1 = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms1 = rms_norm.rms_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            rms1.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms2 = rms_norm.rms_norm(
+            mm2.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(mm1, rms1, mm2, rms2).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
+        golden = torch_rms_norm(t @ torch_b2.float(), torch_w.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"MM→RMS→MM→RMS PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Non-trivial bias and residual
+    # ------------------------------------------------------------------ #
+
+    def test_ln_nonzero_bias_then_matmul(self, device):
+        """LN(random weight + random bias) → MM.
+
+        Exercises: LN bias ifdef path with real values (not zeros),
+        verifies bias actually affects output.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        torch_input = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_w = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16).abs() + 0.5  # positive weights
+        torch_bias = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16) * 0.5
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+
+        ln = layer_norm.layer_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        mm = matmul_desc(
+            ln.output_tensors[0],
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute,
+        )
+
+        fused = Sequential(ln, mm).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = torch_layer_norm(torch_input.float(), torch_w.float(), torch_bias.float()) @ torch_b.float()
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"LN(nonzero bias)→MM PCC: {pcc}"
+
+    def test_rms_with_bias_then_matmul(self, device):
+        """RMS(weight + bias) → MM.
+
+        Exercises: RMS bias code path (rarely tested), CB allocation for
+        bias tensor in RMS.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_input = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16) * 0.1
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+
+        rms = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        mm = matmul_desc(
+            rms.output_tensors[0],
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+
+        fused = Sequential(rms, mm).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # RMS with bias: x / rms(x) * weight + bias
+        rms_val = torch.sqrt(torch_input.float().pow(2).mean(dim=-1, keepdim=True) + 1e-5)
+        temp = torch_input.float() / rms_val * torch_w.float() + torch_bias.float()
+        golden = temp @ torch_b.float()
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"RMS(bias)→MM PCC: {pcc}"
+
+    def test_ln_with_residual_then_rms(self, device):
+        """LN(residual) → RMS.
+
+        Exercises: residual input tensor in non-sharded DRAM mode,
+        extra CB allocation for residual.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        torch_input = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_residual = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_w_ln = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w_rms = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        ln = layer_norm.layer_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w_ln, device),
+            residual_input_tensor=self._tt(torch_residual, device),
+            epsilon=1e-5,
+        )
+        rms = rms_norm.rms_norm(
+            ln.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w_rms, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        fused = Sequential(ln, rms).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        # LN(input + residual) then RMS
+        combined = torch_input.float() + torch_residual.float()
+        temp = torch_layer_norm(combined, torch_w_ln.float())
+        golden = torch_rms_norm(temp, torch_w_rms.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"LN(residual)→RMS PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Deep chains (5+ phases)
+    # ------------------------------------------------------------------ #
+
+    def test_five_phase_rms_mm_ln_mm_rms(self, device):
+        """5-phase: RMS → MM → LN(bias) → MM → RMS.
+
+        Exercises: max depth chain, all three op types, 2 matmuls with
+        different weight matrices, LN bias in middle of chain.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        torch_input = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_w1 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w2 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_w3 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+
+        rms1 = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w1, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        mm1 = matmul_desc(
+            rms1.output_tensors[0],
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute,
+        )
+        ln = layer_norm.layer_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w2, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            ln.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute,
+        )
+        rms2 = rms_norm.rms_norm(
+            mm2.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w3, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        fused = Sequential(rms1, mm1, ln, mm2, rms2).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_rms_norm(torch_input.float(), torch_w1.float())
+        t = t @ torch_b1.float()
+        t = torch_layer_norm(t, torch_w2.float(), torch_bias.float())
+        t = t @ torch_b2.float()
+        golden = torch_rms_norm(t, torch_w3.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"RMS→MM→LN(bias)→MM→RMS PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Shape variety
+    # ------------------------------------------------------------------ #
+
+    def test_non_square_matmul_then_rms(self, device):
+        """MM with dimension change: (32,64)×(64,256) → RMS on (32,256).
+
+        Exercises: CB page size changes between matmul output and norm input,
+        different in0_block_w and per_core_N.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        M, K, N = 32, 64, 256
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, N, dtype=torch.bfloat16)
+
+        mm = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(in0_block_w=K // 32, per_core_N=N // 32),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms = rms_norm.rms_norm(
+            mm.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(mm, rms).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        golden = torch_rms_norm(torch_a.float() @ torch_b.float(), torch_w.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.98)
+        assert passing, f"Non-square MM→RMS PCC: {pcc}"
+
+    def test_wide_matmul_ln_narrow_matmul(self, device):
+        """MM(32,128→256) → LN → MM(32,256→128): expand then contract.
+
+        Exercises: CB page size adapts between phases, norm width changes.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        torch_a = torch.randn(1, 1, 32, 128, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, 256, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, 256, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, 256, 128, dtype=torch.bfloat16)
+
+        mm1 = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(in0_block_w=4, per_core_N=8),
+            compute_kernel_config=mm_compute,
+        )
+        ln = layer_norm.layer_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            ln.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(in0_block_w=8, per_core_N=4),
+            compute_kernel_config=mm_compute,
+        )
+
+        fused = Sequential(mm1, ln, mm2).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_a.float() @ torch_b1.float()
+        t = torch_layer_norm(t, torch_w.float(), torch_bias.float())
+        golden = t @ torch_b2.float()
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"MM(128→256)→LN→MM(256→128) PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Multi-core deep chains
+    # ------------------------------------------------------------------ #
+
+    def test_multicore_four_phase_mm_rms_mm_rms(self, device):
+        """4-phase MM→RMS→MM→RMS on 2x2 grid (4 cores).
+
+        Exercises: multi-core runtime arg distribution for 4-phase chain,
+        per-core tile partitioning across 2 matmuls.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+        # 4 cores × 1 height tile each = 4 height tiles = 128 rows
+        torch_a = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        mm1 = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(grid_x=2, grid_y=2),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms1 = rms_norm.rms_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            rms1.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(grid_x=2, grid_y=2),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms2 = rms_norm.rms_norm(
+            mm2.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(mm1, rms1, mm2, rms2).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
+        golden = torch_rms_norm(t @ torch_b2.float(), torch_w.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"Multi-core MM→RMS→MM→RMS PCC: {pcc}"
+
+    def test_multicore_ln_mm_rms(self, device):
+        """3-phase LN→MM→RMS on 4x1 grid.
+
+        Exercises: multi-core chain with all three op types, fp32=True
+        across 4 cores.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        mm_compute = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        torch_input = torch.randn(1, 1, 128, hidden, dtype=torch.bfloat16)
+        torch_w_ln = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w_rms = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        ln = layer_norm.layer_norm(
+            self._tt(torch_input, device),
+            core_range_set=core_range,
+            weight=self._tt(torch_w_ln, device),
+            bias=self._tt(torch_bias, device),
+            epsilon=1e-5,
+        )
+        mm = matmul_desc(
+            ln.output_tensors[0],
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(grid_x=4, grid_y=1),
+            compute_kernel_config=mm_compute,
+        )
+        rms = rms_norm.rms_norm(
+            mm.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w_rms, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        fused = Sequential(ln, mm, rms).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_layer_norm(torch_input.float(), torch_w_ln.float(), torch_bias.float())
+        t = t @ torch_b.float()
+        golden = torch_rms_norm(t, torch_w_rms.float())
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"Multi-core LN→MM→RMS PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Parallel heterogeneous chains
+    # ------------------------------------------------------------------ #
+
+    def test_parallel_mm_rms_and_ln_mm(self, device):
+        """Two heterogeneous fused chains dispatched in parallel.
+
+        Chain A (core 0,0): MM→RMS (fp32=False)
+        Chain B (core 4,0): LN→MM (fp32=True)
+
+        Exercises: independent fused chains with different fp32 settings.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0))})
+
+        # Chain A: MM→RMS
+        torch_a1 = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w1 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        mm_a = matmul_desc(
+            self._tt(torch_a1, device),
+            self._tt(torch_b1, device),
+            core_range_set=cores_a,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms_a = rms_norm.rms_norm(
+            mm_a.output_tensors[0],
+            core_range_set=cores_a,
+            weight=self._tt(torch_w1, device),
+            epsilon=1e-5,
+        )
+        fused_a = Sequential(mm_a, rms_a).build(device)
+
+        # Chain B: LN→MM
+        torch_input_b = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_w_ln = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        mm_compute_b = self._make_compute_config(fp32=True, math_approx_mode=False)
+
+        ln_b = layer_norm.layer_norm(
+            self._tt(torch_input_b, device),
+            core_range_set=cores_b,
+            weight=self._tt(torch_w_ln, device),
+            epsilon=1e-5,
+        )
+        mm_b = matmul_desc(
+            ln_b.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=cores_b,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=mm_compute_b,
+        )
+        fused_b = Sequential(ln_b, mm_b).build(device)
+
+        outputs = composite.launch([fused_a, fused_b])
+
+        golden_a = torch_rms_norm(torch_a1.float() @ torch_b1.float(), torch_w1.float())
+        golden_b = torch_layer_norm(torch_input_b.float(), torch_w_ln.float()) @ torch_b2.float()
+
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[0][0]), pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing_a, f"Chain A (MM→RMS) PCC: {pcc_a}"
+        assert passing_b, f"Chain B (LN→MM) PCC: {pcc_b}"
+
+    def test_three_parallel_heterogeneous_chains(self, device):
+        """Three independent chains in parallel: MM→RMS, LN→RMS, RMS→MM.
+
+        Exercises: 3-way parallel dispatch, each chain has different structure.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+        cores = [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i, 0), ttnn.CoreCoord(i, 0))}) for i in [0, 3, 6]]
+
+        # Chain 0: MM→RMS (fp32=False)
+        t_a0 = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        t_b0 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        t_w0 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        mm0 = matmul_desc(
+            self._tt(t_a0, device),
+            self._tt(t_b0, device),
+            core_range_set=cores[0],
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms0 = rms_norm.rms_norm(
+            mm0.output_tensors[0],
+            core_range_set=cores[0],
+            weight=self._tt(t_w0, device),
+            epsilon=1e-5,
+        )
+        fused0 = Sequential(mm0, rms0).build(device)
+
+        # Chain 1: LN→RMS (fp32=True)
+        t_in1 = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        t_w1a = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        t_w1b = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        ln1 = layer_norm.layer_norm(
+            self._tt(t_in1, device),
+            core_range_set=cores[1],
+            weight=self._tt(t_w1a, device),
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=cores[1],
+            weight=self._tt(t_w1b, device),
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        fused1 = Sequential(ln1, rms1).build(device)
+
+        # Chain 2: RMS→MM (fp32=False)
+        t_in2 = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        t_w2 = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        t_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+
+        rms2 = rms_norm.rms_norm(
+            self._tt(t_in2, device),
+            core_range_set=cores[2],
+            weight=self._tt(t_w2, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            rms2.output_tensors[0],
+            self._tt(t_b2, device),
+            core_range_set=cores[2],
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        fused2 = Sequential(rms2, mm2).build(device)
+
+        outputs = composite.launch([fused0, fused1, fused2])
+
+        golden0 = torch_rms_norm(t_a0.float() @ t_b0.float(), t_w0.float())
+        golden1 = torch_rms_norm(torch_layer_norm(t_in1.float(), t_w1a.float()), t_w1b.float())
+        golden2 = torch_rms_norm(t_in2.float(), t_w2.float()) @ t_b2.float()
+
+        for i, (golden, label) in enumerate([(golden0, "MM→RMS"), (golden1, "LN→RMS"), (golden2, "RMS→MM")]):
+            passing, pcc = comp_pcc(golden, ttnn.to_torch(outputs[i][0]), pcc=0.98)
+            assert passing, f"Chain {i} ({label}) PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Error detection
+    # ------------------------------------------------------------------ #
+
+    def test_fp32_mismatch_raises_error(self, device):
+        """MM(fp32=False) fused with LN(fp32=True) should error.
+
+        Exercises: fp32_dest_acc_en consistency validation.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_a = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        # Matmul with fp32=False
+        mm = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(fp32=False),
+        )
+        # LN defaults to fp32=True
+        ln = layer_norm.layer_norm(
+            mm.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+
+        with pytest.raises((ValueError, RuntimeError)):
+            Sequential(mm, ln).build(device)
+
+    # ------------------------------------------------------------------ #
+    # Repeated same-op chains
+    # ------------------------------------------------------------------ #
+
+    def test_three_matmuls_with_rms_between(self, device):
+        """5-phase: MM → RMS → MM → RMS → MM.
+
+        Exercises: 3 matmuls with different weight matrices, runtime arg
+        offsets for 3 readers each with different DRAM addresses.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_a = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b1 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b2 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_b3 = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        mm1 = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b1, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms1 = rms_norm.rms_norm(
+            mm1.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+        mm2 = matmul_desc(
+            rms1.output_tensors[0],
+            self._tt(torch_b2, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        rms2 = rms_norm.rms_norm(
+            mm2.output_tensors[0],
+            core_range_set=core_range,
+            weight=self._tt(torch_w, device),
+            epsilon=1e-5,
+        )
+        mm3 = matmul_desc(
+            rms2.output_tensors[0],
+            self._tt(torch_b3, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+
+        fused = Sequential(mm1, rms1, mm2, rms2, mm3).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_rms_norm(torch_a.float() @ torch_b1.float(), torch_w.float())
+        t = torch_rms_norm(t @ torch_b2.float(), torch_w.float())
+        golden = t @ torch_b3.float()
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"MM→RMS→MM→RMS→MM PCC: {pcc}"
+
+    @pytest.mark.parametrize("num_rms", [2, 3, 4])
+    def test_matmul_followed_by_n_rms_norms(self, device, num_rms):
+        """MM followed by N consecutive RMS norms.
+
+        Exercises: many phases with identical op type, CB reuse across
+        repeated norm phases, define/undef for N+1 phases.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        torch_a = torch.randn(1, 1, 32, hidden, dtype=torch.bfloat16)
+        torch_b = torch.randn(1, 1, hidden, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+
+        ops = []
+        mm = matmul_desc(
+            self._tt(torch_a, device),
+            self._tt(torch_b, device),
+            core_range_set=core_range,
+            program_config=self._make_mm_config(),
+            compute_kernel_config=self._make_compute_config(),
+        )
+        ops.append(mm)
+
+        prev_output = mm.output_tensors[0]
+        for _ in range(num_rms):
+            rms = rms_norm.rms_norm(
+                prev_output,
+                core_range_set=core_range,
+                weight=self._tt(torch_w, device),
+                epsilon=1e-5,
+            )
+            ops.append(rms)
+            prev_output = rms.output_tensors[0]
+
+        fused = Sequential(*ops).build(device)
+        outputs = composite.launch([fused])
+        result = ttnn.to_torch(outputs[0][0])
+
+        t = torch_a.float() @ torch_b.float()
+        for _ in range(num_rms):
+            t = torch_rms_norm(t, torch_w.float())
+        golden = t
+        passing, pcc = comp_pcc(golden, result, pcc=0.97)
+        assert passing, f"MM→{num_rms}×RMS PCC: {pcc}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestNestedParallelStress:
+    """Stress tests for deeply nested Sequential/Parallel trees with long chains.
+
+    All branching tests use norm ops (LN/RMS) since matmul doesn't yet support
+    core_range_override in the OpGraph path. Matmul is used in linear stem
+    portions before the split.
+
+    Core layout convention:
+        NCHt (num height tiles) >= num_cores, one tile = 32 rows.
+        8 cores → 256 rows, 16 cores → 512 rows.
+    """
+
+    def _tt(self, t, device):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    # ------------------------------------------------------------------ #
+    # Long chains inside Parallel branches
+    # ------------------------------------------------------------------ #
+
+    def test_stem_parallel_two_phase_mixed_branches(self, device):
+        """Stem(RMS) → Parallel(2-phase chain A, 2-phase chain B).
+
+        Tree (8 cores total):
+            RMS [0-7] → LN→RMS [0-3]
+                       → RMS→LN [4-7]
+
+        3 norm-compute phases per path (max before SFPI compiler ICE).
+        Exercises: mixed LN/RMS per branch, different op ordering per branch.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w = self._tt(torch_w, device)
+        tt_b = self._tt(torch_bias, device)
+
+        # Stem
+        stem = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=all_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Branch A: LN → RMS (2 phases)
+        a1 = layer_norm.layer_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+        a2 = rms_norm.rms_norm(
+            a1.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Branch B: RMS → LN (2 phases, reversed order)
+        b1 = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        b2 = layer_norm.layer_norm(
+            b1.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(a1, a2),
+                Sequential(b1, b2),
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        g_stem = torch_rms_norm(torch_input.float(), torch_w.float())
+        golden_a = torch_rms_norm(
+            torch_layer_norm(g_stem, torch_w.float(), torch_bias.float()),
+            torch_w.float(),
+        )
+        golden_b = torch_layer_norm(
+            torch_rms_norm(g_stem, torch_w.float()),
+            torch_w.float(),
+            torch_bias.float(),
+        )
+
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[0][0]), pcc=0.97)
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[0][1]), pcc=0.97)
+        assert passing_a, f"Branch A (LN→RMS) PCC: {pcc_a}"
+        assert passing_b, f"Branch B (RMS→LN) PCC: {pcc_b}"
+
+    def test_nested_split_of_split(self, device):
+        """Stem → Parallel(Sequential(A, Parallel(A1, A2)), B).
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1]
+                                   → RMS [2-3]
+                       → RMS [4-7]
+
+        3 leaf paths. Exercises: nested Parallel inside Sequential inside Parallel.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        cores_a1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        cores_a2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        ws = [torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16) for _ in range(5)]
+        tt_ws = [self._tt(w, device) for w in ws]
+
+        stem = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=all_cores,
+            weight=tt_ws[0],
+            epsilon=1e-5,
+        )
+        a_mid = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_ws[1],
+            epsilon=1e-5,
+        )
+        a1_leaf = rms_norm.rms_norm(
+            a_mid.output_tensors[0],
+            core_range_set=cores_a1,
+            weight=tt_ws[2],
+            epsilon=1e-5,
+        )
+        a2_leaf = rms_norm.rms_norm(
+            a_mid.output_tensors[0],
+            core_range_set=cores_a2,
+            weight=tt_ws[3],
+            epsilon=1e-5,
+        )
+        b_leaf = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_ws[4],
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(a_mid, Parallel(a1_leaf, a2_leaf)),
+                b_leaf,
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
+        g_a = torch_rms_norm(g_stem, ws[1].float())
+        goldens = [
+            torch_rms_norm(g_a, ws[2].float()),
+            torch_rms_norm(g_a, ws[3].float()),
+            torch_rms_norm(g_stem, ws[4].float()),
+        ]
+
+        for i, label in enumerate(["A1", "A2", "B"]):
+            passing, pcc = comp_pcc(goldens[i], ttnn.to_torch(outputs[0][i]), pcc=0.98)
+            assert passing, f"Leaf {label} PCC: {pcc}"
+
+    # ------------------------------------------------------------------ #
+    # Deep nesting with long chains at every level
+    # ------------------------------------------------------------------ #
+
+    def test_deep_nested_split_three_levels(self, device):
+        """Stem → Parallel(mid → Parallel(leaf, leaf), leaf). 3-level nesting.
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1]
+                                   → RMS [2-3]
+                       → RMS→RMS [4-7]
+
+        3 norm phases on deepest path (hitting SFPI compiler limit).
+        Exercises: 3-level nesting depth, mixed path lengths, CB state
+        save/restore across nested splits.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        cores_a1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        cores_a2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        ws = [torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16) for _ in range(6)]
+        tt_ws = [self._tt(w, device) for w in ws]
+
+        def rms(inp, cores, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cores, weight=tt_ws[wi], epsilon=1e-5)
+
+        stem = rms(self._tt(torch_input, device), all_cores, 0)
+        a_mid = rms(stem.output_tensors[0], cores_a, 1)
+        a1_leaf = rms(a_mid.output_tensors[0], cores_a1, 2)
+        a2_leaf = rms(a_mid.output_tensors[0], cores_a2, 3)
+        b1 = rms(stem.output_tensors[0], cores_b, 4)
+        b2 = rms(b1.output_tensors[0], cores_b, 5)
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(
+                    a_mid,
+                    Parallel(a1_leaf, a2_leaf),
+                ),
+                Sequential(b1, b2),
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        g_stem = torch_rms_norm(torch_input.float(), ws[0].float())
+        g_a = torch_rms_norm(g_stem, ws[1].float())
+        goldens = [
+            torch_rms_norm(g_a, ws[2].float()),  # A1 leaf
+            torch_rms_norm(g_a, ws[3].float()),  # A2 leaf
+            torch_rms_norm(torch_rms_norm(g_stem, ws[4].float()), ws[5].float()),  # B leaf
+        ]
+
+        for i, label in enumerate(["A1", "A2", "B"]):
+            passing, pcc = comp_pcc(goldens[i], ttnn.to_torch(outputs[0][i]), pcc=0.97)
+            assert passing, f"Leaf {label} PCC: {pcc}"
+
+    def test_three_way_split_with_long_chains(self, device):
+        """Stem → Parallel(3 branches each with 2-phase chains).
+
+        Tree (6 cores):
+            RMS [0-5] → LN→RMS [0-1]
+                       → RMS→LN [2-3]
+                       → RMS→RMS [4-5]
+
+        Exercises: 3-way split, different op mix per branch.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))})
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        cores_c = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 0))})
+
+        # 6 cores → 192 rows
+        torch_input = torch.randn(1, 1, 192, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w = self._tt(torch_w, device)
+        tt_b = self._tt(torch_bias, device)
+
+        stem = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=all_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Branch A: LN → RMS
+        a1 = layer_norm.layer_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+        a2 = rms_norm.rms_norm(
+            a1.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Branch B: RMS → LN
+        b1 = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        b2 = layer_norm.layer_norm(
+            b1.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+
+        # Branch C: RMS → RMS
+        c1 = rms_norm.rms_norm(
+            stem.output_tensors[0],
+            core_range_set=cores_c,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        c2 = rms_norm.rms_norm(
+            c1.output_tensors[0],
+            core_range_set=cores_c,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(a1, a2),
+                Sequential(b1, b2),
+                Sequential(c1, c2),
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        w, b = torch_w.float(), torch_bias.float()
+        g_stem = torch_rms_norm(torch_input.float(), w)
+        goldens = [
+            torch_rms_norm(torch_layer_norm(g_stem, w, b), w),
+            torch_layer_norm(torch_rms_norm(g_stem, w), w, b),
+            torch_rms_norm(torch_rms_norm(g_stem, w), w),
+        ]
+
+        for i, label in enumerate(["A(LN→RMS)", "B(RMS→LN)", "C(RMS→RMS)"]):
+            passing, pcc = comp_pcc(goldens[i], ttnn.to_torch(outputs[0][i]), pcc=0.97)
+            assert passing, f"Branch {label} PCC: {pcc}"
+
+    def test_two_phase_stem_then_parallel_branches(self, device):
+        """2-phase stem → Parallel(1-phase branch A, 1-phase branch B).
+
+        Tree (8 cores):
+            RMS→LN [0-7] → RMS [0-3]
+                           → LN [4-7]
+
+        3 norm phases per path (max before SFPI compiler ICE).
+        Exercises: multi-phase stem with branching, mixed op types.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        cores_a = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        cores_b = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.zeros(1, 1, 1, hidden, dtype=torch.bfloat16)
+        tt_w = self._tt(torch_w, device)
+        tt_b = self._tt(torch_bias, device)
+
+        # Stem: RMS → LN (2 phases, 8 cores)
+        s1 = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=all_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+        s2 = layer_norm.layer_norm(
+            s1.output_tensors[0],
+            core_range_set=all_cores,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+
+        # Branch A: RMS
+        a1 = rms_norm.rms_norm(
+            s2.output_tensors[0],
+            core_range_set=cores_a,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Branch B: LN
+        b1 = layer_norm.layer_norm(
+            s2.output_tensors[0],
+            core_range_set=cores_b,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(
+            s1,
+            s2,
+            Parallel(a1, b1),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        w, b = torch_w.float(), torch_bias.float()
+        g = torch_layer_norm(torch_rms_norm(torch_input.float(), w), w, b)
+        golden_a = torch_rms_norm(g, w)
+        golden_b = torch_layer_norm(g, w, b)
+
+        passing_a, pcc_a = comp_pcc(golden_a, ttnn.to_torch(outputs[0][0]), pcc=0.97)
+        passing_b, pcc_b = comp_pcc(golden_b, ttnn.to_torch(outputs[0][1]), pcc=0.97)
+        assert passing_a, f"Branch A (RMS) PCC: {pcc_a}"
+        assert passing_b, f"Branch B (LN) PCC: {pcc_b}"
+
+    def test_symmetric_binary_tree(self, device):
+        """Symmetric binary tree: stem → 2 branches → 4 leaves (2 each).
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1]
+                                   → RMS [2-3]
+                       → RMS [4-7] → RMS [4-5]
+                                   → RMS [6-7]
+
+        4 leaf paths. Exercises: fully symmetric tree, every internal node splits.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+
+        all_8 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        left_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        right_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+        ll_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        lr_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        rl_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 0))})
+        rr_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        ws = [torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16) for _ in range(7)]
+        tt_ws = [self._tt(w, device) for w in ws]
+
+        def rms(inp, cores, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cores, weight=tt_ws[wi], epsilon=1e-5)
+
+        root = rms(self._tt(torch_input, device), all_8, 0)
+        left = rms(root.output_tensors[0], left_4, 1)
+        right = rms(root.output_tensors[0], right_4, 2)
+        ll = rms(left.output_tensors[0], ll_2, 3)
+        lr = rms(left.output_tensors[0], lr_2, 4)
+        rl = rms(right.output_tensors[0], rl_2, 5)
+        rr = rms(right.output_tensors[0], rr_2, 6)
+
+        fused = Sequential(
+            root,
+            Parallel(
+                Sequential(left, Parallel(ll, lr)),
+                Sequential(right, Parallel(rl, rr)),
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        g_root = torch_rms_norm(torch_input.float(), ws[0].float())
+        g_left = torch_rms_norm(g_root, ws[1].float())
+        g_right = torch_rms_norm(g_root, ws[2].float())
+        goldens = [
+            torch_rms_norm(g_left, ws[3].float()),
+            torch_rms_norm(g_left, ws[4].float()),
+            torch_rms_norm(g_right, ws[5].float()),
+            torch_rms_norm(g_right, ws[6].float()),
+        ]
+
+        for i, label in enumerate(["LL", "LR", "RL", "RR"]):
+            passing, pcc = comp_pcc(goldens[i], ttnn.to_torch(outputs[0][i]), pcc=0.98)
+            assert passing, f"Leaf {label} PCC: {pcc}"
+
+    def test_asymmetric_deep_left(self, device):
+        """Asymmetric: deep left chain + shallow right branch.
+
+        Tree (8 cores):
+            RMS [0-7] → RMS [0-3] → RMS [0-1] → RMS [0-1]
+                                   → RMS [2-3]
+                       → RMS [4-7]
+
+        Left-most path: 5 phases. Right path: 2 phases.
+        Exercises: asymmetric depth, different phase counts per path.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+
+        all_8 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        left_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        ll_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        lr_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        right_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        ws = [torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16) for _ in range(6)]
+        tt_ws = [self._tt(w, device) for w in ws]
+
+        def rms(inp, cores, wi):
+            return rms_norm.rms_norm(inp, core_range_set=cores, weight=tt_ws[wi], epsilon=1e-5)
+
+        root = rms(self._tt(torch_input, device), all_8, 0)
+        left = rms(root.output_tensors[0], left_4, 1)
+        ll = rms(left.output_tensors[0], ll_2, 2)
+        ll_deep = rms(ll.output_tensors[0], ll_2, 3)  # extra depth
+        lr = rms(left.output_tensors[0], lr_2, 4)
+        right = rms(root.output_tensors[0], right_4, 5)
+
+        fused = Sequential(
+            root,
+            Parallel(
+                Sequential(
+                    left,
+                    Parallel(
+                        Sequential(ll, ll_deep),
+                        lr,
+                    ),
+                ),
+                right,
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        g_root = torch_rms_norm(torch_input.float(), ws[0].float())
+        g_left = torch_rms_norm(g_root, ws[1].float())
+        goldens = [
+            torch_rms_norm(torch_rms_norm(g_left, ws[2].float()), ws[3].float()),  # LL deep
+            torch_rms_norm(g_left, ws[4].float()),  # LR
+            torch_rms_norm(g_root, ws[5].float()),  # Right
+        ]
+
+        for i, label in enumerate(["LL(deep)", "LR", "Right"]):
+            passing, pcc = comp_pcc(goldens[i], ttnn.to_torch(outputs[0][i]), pcc=0.98)
+            assert passing, f"Leaf {label} PCC: {pcc}"
+
+    def test_nested_parallel_with_ln_bias_and_rms_bias(self, device):
+        """Nested split with different bias configurations per branch.
+
+        Tree (8 cores):
+            RMS [0-7] → LN(bias) [0-3] → RMS(bias) [0-1]
+                                        → RMS [2-3]
+                       → LN [4-7]
+
+        Exercises: LN bias ifdef + RMS bias ifdef in nested branches,
+        different CB layouts per path.
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        hidden = 128
+        ln_compute = ttnn.layernorm_default_compute_config(device.arch())
+
+        all_8 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        left_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        ll_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        lr_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+        right_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))})
+
+        torch_input = torch.randn(1, 1, 256, hidden, dtype=torch.bfloat16)
+        torch_w = torch.ones(1, 1, 1, hidden, dtype=torch.bfloat16)
+        torch_bias = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16) * 0.1
+        torch_rms_bias = torch.randn(1, 1, 1, hidden, dtype=torch.bfloat16) * 0.05
+        tt_w = self._tt(torch_w, device)
+        tt_bias = self._tt(torch_bias, device)
+        tt_rms_bias = self._tt(torch_rms_bias, device)
+
+        stem = rms_norm.rms_norm(
+            self._tt(torch_input, device),
+            core_range_set=all_8,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Left mid: LN with bias
+        left_ln = layer_norm.layer_norm(
+            stem.output_tensors[0],
+            core_range_set=left_4,
+            weight=tt_w,
+            bias=tt_bias,
+            epsilon=1e-5,
+        )
+
+        # Left-left leaf: RMS with bias
+        ll_rms = rms_norm.rms_norm(
+            left_ln.output_tensors[0],
+            core_range_set=ll_2,
+            weight=tt_w,
+            bias=tt_rms_bias,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Left-right leaf: RMS without bias
+        lr_rms = rms_norm.rms_norm(
+            left_ln.output_tensors[0],
+            core_range_set=lr_2,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute,
+        )
+
+        # Right: LN without bias
+        right_ln = layer_norm.layer_norm(
+            stem.output_tensors[0],
+            core_range_set=right_4,
+            weight=tt_w,
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(
+            stem,
+            Parallel(
+                Sequential(left_ln, Parallel(ll_rms, lr_rms)),
+                right_ln,
+            ),
+        ).build(device)
+        outputs = composite.launch([fused])
+
+        w = torch_w.float()
+        b = torch_bias.float()
+        rb = torch_rms_bias.float()
+        g_stem = torch_rms_norm(torch_input.float(), w)
+        g_left = torch_layer_norm(g_stem, w, b)
+
+        # RMS with bias: x / rms(x) * weight + bias
+        g_ll_rms_val = torch.sqrt(g_left.pow(2).mean(dim=-1, keepdim=True) + 1e-5)
+        golden_ll = g_left / g_ll_rms_val * w + rb
+
+        golden_lr = torch_rms_norm(g_left, w)
+        golden_right = torch_layer_norm(g_stem, w)
+
+        passing_ll, pcc_ll = comp_pcc(golden_ll, ttnn.to_torch(outputs[0][0]), pcc=0.97)
+        passing_lr, pcc_lr = comp_pcc(golden_lr, ttnn.to_torch(outputs[0][1]), pcc=0.98)
+        passing_r, pcc_r = comp_pcc(golden_right, ttnn.to_torch(outputs[0][2]), pcc=0.98)
+        assert passing_ll, f"LL (RMS+bias) PCC: {pcc_ll}"
+        assert passing_lr, f"LR (RMS) PCC: {pcc_lr}"
+        assert passing_r, f"Right (LN) PCC: {pcc_r}"
