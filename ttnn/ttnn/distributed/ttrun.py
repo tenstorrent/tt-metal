@@ -300,24 +300,6 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     Returns:
         Dictionary of environment variables for this rank
     """
-    # Handle TT_METAL_CACHE with rank-specific suffix to prevent cache conflicts/collisions between ranks (multi-process safety).
-    hostname = os.uname().nodename
-
-    if "TT_METAL_CACHE" in os.environ:
-        user_cache_path = os.environ["TT_METAL_CACHE"]
-        base_path = user_cache_path
-        logger.warning(
-            f"{TT_RUN_PREFIX} User-provided TT_METAL_CACHE '{user_cache_path}' "
-            f"will be modified with rank suffix for multi-process safety"
-        )
-    else:
-        # Use launch directory for cache when TT_METAL_CACHE is not set.
-        # This ensures the cache is on the shared filesystem (NFS) visible to all nodes.
-        base_path = f"{ORIGINAL_CWD}/.cache"
-
-    # Apply consistent suffix pattern to both user-provided and default paths
-    cache_path = f"{base_path}_{hostname}"
-
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
     # Variables in ENV_BLOCKLIST are excluded even if they match prefixes
@@ -352,7 +334,6 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Note: Path objects are converted to str here at the env var boundary
     env.update(
         {
-            "TT_METAL_CACHE": cache_path,
             "TT_MESH_ID": str(binding.mesh_id),
             "TT_MESH_GRAPH_DESC_PATH": str(config.mesh_graph_desc_path),
             "TT_METAL_HOME": default_tt_metal_home,
@@ -633,7 +614,6 @@ def main(
         The following variables are automatically set for each rank:
         - TT_MESH_ID: Mesh identifier
         - TT_MESH_HOST_RANK: Host rank within the mesh
-        - TT_METAL_CACHE: Per-rank cache directory (defaults to `<LAUNCH_DIR>/.cache_<hostname>_rank<N>`)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path

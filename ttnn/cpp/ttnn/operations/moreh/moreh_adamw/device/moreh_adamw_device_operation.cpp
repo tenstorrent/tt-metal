@@ -13,11 +13,6 @@
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
-MorehAdamWDeviceOperation::program_factory_t MorehAdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MultiCore{};
-}
-
 void MorehAdamWDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});

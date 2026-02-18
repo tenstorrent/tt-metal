@@ -968,12 +968,16 @@ class MlpOp:
         shared_k_parallel,
         shared_n_parallel,
         epsilon=1e-6,
+        num_iterations=1,
     ):
         """
         Execute the full fused MLP operation (dense MLP + shared expert).
 
         No routing tensors needed (no gate_mm_weights, gate_bias, gate_indices,
         gate_output_scores, gate_output_indices, expert_index, expert_scale, mul_scalar_buf).
+
+        Args:
+            num_iterations: Number of iterations to loop inside the kernel (default 1).
 
         Returns:
             final_output_tensor
@@ -1184,6 +1188,11 @@ class MlpOp:
                 ncrisc_args += shared_ncrisc
                 brisc_args += shared_brisc
                 trisc_args += shared_trisc
+
+                # Loop iteration count (available to all RISCs in common section)
+                ncrisc_args += [("num_iterations", num_iterations)]
+                brisc_args += [("num_iterations", num_iterations)]
+                trisc_args += [("num_iterations", num_iterations)]
 
                 # Create unified kernel
                 unified_kernel = UnifiedKernelDescriptor(

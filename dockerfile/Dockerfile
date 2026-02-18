@@ -26,7 +26,10 @@
 #############################################################
 
 ARG UBUNTU_VERSION=22.04
-ARG PYTHON_VERSION=3.10
+# PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
+# Ubuntu 22.04 -> Python 3.10
+# Ubuntu 24.04 -> Python 3.12
+ARG PYTHON_VERSION=""
 
 #############################################################
 # Tool and venv layers (resolved by docker-bake.hcl contexts)
@@ -63,6 +66,7 @@ FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -74,7 +78,19 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 # shared path. When the venv is copied to NFS for multi-host use, the Python interpreter
 # must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
-RUN umask 000 && uv python install "$PYTHON_VERSION"
+
+# Auto-detect Python version from Ubuntu version if not explicitly provided
+RUN set -e; \
+    DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \
+    if [ -z "${DETECTED_PYTHON_VERSION}" ]; then \
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+    DETECTED_PYTHON_VERSION="3.12"; \
+    else \
+    DETECTED_PYTHON_VERSION="3.10"; \
+    fi; \
+    fi; \
+    echo "Installing Python ${DETECTED_PYTHON_VERSION} for Ubuntu ${UBUNTU_VERSION}"; \
+    umask 000 && uv python install "${DETECTED_PYTHON_VERSION}"
 
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
