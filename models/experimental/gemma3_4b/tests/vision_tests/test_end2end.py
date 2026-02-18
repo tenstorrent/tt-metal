@@ -203,7 +203,7 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
         logger.info(f"[Text] Decoding token {iteration}, current_pos: {current_pos.item()}")
 
         # Run decode (exactly like test_end2end.py)
-        logits = generator.decode_forward_text(
+        logits = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=False,

@@ -652,7 +652,7 @@ def test_mlp1d_llama_demo(
             out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
         # Decode forward
-        logits, _ = generator.decode_forward_text(
+        logits, _ = generator.decode_forward(
             out_tok,
             current_pos,
             enable_trace=not measure_accuracy,  # Disable trace for accuracy (teacher forcing)
