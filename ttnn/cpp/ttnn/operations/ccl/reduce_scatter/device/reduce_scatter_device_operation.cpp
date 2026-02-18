@@ -13,11 +13,6 @@
 
 namespace ttnn::operations::ccl {
 
-ReduceScatterDeviceOperation::program_factory_t ReduceScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ReduceScatterProgram{};
-}
-
 void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
@@ -107,9 +102,6 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -120,9 +112,9 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
+        operation_attributes.compute_kernel_config,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::ccl
@@ -140,7 +132,8 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     tt::tt_fabric::Topology topology,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::ccl::ReduceScatterDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -153,7 +146,8 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
             .num_links = num_links,
             .chunks_per_sync = chunks_per_sync,
             .num_workers_per_link = num_workers_per_link,
-            .num_buffers_per_channel = num_buffers_per_channel},
+            .num_buffers_per_channel = num_buffers_per_channel,
+            .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
 }
 }  // namespace ttnn::prim
