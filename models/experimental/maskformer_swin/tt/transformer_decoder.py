@@ -359,6 +359,18 @@ class MaskFormerTransformerDecoder:
                     pass
             return _merge_heads(tt_x)
 
+        def _attention_core(q, k, v, *, tag: str):
+            k_t = ttnn.permute(k, (0, 1, 3, 2))
+            if debug:
+                print(f"[maskformer][decoder] {tag} scores", flush=True)
+            scores = ttnn.matmul(q, k_t, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs)
+            if debug:
+                print(f"[maskformer][decoder] {tag} softmax", flush=True)
+            attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+            if debug:
+                print(f"[maskformer][decoder] {tag} ctx", flush=True)
+            return ttnn.matmul(attn, v, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
+
         def _manual_attention(attn_layer, q_in, k_in, v_in, *, tag: str):
             if debug:
                 print(f"[maskformer][decoder] {tag} proj_q", flush=True)
@@ -384,16 +396,7 @@ class MaskFormerTransformerDecoder:
             q = _split_heads(q)
             k = _split_heads(k)
             v = _split_heads(v)
-            k_t = ttnn.permute(k, (0, 1, 3, 2))
-            if debug:
-                print(f"[maskformer][decoder] {tag} scores", flush=True)
-            scores = ttnn.matmul(q, k_t, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs)
-            if debug:
-                print(f"[maskformer][decoder] {tag} softmax", flush=True)
-            attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
-            if debug:
-                print(f"[maskformer][decoder] {tag} ctx", flush=True)
-            ctx = ttnn.matmul(attn, v, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
+            ctx = _attention_core(q, k, v, tag=tag)
             return _merge_heads(ctx)
 
         for layer_idx in range(self.config.num_layers):
@@ -405,22 +408,31 @@ class MaskFormerTransformerDecoder:
             qkv_in = ttnn.add(tt_hidden, tt_qpos)
             enable_sdpa = os.environ.get("MASKFORMER_TT_ENABLE_SDPA", "1") == "1"
             enable_fused_qkv = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "1") == "1"
+            force_sdpa = os.environ.get("MASKFORMER_TT_FORCE_SDPA", "0").strip() == "1"
+            sdpa_min_seq = int(os.environ.get("MASKFORMER_TT_SDPA_MIN_SEQ", "192"))
+            seq_q = int(tt_hidden.shape[1])
+            seq_k = int(tt_mem.shape[1])
             use_sdpa = (
                 enable_sdpa
                 and hasattr(ttnn, "transformer")
                 and hasattr(ttnn.transformer, "scaled_dot_product_attention")
+                and (force_sdpa or (seq_q >= sdpa_min_seq and seq_k >= sdpa_min_seq))
             )
             ctx = None
-            if use_sdpa and enable_fused_qkv and layer.get("self_qkv_w") is not None:
-                try:
-                    q, k, v = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"))
-                    if q is not None and k is not None and v is not None:
-                        attn_ctx = ttnn.transformer.scaled_dot_product_attention(
-                            q, k, v, is_causal=False, program_config=prog_cfg.sdpa, compute_kernel_config=compute_cfg
-                        )
-                        ctx = _concat_heads(attn_ctx)
-                except Exception:
-                    ctx = None
+            if enable_fused_qkv and layer.get("self_qkv_w") is not None:
+                qkv = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"))
+                if qkv is not None:
+                    q, k, v = qkv
+                    if use_sdpa:
+                        try:
+                            attn_ctx = ttnn.transformer.scaled_dot_product_attention(
+                                q, k, v, is_causal=False, program_config=prog_cfg.sdpa, compute_kernel_config=compute_cfg
+                            )
+                            ctx = _concat_heads(attn_ctx)
+                        except Exception:
+                            ctx = None
+                    if ctx is None:
+                        ctx = _concat_heads(_attention_core(q, k, v, tag=f"layer{layer_idx}.self_attn"))
             if ctx is None:
                 ctx = _manual_attention(layer, qkv_in, qkv_in, tt_hidden, tag=f"layer{layer_idx}.self_attn")
             if debug:
