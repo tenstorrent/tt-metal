@@ -719,7 +719,7 @@ def test_wan_time_text_image_embedding(
     seq_len: int,
     embed_dim: int,
 ) -> None:
-    torch_dtype = torch.bfloat16
+    torch_dtype = torch.bfloat32
     torch.manual_seed(12334)
     # Create Torch model
     inner_dim = 5120
@@ -765,8 +765,8 @@ def test_wan_time_text_image_embedding(
     temb, timestep_proj, encoder_hidden_states = tt_model(tt_timestep, tt_encoder_hidden_states)
 
     # Convert back to torch and compare
-    tt_temb_torch = ttnn.to_torch(temb).squeeze(0).squeeze(0)
-    tt_timestep_proj_torch = ttnn.to_torch(timestep_proj).squeeze(0).squeeze(0)
+    tt_temb_torch = ttnn.to_torch(temb, dtype=torch_dtype).squeeze(0).squeeze(0)
+    tt_timestep_proj_torch = ttnn.to_torch(timestep_proj, dtype=torch_dtype).squeeze(0).squeeze(0)
     tt_encoder_hidden_states_torch = ttnn.to_torch(encoder_hidden_states).squeeze(0)
     assert_quality(temb_torch, tt_temb_torch, pcc=0.9999, relative_rmse=0.01)
     assert_quality(

@@ -11,13 +11,18 @@ import ttnn
 from ..utils.matmul import get_matmul_config
 from .module import Module, Parameter
 
+MATH_FIDELITY = {
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.float32: ttnn.MathFidelity.HiFi4,
+}
+
 
 class Linear(Module):
     """
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
+    def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None, dtype=ttnn.bfloat16):
         super().__init__()
 
         self.in_features = in_features
@@ -38,14 +43,14 @@ class Linear(Module):
         """
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -95,6 +100,7 @@ class ColParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -119,17 +125,20 @@ class ColParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[fsdp_mesh_axis, mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
             if bias
             else None
         )
@@ -204,6 +213,7 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -219,7 +229,7 @@ class RowParallelLinear(Module):
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -228,10 +238,15 @@ class RowParallelLinear(Module):
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
         self.weight = Parameter(
-            total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=[mesh_axis, fsdp_mesh_axis],
+            device=mesh_device,
+            dtype=dtype,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(
+                total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype
+            )
             if bias
             else None
         )

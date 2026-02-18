@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from ..parallel.manager import CCLManager
-from ..utils.tensor import bf16_tensor, float32_tensor, unflatten
+from ..utils.tensor import bf16_tensor, typed_tensor, unflatten
 from .linear import ColParallelLinear, Linear
 from .module import Module, Parameter
 
@@ -35,7 +35,7 @@ class Timesteps(Module):
         downscale_freq_shift: float = 0,
         scale: int = 1,
         mesh_device=None,
-        use_fp32: bool = True,
+        dtype: ttnn.DataType = ttnn.float32,
     ):
         super().__init__()
         self.num_channels = num_channels
@@ -44,9 +44,7 @@ class Timesteps(Module):
         self.scale = scale
         self.max_period = max_period
         self.mesh_device = mesh_device
-        self.use_fp32 = (
-            use_fp32  # BF16 not accurate.Ref PCC ~95% with RMSE ~30% vs FP32: PCC = 99.9999 %, RMSE/σ₁ = 0.2 %
-        )
+        self.dtype = dtype
         self.time_proj_factor = self._create_time_proj_factor()
 
     def _create_time_proj_factor(self) -> ttnn.Tensor:
@@ -57,38 +55,30 @@ class Timesteps(Module):
         exponent = exponent / (half_dim - self.downscale_freq_shift)
         factor = torch.exp(exponent)
 
-        return (
-            ttnn.unsqueeze_to_4D(float32_tensor(factor, device=self.mesh_device))
-            if self.use_fp32
-            else ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
-        )
+        return ttnn.unsqueeze_to_4D(typed_tensor(factor, dtype=self.dtype, device=self.mesh_device))
 
     def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
-        assert (timestep.dtype == ttnn.float32) == self.use_fp32, "Input timestep must be float32 if use_fp32 is True"
+        assert timestep.dtype == self.dtype, "Input timestep must be float32 if use_fp32 is True"
         emb = self.scale * timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         cat_args = [c, s] if self.cos_first else [s, c]
         timesteps_proj = ttnn.concat(cat_args, dim=-1)
-        return (
-            ttnn.typecast(timesteps_proj, dtype=ttnn.bfloat16)
-            if timesteps_proj.dtype == ttnn.float32
-            else timesteps_proj
-        )
+        return timesteps_proj
 
 
 # Helper classes for SD35Transformer2DModel
 class TimestepEmbedding(Module):
-    def __init__(self, in_channels, time_embed_dim, mesh_device=None, act_fn="silu"):
+    def __init__(self, in_channels, time_embed_dim, mesh_device=None, act_fn="silu", dtype=ttnn.float32):
         super().__init__()
 
         self.in_channels = in_channels
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
         self.act_fn = ACT2CLS[act_fn]  # TODO: Fuse with linear instead
-        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device)
-        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device)
+        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
@@ -121,7 +111,7 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, dtype=ttnn.bfloat16)
         self.text_embedder = (
             PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
             if pooled_projection_dim > 0
@@ -542,18 +532,25 @@ class WanTimeTextImageEmbedding(Module):
         mesh_device: ttnn.MeshDevice | None = None,
         tp_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
+        timestep_dtype: ttnn.DataType = ttnn.float32,
     ):
         super().__init__()
         assert image_embed_dim is None, "WanTimeTextImageEmbedding does not support image embedding"
         self.mesh_device = mesh_device
         self.tp_mesh_axis = tp_mesh_axis
-        self.timesteps_proj = Timesteps(num_channels=time_freq_dim, mesh_device=self.mesh_device)
+        self.timesteps_proj = Timesteps(num_channels=time_freq_dim, mesh_device=self.mesh_device, dtype=timestep_dtype)
         self.time_embedder = TimestepEmbedding(
-            in_channels=time_freq_dim, time_embed_dim=dim, mesh_device=self.mesh_device
+            in_channels=time_freq_dim, time_embed_dim=dim, mesh_device=self.mesh_device, dtype=timestep_dtype
         )
         self.pre_time_proj_activation = ttnn.silu
         self.time_proj = ColParallelLinear(
-            dim, time_proj_dim, bias=True, mesh_device=self.mesh_device, mesh_axis=tp_mesh_axis, ccl_manager=ccl_manager
+            dim,
+            time_proj_dim,
+            bias=True,
+            mesh_device=self.mesh_device,
+            mesh_axis=tp_mesh_axis,
+            ccl_manager=ccl_manager,
+            dtype=timestep_dtype,
         )  # Output is fractured according to the older behaviour when sharding from torch. See _prepare_torch_state(...)
         self.text_embedder = PixArtAlphaTextProjection(
             text_embed_dim, dim, act_fn="gelu_tanh", mesh_device=self.mesh_device
