@@ -117,6 +117,16 @@ class TestTypecast:
     ):
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
+        in_low = 0
+        in_high = 100
+        if tt_output_dtype == ttnn.uint8:
+            in_low = -257
+            in_high = 257
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=in_low, high=in_high), pt_input_dtype
+            )
+        ]
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=100), pt_input_dtype)
         ]

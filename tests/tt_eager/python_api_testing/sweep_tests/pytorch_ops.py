@@ -1519,6 +1519,19 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
+    elif tt_output_dtype[0] == ttnn.uint8:
+        return x.to(torch.uint8)
+    elif tt_input_dtype[0] == ttnn.uint8:
+        if tt_output_dtype[0] == ttnn.float32:
+            return x.to(torch.float32)
+        elif (
+            tt_output_dtype[0] == ttnn.bfloat16
+            or tt_output_dtype[0] == ttnn.bfloat8_b
+            or tt_output_dtype[0] == ttnn.bfloat4_b
+        ):
+            return x.to(torch.bfloat16)
+        elif tt_output_dtype[0] == ttnn.int32 or tt_output_dtype[0] == ttnn.uint16 or tt_output_dtype[0] == ttnn.uint32:
+            return x.to(torch.int32)
     else:
         return x
 

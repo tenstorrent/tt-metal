@@ -10,8 +10,6 @@
 
 #include "sfpi.h"
 
-#include "api/debug/dprint.h"
-
 using namespace sfpi;
 
 namespace ckernel {
@@ -29,9 +27,9 @@ inline void calculate_typecast_fp32_to_uint8() {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vInt mantissa = sfpi::exman8(in);
         sfpi::vInt exponent = sfpi::exexp(in);
-        mantissa >>= (23 - exponent - 1);
-        mantissa = (mantissa + 1) >> 1;
-        mantissa += 256;  // Handle negative numbers
+        mantissa = sfpi::shft(mantissa, -(23 - exponent - 1));
+        mantissa = sfpi::shft(mantissa + 1, -1);
+        mantissa += 256;
         mantissa &= 0xFF;
         sfpi::dst_reg[0] = mantissa;
         sfpi::dst_reg++;
