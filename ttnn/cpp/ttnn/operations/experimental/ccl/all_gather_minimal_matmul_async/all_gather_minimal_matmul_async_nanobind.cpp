@@ -56,7 +56,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
             after bias (if any) and before the tile is written out.
 
-        config : Optional[AllGatherMinimalMatmulAsyncConfig], default: None
+        config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
             sizes and kernel flags.
             Fields (all values are in tiles):
@@ -172,7 +172,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         ...     weight_tensor=b,
         ...     bias_tensor=bias,
         ...     fused_activation=(ttnn.UnaryOpType.GELU, False),
-        ...     config=ttnn.AllGatherMinimalMatmulAsyncConfig(
+        ...     config=ttnn.MinimalMatmulConfig(
         ...         M_block_size=8,
         ...         K_block_size=8,
         ...         N_block_size=8,
@@ -203,44 +203,6 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("force_transpose") = true,
             nb::arg("num_workers_per_link") = 1,
             nb::arg("num_buffers_per_channel") = 1});
-
-    auto py_all_gather_minimal_matmul_async_config =
-        nb::class_<ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig>(
-            mod,
-            "AllGatherMinimalMatmulAsyncConfig",
-            R"doc(
-                            Configuration for the AllGatherMinimalMatmulAsync operation.
-                            )doc")
-            .def(nb::init<>())
-            .def(
-                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
-                nb::kw_only(),
-                nb::arg("M_block_size") = 1,
-                nb::arg("K_block_size") = 1,
-                nb::arg("N_block_size") = 1,
-                nb::arg("subblock_h") = 1,
-                nb::arg("subblock_w") = 1,
-                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
-
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "M_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::M_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "K_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::K_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "N_block_size", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::N_block_size, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_h", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::subblock_h, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "subblock_w", &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::subblock_w, "");
-    py_all_gather_minimal_matmul_async_config.def_rw(
-        "compute_with_storage_grid_size",
-        &ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig::compute_with_storage_grid_size,
-        "");
-
-    py_all_gather_minimal_matmul_async_config.def(
-        "__repr__", [](const ttnn::experimental::prim::AllGatherMinimalMatmulAsyncConfig& config) {
-            return fmt::format("{}", config);
-        });
 }
 
 }  // namespace ttnn::operations::experimental::ccl

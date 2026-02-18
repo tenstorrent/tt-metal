@@ -49,7 +49,7 @@ ttnn::Tensor all_gather_minimal_matmul_async(
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
-    const std::optional<const experimental::prim::AllGatherMinimalMatmulAsyncConfig>& config,
+    const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
     const std::optional<MemoryConfig>& memory_config,

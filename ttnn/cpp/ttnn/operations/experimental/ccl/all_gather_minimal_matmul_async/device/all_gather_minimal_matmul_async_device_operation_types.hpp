@@ -7,48 +7,12 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AllGatherMinimalMatmulAsyncConfig {
-    AllGatherMinimalMatmulAsyncConfig(
-        uint32_t M_block_size_ = 1,
-        uint32_t K_block_size_ = 1,
-        uint32_t N_block_size_ = 1,
-        uint32_t subblock_h_ = 1,
-        uint32_t subblock_w_ = 1,
-        CoreCoord compute_with_storage_grid_size_ = {2, 2}) :
-        M_block_size(M_block_size_),
-        K_block_size(K_block_size_),
-        N_block_size(N_block_size_),
-        subblock_h(subblock_h_),
-        subblock_w(subblock_w_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
-
-    uint32_t M_block_size;
-    uint32_t K_block_size;
-    uint32_t N_block_size;
-    uint32_t subblock_h;
-    uint32_t subblock_w;
-
-    CoreCoord compute_with_storage_grid_size;
-
-    static constexpr auto attribute_names = std::make_tuple(
-        "M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w", "compute_with_storage_grid_size");
-
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->M_block_size,
-            this->K_block_size,
-            this->N_block_size,
-            this->subblock_h,
-            this->subblock_w,
-            this->compute_with_storage_grid_size);
-    }
-};
-
 struct AllGatherMinimalMatmulAsyncParams {
-    std::optional<const AllGatherMinimalMatmulAsyncConfig> config;
+    std::optional<const MinimalMatmulConfig> config;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
@@ -65,7 +29,7 @@ struct AllGatherMinimalMatmulAsyncParams {
     uint32_t num_buffers_per_channel = 0;
 
     AllGatherMinimalMatmulAsyncParams(
-        std::optional<const AllGatherMinimalMatmulAsyncConfig> config,
+        std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
         std::optional<tt::tt_metal::MemoryConfig> output_mem_config,
         std::optional<tt::tt_metal::DataType> output_dtype,
