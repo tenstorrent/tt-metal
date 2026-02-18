@@ -25,7 +25,7 @@ ACT2CLS = {
 }
 
 
-# positional Encoding.
+# Positional Encoding.
 class Timesteps(Module):
     def __init__(
         self,
@@ -588,7 +588,7 @@ class WanTimeTextImageEmbedding(Module):
         time_proj_weight_chunks = [chunk.reshape(-1, time_proj_weight.shape[-1]) for chunk in time_proj_weight_chunks]
         time_proj_bias_chunks = [chunk.reshape(-1) for chunk in time_proj_bias_chunks]
 
-        # concatenate back to enable sharding to be applied in preparaton for the chunking.
+        # concatenate back to enable sharding to be applied in preparation for the chunking.
         state["time_proj.weight"] = torch.cat(time_proj_weight_chunks, 0)
         state["time_proj.bias"] = torch.cat(time_proj_bias_chunks, 0)
 

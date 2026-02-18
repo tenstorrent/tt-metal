@@ -63,6 +63,7 @@ class T5Config:
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.ff_dim = ff_dim
+        self.kv_dim = kv_dim
         self.num_heads = num_heads
         self.num_hidden_layers = num_hidden_layers
         self.max_prompt_length = max_prompt_length
@@ -149,11 +150,11 @@ class T5Stack(Module):
         position_bias = None
         if attention_mask is not None:
             attention_mask = (attention_mask - 1.0) * float("inf")
-            # rehape attention mask to b x 1 x 1 x seq_len to make compatible with relative position bias
+            # reshape attention mask to b x 1 x 1 x seq_len to make compatible with relative position bias
             attention_mask = ttnn.reshape(attention_mask, (attention_mask.shape[0], 1, 1, -1))
 
         for layer in self.layers:
-            # Precompute position bias to preserve previous behaviour.If not set for this layer, use the previous layer's position bias.
+            # Precompute position bias to preserve previous behaviour. If not set for this layer, use the previous layer's position bias.
             if layer.self_attn.use_relative_position_bias:
                 position_bias = layer.self_attn.relative_attention_bias(hidden_states.shape[-2])  # seq_length
 
@@ -504,8 +505,8 @@ class RelativePositionEmbeddings(Module):
     def forward(self, seq_length: int) -> ttnn.Tensor:
         """
         Get relative position bias for the given sequence length.
-        Curently, we compure and cache the relative position bias with the assumption that the sequence length is the same (max seq length) for all the tokens in the prompt.
-        If the sequence length is not in the same as cached, we recomopute and update the cache. We can also use slicing to adapt from max cache
+        Currently, we compute and cache the relative position bias with the assumption that the sequence length is the same (max seq length) for all the tokens in the prompt.
+        If the sequence length is not in the same as cached, we recompute and update the cache. We can also use slicing to adapt from max cache
         Args:
             seq_length: int
                 The sequence length
