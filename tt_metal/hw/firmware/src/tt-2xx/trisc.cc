@@ -119,7 +119,7 @@ extern "C" uint32_t _start1() {
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     DeviceProfilerInit();
-
+    DPRINT << "TRISC-FW: initialized" << ENDL();
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {

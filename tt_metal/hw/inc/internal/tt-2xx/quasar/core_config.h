@@ -30,7 +30,15 @@ enum class TensixProcessorTypes : uint8_t {
     E1_MATH1 = 13,
     E1_MATH2 = 14,
     E1_MATH3 = 15,
-    COUNT = 16
+    E2_MATH0 = 16,
+    E2_MATH1 = 17,
+    E2_MATH2 = 18,
+    E2_MATH3 = 19,
+    E3_MATH0 = 20,
+    E3_MATH1 = 21,
+    E3_MATH2 = 22,
+    E3_MATH3 = 23,
+    COUNT = 24
 };
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
