@@ -265,7 +265,7 @@ jobs:
           fi
 
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
-  # Uses docker/bake-action with context overrides for pre-built GHCR tool/venv images.
+  # Uses docker buildx bake CLI with context overrides for pre-built GHCR tool/venv images.
   ubuntu:
     name: "🐳 Ubuntu images"
     needs: [image-tags, tools, venvs]
@@ -290,16 +290,10 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [worker.oci]
-              max-parallelism = 4
-          driver-opts: |
-            image=moby/buildkit:v0.27.0
-            network=host
-          buildkitd-flags: --debug
+      - name: Use host buildx builder
+        run: |
+          docker buildx ls
+          docker buildx use default || true
       - name: Prepare bake overrides
         id: bake
         env:
@@ -368,68 +362,44 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push CI Build image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/bake-action@v6
+      - name: Build and push Ubuntu images via docker bake CLI
         env:
           UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
           PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: ci-build
-          set: ${{ steps.bake.outputs.set }}
+        run: |
+          export UBUNTU_VERSION PYTHON_VERSION
 
-      - name: Build and push CI Test image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
-          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: ci-test
-          set: ${{ steps.bake.outputs.set }}
+          mapfile -t BAKE_SET_LINES <<'EOF'
+          ${{ steps.bake.outputs.set }}
+          EOF
 
-      - name: Build and push Dev image
-        if: needs.image-tags.outputs.dev-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
-          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: dev
-          set: ${{ steps.bake.outputs.set }}
+          BAKE_SETS=()
+          for s in "${BAKE_SET_LINES[@]}"; do
+            [ -n "$s" ] && BAKE_SETS+=(--set "$s")
+          done
 
-      - name: Build and push Basic Dev image
-        if: needs.image-tags.outputs.basic-dev-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
-          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: basic-dev
-          set: ${{ steps.bake.outputs.set }}
+          build_target() {
+            local target="$1"
+            echo "Building target: ${target}"
+            docker buildx bake -f dockerfile/docker-bake.hcl "${BAKE_SETS[@]}" "${target}"
+          }
 
-      - name: Build and push Basic TTNN Runtime image
-        if: needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
-          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: basic-ttnn-runtime
-          set: ${{ steps.bake.outputs.set }}
+          if [ "${{ needs.image-tags.outputs.dev-exists }}" != "true" ]; then
+            build_target ci-build
+            build_target ci-test
+            build_target dev
+          fi
+
+          if [ "${{ needs.image-tags.outputs.basic-dev-exists }}" != "true" ]; then
+            build_target basic-dev
+          fi
+
+          if [ "${{ needs.image-tags.outputs.basic-ttnn-runtime-exists }}" != "true" ]; then
+            build_target basic-ttnn-runtime
+          fi
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
-  # Uses docker/bake-action with context overrides for pre-built GHCR tool images.
+  # Uses docker buildx bake CLI with context overrides for pre-built GHCR tool images.
   manylinux:
     name: "🐳 ManyLinux image"
     needs: [image-tags, tools]
@@ -453,12 +423,10 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [worker.oci]
-              max-parallelism = 4
+      - name: Use host buildx builder
+        run: |
+          docker buildx ls
+          docker buildx use default || true
       - name: Prepare bake overrides
         id: bake
         env:
@@ -481,13 +449,18 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push ManyLinux image
-        uses: docker/bake-action@v6
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: manylinux
-          set: ${{ steps.bake.outputs.set }}
+      - name: Build and push ManyLinux image via docker bake CLI
+        run: |
+          mapfile -t BAKE_SET_LINES <<'EOF'
+          ${{ steps.bake.outputs.set }}
+          EOF
+
+          BAKE_SETS=()
+          for s in "${BAKE_SET_LINES[@]}"; do
+            [ -n "$s" ] && BAKE_SETS+=(--set "$s")
+          done
+
+          docker buildx bake -f dockerfile/docker-bake.hcl "${BAKE_SETS[@]}" manylinux
 
   # tag-latest runs after image-tags only (not after build jobs) because adding
   # needs.ubuntu would cause this job to be skipped when builds are skipped
