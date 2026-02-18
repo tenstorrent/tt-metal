@@ -124,7 +124,6 @@ struct Sampling {
             best_index = 0xFFFFFFFF;
             for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
                 const uint16_t score = scores_ptr[i];
-                uint32_t index = indices_ptr[i];
                 if (bfloat16_greater(score, best_score)) {
                     best_score = score;
                     best_index = indices_ptr[i];

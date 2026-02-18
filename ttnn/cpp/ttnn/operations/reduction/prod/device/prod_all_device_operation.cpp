@@ -8,12 +8,6 @@
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::prim {
-
-ProdAllDeviceOperation::program_factory_t ProdAllDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ProdAllProgramFactory{};
-}
-
 void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

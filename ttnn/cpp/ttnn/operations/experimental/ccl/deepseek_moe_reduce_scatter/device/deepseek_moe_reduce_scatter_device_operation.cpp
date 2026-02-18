@@ -14,12 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-DeepseekMoEReduceScatterDeviceOperation::program_factory_t
-DeepseekMoEReduceScatterDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return DeepseekMoEReduceScatterMeshWorkloadFactory{};
-}
-
 void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // lightweight validation for cache hits
@@ -192,16 +186,12 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
 tt::stl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "DeepseekMoEReduceScatterDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<DeepseekMoEReduceScatterDeviceOperation>(
         operation_attributes.output_memory_config,
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
