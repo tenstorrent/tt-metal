@@ -27,14 +27,12 @@ Two-level barrier synchronization between phases:
     serves as the phase release signal for compute/writer.
 
 Usage (linear chain):
-    >>> root = OpNode(op0_desc, children=[OpNode(op1_desc)])
-    >>> fused = OpGraphBuilder(root).build(device)
-    >>> outputs = composite.launch(fused)
+    >>> fused = Sequential(op0, op1, op2).build(device)
+    >>> composite.launch([fused])
 
 Usage (branching tree):
-    >>> root = OpNode(op0_desc, children=[OpNode(op1_desc), OpNode(op2_desc)])
-    >>> paths = OpGraphBuilder(root).build(device)
-    >>> outputs = composite.launch(paths)
+    >>> fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
+    >>> composite.launch([fused])
 """
 
 from dataclasses import dataclass, field
@@ -136,6 +134,186 @@ class OpNode:
 
     op: OpDescriptor
     children: List["OpNode"] = field(default_factory=list)
+
+
+# =============================================================================
+# High-Level API: Sequential / Parallel
+# =============================================================================
+
+
+class Sequential:
+    """A sequence of ops to fuse into a single dispatch.
+
+    Items can be ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
+    Nested ``Sequential`` items are automatically flattened.
+
+    Usage::
+
+        # Inline
+        fused = Sequential(op0, op1, op2).build(device)
+
+        # Incremental
+        s = Sequential(op0)
+        s.add(op1).add(op2)
+        fused = s.build(device)
+
+        # Composition
+        stem = Sequential(op0, op1)
+        full = Sequential(stem, op2).build(device)  # flattened
+    """
+
+    def __init__(self, *items):
+        if not items:
+            raise ValueError("Sequential() requires at least 1 item")
+        self._items = list(items)
+
+    def add(self, item):
+        """Append an item.  Returns self for chaining."""
+        self._items.append(item)
+        return self
+
+    def build(self, device):
+        """Build the fused OpDescriptor."""
+        nodes = _resolve(self)
+        if len(nodes) != 1:
+            raise ValueError("Sequential must resolve to a single root node")
+        return OpGraphBuilder(nodes[0]).build(device)
+
+
+class Parallel:
+    """Items that run in parallel on disjoint core subsets.
+
+    Each item runs independently on its own cores.  Items can be
+    ``OpDescriptor``, ``Sequential``, or ``Parallel`` objects.
+
+    Usage::
+
+        # Inline
+        fused = Parallel(op_a, op_b).build(device)
+        composite.launch([fused])
+
+        # As part of a Sequential
+        fused = Sequential(stem, Parallel(branch_a, branch_b)).build(device)
+    """
+
+    def __init__(self, *items):
+        if len(items) < 2:
+            raise ValueError("Parallel() requires at least 2 items")
+        self._items = list(items)
+
+    def add(self, item):
+        """Add a branch.  Returns self for chaining."""
+        self._items.append(item)
+        return self
+
+    def build(self, device):
+        """Build each item independently and merge into one OpDescriptor."""
+        built = [_build_item(item, device) for item in self._items]
+        return _merge_op_descriptors(built)
+
+
+def _resolve(item) -> List[OpNode]:
+    """Convert a user-facing item into a list of OpNode trees.
+
+    Handles all three types uniformly:
+    - ``OpDescriptor`` → ``[OpNode(op)]``
+    - ``Parallel`` → flat list of children (one OpNode per branch)
+    - ``Sequential`` → single-element list containing a chain of OpNodes
+
+    When a ``Sequential`` item in the middle resolves to multiple nodes
+    (i.e. it's a ``Parallel``), a ``ValueError`` is raised because the
+    tree diverges and can't rejoin.
+    """
+    if isinstance(item, OpDescriptor):
+        return [OpNode(item)]
+
+    if isinstance(item, Parallel):
+        return [node for child in item._items for node in _resolve(child)]
+
+    if isinstance(item, Sequential):
+        # Flatten nested Sequential items
+        flat: List = []
+        for sub in item._items:
+            if isinstance(sub, Sequential):
+                flat.extend(sub._items)
+            else:
+                flat.append(sub)
+
+        if not flat:
+            raise ValueError("Sequential() has no items after flattening")
+
+        # Process right-to-left: resolve the last item to get tail nodes,
+        # then walk remaining items in reverse, each becoming parent of tail.
+        tail = _resolve(flat[-1])
+
+        for sub_item in reversed(flat[:-1]):
+            parents = _resolve(sub_item)
+            if len(parents) != 1:
+                raise ValueError(
+                    "Items before a Parallel in a Sequential are not allowed — "
+                    "the tree would diverge and can't rejoin.  Place trailing "
+                    "items inside each branch instead."
+                )
+            _set_leaf_children(parents[0], tail)
+            tail = parents
+
+        return tail
+
+    raise TypeError(f"Unsupported item type: {type(item).__name__}")
+
+
+def _set_leaf_children(node: OpNode, children: List[OpNode]):
+    """Attach children to the deepest single-child leaf of a node subtree."""
+    current = node
+    while current.children:
+        if len(current.children) != 1:
+            raise ValueError("Cannot attach children to a node that already branches")
+        current = current.children[0]
+    current.children = list(children)
+
+
+def _build_item(item, device) -> OpDescriptor:
+    """Build a single item into an OpDescriptor."""
+    if isinstance(item, OpDescriptor):
+        return item
+    if isinstance(item, (Sequential, Parallel)):
+        return item.build(device)
+    raise TypeError(f"Unsupported item type: {type(item).__name__}")
+
+
+def _merge_op_descriptors(ops: List[OpDescriptor]) -> OpDescriptor:
+    """Merge multiple OpDescriptors into one.
+
+    Combines ProgramDescriptors, deduplicates input tensors (by identity),
+    concatenates output tensors, and unions keepalive refs.
+    """
+    if len(ops) == 1:
+        return ops[0]
+
+    merged_desc = ttnn.merge_program_descriptors([op.descriptor for op in ops])
+
+    # Deduplicate input tensors (shared inputs appear in multiple ops)
+    all_inputs: List = []
+    seen_ids: Set[int] = set()
+    for op in ops:
+        for t in op.input_tensors:
+            tid = id(t)
+            if tid not in seen_ids:
+                all_inputs.append(t)
+                seen_ids.add(tid)
+
+    # Output tensors: one per op, in order
+    all_outputs = [t for op in ops for t in op.output_tensors]
+
+    # Union keepalive refs (semaphores, etc.)
+    all_keepalive = tuple(ref for op in ops for ref in op.keepalive)
+
+    return OpDescriptor(
+        descriptor=merged_desc,
+        input_tensors=all_inputs,
+        output_tensors=all_outputs,
+        keepalive=all_keepalive,
+    )
 
 
 @dataclass
@@ -2571,35 +2749,7 @@ class OpGraphBuilder:
             _restore_cb_state(saved_cb_state)
             _verify_cb_restore(saved_cb_state)
 
-        # Single path = return directly
-        if len(fused_ops) == 1:
-            return fused_ops[0]
-
-        # Multiple paths: merge into one self-contained descriptor
-        merged_desc = ttnn.merge_program_descriptors([op.descriptor for op in fused_ops])
-
-        # Deduplicate input tensors (shared root inputs appear in every path)
-        all_inputs: List = []
-        seen_ids: Set[int] = set()
-        for op in fused_ops:
-            for t in op.input_tensors:
-                tid = id(t)
-                if tid not in seen_ids:
-                    all_inputs.append(t)
-                    seen_ids.add(tid)
-
-        # Output tensors: one per leaf, left-to-right DFS order
-        all_outputs = [t for op in fused_ops for t in op.output_tensors]
-
-        # Union keepalive refs (semaphores, etc.)
-        all_keepalive = tuple(ref for op in fused_ops for ref in op.keepalive)
-
-        return OpDescriptor(
-            descriptor=merged_desc,
-            input_tensors=all_inputs,
-            output_tensors=all_outputs,
-            keepalive=all_keepalive,
-        )
+        return _merge_op_descriptors(fused_ops)
 
     def _trace_paths(self) -> List[List[Tuple[Any, List[OpDescriptor]]]]:
         """Trace all root-to-leaf paths through the tree.
@@ -2878,6 +3028,9 @@ def build_op_graph(
 
 
 __all__ = [
+    # High-level API
+    "Sequential",
+    "Parallel",
     # Core classes
     "OpGraphBuilder",
     "OpNode",
