@@ -80,6 +80,19 @@ void copy_to_device(
 HostTensor to_layout(const HostTensor& tensor, Layout target_layout);
 
 // ======================================================================================
+//                                  .view()
+// ======================================================================================
+HostTensor view(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
+
+DeviceTensor view(
+    const DeviceTensor& tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
+
+// ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
 HostTensor pad(
