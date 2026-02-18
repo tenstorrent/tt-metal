@@ -19,6 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+import lead_models_filter
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -100,12 +101,15 @@ class MasterConfigLoader:
             This must be called BEFORE importing sweep modules that use MasterConfigLoader,
             as the filtering happens at module load time when get_suite_parameters() is called.
         """
-        cls._lead_models_only = enabled
+        # Use shared global filter state
+        lead_models_filter.set_lead_models_filter(enabled)
+        cls._lead_models_only = enabled  # Keep for backwards compatibility
 
     @classmethod
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
-        return cls._lead_models_only
+        # Read from shared global filter state
+        return lead_models_filter.get_lead_models_filter()
 
     @classmethod
     def set_database_mode(cls, enabled: bool) -> None:
@@ -396,8 +400,8 @@ class MasterConfigLoader:
             List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
-        # Uses class-level setting instead of environment variable for cleaner control
-        lead_models_only = MasterConfigLoader._lead_models_only
+        # Uses shared global filter state to work across V1 and V2 loaders
+        lead_models_only = lead_models_filter.get_lead_models_filter()
 
         normalized = []
         for config in configs:
@@ -693,8 +697,18 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
+        logger.debug(f"_get_generic_parameters processing {len(configs)} configs for {operation_name}")
+
         for config_args, source, machine_info, config_hash in configs:
             try:
+                # Convert config_args from list of dicts to single dict if needed
+                if isinstance(config_args, list):
+                    merged_args = {}
+                    for arg_dict in config_args:
+                        if isinstance(arg_dict, dict):
+                            merged_args.update(arg_dict)
+                    config_args = merged_args
+
                 config_dict = {}
                 positional_tensors = []
 
@@ -750,8 +764,13 @@ class MasterConfigLoader:
                 logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
-            # Skip if no tensors found
+            # If no tensors found, add a minimal entry with just the source info
+            # This ensures configs pass through even if tensor extraction fails
             if not positional_tensors:
+                config_dict["traced_source"] = source
+                config_dict["traced_machine_info"] = machine_info
+                config_dict["config_hash"] = config_hash
+                traced_config_list.append(config_dict)
                 continue
 
             # Add positional tensor parameters with consistent naming

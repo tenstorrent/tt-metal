@@ -19,7 +19,9 @@ from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+
+# DON'T import MasterConfigLoader here - it triggers lead_models_filter import
+# which reads environment variable. Import it later after env var is set.
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
@@ -419,17 +421,6 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
 
-    # Configure lead models filter if --model-traced lead is specified
-    # This must be set BEFORE any sweep modules are imported
-    if model_traced == "lead":
-        MasterConfigLoader.set_lead_models_filter(True)
-        print("=" * 80)
-        print("🔧 LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations")
-        print("=" * 80)
-        logger.info("Lead models filter enabled: Only loading DeepSeek V3 configurations")
-    else:
-        MasterConfigLoader.set_lead_models_filter(False)
-
     if suite_name:
         logger.info(f"Filtering to suite: {suite_name}")
 
@@ -469,6 +460,31 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
 
 
 if __name__ == "__main__":
+    # CRITICAL: Parse --model-traced argument FIRST to set environment variable
+    # This must happen BEFORE any other imports so sweep modules see the filter setting
+    import sys
+
+    model_traced_arg = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--model-traced" and i + 1 < len(sys.argv):
+            model_traced_arg = sys.argv[i + 1]
+            break
+        elif arg.startswith("--model-traced="):
+            model_traced_arg = arg.split("=", 1)[1]
+            break
+
+    # Set environment variable BEFORE any sweep modules are imported
+    if model_traced_arg == "lead":
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1"
+        print("=" * 80, flush=True)
+        print("🔧 LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations", flush=True)
+        print(
+            f"🔧 Environment variable set: TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY')}", flush=True
+        )
+        print("=" * 80, flush=True)
+    else:
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "0"
+
     parser = argparse.ArgumentParser(
         prog="Sweep Test Vector Generator",
         description="Generate test vector suites for the specified module.",
@@ -522,6 +538,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args(sys.argv[1:])
 
+    # Log filter status (env var was already set at the start of __main__)
+    if args.model_traced == "lead":
+        logger.info("Lead models filter enabled: Only loading DeepSeek V3 configurations")
+
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
@@ -536,6 +556,9 @@ if __name__ == "__main__":
     else:
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
+
+    # Import MasterConfigLoader NOW (after env var is set)
+    from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
     # Configure database mode if --use-db flag is provided
     if args.use_db:
