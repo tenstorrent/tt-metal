@@ -27,7 +27,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  actions: write
 
 jobs:
   mirror-fork-branch:
@@ -54,9 +53,11 @@ jobs:
           echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
 
       - name: Checkout base repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: Configure Git
         run: |
@@ -93,12 +94,10 @@ jobs:
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Push branch to origin
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git "$TARGET_BRANCH" --force
+          git push origin "$TARGET_BRANCH" --force
 
       - name: Find PR
         id: pr
