@@ -837,7 +837,7 @@ jobs:
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: [build-artifact, generate-master-json-from-db]
-    if: always() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -943,7 +943,7 @@ jobs:
     name: Generate CCL Sweep Vectors (n300-llmbox)
     needs: [build-artifact]
     if: |
-      always() &&
+      !cancelled() &&
       needs.build-artifact.result == 'success' &&
       (
         (github.event_name == 'schedule' && github.event.schedule != '0 2 * * *' && github.event.schedule != '0 3 * * *') ||
@@ -1013,7 +1013,7 @@ jobs:
     # The output matrix is consumed by ttnn-run-sweeps-batch to spawn parallel jobs
     needs: [ttnn-generate-sweeps, ttnn-generate-sweeps-ccl]
     if: |
-      always() &&
+      !cancelled() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       (github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
@@ -1190,7 +1190,7 @@ jobs:
 
           "${CMD[@]}"
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: ${{ !cancelled() && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-run-result
@@ -1204,7 +1204,7 @@ jobs:
       - build-artifact
       - ttnn-compute-module-matrix
     if: |
-      always() &&
+      !cancelled() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
@@ -1358,7 +1358,7 @@ jobs:
           fi
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: ${{ !cancelled() && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
