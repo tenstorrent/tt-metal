@@ -7,7 +7,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::moe {
+namespace ttnn::experimental::prim {
 namespace detail {
 
 std::vector<uint32_t> data_parallel_split(
@@ -115,8 +115,7 @@ void add_termination_master_rt_args(
 }
 
 }  // namespace detail
-SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::cached_mesh_workload_t
-SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_mesh_workload(
+UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -125,11 +124,12 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_mesh_workload
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
+    const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
     auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
 
     auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0));
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0));
 
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
@@ -149,8 +149,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_mesh_workload
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::shared_variables_t>
-SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
+ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> UnifiedSelectReduce::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
@@ -175,7 +174,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     const auto hidden_size = operation_attributes.hidden_size;
 
     const auto total_tokens = batch_size * seq_size;
-    // TODO map number of experts to device
+    // Eventually map number of experts to device
     const auto experts = operation_attributes.experts;
 
     const auto num_links = operation_attributes.num_links;
@@ -184,7 +183,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    // TODO assert (axis.has_value()) in validate
+    //  assert (axis.has_value()) in validate
     const auto& axis = operation_attributes.axis;
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -194,7 +193,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     const uint32_t num_devices = mesh_view.num_devices();
 
-    // TODO this should eventually be variable per device
+    // this should eventually be variable per device
     const uint32_t experts_per_device = experts / num_devices;
 
     const auto input_dtype = input_tensor.dtype();
@@ -213,7 +212,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
     // in validate, assert that worker_core_range_set.size() == num_token_parallel_cores*num_data_parallel_cores;
     const auto num_token_parallel_cores = operation_attributes.num_token_parallel_cores;
     auto num_data_parallel_cores = operation_attributes.num_data_parallel_cores;
-    const auto& worker_core_range_set = operation_attributes.worker_core_range_set;
+    const auto& worker_cores = operation_attributes.worker_cores;
 
     // in validate mux_core_range_set.size() == 2(directions) * num_links
     const auto& mux_core_range_set = operation_attributes.mux_core_range_set;
@@ -223,9 +222,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
 
     num_data_parallel_cores = data_parallel_sizes_bytes.size();
     const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
-
-    const auto needed_worker_core_range_set = select_from_corerangeset(worker_core_range_set, 0, num_worker_cores - 1);
-    const std::vector<CoreCoord> sender_cores = corerange_to_cores(needed_worker_core_range_set, num_worker_cores);
+    const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
+    const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
 
     // buffer may be padded
     const auto token_segment_buffer_size_bytes = input_tensor.logical_shape()[-1] * input_tensor.element_size();
@@ -457,7 +455,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
          .cross_device_semaphore = cross_device_semaphore}};
 }
 
-void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtime_arguments(
+void UnifiedSelectReduce::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -492,4 +490,4 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::moe
+}  // namespace ttnn::experimental::prim

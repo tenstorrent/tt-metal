@@ -194,9 +194,6 @@ inline void open_direction_connections_barrier(
         if (directions[i]) {
             MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
 
-            // DPRINT << "OPENING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
-            //                    << "\n";
-
             tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 args.fabric_mux_x,
                 args.fabric_mux_y,

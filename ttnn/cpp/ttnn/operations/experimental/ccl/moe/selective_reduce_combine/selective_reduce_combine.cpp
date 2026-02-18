@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "selective_reduce_combine.hpp"
 #include "device/selective_reduce_combine_device_operation.hpp"
-// #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -14,7 +13,7 @@
 
 namespace ttnn::operations::experimental::ccl::moe {
 
-ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
+ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
     const ttnn::Tensor& dense_metadata_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
@@ -29,7 +28,7 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
     const uint32_t num_links,
     const uint32_t token_parallel_core_dim,
     const uint32_t data_parallel_core_dim,
-    const CoreRangeSet& worker_core_range_set,
+    const std::vector<ttnn::CoreCoord>& worker_cores,
     const CoreRangeSet& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
@@ -51,7 +50,7 @@ ttnn::Tensor ExecuteSelectiveReduceCombine::invoke(
         num_links,
         token_parallel_core_dim,
         data_parallel_core_dim,
-        worker_core_range_set,
+        worker_cores,
         mux_core_range_set,
         input_memory_config,
         optional_output_tensor,

@@ -598,6 +598,8 @@ def _run_test(
 
     barrier_semaphore = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
 
+    core_list = list(ttnn.corerange_to_cores(worker_cores))
+
     def _run_op(num_iters):
         for _ in range(num_iters):
             tt_out = ttnn.experimental.selective_reduce_combine(
@@ -615,7 +617,7 @@ def _run_test(
                 num_links=num_links,
                 token_parallel_core_dim=token_parallel_core_dim,
                 data_parallel_core_dim=data_parallel_core_dim,
-                worker_core_range_set=worker_cores,
+                worker_cores=core_list,
                 mux_core_range_set=mux_cores,
                 output_tensor=tt_output_tensor,
                 optional_cross_device_semaphore=barrier_semaphore,

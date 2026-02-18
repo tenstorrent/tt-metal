@@ -11,8 +11,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_config.h"
 
-// this is a bit of a hack because ShardedAddrGen is declared in a global `experimental` namespace and will clash with
-// tt::tt_fabric::experimental if we try to bring it in there
+// ShardedAddrGen is declared under a global experimental namespace. So when you try to use experimental::ShardedAddrGen
+// within the tt::tt_fabric namespace it will end up clashing with tt::tt_fabric::experimental namespace
+// (which gets brought in in a header somewhere). So my best solution (and AI's) so far is to bring it in at global
+// scope with the using which I made really stupid and obvious as to not cause any new name collisions.
 template <typename ShardingInfoType>
 using _ttnn_operations_experimental_ShardedAddrGen = experimental::ShardedAddrGen<ShardingInfoType>;
 
