@@ -89,8 +89,9 @@ void kernel_main() {
         socket_reserve_pages(sender_socket, 1);
         DPRINT << "Space reserved in D2H socket\n";
 
+        DPRINT << "current_socket_idx: " << (uint32_t)current_socket_idx << "\n";
+
         // Round-robin: wait for pages in current upstream socket with termination checks
-        DPRINT << "BEFORE if statement to wait for pages in current upstream socket with termination checks\n";
         if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
             DPRINT << "D2H socket terminated\n";
             break;
