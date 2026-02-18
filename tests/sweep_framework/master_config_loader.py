@@ -22,21 +22,16 @@ from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
 # Import lead_models_filter - handle both direct run and module import
+# Add current directory to path first to ensure it can be found
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+
 try:
     from tests.sweep_framework import lead_models_filter
 except ImportError:
-    try:
-        # Try direct import first
-        import lead_models_filter
-    except ImportError:
-        # Fallback: add current directory to path
-        import sys
-        import os
-
-        current_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-        import lead_models_filter
+    # Direct import as fallback
+    import lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
