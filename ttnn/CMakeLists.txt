@@ -130,7 +130,9 @@ target_sources(
             cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp
             cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl
             cpp/ttnn/kernel_lib/tilize_helpers.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.inl
             cpp/ttnn/kernel_lib/untilize_helpers.hpp
+            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
