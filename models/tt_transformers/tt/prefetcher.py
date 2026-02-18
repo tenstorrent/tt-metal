@@ -28,7 +28,7 @@ VERIFIED_MODEL_CONFIGS = {
 }
 
 
-def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 80) -> bool:
+def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
     Check if model weights fit in global CB constraints:
     1. Max 65535 pages (tiles) per CB
@@ -49,11 +49,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
 
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    # Conservative L1 limit: account for prefetcher static CBs (~262KB) and input shards
-    # Total L1 ~1.46MB, prefetcher CBs end at ~762KB, need room for input shards
-    # Use ~500KB as safe limit for global CB per core
     MAX_L1_PER_BANK = 1000000
-
     dim, hidden_dim = VERIFIED_MODEL_CONFIGS[model_name]["dim"], VERIFIED_MODEL_CONFIGS[model_name]["hidden_dim"]
     n_per_device = hidden_dim // num_devices
     n_per_core = math.ceil(n_per_device / ring_size)
@@ -64,7 +60,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     h_tiles_padded = ((h_tiles + ring_size - 1) // ring_size) * ring_size
     tiles_per_core = (h_tiles_padded * w_tiles) // ring_size
 
-    # Check both constraints
+    # Check memory constraints
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK

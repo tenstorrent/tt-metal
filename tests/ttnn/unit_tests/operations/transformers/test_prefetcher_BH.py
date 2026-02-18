@@ -192,7 +192,7 @@ def create_matmul_program_configs(model_dims, prefetcher, mesh_device, weight_me
         K: original weight K dimension (for block width calculation)
         N_padded: padded output N dimension
         """
-        # in0_block_w uses original K (similar to prefetcher_common.py)
+        # in0_block_w uses original K
         in0_block_w = K // num_cores // ttnn.TILE_SIZE
         while in0_block_w > 0 and (K / ttnn.TILE_SIZE) % in0_block_w != 0:
             in0_block_w -= 1
@@ -265,11 +265,6 @@ def create_input_tensors(mesh_device, model_dims, prefetcher, weight_metadata):
     Create input tensors for the matmuls.
     For K-sharded matmuls (WO, FF2), inputs need to be sharded across devices.
     For N-sharded matmuls (QKV, FF1, FF3), inputs are replicated.
-
-    Following prefetcher_common.py pattern:
-    - Tensor shape uses original K dimension
-    - Shard spec uses K_per_shard = round_up(ceil(K / ring_size), TILE_SIZE)
-    - Framework handles padding automatically
     """
     ring_size = prefetcher.ring_size
     num_devices = mesh_device.get_num_devices()
@@ -299,7 +294,6 @@ def create_input_tensors(mesh_device, model_dims, prefetcher, weight_metadata):
     ff2_k = weight_metadata["layer_0_ff2"]["k_per_device"]  # hidden_dim/num_devices (original)
 
     # Calculate K_per_shard for memory config (padded to tile size per core)
-    # Following prefetcher_common.py: K_per_shard = round_up(ceil(K / num_cores), TILE_SIZE)
     def calc_k_per_shard(k):
         return round_up(math.ceil(k / ring_size), ttnn.TILE_SIZE)
 
@@ -684,7 +678,6 @@ SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE = {
         "Llama-3.1-8B",
         "Llama-3.3-70B",
         "Qwen3-32B",
-        "Qwen3-32B",
         "Qwen3-VL-7B",
         "Qwen3-VL-14B",
         "Qwen3-VL-72B",
@@ -719,13 +712,6 @@ def test_prefetcher_BH(
     """
     mesh_shape = tuple(mesh_device.shape)
 
-    # Skip if configuration is not supported
-    if model_name not in VERIFIED_MODEL_CONFIGS:
-        pytest.skip(
-            f"Configuration (mesh_shape={mesh_shape}, custom_mapping={custom_core_mapping}) not supported. "
-            f"Supported configs: {[k for k in VERIFIED_MODEL_CONFIGS.keys()]}"
-        )
-    # ring_size: 80 for custom mapping (8 senders * 10 receivers), 16 for default (8 senders * 2 receivers)
     ring_size = custom_core_mapping if custom_core_mapping else 16
     if not is_prefetcher_supported(model_name, mesh_device.get_num_devices(), ring_size):
         pytest.skip(
