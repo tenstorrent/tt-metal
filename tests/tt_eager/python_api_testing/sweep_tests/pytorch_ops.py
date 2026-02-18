@@ -1438,8 +1438,13 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
-def _simulate_bfp4_quantization(x):
-    """Simulate bfp4 round-trip (float -> bfp4 -> float) on CPU."""
+def _simulate_bfp_quantization(x, man_bits):
+    """Simulate bfp round-trip (float -> bfp -> float) on CPU.
+
+    Args:
+        x: Input tensor.
+        man_bits: Number of mantissa bits (3 for bfp4, 7 for bfp8).
+    """
     orig_shape = x.shape
     x_f32 = x.to(torch.float32).contiguous().reshape(-1, 16)
     x_bits = x_f32.view(torch.int32)
@@ -1457,28 +1462,30 @@ def _simulate_bfp4_quantization(x):
     exp_diff = (shared_exp - exp_bfp).clamp(0, 31)
     man_aligned = man_full >> exp_diff
 
-    # Round to 3 bits (banker's rounding)
-    SHIFT = 21  # 24 - 3
-    remainder = man_aligned & ((1 << SHIFT) - 1)
-    tie = 1 << (SHIFT - 1)
-    man_3 = man_aligned >> SHIFT
-    guard = man_3 & 1
-    man_3 = man_3 + ((remainder > tie) | ((remainder == tie) & (guard == 1))).to(torch.int32)
-    man_3 = man_3.clamp(max=7)
-    sign = torch.where(man_3 == 0, torch.zeros_like(sign), sign)
+    # Round to man_bits (banker's rounding)
+    shift = 24 - man_bits
+    remainder = man_aligned & ((1 << shift) - 1)
+    tie = 1 << (shift - 1)
+    man_n = man_aligned >> shift
+    guard = man_n & 1
+    man_n = man_n + ((remainder > tie) | ((remainder == tie) & (guard == 1))).to(torch.int32)
+    man_n = man_n.clamp(max=(1 << man_bits) - 1)
+    sign = torch.where(man_n == 0, torch.zeros_like(sign), sign)
 
-    # Unpack: normalize 3-bit mantissa
-    bfp_zero = man_3 == 0
-    lz = torch.where(
-        man_3 <= 1,
-        torch.tensor(2, dtype=torch.int32),
-        torch.where(man_3 <= 3, torch.tensor(1, dtype=torch.int32), torch.tensor(0, dtype=torch.int32)),
-    )
+    # Unpack: normalize mantissa (find leading zeros in man_bits-wide field)
+    bfp_zero = man_n == 0
+    lz = torch.zeros_like(man_n)
+    for i in range(1, man_bits):
+        lz = torch.where(
+            (man_n >= 1) & (man_n < (1 << (man_bits - i))),
+            torch.tensor(i, dtype=torch.int32),
+            lz,
+        )
     lz = torch.where(bfp_zero, torch.zeros_like(lz), lz)
-    man_out = ((man_3 << lz) << 1) & 0x7
+    man_out = ((man_n << lz) << 1) & ((1 << man_bits) - 1)
     exp_out = shared_exp - lz + 112  # rebias to FP32: +127 - 15 = +112
 
-    result = (sign << 31) | (exp_out << 23) | (man_out << 20)
+    result = (sign << 31) | (exp_out << 23) | (man_out << (23 - man_bits))
     result = torch.where(bfp_zero, torch.zeros_like(result), result)
     return result.view(torch.float32).reshape(orig_shape).to(torch.bfloat16)
 
@@ -1505,11 +1512,12 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.float32:
         return x.to(torch.float32)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+        x = _simulate_bfp_quantization(x, 7)
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.bfloat16).to(torch.int32)
+        return _simulate_bfp_quantization(x, 7).to(torch.int32)
     elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint32:
@@ -1521,7 +1529,7 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.float32:
         return x.to(torch.float32)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+        return torch.relu(_simulate_bfp_quantization(x, 7).to(torch.int32))  # due to no uint32 support
     elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
@@ -1533,40 +1541,43 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
     elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.uint16:
         return torch.clamp(x, min=0, max=65535)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
+        return _simulate_bfp_quantization(x, 7)
     elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.bfloat16).to(torch.float32)
+        return _simulate_bfp_quantization(x, 7).to(torch.float32)
     elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat8_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint16:
-        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+        x = _simulate_bfp_quantization(x, 3)
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.int32:
-        return x.to(torch.bfloat16).to(torch.int32)
+        return _simulate_bfp_quantization(x, 3).to(torch.int32)
     elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint32:
-        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+        return torch.relu(_simulate_bfp_quantization(x, 3).to(torch.int32))  # due to no uint32 support
     elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat16:
-        return x.to(torch.bfloat16)
+        return _simulate_bfp_quantization(x, 3)
     elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.float32:
-        return x.to(torch.bfloat16).to(torch.float32)
+        return _simulate_bfp_quantization(x, 3).to(torch.float32)
     elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat4_b:
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat8_b:
-        return x.to(torch.bfloat16)
+        return _simulate_bfp_quantization(x, 3)
     elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
-        return x.to(torch.bfloat16)
+        return _simulate_bfp_quantization(x, 7)
     elif tt_output_dtype[0] == ttnn.uint8:
         if tt_input_dtype[0] == ttnn.bfloat4_b:
-            x = _simulate_bfp4_quantization(x)
+            x = _simulate_bfp_quantization(x, 3)
+        elif tt_input_dtype[0] == ttnn.bfloat8_b:
+            x = _simulate_bfp_quantization(x, 7)
         return x.to(torch.uint8)
     elif tt_input_dtype[0] == ttnn.uint8:
         if tt_output_dtype[0] == ttnn.float32:
