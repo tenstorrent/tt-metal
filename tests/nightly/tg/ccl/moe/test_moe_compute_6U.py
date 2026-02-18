@@ -253,6 +253,7 @@ def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t
 def prepare_output_tensor_from_combine_writer(
     raw_torch_output,
     active_token_counts,
+    device_idx,
     all_core_range_set,
     output_shard_cores,
     output_shard_height_dim,
@@ -261,20 +262,13 @@ def prepare_output_tensor_from_combine_writer(
     total_tokens,
     hidden,
 ):
-    # python in doesn't work as expected with list of CoreCoord
-    def _output_shard_contains(core):
-        for c in output_shard_cores:
-            if core.x == c.x and core.y == c.y:
-                return True
-        return False
+    all_output_shards = {}
 
-    torch.set_printoptions(profile="full")
-    output_shards = []
     for i, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
-        if _output_shard_contains(c):
-            output_shards.append(raw_torch_output[i, :, :, :])
+        all_output_shards[(c.x, c.y)] = raw_torch_output[i]
 
-    output_core_shards = torch.stack(output_shards)
+    combine_output_shards = [all_output_shards[c.x, c.y] for c in output_shard_cores]
+    output_shard_tensor = torch.stack(combine_output_shards)
 
     output_shape = (
         output_shard_height_dim,
@@ -284,7 +278,7 @@ def prepare_output_tensor_from_combine_writer(
         hidden // output_shard_width_dim,
     )
 
-    shaped_torch_output = output_core_shards.view(output_shape)
+    shaped_torch_output = output_shard_tensor.view(output_shape)
 
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape(
         [experts_per_device, total_tokens, hidden]
@@ -302,7 +296,6 @@ def prepare_output_tensor_from_combine_writer(
 
             torch_output[e, t] = contrib
 
-        print(f"{torch_output[e,:active_tokens,:16]=}")
     return torch_output
 
 
@@ -342,7 +335,9 @@ def validate_matmul(
     )
 
     # (D, E/devices, T, H)
-    reshaped_device_outputs = torch.stack([reshape_func(raw_output[d], expert_token_counts[d]) for d in range(devices)])
+    reshaped_device_outputs = torch.stack(
+        [reshape_func(raw_output[d], expert_token_counts[d], d) for d in range(devices)]
+    )
 
     matmul_all_passed = True
 
@@ -353,8 +348,6 @@ def validate_matmul(
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
-
-            # print(f"{torch_layer_output[:16]=}")
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
             std = torch_layer_output.std().item()
@@ -368,7 +361,9 @@ def validate_matmul(
                 matmul_all_passed = False
                 logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f}")
             else:
-                logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} (Passed)")
+                logger.info(
+                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                )
 
     return matmul_all_passed
 
@@ -672,7 +667,7 @@ def gen_sparse_buffer_and_indices(
 
     # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
-    original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
+    original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
@@ -983,14 +978,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 1)]
-    #    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False])
-# @pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
@@ -1385,6 +1377,7 @@ def test_moe_compute(
     else:
         for i in range(num_iterations):
             moe_compute_output = run_op()
+            ttnn.synchronize_device(mesh_device)
             moe_compute_outputs.append(moe_compute_output)
 
     #########################################

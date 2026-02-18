@@ -112,7 +112,9 @@ void kernel_main() {
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
+    cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
+    cb_push_back(cb_s2c_in, 1);
     constexpr uint32_t source_width_tiles = 20;  // token segments/core are all padded up to 20
     const uint32_t output_width_tiles_core = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
     // offset in tiles into the token width for this core
@@ -264,9 +266,7 @@ void kernel_main() {
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
-            DPRINT << "output_width_tiles_core: " << output_width_tiles_core << "\n";
             const uint32_t elts_per_page = source_width_tiles * tile_width;
-            tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, active_tokens);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
@@ -290,7 +290,7 @@ void kernel_main() {
                     const auto dest_noc_y =
                         output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
 
-                    const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr);
+                    const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr, 1);
                     noc_async_write_one_packet_set_state</*posted=*/true>(
                         dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
 
@@ -310,6 +310,7 @@ void kernel_main() {
                 width_tiles_sent += width_transfer_tiles;
                 width_tiles_to_send -= width_transfer_tiles;
             }
+
             noc_async_posted_writes_flushed(1);
             cb_pop_front(cb_c2s_out, num_w0_w1_tiles_h);
 

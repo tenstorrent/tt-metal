@@ -174,7 +174,6 @@ void kernel_main() {
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
-        DPRINT << "expert_id: " << expert_id << " num_tokens: " << num_tokens << "\n";
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
         num_active_tokens[expert_id] = num_tokens;
     }
@@ -318,11 +317,6 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-                //                 fill_tile_init();
-                //                 fill_tile(0,(expert_id+1)*(iter+1));
-                //                 fill_tile(1,(expert_id+1)*(iter+1));
-                //                 fill_tile(2,(expert_id+1)*(iter+1));
-                //                 fill_tile(3,(expert_id+1)*(iter+1));
 
                 tile_regs_commit();
 

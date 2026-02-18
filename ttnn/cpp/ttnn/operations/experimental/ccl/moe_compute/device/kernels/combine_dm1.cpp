@@ -7,6 +7,8 @@
 #include "api/tt-metalium/constants.hpp"
 #include "moe_ring_common.h"
 
+#include "api/debug/dprint_pages.h"
+
 //
 // Combine destination core dm1 kernel.
 //
@@ -32,4 +34,5 @@ void kernel_main() {
 
     // Wait until all source cores have signaled completion
     noc_semaphore_wait(semaphore_ptr, num_sources);
+    const uint32_t output_base_l1_addr = get_write_ptr(tt::CBIndex::c_0);
 }
