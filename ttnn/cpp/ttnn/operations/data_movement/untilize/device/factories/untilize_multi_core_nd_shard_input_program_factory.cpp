@@ -41,33 +41,32 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
-
+    uint32_t output_tensor_width = output.padded_shape()[-1];
+    uint32_t output_tensor_height = output.physical_volume() / output_tensor_width;
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_input_row = tensor_width / tile_width;
 
     const auto& nd_shard_spec = a.nd_shard_spec().value();
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
-    CoreRangeSet grid = nd_shard_spec.grid;
 
-    const auto distribution_spec = BufferDistributionSpec::from_shard_spec(
-        a.padded_shape(),
-        nd_shard_spec.shard_shape,
-        tile_shape,
-        nd_shard_spec.grid,
-        nd_shard_spec.orientation,
-        nd_shard_spec.shard_distribution_strategy);
+    const auto distribution_spec = a.buffer()->buffer_distribution_spec().value();
+
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& groups = distribution_spec.core_groups();
-    uint32_t num_compute_cores = grid.num_cores();
-    const auto& compute_core_range = grid;
+    const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
+    uint32_t num_compute_cores = ordered_cores_with_data.size();
+    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
-    uint32_t num_blocks_per_shard_plane = input_shard_height / tile_height;
+    uint32_t num_blocks_per_shard_plane =
+        input_shard_height /
+        tile_height;  // Note: a "shard plane" here refers to a 2D plane the size of the last 2 dimensions of the shard.
+                      // For example, a shard of shape [b, c, h, w] has b * c planes each of shape [h, w].
     const auto& shard_shape = nd_shard_spec.shard_shape;
     size_t num_planes_per_shard = 1;
     if (shard_shape.rank() > 2) {
@@ -79,16 +78,21 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     uint32_t num_input_blocks_per_full_core = groups.num_shards_per_core_in_group_1 * num_blocks_per_shard;
 
     // Input CB
-    // Have compute core untilize the entire shard at once
-    uint32_t input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
+    uint32_t input_cb_num_tiles;
+    if (num_input_blocks_per_full_core == 1) {
+        // No need to double buffer if the core is only processing a single block
+        input_cb_num_tiles = num_tiles_per_input_block;
+    } else {
+        // Double buffer if the core is processing 2+ blocks
+        input_cb_num_tiles = num_tiles_per_input_block * 2;
+    }
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
         compute_core_range,
         input_single_tile_size,
         input_cb_num_tiles,
-        input_cb_data_format,
-        src0_buffer);
+        input_cb_data_format);
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -110,29 +114,36 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
     // Sharded input
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args = {
+        (uint32_t)src0_cb_index,
+        (uint32_t)num_tiles_per_input_block,
+        (uint32_t)num_shards,
+        (uint32_t)num_compute_cores};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_nd_sharded.cpp",
         compute_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
+    uint32_t output_element_size = output.element_size();
+    uint32_t output_page_width =
+        output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_shard_width;
         if (output.shard_spec().has_value()) {
-            output_shard_width = output.shard_spec().value().shape[1];
+            output_page_width = output.shard_spec().value().shape[1];
         } else {
-            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+            output_page_width = output.nd_shard_spec().value().shard_shape[-1];
         }
-        output_num_blocks_across_width = tensor_width / output_shard_width;
+        output_num_blocks_across_width = tt::div_up(output_tensor_width, output_page_width);
     }
-    uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    uint32_t output_element_size = output.element_size();
+
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
-    uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
+    uint32_t num_cols_per_output_block = output_page_width;
+    uint32_t output_stick_size = num_cols_per_output_block * output_element_size;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
@@ -145,8 +156,10 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         (uint32_t)input_single_tile_size,
         (uint32_t)num_shards,
         (uint32_t)num_compute_cores,
-        (uint32_t)num_tiles_per_row,
+        (uint32_t)num_tiles_per_input_row,
         (uint32_t)tile_width,
+        (uint32_t)output_tensor_width,
+        (uint32_t)output_tensor_height,
     };
 
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -172,8 +185,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
     // Compute kernel file
     std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
@@ -208,33 +220,47 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     }
 
     // Run-time args
-    ShardOrientation orientation = a.nd_shard_spec().value().orientation;
-    bool is_row_major = orientation == ShardOrientation::ROW_MAJOR;
-
-    std::vector<CoreCoord> full_cores = corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
     // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
     // in the writer kernel.
     const auto& mapped_cores = page_mapping.all_cores;
+
+    // Use page_mapping to count non-padding blocks per core
+    // page_mapping.core_host_page_indices[core_id] contains host page indices for all device pages on that core,
+    // with UncompressedBufferPageMapping::PADDING indicating padding pages
     uint32_t start_shard_id = 0;
-    for (auto core : full_cores) {
+    for (auto core : ordered_cores_with_data) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
-        uint32_t num_blocks_on_core = 0;
-        uint32_t num_tiles_on_core = 0;
+        uint32_t num_input_blocks_to_process = 0;
+
         if (core_it != mapped_cores.end()) {
             const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
-            const size_t num_shards_on_core = distribution_spec.num_shards_per_core(core_idx);
-            num_blocks_on_core = num_shards_on_core * num_blocks_per_shard;
-            num_tiles_on_core = num_blocks_on_core * num_tiles_per_input_block;
+            const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
+
+            // Iterate through device pages in blocks of num_tiles_per_input_block.
+            uint32_t page_offset = 0;
+            const uint32_t total_pages = host_page_indices.size();
+
+            while (page_offset < total_pages) {
+                if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
+                    num_input_blocks_to_process++;
+                } else if (page_offset == 0) {  // First page is PADDING means this core has no shards, no need to
+                                                // iterate further. This should never happen, as we are iterating over
+                                                // only cores with data.
+                    break;
+                }
+                // Advance by num_tiles_per_input_block
+                page_offset += num_tiles_per_input_block;
+            }
         }
         // Reader run-time args
-        std::vector<uint32_t> reader_run_time_args = {num_tiles_on_core};
+        std::vector<uint32_t> reader_run_time_args = {src0_buffer->address(), start_shard_id};
 
         // Writer run-time args
         std::vector<uint32_t> writer_run_time_args = {dst_buffer->address(), src0_buffer->address(), start_shard_id};
         start_shard_id++;
 
         // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_blocks_on_core};
+        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
         // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
@@ -242,8 +268,9 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     }
 
     std::vector<CoreCoord> cores_with_run_time_args;
-    cores_with_run_time_args.reserve(full_cores.size());
-    cores_with_run_time_args.insert(cores_with_run_time_args.end(), full_cores.begin(), full_cores.end());
+    cores_with_run_time_args.reserve(ordered_cores_with_data.size());
+    cores_with_run_time_args.insert(
+        cores_with_run_time_args.end(), ordered_cores_with_data.begin(), ordered_cores_with_data.end());
 
     return cached_program_t{
         std::move(program),
@@ -256,22 +283,22 @@ void UntilizeMultiCoreNDShardInputProgramFactory::override_runtime_arguments(
     const UntilizeTensorArgs& tensor_args,
     const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
-    // Reader
-    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-
-    // Writer
-    auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+    // Reader and Writer update buffer addresses
+    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
+    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     for (const CoreCoord& core : cores_with_runtime_args) {
-        auto& runtime_args = runtime_args_by_core[core.x][core.y];
-        runtime_args[0] = dst_buffer->address();
-        runtime_args[1] = src_buffer->address();
+        auto& runtime_args_reader = runtime_args_by_core_reader[core.x][core.y];
+        runtime_args_reader[0] = src_buffer->address();
+        auto& runtime_args_writer = runtime_args_by_core_writer[core.x][core.y];
+        runtime_args_writer[0] = dst_buffer->address();
+        runtime_args_writer[1] = src_buffer->address();
     }
 }
 }  // namespace ttnn::prim

@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 from models.common.utility_functions import skip_for_blackhole
@@ -121,7 +120,7 @@ def test_slice_write_nd(rank, layout, device):
     tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
 
     # Perform the slice write
-    ttnn.slice_write(tt_in, tt_out, begins, ends, strides)
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
 
     # Compare full tensors and the written region explicitly
     out_host = ttnn.to_torch(tt_out)

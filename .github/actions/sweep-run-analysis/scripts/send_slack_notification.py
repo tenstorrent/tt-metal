@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import time
-from typing import Optional
 
 import requests
 
@@ -18,7 +17,9 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")  # Alternative: OAuth bot token
 SLACK_CHANNEL = os.environ.get("SLACK_CHANNEL", "")  # Required with bot token
 CONCLUSION = os.environ.get("CONCLUSION", "success")  # success, failure, cancelled
-GITHUB_RUN_ID = os.environ.get("GITHUB_RUN_ID", "")
+GITHUB_RUN_ID = os.environ.get("SOURCE_GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_ID", ""))
+GITHUB_RUN_NUMBER = os.environ.get("SOURCE_GITHUB_RUN_NUMBER", "")
+SLACK_ALERT_USER_IDS = os.environ.get("SLACK_ALERT_USER_IDS", "")
 SUPERSET_BASE_URL = "https://superset.tenstorrent.com/superset/dashboard/lead-models-sweep-run/"
 GITHUB_ACTIONS_URL = f"https://github.com/tenstorrent/tt-metal/actions/runs/{GITHUB_RUN_ID}"
 
@@ -93,6 +94,40 @@ def build_header_block(emoji: str, status_text: str, suffix: str) -> dict:
     }
 
 
+def parse_alert_mentions(raw_ids: str) -> list[str]:
+    """Parse and normalize configured Slack alert mentions."""
+    if not raw_ids:
+        return []
+
+    mentions = []
+    for token in raw_ids.replace(";", ",").split(","):
+        value = token.strip()
+        if not value:
+            continue
+
+        # Allow explicit mention tokens or plain user IDs.
+        if value.startswith("<@") and value.endswith(">"):
+            mentions.append(value)
+        elif value.startswith("<!subteam^") and value.endswith(">"):
+            mentions.append(value)
+        else:
+            mentions.append(f"<@{value}>")
+
+    return mentions
+
+
+def build_alert_mentions_block() -> dict | None:
+    """Build an alert block with Slack mentions for non-green runs."""
+    mentions = parse_alert_mentions(SLACK_ALERT_USER_IDS)
+    if not mentions:
+        return None
+
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": f"*:rotating_light: Attention:* {' '.join(mentions)}"},
+    }
+
+
 def build_context_block(results: dict) -> dict:
     """Build the context block with architecture, commit, branch."""
     summary = results["run_summary"]
@@ -159,7 +194,7 @@ def build_pass_rate_regressions_block(regressions: list[dict]) -> list[dict]:
 
     # Build table
     lines = ["```"]
-    lines.append(f"{'Module':<35} {'Prev':>8} {'Now':>8} {'Delta':>8}")
+    lines.append(f"{'Sweep test':<35} {'Prev':>8} {'Now':>8} {'Delta':>8}")
     for reg in regressions[:10]:  # Limit to top 10
         module = reg["module"][:35]
         prev = f"{float(reg['prev']):.1f}%" if reg.get("prev") is not None else "N/A"
@@ -218,7 +253,8 @@ def build_perf_regressions_block(op_regressions: list[dict], test_regressions: l
             test_name = reg.get("full_test_name", "unknown")
             model = reg.get("model_name", "")
             if model:
-                display_name = f"{test_name[:35]}[{model[:10]}]"
+                model_display = model.removeprefix("models/demos/")
+                display_name = f"{test_name[:35]}[{model_display[:10]}]"
             else:
                 display_name = test_name[:50]
             prev = format_duration(reg.get("prev_ns"))
@@ -341,17 +377,27 @@ def build_cancelled_block() -> list[dict]:
     ]
 
 
-def build_superset_link_block(run_id: Optional[int]) -> dict:
-    """Build the Superset dashboard link block."""
-    if run_id:
-        url = f"{SUPERSET_BASE_URL}?run_id={run_id}"
-        text = f"<{url}|View in Superset>"
+def build_superset_link_block() -> dict:
+    """Build the run links block with both Superset and GitHub links.
+
+    Uses gh_run_number (GITHUB_RUN_NUMBER) for Superset since it's available immediately,
+    whereas run_id (database PK) requires Airflow ingestion first.
+    """
+    links = []
+    if GITHUB_RUN_NUMBER:
+        superset_url = f"{SUPERSET_BASE_URL}?gh_run_number={GITHUB_RUN_NUMBER}"
+        links.append(f"<{superset_url}|View in Superset>")
     else:
-        text = f"<{GITHUB_ACTIONS_URL}|View in GitHub Actions>"
+        links.append("Superset link unavailable (missing run number)")
+
+    if GITHUB_RUN_ID:
+        links.append(f"<{GITHUB_ACTIONS_URL}|View in GitHub Actions>")
+    else:
+        links.append("GitHub Actions link unavailable (missing run ID)")
 
     return {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": text},
+        "text": {"type": "mrkdwn", "text": " | ".join(links)},
     }
 
 
@@ -363,6 +409,12 @@ def build_slack_message(results: dict, conclusion: str) -> dict:
 
     # Header
     blocks.append(build_header_block(emoji, status_text, suffix))
+
+    # Mention configured users for all non-green outcomes.
+    if emoji != ":large_green_circle:":
+        alert_block = build_alert_mentions_block()
+        if alert_block:
+            blocks.append(alert_block)
 
     # Handle infrastructure failure
     if conclusion == "failure" and results["run_summary"]["test_count"] == 0:
@@ -419,7 +471,7 @@ def build_slack_message(results: dict, conclusion: str) -> dict:
 
     # Superset link
     blocks.append({"type": "divider"})
-    blocks.append(build_superset_link_block(results.get("run_id")))
+    blocks.append(build_superset_link_block())
 
     return {"blocks": blocks}
 

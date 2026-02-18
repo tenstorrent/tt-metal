@@ -63,9 +63,11 @@ void kernel_main() {
         .input_cb = input_cb,
         .gamma_cb = gamma_cb,
         .output_cb = output_cb,
-        .epsilon = get_arg_val<uint32_t>(0),  // epsilon
-        .scalar = get_arg_val<float>(1),   // scalar (1/sqrt(num_elements))
+        .epsilon = get_common_arg_val<uint32_t>(0),  // epsilon
+        .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
     };
+    // Full init, CBs don't matter
+    compute_kernel_hw_startup(0, 0, 0);
 #endif
 
     // ========================================================================

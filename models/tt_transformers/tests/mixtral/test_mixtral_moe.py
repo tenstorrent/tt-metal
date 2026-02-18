@@ -9,6 +9,7 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -30,7 +31,7 @@ def convert2ref(state_dict):
     return out
 
 
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
@@ -86,7 +87,7 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
 
         pt_decode_input = (torch.rand(seqlen, batch, model_args.dim) * 2) - 1
 
-        if mode == "decode":
+        if mode == Mode.DECODE:
             memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,

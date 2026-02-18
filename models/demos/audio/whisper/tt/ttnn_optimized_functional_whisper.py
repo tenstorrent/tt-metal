@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
 from typing import Optional
 
 import torch
@@ -40,7 +41,7 @@ def unsqueeze_to_4D_at_dim_1(tensor):
         raise ValueError(f"Unsupported shape: {tensor.shape}")
 
 
-def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapper, n_layers=None):
+def init_kv_cache(config, device, max_seq_len, weights_mesh_mapper, n_layers=None):
     """
     Generates empty KV cache for self-attention and cross-attention, and sends to device.
     Returns:
@@ -49,69 +50,75 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, weights_mesh_mapp
             - cross_attn_cache: List of [K, V] tensors per layer for cross-attention (pre-allocated)
     """
 
-    logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
+    logger.info(f"Initializing KV cache for both batch size per device 1 and 2 and max sequence length: {max_seq_len}")
 
-    kv_cache = []
-    cross_attn_cache = []
-    if n_layers is None:
-        n_layers = config.decoder_layers
+    kv_cache_per_batch_size = defaultdict(lambda: None)
+    cross_attn_cache_per_batch_size = defaultdict(lambda: None)
+    for batch_size in [1, WHISPER_BATCH_SIZE]:
+        kv_cache = []
+        cross_attn_cache = []
+        if n_layers is None:
+            n_layers = config.decoder_layers
 
-    # Cross-attention cache dimensions
-    # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
-    encoder_seq_len = 1500
-    num_heads = config.encoder_attention_heads
-    head_dim = config.d_model // config.encoder_attention_heads
+        # Cross-attention cache dimensions
+        # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
+        encoder_seq_len = 1500
+        num_heads = config.encoder_attention_heads
+        head_dim = config.d_model // config.encoder_attention_heads
 
-    for i in range(n_layers):
-        # Self-attention cache
-        kv_cache_layer = []
-        for j in range(2):
-            cache_k_or_v = torch.zeros(
-                (
-                    max_batch_size,
-                    config.decoder_attention_heads,
-                    max_seq_len,
-                    config.d_model // config.decoder_attention_heads,
+        for i in range(n_layers):
+            # Self-attention cache
+            kv_cache_layer = []
+            for j in range(2):
+                cache_k_or_v = torch.zeros(
+                    (
+                        batch_size,
+                        config.decoder_attention_heads,
+                        max_seq_len,
+                        config.d_model // config.decoder_attention_heads,
+                    )
                 )
-            )
-            cache_k_or_v = ttnn.as_tensor(
-                cache_k_or_v,
-                dtype=ttnn.bfloat8_b,
+                cache_k_or_v = ttnn.as_tensor(
+                    cache_k_or_v,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=weights_mesh_mapper,
+                    cache_file_name=None,
+                )
+                kv_cache_layer.append(cache_k_or_v)
+            kv_cache.append(kv_cache_layer)
+
+            # Pre-allocate cross-attention cache for tracing
+            # bfloat16 to match calculate_key_values output dtype
+            cross_k = torch.zeros((batch_size, num_heads, head_dim, encoder_seq_len))
+            cross_k = ttnn.as_tensor(
+                cross_k,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=weights_mesh_mapper,
                 cache_file_name=None,
             )
-            kv_cache_layer.append(cache_k_or_v)
-        kv_cache.append(kv_cache_layer)
 
-        # Pre-allocate cross-attention cache for tracing
-        # bfloat16 to match calculate_key_values output dtype
-        cross_k = torch.zeros((max_batch_size, num_heads, head_dim, encoder_seq_len))
-        cross_k = ttnn.as_tensor(
-            cross_k,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=weights_mesh_mapper,
-            cache_file_name=None,
-        )
+            cross_v = torch.zeros((batch_size, num_heads, encoder_seq_len, head_dim))
+            cross_v = ttnn.as_tensor(
+                cross_v,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=weights_mesh_mapper,
+                cache_file_name=None,
+            )
+            cross_attn_cache.append([cross_k, cross_v])
 
-        cross_v = torch.zeros((max_batch_size, num_heads, encoder_seq_len, head_dim))
-        cross_v = ttnn.as_tensor(
-            cross_v,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=weights_mesh_mapper,
-            cache_file_name=None,
-        )
-        cross_attn_cache.append([cross_k, cross_v])
+        kv_cache_per_batch_size[batch_size] = kv_cache
+        cross_attn_cache_per_batch_size[batch_size] = cross_attn_cache
 
-    return kv_cache, cross_attn_cache
+    return kv_cache_per_batch_size, cross_attn_cache_per_batch_size
 
 
 def calculate_key_values(config, key_value_states, *, parameters):

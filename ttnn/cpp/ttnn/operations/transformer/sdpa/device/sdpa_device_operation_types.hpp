@@ -16,7 +16,8 @@ struct SDPAParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
     bool is_causal = false;
-    std::optional<int64_t> chunk_start_idx;
+    std::optional<int64_t> chunk_start_idx;        // Chunked legacy: scalar offset, part of program cache key
+    std::optional<Tensor> chunk_start_idx_tensor;  // Chunked flexible: device tensor [1] int32, read at runtime
     DeviceComputeKernelConfig compute_kernel_config;
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;

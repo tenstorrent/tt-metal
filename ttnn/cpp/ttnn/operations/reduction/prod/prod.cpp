@@ -68,7 +68,7 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
         output_mem_config);
 }
 
-Tensor ProdOperation::invoke(
+Tensor prod_impl(
     const Tensor& input_a,
     const std::optional<int64_t> dim,
     const bool keepdim,
@@ -188,7 +188,7 @@ Tensor ProdOperation::invoke(
     return keepdim ? result : ttnn::squeeze(result, *dim);
 }
 
-Tensor ProdOperation::invoke(
+Tensor prod_nc_impl(
     const Tensor& input,
     const Tensor& output,
     ttnn::SmallVector<int64_t>& dims,
@@ -202,3 +202,20 @@ Tensor ProdOperation::invoke(
 }
 
 }  // namespace ttnn::operations::reduction
+
+namespace ttnn {
+
+Tensor prod(
+    const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+}
+
+Tensor prod(
+    const Tensor& input,
+    const Tensor& output,
+    SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config) {
+    return operations::reduction::prod_nc_impl(input, output, dims, memory_config);
+}
+
+}  // namespace ttnn

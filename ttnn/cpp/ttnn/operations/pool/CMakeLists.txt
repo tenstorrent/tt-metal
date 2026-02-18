@@ -12,7 +12,14 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*
+    generic/device/kernels/*
+    grid_sample/device/kernels/*
+    rotate/device/kernels/*
+    upsample/device/kernels/*
+)
 
 target_sources(
     ttnn_op_pool
@@ -38,6 +45,7 @@ target_sources(
         grid_sample/grid_sample_prepare_grid.cpp
         rotate/device/rotate_device_operation.cpp
         rotate/device/rotate_nearest_program_factory.cpp
+        rotate/device/rotate_bilinear_program_factory.cpp
         rotate/rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp

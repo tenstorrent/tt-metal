@@ -370,27 +370,27 @@ run_t3000_dit_tests() {
 
 run_t3000_sd35large_tests() {
   run_t3000_dit_tests \
-    "models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
-    "models/experimental/tt_dit/tests/models/sd35/test_attention_sd35.py" \
-    "models/experimental/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
+    "models/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
+    "models/tt_dit/tests/models/sd35/test_attention_sd35.py" \
+    "models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
 }
 
 run_t3000_flux1_tests() {
   run_t3000_dit_tests \
-    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
-    "models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k 2x4" \
-    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k 2x4"
+    "models/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
+    "models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k 2x4" \
+    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k 2x4"
 }
 
 run_t3000_motif_tests() {
   run_t3000_dit_tests \
-    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
-    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
+    "models/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
+    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
 }
 
 run_t3000_qwenimage_tests() {
   run_t3000_dit_tests \
-    "models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
+    "models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
 }
 
 run_t3000_wan22_tests() {
@@ -402,10 +402,10 @@ run_t3000_wan22_tests() {
 
   # Run test_model for Wan2.2
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
-  pytest models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
-  pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
-  pytest models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 2x4 and real_weights and check_output and _1f"; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4sp0tp1"; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 and not yes_load_cache and not model_caching" --timeout 600; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_decoder or test_wan_encoder) and 2x4 and real_weights and check_output and _1f"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -424,9 +424,9 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  FAKE_DEVICE=T3K pytest models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-large_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
-  pytest models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
-  pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
+  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-large_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
+  pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
+  pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

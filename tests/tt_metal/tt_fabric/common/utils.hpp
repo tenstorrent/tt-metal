@@ -10,6 +10,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <filesystem>
+#include <string>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -32,5 +34,12 @@ bool find_device_with_neighbor_in_direction(
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
+
+// Compare ASIC mapping YAML files (hostname-agnostic comparison)
+bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
+
+// Helper function to check generated ASIC mapping files against golden files
+// Checks on the current rank (each rank compares its own generated file)
+void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
 
 }  // namespace tt::tt_fabric::fabric_router_tests

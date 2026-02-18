@@ -127,11 +127,6 @@ void MorehNormOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
 MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {

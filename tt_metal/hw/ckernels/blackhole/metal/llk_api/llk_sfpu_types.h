@@ -90,6 +90,7 @@ enum class SfpuType {
     gt,
     ge,
     le,
+    eq,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
@@ -149,4 +150,6 @@ enum class SfpuType {
     unary_min_int32,
     unary_max_uint32,
     unary_min_uint32,
+    addcdiv,
+    lerp,
 };

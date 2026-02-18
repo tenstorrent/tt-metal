@@ -98,6 +98,68 @@ static void BM_write(
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
+static void BM_write_pinned_memory(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
+    auto page_size = state.range(0);
+    auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    log_debug(
+        LogTest,
+        "Running WritePinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    // Check if memory pinning with NOC mapping is supported
+    if (!experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
+        state.SkipWithError("Memory pinning with NOC mapping is not supported on this device");
+        return;
+    }
+
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
+
+    // Allocate destination host buffer with 16-byte alignment
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{64};
+    TT_ASSERT(
+        device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
+        "Source vector alignment {} must be divisible by PCIE read alignment {}",
+        device_read_align,
+        hal.get_read_alignment(HalMemType::HOST));
+    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+        static_cast<std::size_t>(transfer_size));
+    void* aligned_ptr = reinterpret_cast<void*>(src_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(src_storage));
+
+    // Pin the aligned host memory region for the shard
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_mem =
+        experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+
+    // Prepare the read transfer using pinned memory
+    auto write_transfer = distributed::ShardDataTransfer(coord)
+                              .host_data(aligned_ptr)
+                              .region(BufferRegion(0, static_cast<std::size_t>(transfer_size)));
+    experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_mem);
+
+    for (auto _ : state) {
+        bool blocking = true;
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
+    }
+
+    state.SetBytesProcessed(transfer_size * state.iterations());
+}
+
 static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = state.range(0);
     uint64_t transfer_size = state.range(1);
@@ -157,9 +219,8 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique =
+    auto pinned_mem =
         experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
-    std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
     auto read_transfer = distributed::ShardDataTransfer{coord}
@@ -216,6 +277,12 @@ int main(int argc, char** argv) {
 
         if (can_map_to_noc) {
             benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
+                ->ArgsProduct(benchmark_args)
+                ->UseRealTime()
+                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+                ->ComputeStatistics("min", compute_min)
+                ->ComputeStatistics("max", compute_max);
+            benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
                 ->UseRealTime()
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)

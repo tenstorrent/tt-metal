@@ -179,60 +179,70 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -253,60 +263,70 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image
   build-manylinux:
@@ -327,15 +347,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
+        id: build-manylinux
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
-          push: true
           tags: ${{ needs.check-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
-
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
@@ -344,6 +365,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest Ubuntu 22.04 Dev tag"
         if: needs.check-images.outputs.ubuntu-2204-needs-build != 'true' || needs.build-ubuntu-2204.result == 'success'

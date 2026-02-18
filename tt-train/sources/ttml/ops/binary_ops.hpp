@@ -8,6 +8,7 @@
 #include "autograd/tensor.hpp"
 namespace ttml::ops {
 
+autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b);
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b);
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
@@ -15,6 +16,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 
+autograd::TensorPtr add(const autograd::TensorPtr& a, const ttnn::Tensor& b);
 autograd::TensorPtr add(const autograd::TensorPtr& a, const autograd::AutocastTensor& b);
 autograd::TensorPtr add(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 autograd::TensorPtr sub(const autograd::TensorPtr& a, const autograd::TensorPtr& b);

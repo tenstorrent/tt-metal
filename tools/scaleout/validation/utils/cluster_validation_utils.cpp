@@ -12,6 +12,9 @@
 #include <random>
 #include <future>
 #include <chrono>
+#include <exception>
+#include <unordered_set>
+#include <thread>
 
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -95,6 +98,64 @@ std::vector<TrafficConfig> generate_sweep_traffic_configs() {
     return configs;
 }
 
+// Helper function to execute tasks in parallel batches with exception handling
+template <typename Task, typename Result = void>
+void execute_parallel_batches(
+    const std::vector<Task>& tasks, size_t batch_size, auto&& task_executor, std::vector<Result>* results = nullptr) {
+    if (tasks.empty()) {
+        return;
+    }
+
+    if constexpr (!std::is_same_v<Result, void>) {
+        if (results) {
+            results->resize(tasks.size());
+        }
+    }
+
+    auto process_future = [&](std::future<Result>& future, size_t index) {
+        if constexpr (std::is_same_v<Result, void>) {
+            future.get();
+        } else {
+            auto value = future.get();
+            if (results) {
+                (*results)[index] = std::move(value);
+            }
+        }
+    };
+
+    for (size_t batch_start = 0; batch_start < tasks.size(); batch_start += batch_size) {
+        const size_t batch_end = std::min(batch_start + batch_size, tasks.size());
+        std::vector<std::future<Result>> futures;
+        futures.reserve(batch_end - batch_start);
+        std::transform(
+            tasks.begin() + batch_start, tasks.begin() + batch_end, std::back_inserter(futures), [&](const Task& task) {
+                return std::async(std::launch::async, task_executor, task);
+            });
+
+        std::exception_ptr first_exception;
+        size_t index = batch_start;
+        for (auto& future : futures) {
+            try {
+                process_future(future, index++);
+            } catch (...) {
+                if (!first_exception) {
+                    first_exception = std::current_exception();
+                }
+            }
+        }
+        if (first_exception) {
+            std::rethrow_exception(first_exception);
+        }
+    }
+}
+
+// Convenience overload for value-returning tasks with results vector
+template <typename Task, typename Result>
+void execute_parallel_batches(
+    const std::vector<Task>& tasks, std::vector<Result>& results, size_t batch_size, auto&& task_executor) {
+    execute_parallel_batches<Task, Result>(tasks, batch_size, task_executor, &results);
+}
+
 // ============================================================================
 // Traffic Configuration Functions
 // ============================================================================
@@ -123,10 +184,27 @@ void configure_local_kernels(
                       ? tt::tt_metal::NOC::NOC_1
                       : tt::tt_metal::NOC::NOC_0;
 
+    struct WriteTask {
+        ChipId chip_id;
+        CoreCoord ethernet_core;
+        const std::vector<uint32_t>* data;
+        uint32_t address;
+    };
+    std::vector<WriteTask> write_tasks;
+    std::unordered_set<ChipId> chips_with_writes;
+
+    struct KernelInfo {
+        ChipId chip_id;
+        CoreCoord coord;
+        ChipId neighbor_chip_id;
+        CoreCoord neighbor_coord;
+    };
+    std::vector<KernelInfo> kernel_infos;
+
+    // First pass: collect all write tasks and kernel information
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto curr_chip_id = ctx.asic_id_to_chip_id[*asic_id];
         auto curr_chip = ctx.devices[curr_chip_id];
-        auto& curr_program = programs[curr_chip_id];
 
         for (const auto& [neighbor_asic_id, eth_connections] : asic_connections) {
             if (ctx.physical_system_descriptor.get_host_name_for_asic(neighbor_asic_id) != host_name) {
@@ -134,7 +212,6 @@ void configure_local_kernels(
             }
             auto neighbor_chip_id = ctx.asic_id_to_chip_id[*neighbor_asic_id];
             auto neighbor_chip = ctx.devices[neighbor_chip_id];
-            auto& neighbor_program = programs[neighbor_chip_id];
 
             for (const auto& eth_connection : eth_connections) {
                 auto curr_chan = eth_connection.src_chan;
@@ -147,57 +224,27 @@ void configure_local_kernels(
 
                 if (std::find(kernel_coords[curr_chip_id].begin(), kernel_coords[curr_chip_id].end(), curr_coord) ==
                     kernel_coords[curr_chip_id].end()) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                        curr_chip_id,
-                        curr_chip->ethernet_core_from_logical_core(curr_coord),
-                        fwd ? inputs : all_zeros,
-                        src_eth_l1_byte_address);
+                    // Collect write tasks
+                    write_tasks.push_back(
+                        {curr_chip_id,
+                         curr_chip->ethernet_core_from_logical_core(curr_coord),
+                         fwd ? &inputs : &all_zeros,
+                         src_eth_l1_byte_address});
+                    chips_with_writes.insert(curr_chip_id);
 
-                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                        neighbor_chip_id,
-                        neighbor_chip->ethernet_core_from_logical_core(neighbor_coord),
-                        fwd ? all_zeros : inputs,
-                        dst_eth_l1_byte_address);
+                    write_tasks.push_back(
+                        {neighbor_chip_id,
+                         neighbor_chip->ethernet_core_from_logical_core(neighbor_coord),
+                         fwd ? &all_zeros : &inputs,
+                         dst_eth_l1_byte_address});
+                    chips_with_writes.insert(neighbor_chip_id);
 
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(curr_chip_id);
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(neighbor_chip_id);
-
-                    const auto* sender_kernel_path =
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
-                    const auto* receiver_kernel_path =
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
-                    std::vector<uint32_t> sender_compile_args = {packet_size_bytes, packet_size_words};
-                    std::vector<uint32_t> receiver_compile_args = {};
-                    auto curr_kernel = tt::tt_metal::CreateKernel(
-                        curr_program,
-                        fwd ? sender_kernel_path : receiver_kernel_path,
-                        curr_coord,
-                        tt::tt_metal::EthernetConfig{
-                            .noc = noc_id,
-                            .processor = erisc_id,
-                            .compile_args = fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words}
-                                                : std::vector<uint32_t>{}});
-
-                    auto neighbor_kernel = tt::tt_metal::CreateKernel(
-                        neighbor_program,
-                        fwd ? receiver_kernel_path : sender_kernel_path,
-                        neighbor_coord,
-                        tt::tt_metal::EthernetConfig{
-                            .noc = noc_id,
-                            .processor = erisc_id,
-                            .compile_args = fwd ? std::vector<uint32_t>{}
-                                                : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
-                    tt::tt_metal::SetRuntimeArgs(
-                        fwd ? curr_program : neighbor_program,
-                        fwd ? curr_kernel : neighbor_kernel,
-                        fwd ? curr_coord : neighbor_coord,
-                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
-
-                    tt::tt_metal::SetRuntimeArgs(
-                        fwd ? neighbor_program : curr_program,
-                        fwd ? neighbor_kernel : curr_kernel,
-                        fwd ? neighbor_coord : curr_coord,
-                        {data_size});
+                    // Store kernel info for later
+                    kernel_infos.push_back(KernelInfo{
+                        .chip_id = curr_chip_id,
+                        .coord = CoreCoord(curr_coord.x, curr_coord.y),
+                        .neighbor_chip_id = neighbor_chip_id,
+                        .neighbor_coord = CoreCoord(neighbor_coord.x, neighbor_coord.y)});
 
                     kernel_coords[curr_chip_id].push_back(curr_coord);
                     kernel_coords[neighbor_chip_id].push_back(neighbor_coord);
@@ -213,6 +260,55 @@ void configure_local_kernels(
                 }
             }
         }
+    }
+
+    // Parallelize write_core calls
+    const size_t max_concurrent_writes = std::thread::hardware_concurrency();
+    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
+        cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
+        cluster.l1_barrier(task.chip_id);
+    });
+
+    // Create kernels and set runtime args
+    constexpr const char* sender_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
+    constexpr const char* receiver_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
+
+    for (const auto& [curr_chip_id, curr_coord, neighbor_chip_id, neighbor_coord] : kernel_infos) {
+        auto& curr_program = programs[curr_chip_id];
+        auto& neighbor_program = programs[neighbor_chip_id];
+
+        auto curr_kernel = tt::tt_metal::CreateKernel(
+            curr_program,
+            fwd ? sender_kernel_path : receiver_kernel_path,
+            curr_coord,
+            tt::tt_metal::EthernetConfig{
+                .noc = noc_id,
+                .processor = erisc_id,
+                .compile_args =
+                    fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words} : std::vector<uint32_t>{}});
+
+        auto neighbor_kernel = tt::tt_metal::CreateKernel(
+            neighbor_program,
+            fwd ? receiver_kernel_path : sender_kernel_path,
+            neighbor_coord,
+            tt::tt_metal::EthernetConfig{
+                .noc = noc_id,
+                .processor = erisc_id,
+                .compile_args =
+                    fwd ? std::vector<uint32_t>{} : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
+        tt::tt_metal::SetRuntimeArgs(
+            fwd ? curr_program : neighbor_program,
+            fwd ? curr_kernel : neighbor_kernel,
+            fwd ? curr_coord : neighbor_coord,
+            {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+
+        tt::tt_metal::SetRuntimeArgs(
+            fwd ? neighbor_program : curr_program,
+            fwd ? neighbor_kernel : curr_kernel,
+            fwd ? neighbor_coord : curr_coord,
+            {data_size});
     }
 }
 
@@ -237,6 +333,23 @@ void configure_cross_host_kernels(
                       : tt::tt_metal::NOC::NOC_0;
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
+
+    struct WriteTask {
+        ChipId chip_id;
+        CoreCoord ethernet_core;
+        const std::vector<uint32_t>* data;
+        uint32_t address;
+    };
+    std::vector<WriteTask> write_tasks;
+
+    struct KernelInfo {
+        ChipId chip_id;
+        CoreCoord coord;
+        bool is_sender;
+    };
+    std::vector<KernelInfo> kernel_infos;
+
+    // First pass: collect all write tasks and kernel information
     for (const auto& host_neighbor : ctx.physical_system_descriptor.get_host_neighbors(host_name)) {
         const auto& exit_nodes = ctx.physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
         for (const auto& exit_node : exit_nodes) {
@@ -245,33 +358,59 @@ void configure_cross_host_kernels(
             auto neighbor_asic = exit_node.dst_exit_node;
             bool sender = fwd ? (*my_asic > *neighbor_asic) : (*my_asic < *neighbor_asic);
             auto my_device = ctx.devices[my_chip];
-            auto& my_program = programs[my_chip];
             const auto& my_soc_desc = cluster.get_soc_desc(my_chip);
             auto my_coord = my_soc_desc.get_eth_core_for_channel(exit_node.eth_conn.src_chan, CoordSystem::LOGICAL);
 
+            // Collect write task
             if (sender) {
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), inputs, src_eth_l1_byte_address);
-                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
-                auto sender_kernel = tt::tt_metal::CreateKernel(
-                    my_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
-                    my_coord,
-                    tt::tt_metal::EthernetConfig{
-                        .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
-                tt::tt_metal::SetRuntimeArgs(
-                    my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+                write_tasks.push_back(
+                    {my_chip, my_device->ethernet_core_from_logical_core(my_coord), &inputs, src_eth_l1_byte_address});
             } else {
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), all_zeros, dst_eth_l1_byte_address);
-                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
-                auto receiver_kernel = tt::tt_metal::CreateKernel(
-                    my_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
-                    my_coord,
-                    tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
-                tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
+                write_tasks.push_back(
+                    {my_chip,
+                     my_device->ethernet_core_from_logical_core(my_coord),
+                     &all_zeros,
+                     dst_eth_l1_byte_address});
             }
+
+            // Store kernel info for later
+            kernel_infos.push_back(
+                KernelInfo{.chip_id = my_chip, .coord = CoreCoord(my_coord.x, my_coord.y), .is_sender = sender});
+        }
+    }
+
+    // Parallelize write_core calls
+    const size_t max_concurrent_writes = std::thread::hardware_concurrency();
+    execute_parallel_batches(write_tasks, max_concurrent_writes, [&cluster](const WriteTask& task) {
+        cluster.write_core(task.chip_id, task.ethernet_core, *task.data, task.address);
+        cluster.l1_barrier(task.chip_id);
+    });
+
+    // Create kernels and set runtime args
+    constexpr const char* sender_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
+    constexpr const char* receiver_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
+
+    for (const auto& [my_chip, my_coord, sender] : kernel_infos) {
+        auto& my_program = programs[my_chip];
+
+        if (sender) {
+            auto sender_kernel = tt::tt_metal::CreateKernel(
+                my_program,
+                sender_kernel_path,
+                my_coord,
+                tt::tt_metal::EthernetConfig{
+                    .noc = noc_id, .processor = erisc_id, .compile_args = {packet_size_bytes, packet_size_words}});
+            tt::tt_metal::SetRuntimeArgs(
+                my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+        } else {
+            auto receiver_kernel = tt::tt_metal::CreateKernel(
+                my_program,
+                receiver_kernel_path,
+                my_coord,
+                tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = erisc_id});
+            tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
         }
     }
 }
@@ -546,6 +685,7 @@ void dump_link_stats(
     uint32_t data_size,
     uint32_t packet_size_bytes) {
     const uint32_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     const auto& host_name = ctx.physical_system_descriptor.my_host_name();
     const auto& asic_topology = ctx.physical_system_descriptor.get_asic_topology(host_name);
@@ -553,50 +693,67 @@ void dump_link_stats(
     auto local_ethernet_metrics = ctx.physical_system_descriptor.query_local_ethernet_metrics();
     auto port_info_map = generate_port_info(ctx.physical_system_descriptor);
 
+    struct LinkInfo {
+        ChipId chip_id;
+        CoreCoord ethernet_core;
+        EthChannelIdentifier channel_id;
+    };
+    std::vector<LinkInfo> links;
+
     for (const auto& [asic_id, asic_connections] : asic_topology) {
-        auto chip_id = ctx.asic_id_to_chip_id[*asic_id];
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
+        auto chip_id = ctx.asic_id_to_chip_id.at(*asic_id);
+        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        const auto& asic_desc = asic_descriptors.at(asic_id);
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
-                auto coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                uint32_t num_mismatched = 0;
-                if (data_size > 0) {
-                    auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        chip_id,
-                        ctx.devices[chip_id]->ethernet_core_from_logical_core(coord),
-                        src_eth_l1_byte_address,
-                        data_size);
-
-                    // Count mismatched words
-                    for (size_t i = 0; i < result_vec.size(); ++i) {
-                        if (result_vec[i] != inputs[i]) {
-                            num_mismatched++;
-                        }
-                    }
-                }
-
+                auto logical_coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+                auto ethernet_core = ctx.devices.at(chip_id)->ethernet_core_from_logical_core(logical_coord);
                 const auto& port_info = port_info_map.at(asic_id).at(src_chan);
-                statuses_per_link[EthChannelIdentifier{
-                                      .host = host_name,
-                                      .asic_id = asic_descriptors.at(asic_id).unique_id,
-                                      .tray_id = asic_descriptors.at(asic_id).tray_id,
-                                      .asic_location = asic_descriptors.at(asic_id).asic_location,
-                                      .channel = src_chan,
-                                      .port_id = *port_info.port_id,
-                                      .port_type = static_cast<uint32_t>(port_info.port_type),
-                                  }]
-                    .push_back(LinkStatus{
-                        .metrics = local_ethernet_metrics.at(asic_id).at(src_chan),
-                        .traffic_params =
-                            TrafficParams{
-                                .packet_size_bytes = packet_size_bytes,
-                                .data_size = data_size,
-                            },
-                        .num_mismatched_words = num_mismatched,
-                    });
+                links.push_back(
+                    {chip_id,
+                     ethernet_core,
+                     EthChannelIdentifier{
+                         .host = host_name,
+                         .asic_id = asic_desc.unique_id,
+                         .tray_id = asic_desc.tray_id,
+                         .asic_location = asic_desc.asic_location,
+                         .channel = src_chan,
+                         .port_id = *port_info.port_id,
+                         .port_type = static_cast<uint32_t>(port_info.port_type),
+                     }});
             }
         }
+    }
+
+    // Parallelize read_core calls and compute mismatch counts in worker threads
+    const size_t max_concurrent_reads = std::thread::hardware_concurrency();
+    std::vector<uint32_t> num_mismatched_words(links.size(), 0);
+    if (data_size > 0) {
+        execute_parallel_batches(
+            links,
+            num_mismatched_words,
+            max_concurrent_reads,
+            [&cluster, src_eth_l1_byte_address, data_size, &inputs](const LinkInfo& link) {
+                const auto result_vec =
+                    cluster.read_core(link.chip_id, link.ethernet_core, src_eth_l1_byte_address, data_size);
+                uint32_t mismatches = 0;
+                for (size_t i = 0; i < result_vec.size(); ++i) {
+                    if (result_vec[i] != inputs[i]) {
+                        ++mismatches;
+                    }
+                }
+                return mismatches;
+            });
+    }
+
+    // Process results and build LinkStatus entries
+    for (size_t i = 0; i < links.size(); ++i) {
+        statuses_per_link[links[i].channel_id].push_back(LinkStatus{
+            .metrics = local_ethernet_metrics.at(links[i].channel_id.asic_id).at(links[i].channel_id.channel),
+            .traffic_params = TrafficParams{.packet_size_bytes = packet_size_bytes, .data_size = data_size},
+            .num_mismatched_words = num_mismatched_words[i],
+        });
     }
 }
 

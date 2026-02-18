@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Union
 
 import ttnn
+
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
@@ -115,14 +118,26 @@ class AllGatherAsyncConfig(OpConfigBase):
     dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_workers_per_link: int | None = None
+
+
+@dataclass
+class AllBroadcastAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_broadcast_async op"""
+
+    num_links: int | None = 4
+    cluster_axis: int | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
 
 
 @dataclass
@@ -133,9 +148,9 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
     out_dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
 
@@ -161,12 +176,12 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 
     dim: int
     multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     persistent_output_buffers: ttnn.Tensor | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     cluster_axis: int | None = None
     chunks_per_sync: int | None = None
@@ -180,7 +195,7 @@ class PointToPointConfig(OpConfigBase):
 
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
     output_tensor: ttnn.Tensor | None = None
 
 
@@ -192,8 +207,8 @@ class AllGatherConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     num_workers: int | None = None
     num_buffers_per_channel: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
 
 
 @dataclass
@@ -205,8 +220,8 @@ class ReduceScatterConfig(OpConfigBase):
     mesh_device: ConfigDevice | None = None
     cluster_axis: int | None = None
     memory_config: ttnn.MemoryConfig = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
 
 
 @dataclass
@@ -305,7 +320,7 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: int | None = None
 
 
@@ -316,7 +331,7 @@ class AllToAllCombineConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
 
 
 @dataclass

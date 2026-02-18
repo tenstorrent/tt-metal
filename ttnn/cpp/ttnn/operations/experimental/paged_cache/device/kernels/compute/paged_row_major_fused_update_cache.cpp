@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/common.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tilize.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;

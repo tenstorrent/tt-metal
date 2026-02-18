@@ -19,9 +19,12 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+MAX_SEQ_LEN = 2048
 
 
 @dataclass(frozen=True)
@@ -82,9 +85,13 @@ class DeepseekGenerator:
         dense_layers: int | None = None,
         override_num_layers: int | None = None,
         single_layer: str | None = None,
+        max_seq_len: int | None = None,
         enable_trace: bool = False,
+        enable_mem_profile: bool = False,
         signpost: bool = False,
         prefill_max_tokens: int | None = None,
+        force_recalculate: bool = False,
+        profile_decode: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -94,8 +101,11 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 1024
+        # Hard-code the context length to keep KV cache + RoPE tables bounded.
+        # (Avoid env var overrides; long-context runs should change this constant in code.)
+        if max_seq_len is not None and int(max_seq_len) != MAX_SEQ_LEN:
+            logger.warning(f"Ignoring requested max_seq_len={max_seq_len}; using MAX_SEQ_LEN={MAX_SEQ_LEN}.")
+        self.hf_config.max_seq_len = MAX_SEQ_LEN
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -148,9 +158,14 @@ class DeepseekGenerator:
         self._trace_output: ttnn.Tensor | None = None
         self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
         self.enable_trace = enable_trace
+        self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
         self.prefill_max_tokens = prefill_max_tokens
+        self.force_recalculate = force_recalculate
+        self.profile_decode = profile_decode  # Profile decode: skip prefill, run only 1st dense + 1st MoE layer
         logger.info(f"Enable trace: {self.enable_trace}")
+        if self.profile_decode:
+            logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
 
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
@@ -159,19 +174,31 @@ class DeepseekGenerator:
 
         self._prepare_weight_configs(cache_dir)
 
+    def _dump_meminfo(self, header: str) -> None:
+        if self.enable_mem_profile:
+            dump_ttnn_meminfo(self.mesh_device, header=header)
+
     @staticmethod
     def _ensure_max_seq_len(hf_config) -> None:
         if getattr(hf_config, "max_seq_len", None) is not None:
             return
         try:
+            max_pos = getattr(hf_config, "max_position_embeddings", None)
+            scaled = None
             if getattr(hf_config, "rope_scaling", None):
                 factor = hf_config.rope_scaling.get("factor")
                 orig = hf_config.rope_scaling.get("original_max_position_embeddings")
                 if factor and orig:
-                    hf_config.max_seq_len = int(factor * orig)
-                    return
-            if getattr(hf_config, "max_position_embeddings", None):
-                hf_config.max_seq_len = int(hf_config.max_position_embeddings)
+                    scaled = int(factor * orig)
+            if max_pos is not None and scaled is not None:
+                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
+                hf_config.max_seq_len = int(max(max_pos, scaled))
+                return
+            if scaled is not None:
+                hf_config.max_seq_len = int(scaled)
+                return
+            if max_pos is not None:
+                hf_config.max_seq_len = int(max_pos)
                 return
         except Exception:
             pass
@@ -186,7 +213,7 @@ class DeepseekGenerator:
             hf_config=self.hf_config,
             weight_cache_path=weight_cache_path,
             mesh_device=self.mesh_device,
-            force_recalculate=False,
+            force_recalculate=self.force_recalculate,
             random_weights=self.random_weights,
             model_path=self.model_path,
             single_layer=self.single_layer,
@@ -194,6 +221,7 @@ class DeepseekGenerator:
 
     def _prepare_model_states(self, kv_cache_override: KvCacheConfig | None = None) -> None:
         logger.info("Creating model states...")
+        self._dump_meminfo("Before creating model states...")
         self.model_state = RowBatchedModel.create_state(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
@@ -201,18 +229,24 @@ class DeepseekGenerator:
             ccl=self.ccl,
             kv_cache_override=kv_cache_override,
         )
+        self._dump_meminfo("After creating model states...")
         logger.info("Creating model shared states...")
+        self._dump_meminfo("Before creating model shared states...")
         self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
+        self._dump_meminfo("After creating model shared states...")
 
     def _prepare_run_configs(self, mode: str, kv_cache_override: KvCacheConfig | None = None) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
+            self._dump_meminfo("Before creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("After creating model prefill config...")
             self._prepare_model_states(kv_cache_override=kv_cache_override)
+            self._dump_meminfo("Before creating model run config for prefill...")
             self.model_run_config_prefill = create_run_config(
                 self.model_prefill_cfg,
                 self.model_weight_config,
@@ -220,6 +254,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for prefill...")
         elif mode == "decode":
             logger.info("Creating model decode config...")
             assert (
@@ -231,6 +266,7 @@ class DeepseekGenerator:
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
+            self._dump_meminfo("Before creating model run config for decode...")
             self.model_run_config_decode = create_run_config(
                 self.model_decode_cfg,
                 self.model_weight_config,
@@ -238,6 +274,7 @@ class DeepseekGenerator:
                 self.model_shared_state,
                 cached_ttnn_weights=self._weight_ttnn_cache,
             )
+            self._dump_meminfo("After creating model run config for decode...")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
 
@@ -483,6 +520,7 @@ class DeepseekGenerator:
             self.model_run_config_decode,
             rope_tensors,
             page_tables=page_tables_to_use,
+            profile_decode=self.profile_decode,
         )
         # Gather to host
         logits = ttnn.to_torch(
@@ -593,42 +631,56 @@ class DeepseekGenerator:
             if teacher_forcing is not None:
                 teacher_forcing.reset()
 
-            # Prefill
-            if self.signpost:
-                signpost(header="prefill")
-            profiler.start("inference_prefill")
+            # Prefill (can be skipped for decode-only profiling)
             num_of_users = tokens_batched.shape[0]
-            last_logits = []
-            for user_id in range(num_of_users):
-                if lengths[user_id] == 0:
-                    logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
-                    continue
-                logger.info(f"Running prefill for user_id: {user_id}")
-                prompt_len = int(lengths[user_id].item())
-                logger.info(
-                    "Input to the prefill: "
-                    + (
-                        self.tokenizer.decode(
-                            tokens_batched[user_id][:prompt_len].tolist(),
-                            skip_special_tokens=True,
+            if self.profile_decode:
+                logger.info("Skipping prefill (profile_decode=True) - using random tokens for decode profiling")
+                # Generate random starting token IDs directly instead of
+                # allocating a full [num_users, vocab_size] logits tensor.
+                vocab_size = int(getattr(self.hf_config, "vocab_size", 32768))
+                next_tokens_override = torch.randint(0, vocab_size, (num_of_users,))
+                # Set lengths to 0 so positions start at 0
+                lengths = torch.zeros((num_of_users,), dtype=torch.int32)
+            else:
+                if self.signpost:
+                    signpost(header="prefill")
+                profiler.start("inference_prefill")
+                last_logits = []
+                for user_id in range(num_of_users):
+                    if lengths[user_id] == 0:
+                        logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                        last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                        continue
+                    logger.info(f"Running prefill for user_id: {user_id}")
+                    prompt_len = int(lengths[user_id].item())
+                    logger.info(
+                        "Input to the prefill: "
+                        + (
+                            self.tokenizer.decode(
+                                tokens_batched[user_id][:prompt_len].tolist(),
+                                skip_special_tokens=True,
+                            )
+                            if self.tokenizer is not None
+                            else str(tokens_batched[user_id][:prompt_len].tolist())
                         )
-                        if self.tokenizer is not None
-                        else str(tokens_batched[user_id][:prompt_len].tolist())
                     )
-                )
-                user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
-                # Use logits at the *actual* last prompt token (not the padded tail).
-                last_logits.append(user_out[0, 0, prompt_len - 1, :])
-                self.ccl.reset_sem_counters()
-            last_logits = torch.stack(last_logits)
-            profiler.end("inference_prefill")
-            if self.signpost:
-                signpost(header="prefill")
+                    user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
+                    # Use logits at the *actual* last prompt token (not the padded tail).
+                    last_logits.append(user_out[0, 0, prompt_len - 1, :])
+                    self.ccl.reset_sem_counters()
+                last_logits = torch.stack(last_logits)
+                profiler.end("inference_prefill")
+                if self.signpost:
+                    signpost(header="prefill")
 
-            assert len(last_logits) == num_of_users
+            if not self.profile_decode:
+                assert len(last_logits) == num_of_users
 
-            logger.info(f"Finished prefill for all users...")
+            logger.info(
+                f"Finished prefill for all users..."
+                if not self.profile_decode
+                else "Skipped prefill, starting decode..."
+            )
 
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
             if max_new_tokens <= 0:
@@ -638,8 +690,12 @@ class DeepseekGenerator:
                 if early_print_first_user:
                     logger.info("===== Generation for first user =====")
 
-                # First generated token comes from prefill's last-position logits
-                next_tokens = self._sample_greedy(last_logits)
+                # First generated token comes from prefill's last-position logits,
+                # or from random IDs when profiling decode only.
+                if self.profile_decode:
+                    next_tokens = next_tokens_override
+                else:
+                    next_tokens = self._sample_greedy(last_logits)
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
@@ -698,7 +754,7 @@ class DeepseekGenerator:
 
         profiler.end("run")
         # Calculate statistics
-        prefill_time = profiler.get_duration("inference_prefill")
+        prefill_time = profiler.get_duration("inference_prefill") if not self.profile_decode else 0
         decode_steps = max(max_new_tokens - 1, 0)
         decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(decode_steps)]
 
@@ -857,8 +913,12 @@ class DeepseekGenerator:
 
         # 1) Warm-up compile run (no trace) to keep compilation out of capture
         logger.info("Running warm-up decode step (no trace)...")
+        if self.signpost:
+            signpost(header="decode_warmup")
         _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row, page_tables=page_tables)
         ttnn.synchronize_device(self.mesh_device)
+        if self.signpost:
+            signpost(header="decode_warmup")
 
         # 2) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
@@ -882,6 +942,8 @@ class DeepseekGenerator:
         # 3) Capture decode graph
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
+        if self.signpost:
+            signpost(header="decode_trace_capture")
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         # Only capture the rot_mats generation from rot_idxs (all ttnn ops, no from_torch)
@@ -892,8 +954,11 @@ class DeepseekGenerator:
             cfg=self.model_run_config_decode,
             rope_tensors=rope_tensors,
             page_tables=self._trace_page_tables_to_use,
+            profile_decode=self.profile_decode,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        if self.signpost:
+            signpost(header="decode_trace_capture")
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
@@ -985,6 +1050,9 @@ class DeepseekGenerator:
             )
             if self.signpost:
                 signpost(header="decode_execute_trace")
+            if self.profile_decode:
+                # trigger the profiler to read the device side data each iteration to not miss any data
+                ttnn.ReadDeviceProfiler(self.mesh_device)
             return logits.squeeze(0).squeeze(0)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
