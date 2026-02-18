@@ -216,7 +216,6 @@ class MasterConfigLoader:
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            # V1 loader uses original V1 JSON format
             original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
             reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
 
@@ -261,42 +260,48 @@ class MasterConfigLoader:
             # Convert new format (dict with source) to old format (list) for backward compatibility
             return self._normalize_configs(configs)
 
-        # Try with ttnn:: prefix (V1 format)
-        ttnn_op_name = f"ttnn::{operation_name}"
-        if ttnn_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with ttnn::experimental:: namespace (V1 format)
-        experimental_full_op_name = f"ttnn::experimental::{operation_name}"
-        if experimental_full_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
-        if operation_name.startswith("experimental::"):
-            experimental_op_name = f"ttnn::{operation_name}"
-            if experimental_op_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+        # Try with ttnn:: prefix (V1 format) and ttnn. prefix (V2 format)
+        for sep in ["::", "."]:
+            ttnn_op_name = f"ttnn{sep}{operation_name}"
+            if ttnn_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with transformer:: namespace (V1 format)
-        transformer_op_name = f"ttnn::transformer::{operation_name}"
-        if transformer_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
+        # Try with ttnn::experimental:: / ttnn.experimental. namespace
+        for sep in ["::", "."]:
+            experimental_full_op_name = f"ttnn{sep}experimental{sep}{operation_name}"
+            if experimental_full_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
 
-        # Try without prefix if it starts with ttnn::
-        if operation_name.startswith("ttnn::"):
-            base_name = operation_name[6:]  # Remove "ttnn::"
-            if base_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][base_name].get("configurations", [])
+        # Try with experimental:: / experimental. namespace prefix on operation name
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"experimental{sep}"):
+                experimental_op_name = f"ttnn{sep}{operation_name}"
+                if experimental_op_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+
+        # Try with transformer:: / transformer. namespace
+        for sep in ["::", "."]:
+            transformer_op_name = f"ttnn{sep}transformer{sep}{operation_name}"
+            if transformer_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
-            # Also try with transformer:: namespace
-            transformer_base = f"ttnn::transformer::{base_name}"
-            if transformer_base in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][transformer_base].get("configurations", [])
-                return self._normalize_configs(configs)
+
+        # Try without prefix if it starts with ttnn:: or ttnn.
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"ttnn{sep}"):
+                base_name = operation_name[len(f"ttnn{sep}") :]
+                if base_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][base_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+                # Also try with transformer:: / transformer. namespace
+                for sep2 in ["::", "."]:
+                    transformer_base = f"ttnn{sep2}transformer{sep2}{base_name}"
+                    if transformer_base in self.master_data.get("operations", {}):
+                        configs = self.master_data["operations"][transformer_base].get("configurations", [])
+                        return self._normalize_configs(configs)
 
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []

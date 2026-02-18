@@ -33,13 +33,14 @@ DO_RANDOMIZE = False
 
 
 def get_mesh_shape_from_vector(vector):
-    """Extract mesh_device_shape from traced_machine_info, default to [1, 1] for single-chip.
+    """Extract mesh_device_shape from traced_machine_info.
 
     Args:
         vector: Dictionary containing vector parameters including traced_machine_info
 
     Returns:
-        tuple: (rows, cols) representing mesh shape, e.g., (2, 4) or (1, 1) for single-chip
+        tuple: (rows, cols) representing mesh shape (e.g., (4, 8) for Galaxy), or
+               None if mesh shape cannot be determined (vector has no routing restriction).
     """
     machine_info = vector.get("traced_machine_info")
 
@@ -68,12 +69,26 @@ def get_mesh_shape_from_vector(vector):
                     if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
                         return tuple(mesh_shape)
                 except (ValueError, SyntaxError) as e:
-                    # Invalid or malformed mesh_device_shape string; fall back to default (1, 1)
                     logger.debug(f"Failed to parse mesh_device_shape '{mesh_shape_str}': {e}")
             elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
                 return tuple(mesh_shape_str)
 
-    return (1, 1)  # Default: single-chip
+        # Infer mesh_device_shape from device_series + card_count when not explicitly present.
+        # This handles V1 machine_info which lacks mesh_device_shape but records device_series.
+        # Iterate all entries so we find the galaxy entry even if it isn't first.
+        _DEVICE_SERIES_MESH_MAP = {
+            ("tt-galaxy-wh", 32): (4, 8),
+        }
+        for entry in machine_info:
+            if not isinstance(entry, dict):
+                continue
+            device_series = entry.get("device_series", "")
+            card_count = entry.get("card_count", 0)
+            inferred = _DEVICE_SERIES_MESH_MAP.get((device_series, card_count))
+            if inferred:
+                return inferred
+
+    return None  # Unknown mesh shape: no routing restriction
 
 
 def group_vectors_by_mesh_shape(vectors):
@@ -264,7 +279,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
     Vectors are grouped by mesh_device_shape and written to separate files:
     - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
-    - model_traced.op__mesh_1x1.json (for single-chip)
+    - model_traced.op.json (for unknown mesh — no suffix, runs on any machine)
 
     IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
     the sweep_name field. This ensures stable full_test_name and input_hash values
@@ -285,10 +300,14 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         if not mesh_vectors:
             continue
 
-        # Generate mesh-specific filename (NOT sweep_name)
-        # The mesh suffix is for file routing only, not for modifying vector metadata
-        mesh_suffix = format_mesh_suffix(mesh_shape)
-        mesh_module_name = f"{module_name}{mesh_suffix}"
+        # Generate mesh-specific filename (NOT sweep_name).
+        # None mesh_shape means no routing restriction - export without mesh suffix
+        # so any runner can pick up the file.
+        if mesh_shape is not None:
+            mesh_suffix = format_mesh_suffix(mesh_shape)
+            mesh_module_name = f"{module_name}{mesh_suffix}"
+        else:
+            mesh_module_name = module_name
 
         # Export vectors WITHOUT modifying sweep_name
         # The mesh info is already in traced_machine_info; sweep_name stays stable

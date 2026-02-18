@@ -135,6 +135,12 @@ def compute_lead_models_matrix(modules, batch_size):
         for mesh_shape in runner_config["mesh_shapes"]:
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
+        # Route modules without a mesh suffix to the first (default) runner config,
+        # which is conventionally the single-chip N150 runner.
+        is_default_runner = runner_config == config[0]
+        if is_default_runner:
+            runner_modules.extend(unmatched_modules)
+
         if not runner_modules:
             continue
 
@@ -180,6 +186,12 @@ def compute_lead_models_matrix(modules, batch_size):
     for mesh_shape, mods in sorted(mesh_shape_modules.items()):
         unique_base = len(set(strip_mesh_suffix(m) for m in mods))
         print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
+    if unmatched_modules:
+        unique_base = len(set(strip_mesh_suffix(m) for m in unmatched_modules))
+        print(
+            f"  no mesh suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
+            file=sys.stderr,
+        )
 
     return include_entries, batches, []  # No CCL batches for lead models
 
