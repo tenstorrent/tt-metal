@@ -26,6 +26,7 @@
 #include <tt_stl/span.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/host_api.hpp>
+#include "impl/debug/debug_helpers.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -63,8 +64,7 @@ static void RunTest(
     constexpr uint32_t line_num = 67;  // Note: this should match the assert line # in watcher_asserts.cpp
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
 
-    // Depending on riscv type, choose one core to run the test on
-    // and set up the kernel on the correct risc
+    // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
@@ -143,7 +143,7 @@ static void RunTest(
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgram(mesh_device, workload, true);
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
@@ -156,37 +156,11 @@ static void RunTest(
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
-    std::string_view core_str = (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker";
-    std::string msg;
-
-    switch (assert_type) {
-        case dev_msgs::DebugAssertTripped:
-            msg = fmt::format(
-                "tripped an assert on line {}. Note that file name reporting is not yet implemented, and the reported "
-                "line number for the assert may be from a different file",
-                line_num);
-            break;
-
-        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
-        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped:
-        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped:
-        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
-            constexpr std::string_view barriers[] = {
-                "reads flushed", "non-posted writes sent", "non-posted atomics flushed", "posted writes sent"};
-            msg = fmt::format(
-                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
-                "NOC {} barrier)",
-                barriers[assert_type - dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped]);
-            break;
-        }
-        case dev_msgs::DebugAssertRtaOutOfBounds:
-        case dev_msgs::DebugAssertCrtaOutOfBounds:
-            msg = fmt::format(
-                "accessed {} runtime arg index out of bounds",
-                (assert_type == dev_msgs::DebugAssertRtaOutOfBounds) ? "unique" : "common");
-            break;
-
-        default: TT_THROW("Unhandled assert type {}", static_cast<int>(assert_type));
+    const std::string_view core_str =
+        (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker";
+    const std::string msg = get_debug_assert_message(assert_type, line_num);
+    if (msg.empty()) {
+        TT_THROW("Unhandled assert type {}", static_cast<int>(assert_type));
     }
 
     // Combine everything in one final pass

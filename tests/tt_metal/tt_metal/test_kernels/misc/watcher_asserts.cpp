@@ -57,13 +57,13 @@ void kernel_main() {
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif
-    if (a == b) {
     // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
 #if !defined(COMPILE_FOR_ERISC) && defined(COMPILE_FOR_DM)
+    if (a == b) {
         volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
         go_message_ptr->signal = RUN_MSG_DONE;
-#endif
     }
+#endif
     ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
 
 #endif
