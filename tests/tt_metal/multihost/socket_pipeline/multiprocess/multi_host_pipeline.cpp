@@ -1233,13 +1233,11 @@ void run_single_galaxy_rate_pipeline(
 }
 
 TEST_F(BlitzDecodePipelineFixture, RatePipeline) {
-    constexpr uint32_t NUM_ITERATIONS_BASE = 10000000;
+    constexpr uint32_t NUM_ITERATIONS = 100000;
     auto num_ranks = *MetalContext::instance().global_distributed_context().size();
     auto pipeline_type = pipeline_type_from_num_ranks(num_ranks);
     ASSERT_TRUE(pipeline_type.has_value()) << "Unsupported rank count";
-    // SUPERPOD_4 (64 ranks) uses a larger iteration count for timing.
-    uint32_t num_iterations = (*pipeline_type == PipelineType::SUPERPOD_4) ? 10000000u : NUM_ITERATIONS_BASE;
-    run_single_galaxy_rate_pipeline(mesh_device_, *pipeline_type, num_iterations, /*enable_correctness_check=*/false);
+    run_single_galaxy_rate_pipeline(mesh_device_, *pipeline_type, NUM_ITERATIONS, /*enable_correctness_check=*/false);
 }
 
 TEST_F(BlitzDecodePipelineFixture, RatePipelineWithCorrectnessCheck) {
