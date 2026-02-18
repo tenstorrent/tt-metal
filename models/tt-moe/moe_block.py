@@ -512,13 +512,6 @@ class MoEBlock:
 
         # Check batch mode
         use_replicated_batch = self.config.get("replicated_batch_mode", False)
-        num_dispatch_devices = self.mesh_device.shape[0] if hasattr(self.mesh_device, "shape") else 1
-
-        if use_replicated_batch:
-            batch_size = batch_size_per_device
-        else:
-            batch_size = batch_size_per_device * num_dispatch_devices
-
         # Reshape inputs
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
@@ -561,7 +554,6 @@ class MoEBlock:
                 indices_chunk = indices_rm  # This is still the original uint16 tensor
 
             # Prepare weights for experts
-            batch_chunk = batch_end - batch_start
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
             weights_chunk = ttnn.slice(

@@ -486,7 +486,6 @@ def test_06_distributed_expert_with_reference_comparison(mesh_device):
         hidden_act = "silu"  # Maps to swiglu in the config
 
     hf_config = MockConfig()
-    mode = "decode"
     seq_len = 128
 
     # Calculate expected experts per device
@@ -494,15 +493,6 @@ def test_06_distributed_expert_with_reference_comparison(mesh_device):
     logger.info(f"Total experts: {hf_config.n_routed_experts}")
     logger.info(f"Devices: {mesh_device.get_num_devices()}")
     logger.info(f"Experts per device: {num_experts_per_device}")
-
-    # Create reference model for a single expert
-    class SingleExpertReference(torch.nn.Module):
-        def __init__(self, config):
-            super().__init__()
-            self.expert = ReferenceExpert(config, intermediate_size=config.moe_intermediate_size)
-
-        def forward(self, hidden_states):
-            return self.expert(hidden_states)
 
     # Create all experts reference model
     class AllExpertsReference(torch.nn.Module):

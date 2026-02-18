@@ -253,7 +253,6 @@ def test_deepseek_moe_against_reference(mesh_device, hf_config, ccl, state_dict,
         config_data = json.load(f)
 
     # Remove weight_path to prevent auto-loading during init
-    original_weight_path = config_data["moe_block"].get("weight_path")
     if "weight_path" in config_data["moe_block"]:
         del config_data["moe_block"]["weight_path"]
 

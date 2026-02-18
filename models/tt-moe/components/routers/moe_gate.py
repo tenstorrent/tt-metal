@@ -39,6 +39,7 @@ class MoEGateRouter(BaseRouter):
                 - memory_config: Memory configuration string
             mesh_device: TTNN mesh device for tensor placement
         """
+        super().__init__(config, mesh_device)
         self.config = config
         self.mesh_device = mesh_device
 
