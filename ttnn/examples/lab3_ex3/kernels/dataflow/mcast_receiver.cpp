@@ -45,7 +45,7 @@ void kernel_main() {
         // Wait for sender to multicast the batch (semaphore becomes VALID)
         noc_semaphore_wait(tile_sent_sem_ptr, VALID);
 
-        // Tile has been received into our L1 at the CB write pointer.
+        // Batch has been received into our L1 at the CB write pointer.
         // Mark it as available in the input CB for the compute kernel to consume.
         cb_push_back(cb_id_in0, tiles_per_batch);
     }

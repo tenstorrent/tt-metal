@@ -14,6 +14,7 @@
 */
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <random>
 #include <vector>
@@ -170,7 +171,7 @@ bool verify_multicast_results(
 
         // Compare this receiver's output against the reference
         for (uint32_t i = 0; i < total_elements; i++) {
-            uint32_t received_idx = receiver * total_elements + i;
+            uint32_t received_idx = (receiver * total_elements) + i;
             if (received[received_idx] != reference[i]) {
                 if (mismatch_count == 0) {
                     first_mismatch_idx = i;
@@ -205,7 +206,7 @@ bool verify_multicast_results(
 
 // clang-format off
 /**
- * Perform multicast operation: send a full tensor from coordinator core to multiple receiver cores.
+ * Perform multicast operation: send a full tensor from the coordinator core to multiple receiver cores.
  * Uses double-buffering for improved performance. Each receiver gets a complete copy of the tensor.
  *
  * | Argument        | Description                                               |
@@ -239,7 +240,7 @@ void multicast_tensor_tensix(
 
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware natively operates on.
-    // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
+    // Tensors are allocated in device DRAM (i.e., DRAM that is directly attached to the Tensix processor,
     // which is distinct from the host DRAM).
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
 
@@ -272,8 +273,13 @@ void multicast_tensor_tensix(
         prog_state.mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
         prog_state.mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
 
-    // Grab the number of multicast destinations (only receiver cores, not sender).
-    size_t num_dests = receiver_cores_logical.size();
+    // Grab the number of destinations, which will act as our "atomic counter" for semaphores.
+    size_t num_dests_sz = receiver_cores_logical.size();
+    TT_FATAL(
+        num_dests_sz <= std::numeric_limits<uint32_t>::max(),
+        "Number of receiver cores ({}) exceeds uint32_t range",
+        num_dests_sz);
+    uint32_t num_dests = static_cast<uint32_t>(num_dests_sz);
 
     ////////// SEMAPHORE SETUP //////////
     // Semaphores are used for synchronization between the coordinator and receiver cores.
@@ -289,7 +295,9 @@ void multicast_tensor_tensix(
     create_cb(prog_state.program, all_cores_logical, 2, tt::CBIndex::c_16);
 
     ////////// DATA MOVEMENT CONFIG SETUP //////////
-    // Compile-time args for mcast_sender kernel: TensorAccessorArgs for DRAM layout, tiles_per_batch.
+    // Compile-time args for mcast_sender kernel to read input tiles from DRAM.
+    // TensorAccessorArgs extracts data distribution details from MeshBuffer so kernels
+    // don't need to deal with low-level details like bank IDs.
     std::vector<uint32_t> mcast_sender_compile_args;
     TensorAccessorArgs(*src_mesh_buffer).append_to(mcast_sender_compile_args);
     mcast_sender_compile_args.push_back(tiles_per_batch);
@@ -346,12 +354,12 @@ void multicast_tensor_tensix(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_ex3/kernels/compute/tiles_copy.cpp",
         all_cores_logical,
-        ComputeConfig{.compile_args = tiles_copy_compile_args});
+        tt_metal::ComputeConfig{.compile_args = tiles_copy_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 
     // Args for the mcast_sender kernel to multicast tiles.
-    // It needs coordinates of all receiver cores to execute multicast operation.
+    // It needs coordinates of all receiver cores to execute the multicast operation.
     // Observe how SetRuntimeArgs, which is a host-level function, takes in logical coordinates,
     // but the runtime arguments passed to kernels use device coordinates.
     // This is because runtime arguments are used by kernels, which run on the device, and they need

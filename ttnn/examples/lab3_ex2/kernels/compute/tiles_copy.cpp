@@ -24,7 +24,7 @@ void kernel_main() {
     // Destination register index for tile operations
     constexpr uint32_t dst_reg_idx = 0;
 
-    // Initialize for tile copy operation, which is a two step init:
+    // Initialize for tile copy operation, which is a two-step init:
     unary_op_init_common(cb_in0, cb_out0);
     copy_tile_init(cb_in0);
 

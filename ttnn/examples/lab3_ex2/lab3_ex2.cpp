@@ -7,11 +7,13 @@
  receiver cores using double-buffering for improved performance. It covers the setup of semaphores and
  multicore addressing on Tenstorrent hardware. In the default configuration, (0,0) is the sender core,
  while (1,0), (2,0), and (3,0) are the receiver cores. The user can modify these coordinates as desired.
+ In this version, all cores run compute and writer kernels.
 
  This version uses ttnn::Tensor for cleaner buffer management, abstracting away DRAM buffer internals.
 */
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <random>
 #include <vector>
@@ -168,7 +170,7 @@ bool verify_multicast_results(
 
         // Compare this receiver's output against the reference
         for (uint32_t i = 0; i < total_elements; i++) {
-            uint32_t received_idx = receiver * total_elements + i;
+            uint32_t received_idx = (receiver * total_elements) + i;
             if (received[received_idx] != reference[i]) {
                 if (mismatch_count == 0) {
                     first_mismatch_idx = i;
@@ -203,7 +205,7 @@ bool verify_multicast_results(
 
 // clang-format off
 /**
- * Perform multicast operation: send a full tensor from coordinator core to multiple receiver cores.
+ * Perform multicast operation: send a full tensor from the coordinator core to multiple receiver cores.
  * Uses double-buffering for improved performance. Each receiver gets a complete copy of the tensor.
  *
  * | Argument        | Description                                               |
@@ -233,7 +235,7 @@ void multicast_tensor_tensix(
 
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware natively operates on.
-    // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
+    // Tensors are allocated in device DRAM (i.e., DRAM that is directly attached to the Tensix processor,
     // which is distinct from the host DRAM).
     TensorLayout tile_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig(BufferType::DRAM));
 
@@ -255,6 +257,7 @@ void multicast_tensor_tensix(
 
     ////////// TENSIX CORE SETUP //////////
     // Define logical sender core and receiver core range (for kernel creation on the host).
+    // All cores (sender + receivers) participate in compute and writing output.
     CoreRange all_cores_logical = CoreRange({0, 0}, {num_receivers - 1, 0});
     CoreCoord sender_core_logical = {0, 0};
     CoreRange receiver_cores_logical = CoreRange({1, 0}, {num_receivers - 1, 0});
@@ -266,7 +269,12 @@ void multicast_tensor_tensix(
         prog_state.mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
 
     // Grab the number of destinations, which will act as our "atomic counter" for semaphores.
-    size_t num_dests = receiver_cores_logical.size();
+    size_t num_dests_sz = receiver_cores_logical.size();
+    TT_FATAL(
+        num_dests_sz <= std::numeric_limits<uint32_t>::max(),
+        "Number of receiver cores ({}) exceeds uint32_t range",
+        num_dests_sz);
+    uint32_t num_dests = static_cast<uint32_t>(num_dests_sz);
 
     ////////// SEMAPHORE SETUP //////////
     // Semaphores are used for synchronization between the coordinator and receiver cores.
@@ -322,6 +330,7 @@ void multicast_tensor_tensix(
         mcast_receiver_config);
 
     // write_tiles kernel: writes the processed tiles back to DRAM.
+    // Runs on all cores (sender + receivers) since the sender also produces output.
     KernelHandle write_tiles_id = CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_ex2/kernels/dataflow/write_tiles.cpp",
@@ -332,17 +341,18 @@ void multicast_tensor_tensix(
     // tiles_copy kernel copies tiles from input CB to output CB.
     // In a real application, this is where computation would happen.
     // n_tiles is passed as a compile-time argument for loop bounds.
+    // Runs on all cores (sender + receivers) since the sender also participates in compute.
     vector<uint32_t> tiles_copy_compile_args = {n_tiles};
     CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_ex2/kernels/compute/tiles_copy.cpp",
         all_cores_logical,
-        ComputeConfig{.compile_args = tiles_copy_compile_args});
+        tt_metal::ComputeConfig{.compile_args = tiles_copy_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 
     // Args for the mcast_sender kernel to multicast tiles.
-    // It needs coordinates of all receiver cores to execute multicast operation.
+    // It needs coordinates of all receiver cores to execute the multicast operation.
     // Observe how SetRuntimeArgs, which is a host-level function, takes in logical coordinates,
     // but the runtime arguments passed to kernels use device coordinates.
     // This is because runtime arguments are used by kernels, which run on the device, and they need
@@ -374,8 +384,8 @@ void multicast_tensor_tensix(
          n_tiles});
 
     // Args for the write_tiles kernel to write tiles back to DRAM.
-    // Each receiver writes to a different section of the output tensor.
-    // receiver_idx determines the starting tile offset for each receiver.
+    // Each core (sender + receivers) writes to a different section of the output tensor.
+    // receiver_idx determines the starting tile offset for each core.
     int receiver_idx = 0;
     for (const CoreCoord& core : all_cores_logical) {
         SetRuntimeArgs(
@@ -412,7 +422,8 @@ int main() {
     bool pass = true;
 
     try {
-        // Number of receiver cores (cores 0,0 through 3,0)
+        // Number of cores participating in multicast (cores 0,0 through 3,0).
+        // Core 0,0 is the sender; all cores (including sender) run compute + writer.
         constexpr uint32_t num_receivers = 4;
 
         // Define tensor dimensions (same as lab_eltwise_binary: 400 tiles)

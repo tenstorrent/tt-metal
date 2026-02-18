@@ -52,17 +52,23 @@ void kernel_main() {
     uint64_t a_receivers_ready_sem_noc_addr = get_noc_addr(a_sender_x, a_sender_y, a_receivers_ready_semaphore_addr);
     uint64_t b_receivers_ready_sem_noc_addr = get_noc_addr(b_sender_x, b_sender_y, b_receivers_ready_semaphore_addr);
 
-    // Kt dimension is split into K-blocks. For each K-block, receive full A and B slabs via multicast.
+    // Kt dimension is split into K-blocks of size K_block_tiles,
+    // such that Kt = num_k_blocks * K_block_tiles.
+    // So we have K-block index b in range (0, 1, ..., num_k_blocks-1).
+    // Loop over all the K-blocks.
+    // For each K-block, receive full A and B slabs via multicast.
     // Reserve space for entire slab, signal ready once, wait for sender once, then push entire slab.
     for (uint32_t b = 0; b < num_k_blocks; ++b) {
-        // ``A_slab(b)``: receive entire slab from A sender
+        // ``A_slab(b)`` (size: M_block_tiles * K_block_tiles).
+        // Receive entire slab from A sender
         cb_reserve_back(cb_in0, A_slab_tiles);
         noc_semaphore_set(a_tile_sent_sem_ptr, INVALID);
         noc_semaphore_inc(a_receivers_ready_sem_noc_addr, 1);
         noc_semaphore_wait(a_tile_sent_sem_ptr, VALID);
         cb_push_back(cb_in0, A_slab_tiles);
 
-        // ``B_slab(b)``: receive entire slab from B sender
+        // ``B_slab(b)`` (size: K_block_tiles * N_block_tiles).
+        // Receive entire slab from B sender
         cb_reserve_back(cb_in1, B_slab_tiles);
         noc_semaphore_set(b_tile_sent_sem_ptr, INVALID);
         noc_semaphore_inc(b_receivers_ready_sem_noc_addr, 1);

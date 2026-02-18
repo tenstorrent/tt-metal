@@ -54,13 +54,19 @@ void kernel_main() {
         noc_semaphore_set(receivers_ready_sem_ptr, 0);
 
         // Multicast tile to all receiver cores
+        // Observe that we are using the local CB write pointer as the destination address.
+        // Since the receivers update their CB write pointers in sync (relative to the multicast semaphore updates)
+        // with the sender's CB write pointer, CB write pointers on the sender and all receivers will
+        // contain the same address when the multicast operation occurs.
+        // This synchronized approach avoids the need for receiver cores to pass their local addresses to the sender;
+        // the sender can simply use its own CB pointer as the destination address.
         uint64_t tile_mcast_addr =
             get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, cb_write_addr);
         noc_async_write_multicast(cb_write_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
 
         // Flush is needed to ensure the multicast command is sent before the semaphore set command
         // because the commands go into separate command buffer FIFOs on some architectures and may not be
-        // sent in order they are issued.
+        // sent in the order they are issued.
         // Note that this doesn't wait on the multicast command to complete, only ensures it is sent.
         noc_async_writes_flushed();
 
@@ -68,10 +74,12 @@ void kernel_main() {
         *tile_sent_sem_ptr = VALID;
         noc_semaphore_set_multicast(tile_sent_semaphore_addr, tile_sent_mcast_addr, num_receivers);
 
-        // Wait for multicast to complete before freeing CB slot
+        // Wait for multicast to complete.
         noc_async_write_barrier();
 
         // Mark tile as ready in CB
+        // Unlike the base version where the core (0, 0) only multicasts, we do NOT cb_pop_front here.
+        // The compute kernel will consume tiles from CB c_0 and free the slots via cb_pop_front.
         cb_push_back(cb_id_in0, 1);
     }
 }

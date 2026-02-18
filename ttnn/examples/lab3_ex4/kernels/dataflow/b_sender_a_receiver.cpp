@@ -70,18 +70,29 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_tile_sent_semaphore_addr);
 
     const uint32_t B_slab_size_bytes = B_slab_tiles * tile_size_bytes_1;
+
+    // Precompute multicast address that doesn't change per slab.
     uint64_t b_slab_sent_sem_mcast_addr = get_noc_multicast_addr(
         b_receiver_start_x, b_receiver_start_y, b_receiver_end_x, b_receiver_end_y, b_tile_sent_semaphore_addr);
 
+    // Kt dimension is split into K-blocks of size K_block_tiles,
+    // such that Kt = num_k_blocks * K_block_tiles.
+    // So we have K-block index b in range (0, 1, ..., num_k_blocks-1).
+    // Loop over all the K-blocks.
+    // For each K-block, receive full A slabs via multicast and read full B slabs from DRAM.
     for (uint32_t b = 0; b < num_k_blocks; ++b) {
-        // ``A_slab(b)``: receive entire slab from A sender
+        // ``A_slab(b)`` (size: M_block_tiles * K_block_tiles).
+        // Receive entire slab from A sender
         cb_reserve_back(cb_in0, A_slab_tiles);
         noc_semaphore_set(a_tile_sent_sem_ptr, INVALID);
         noc_semaphore_inc(a_receivers_ready_sem_noc_addr, 1);
         noc_semaphore_wait(a_tile_sent_sem_ptr, VALID);
         cb_push_back(cb_in0, A_slab_tiles);
 
-        // ``B_slab(b)``: read entire slab from DRAM, then multicast to receivers
+        // ``B_slab(b)`` (size: K_block_tiles * N_block_tiles).
+        // All the indexing logic is equivalent as for A_slab(b) in ab_sender.cpp.
+        // Order tiles within each slab in the CB in row-major order.
+        // Read entire slab from DRAM, then multicast to receivers.
         cb_reserve_back(cb_in1, B_slab_tiles);
         uint32_t cb_in1_start_addr = get_write_ptr(cb_in1);
         uint32_t cb_in1_addr = cb_in1_start_addr;
@@ -90,10 +101,14 @@ void kernel_main() {
             for (uint32_t slab_b_col = 0; slab_b_col < N_block_tiles; slab_b_col++) {
                 uint32_t B_slab_effective_col = tile_offset_col + slab_b_col;
                 uint32_t b_tile_index = B_slab_effective_row * Nt + B_slab_effective_col;
+                // Recall that src0_addr_gen and src1_addr_gen are address generators for the input buffers.
+                // They are used to determine the address to read the tiles from. b_tile_index is the index of the tile
+                // to read.
                 noc_async_read_tile(b_tile_index, src1_addr_gen, cb_in1_addr);
                 cb_in1_addr += tile_size_bytes_1;
             }
         }
+        // Wait until the DRAM read is done before waiting on semaphores.
         noc_async_read_barrier();
 
         noc_semaphore_wait(b_receivers_ready_sem_ptr, b_num_receivers);
