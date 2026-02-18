@@ -27,8 +27,6 @@
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
-#include "api/debug/ring_buffer.h"
-
 namespace tt::tt_fabric {
 /* Ethernet channel structure is as follows (for both sender and receiver):
               &header->  |----------------|\  <-  channel_base_address
