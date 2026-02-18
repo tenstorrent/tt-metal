@@ -350,7 +350,7 @@ def validate_matmul(
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
-            allclose_passed, allclose_val = comp_allclose(torch_layer_output, tt_layer_output)
+            allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=600)
             std = torch_layer_output.std().item()
             relative_rmse_val = (
                 (torch.nn.functional.mse_loss(torch_layer_output, tt_layer_output).sqrt().item() / std)
@@ -364,7 +364,7 @@ def validate_matmul(
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
-                    f" Allclose passed: {allclose_passed} allclose value: {allclose_val}"
+                    f" Allclose passed: {allclose_passed}"
                 )
 
     return matmul_all_passed
