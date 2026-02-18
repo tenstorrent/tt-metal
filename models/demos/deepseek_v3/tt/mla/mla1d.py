@@ -646,6 +646,15 @@ class MLA1D(AbstractModule):
         tile_size = 32
         dim = hf_config.hidden_size
 
+        # Compute kernel config for all matmuls
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         # =====================================================================
         # qkv_a (wq_kv_a): m=32, k=896, n=2112 (pads to 2304)
         # in0_core_grid=(7,1), out_core_grid=(8,1), WIDTH sharding
@@ -685,6 +694,7 @@ class MLA1D(AbstractModule):
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=qkv_a_out_memory_config,
+            compute_kernel_config=compute_kernel_config,
             program_config=qkv_a_program_config,
         )
 
@@ -730,6 +740,7 @@ class MLA1D(AbstractModule):
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wq_b_out_memory_config,
+            compute_kernel_config=compute_kernel_config,
             program_config=wq_b_program_config,
         )
 
@@ -786,6 +797,7 @@ class MLA1D(AbstractModule):
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wkv_b1_out_memory_config,
+            compute_kernel_config=compute_kernel_config,
             program_config=wkv_b1_program_config,
         )
 
@@ -847,6 +859,7 @@ class MLA1D(AbstractModule):
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wkv_b2_out_memory_config,
+            compute_kernel_config=compute_kernel_config,
             program_config=wkv_b2_program_config,
             output_tile=wkv_b2_output_tile,
         )
@@ -893,6 +906,7 @@ class MLA1D(AbstractModule):
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wo_out_memory_config,
+            compute_kernel_config=compute_kernel_config,
             program_config=wo_program_config,
         )
 
