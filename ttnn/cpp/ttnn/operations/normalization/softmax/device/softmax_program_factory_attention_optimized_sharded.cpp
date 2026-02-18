@@ -291,7 +291,6 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
                 reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
@@ -331,7 +330,6 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
 
                 // reader args
                 std::vector<uint32_t> reader_args;
-                reader_args.push_back(0x3f803f80);
                 reader_args.push_back(s.u);
                 reader_args.push_back(mask_addr);
                 reader_args.push_back(mask_start_tile_id);
@@ -397,7 +395,7 @@ void SoftmaxShardedProgramFactoryAttentionOptimized::override_runtime_arguments(
                 i % cached_program.shared_variables.grid_size.x, i / cached_program.shared_variables.grid_size.x};
             auto& runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id, core);
-            runtime_args[2] = mask_tensor->buffer()->address();
+            runtime_args[1] = mask_tensor->buffer()->address();
         }
     }
 }

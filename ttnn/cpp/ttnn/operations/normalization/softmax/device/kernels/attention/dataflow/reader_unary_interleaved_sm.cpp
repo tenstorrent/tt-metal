@@ -35,8 +35,8 @@ void kernel_main() {
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
-    uint32_t mask_offset = get_arg_val<uint32_t>(13);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
+    uint32_t mask_offset = get_arg_val<uint32_t>(12);
 
     uint32_t mask_id_offset = mask_offset;
     uint32_t mask_ht = mask_start_ht;
@@ -52,11 +52,10 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
-    // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
-        dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_2, reduce_scaler);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

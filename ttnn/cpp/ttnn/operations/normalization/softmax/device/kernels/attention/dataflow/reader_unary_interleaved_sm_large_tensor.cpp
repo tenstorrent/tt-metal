@@ -17,10 +17,9 @@ void kernel_main() {
     uint32_t mask_addr = get_arg_val<uint32_t>(7);
     uint32_t start_ht = get_arg_val<uint32_t>(8);
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
-    const uint32_t reduce_scaler = get_arg_val<uint32_t>(10);
-    uint32_t cb_length_t = get_arg_val<uint32_t>(11);
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
-    uint32_t mask_offset = get_arg_val<uint32_t>(13);
+    uint32_t cb_length_t = get_arg_val<uint32_t>(10);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
+    uint32_t mask_offset = get_arg_val<uint32_t>(12);
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
@@ -54,7 +53,8 @@ void kernel_main() {
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_2, reduce_scaler);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
