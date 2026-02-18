@@ -170,6 +170,7 @@ class PreSDPA:
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -194,6 +195,7 @@ class PreSDPA:
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
+            noc_mode: NOC mode for the kernel (dedicated or dynamic)
 
         Returns:
             output_tensor with pre-SDPA operations applied
@@ -1804,6 +1806,7 @@ class PreSDPA:
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
                     ),
+                    noc_mode=noc_mode,
                 )
 
                 # ================================================================

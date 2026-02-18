@@ -168,6 +168,7 @@ class UnifiedKernelDescriptor:
         PerCoreRuntimeArgsDescriptor
     ] = None  # Per-core runtime args for all RISCs
     defines: list = field(default_factory=list)  # List of (name, value) tuples
+    noc_mode: ttnn.NOC_MODE = ttnn.NOC_MODE.DM_DYNAMIC_NOC
 
     def _get_core_range_set(
         self, core_range: Union[ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet]
@@ -264,8 +265,8 @@ class UnifiedKernelDescriptor:
             runtime_args=ncrisc_runtime_args,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1,
-                noc=ttnn.NOC.RISCV_1_default,
-                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
+                noc_mode=self.noc_mode,
             ),
         )
 
@@ -281,8 +282,8 @@ class UnifiedKernelDescriptor:
             runtime_args=brisc_runtime_args,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0,
-                noc=ttnn.NOC.RISCV_0_default,
-                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
+                noc_mode=self.noc_mode,
             ),
         )
 
@@ -405,8 +406,8 @@ class UnifiedKernelDescriptor:
                     runtime_args=ncrisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_1,
-                        noc=ttnn.NOC.RISCV_1_default,
-                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                        noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
+                        noc_mode=self.noc_mode,
                     ),
                 )
             )
@@ -424,8 +425,8 @@ class UnifiedKernelDescriptor:
                     runtime_args=brisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_0_default,
-                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                        noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
+                        noc_mode=self.noc_mode,
                     ),
                 )
             )
