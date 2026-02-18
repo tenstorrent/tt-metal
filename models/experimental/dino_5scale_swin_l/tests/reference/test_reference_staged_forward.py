@@ -18,6 +18,7 @@ from models.experimental.dino_5scale_swin_l.common import DINO_INPUT_H, DINO_INP
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -25,6 +26,7 @@ def _mmdet_importable():
 
 def _get_config_and_checkpoint():
     from pathlib import Path
+
     base = Path(os.environ.get("TT_METAL_HOME", Path.cwd()))
     config = base / "models/experimental/dino_5scale_swin_l/reference/dino_5scale_swin_l.py"
     ckpt_dir = base / "models/experimental/dino_5scale_swin_l/checkpoints/dino_5scale_swin_l"

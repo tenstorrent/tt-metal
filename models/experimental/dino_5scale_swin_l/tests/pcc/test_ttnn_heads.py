@@ -21,12 +21,6 @@ from models.experimental.dino_5scale_swin_l.common import (
     DINO_INPUT_H,
     DINO_INPUT_W,
     NUM_QUERIES,
-    NUM_CLASSES,
-    NUM_LEVELS,
-    ENCODER_EMBED_DIMS,
-    ENCODER_NUM_HEADS,
-    ENCODER_NUM_POINTS,
-    ENCODER_NUM_LAYERS,
     DECODER_NUM_LAYERS,
 )
 from loguru import logger
@@ -35,6 +29,7 @@ from loguru import logger
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -61,6 +56,7 @@ def test_ttnn_heads_pcc(device, reset_seeds):
 
     config_path, ckpt_path = _get_ckpt_and_config()
     from pathlib import Path
+
     if not Path(ckpt_path).is_file():
         pytest.skip("Checkpoint not found")
 
@@ -86,7 +82,6 @@ def test_ttnn_heads_pcc(device, reset_seeds):
 
     # --- TTNN detection heads ---
     from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import load_decoder_weights
-    from models.experimental.dino_5scale_swin_l.tt.tt_dino import TtDINO
     from models.experimental.dino_5scale_swin_l.tt.tt_decoder import TtRegBranch, inverse_sigmoid_torch
 
     decoder_params = load_decoder_weights(ckpt_path, device)
@@ -96,7 +91,9 @@ def test_ttnn_heads_pcc(device, reset_seeds):
     for i in range(DECODER_NUM_LAYERS):
         hs = ref_hidden_states[i]  # [B, num_queries, 256]
         hs_tt = ttnn.from_torch(
-            hs.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT,
+            hs.to(torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
         )
         hidden_states_tt.append(hs_tt)
 
@@ -105,10 +102,7 @@ def test_ttnn_heads_pcc(device, reset_seeds):
 
     # Build head components
     cls_branches = decoder_params["cls_branches"]
-    reg_branches_head = [
-        TtRegBranch(decoder_params["reg_branches"][i], device)
-        for i in range(DECODER_NUM_LAYERS)
-    ]
+    reg_branches_head = [TtRegBranch(decoder_params["reg_branches"][i], device) for i in range(DECODER_NUM_LAYERS)]
 
     # Run TTNN heads
     all_cls = []

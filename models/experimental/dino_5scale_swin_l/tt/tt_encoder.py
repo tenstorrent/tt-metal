@@ -11,7 +11,6 @@ Reuses the multi-scale deformable attention pattern from BEVFormer/UniAD
 with native ttnn.grid_sample for bilinear sampling.
 """
 
-import math
 import torch
 import ttnn
 from loguru import logger
@@ -56,7 +55,9 @@ def multi_scale_deformable_attn_uniad_style(
 
     output = ttnn.zeros(
         [bs, num_queries, num_heads, head_dim],
-        device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     for level, (H_, W_) in enumerate(value_spatial_shapes):
@@ -64,26 +65,24 @@ def multi_scale_deformable_attn_uniad_style(
 
         # Value: [bs, H*W, heads, dim] → [bs*heads, H, W, dim] (ROW_MAJOR)
         val_l = value_level_list[level]
-        val_l = ttnn.permute(val_l, (0, 2, 1, 3))   # [bs, heads, H*W, dim]
+        val_l = ttnn.permute(val_l, (0, 2, 1, 3))  # [bs, heads, H*W, dim]
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
 
         # Grid: batch ALL points together → [bs*heads, Q*points, 1, 2]
-        grid = sampling_grids[:, :, :, level, :, :]   # [bs, Q, heads, points, 2]
-        grid = (
-            grid.permute(0, 2, 1, 3, 4)
-            .reshape(bs * num_heads, num_queries * num_points, 1, 2)
-            .contiguous()
-        )
+        grid = sampling_grids[:, :, :, level, :, :]  # [bs, Q, heads, points, 2]
+        grid = grid.permute(0, 2, 1, 3, 4).reshape(bs * num_heads, num_queries * num_points, 1, 2).contiguous()
         grid_tt = ttnn.from_torch(
-            grid.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT,
+            grid.to(torch.bfloat16),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        sampled = ttnn.grid_sample(val_l, grid_tt)    # [bs*heads, Q*points, 1, dim]
+        sampled = ttnn.grid_sample(val_l, grid_tt)  # [bs*heads, Q*points, 1, dim]
         ttnn.deallocate(grid_tt)
         ttnn.deallocate(val_l)
 
         # Reshape to [bs, Q, heads, points, dim]
-        sampled = ttnn.squeeze(sampled, 2)             # [bs*heads, Q*points, dim]
+        sampled = ttnn.squeeze(sampled, 2)  # [bs*heads, Q*points, dim]
         sampled = ttnn.to_layout(sampled, ttnn.TILE_LAYOUT)
         sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
         sampled = ttnn.permute(sampled, (0, 2, 1, 3, 4))  # [bs, Q, heads, points, dim]
@@ -92,7 +91,9 @@ def multi_scale_deformable_attn_uniad_style(
         attn = attention_weights_torch[:, :, :, level, :]
         attn = attn.unsqueeze(-1).contiguous()
         attn_tt = ttnn.from_torch(
-            attn.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT,
+            attn.to(torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
         )
 
         # Weighted sum over points
@@ -100,7 +101,7 @@ def multi_scale_deformable_attn_uniad_style(
         ttnn.deallocate(sampled)
         ttnn.deallocate(attn_tt)
 
-        level_out = ttnn.sum(weighted, dim=-2)         # [bs, Q, heads, dim]
+        level_out = ttnn.sum(weighted, dim=-2)  # [bs, Q, heads, dim]
         ttnn.deallocate(weighted)
 
         old_output = output
@@ -179,13 +180,11 @@ def multi_scale_deformable_attn_ttnn(
         for level in range(num_levels):
             # --- Transfer 1: grid with all points (points-slow ordering) ---
             grid = sampling_grids[:, q_start:q_end, :, level, :, :]
-            grid = (
-                grid.permute(0, 2, 3, 1, 4)
-                .reshape(bs * num_heads, num_points * Q, 1, 2)
-                .contiguous()
-            )
+            grid = grid.permute(0, 2, 3, 1, 4).reshape(bs * num_heads, num_points * Q, 1, 2).contiguous()
             grid_tt = ttnn.from_torch(
-                grid.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT,
+                grid.to(torch.bfloat16),
+                device=device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
             # Single grid_sample for all 4 points
@@ -199,13 +198,11 @@ def multi_scale_deformable_attn_ttnn(
 
             # --- Transfer 2: attention weights for all points ---
             attn = attention_weights_torch[:, q_start:q_end, :, level, :]
-            attn = (
-                attn.permute(0, 2, 1, 3)
-                .reshape(bs * num_heads, Q, num_points)
-                .contiguous()
-            )
+            attn = attn.permute(0, 2, 1, 3).reshape(bs * num_heads, Q, num_points).contiguous()
             attn_tt = ttnn.from_torch(
-                attn.to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT,
+                attn.to(torch.bfloat16),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
             )
 
             # Weighted sum over points — all on device
@@ -346,9 +343,7 @@ class TtMSDeformAttn:
 
         logger.info("  MSDeformAttn: computing sampling locations on host...")
         if ref_pts.shape[-1] == 2:
-            offset_normalizer = torch.stack(
-                [spatial_shapes[..., 1].float(), spatial_shapes[..., 0].float()], dim=-1
-            )
+            offset_normalizer = torch.stack([spatial_shapes[..., 1].float(), spatial_shapes[..., 0].float()], dim=-1)
             so_torch = so_torch / offset_normalizer[None, None, None, :, None, :]
             ref_xy = ref_pts.reshape(bs, num_queries, 1, ref_pts.shape[2], 1, 2)
             sampling_locations = ref_xy + so_torch
@@ -414,9 +409,12 @@ class TtDINOEncoderLayer:
 
     def __init__(self, params, device, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
         self.self_attn = TtMSDeformAttn(
-            params["self_attn"], device,
-            embed_dims=embed_dims, num_heads=num_heads,
-            num_levels=num_levels, num_points=num_points,
+            params["self_attn"],
+            device,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            num_levels=num_levels,
+            num_points=num_points,
         )
         self.ffn = TtFFN(params["ffn"], device)
         self.norm1_w = params["norms"][0]["weight"]
@@ -424,8 +422,17 @@ class TtDINOEncoderLayer:
         self.norm2_w = params["norms"][1]["weight"]
         self.norm2_b = params["norms"][1]["bias"]
 
-    def __call__(self, query, query_pos, key_padding_mask, spatial_shapes,
-                 level_start_index, valid_ratios, reference_points, **kwargs):
+    def __call__(
+        self,
+        query,
+        query_pos,
+        key_padding_mask,
+        spatial_shapes,
+        level_start_index,
+        valid_ratios,
+        reference_points,
+        **kwargs,
+    ):
         query = self.self_attn(
             query=query,
             value=query,
@@ -455,9 +462,12 @@ class TtDINOEncoder:
         self.embed_dims = embed_dims
         self.layers = [
             TtDINOEncoderLayer(
-                params["layers"][i], device,
-                embed_dims=embed_dims, num_heads=num_heads,
-                num_levels=num_levels, num_points=num_points,
+                params["layers"][i],
+                device,
+                embed_dims=embed_dims,
+                num_heads=num_heads,
+                num_levels=num_levels,
+                num_points=num_points,
             )
             for i in range(num_layers)
         ]
@@ -508,9 +518,7 @@ class TtDINOEncoder:
             memory: [B, N, 256] encoder output (ttnn tensor)
         """
         logger.info("Computing encoder reference points...")
-        reference_points = self.get_encoder_reference_points(
-            spatial_shapes, valid_ratios, device=self.device
-        )
+        reference_points = self.get_encoder_reference_points(spatial_shapes, valid_ratios, device=self.device)
         logger.info(f"Reference points shape: {reference_points.shape}")
 
         query = feat

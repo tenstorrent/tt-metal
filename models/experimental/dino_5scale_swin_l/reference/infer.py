@@ -62,10 +62,7 @@ def load_model(cfg_path: Path, ckpt_path: Path, device: str):
     try:
         from mmdet.apis import init_detector
     except Exception as exc:
-        raise SystemExit(
-            f"Failed to import MMDetection APIs: {exc}. "
-            "Use an env with mmengine/mmcv/mmdet installed."
-        )
+        raise SystemExit(f"Failed to import MMDetection APIs: {exc}. " "Use an env with mmengine/mmcv/mmdet installed.")
     print(f"[load] DINO: cfg={cfg_path} ckpt={ckpt_path} device={device}")
     return init_detector(str(cfg_path), str(ckpt_path), device=device)
 

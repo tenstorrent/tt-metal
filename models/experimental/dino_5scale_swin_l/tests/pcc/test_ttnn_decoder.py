@@ -25,7 +25,6 @@ from models.experimental.dino_5scale_swin_l.common import (
     DECODER_EMBED_DIMS,
     ENCODER_NUM_POINTS,
     NUM_LEVELS,
-    NUM_QUERIES,
 )
 from loguru import logger
 
@@ -33,6 +32,7 @@ from loguru import logger
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -90,10 +90,16 @@ def test_ttnn_decoder_pcc(device):
     # --- Transfer inputs to TTNN device ---
     logger.info("Transferring decoder inputs to device...")
     query_tt = ttnn.from_torch(
-        ref_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        ref_query,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
     )
     memory_tt = ttnn.from_torch(
-        ref_memory, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        ref_memory,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     # --- Load decoder weights and create TTNN decoder ---
@@ -105,7 +111,8 @@ def test_ttnn_decoder_pcc(device):
     logger.info("Decoder weights loaded. Creating decoder...")
 
     ttnn_decoder = TtDINODecoder(
-        decoder_params, device,
+        decoder_params,
+        device,
         num_layers=DECODER_NUM_LAYERS,
         embed_dims=DECODER_EMBED_DIMS,
         num_heads=DECODER_NUM_HEADS,

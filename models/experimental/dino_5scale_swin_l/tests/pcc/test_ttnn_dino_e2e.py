@@ -19,7 +19,6 @@ Run with:
 
 import pytest
 import torch
-import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.dino_5scale_swin_l.common import (
@@ -29,7 +28,6 @@ from models.experimental.dino_5scale_swin_l.common import (
     SWIN_L_DEPTHS,
     SWIN_L_NUM_HEADS,
     SWIN_L_WINDOW_SIZE,
-    SWIN_L_STAGE_CHANNELS,
     NECK_IN_CHANNELS,
     NUM_QUERIES,
     NUM_CLASSES,
@@ -46,6 +44,7 @@ from loguru import logger
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -138,6 +137,7 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
 
     config_path, ckpt_path = _get_ckpt_and_config()
     from pathlib import Path
+
     if not Path(ckpt_path).is_file():
         pytest.skip("Checkpoint not found")
 
@@ -168,7 +168,9 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
     std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
     padded = (padded - mean) / std
     torch_input = torch.from_numpy(padded).permute(2, 0, 1).unsqueeze(0)
-    logger.info(f"Using real image: {img_path} ({orig_w}x{orig_h} → {new_w}x{new_h} → padded {DINO_INPUT_W}x{DINO_INPUT_H})")
+    logger.info(
+        f"Using real image: {img_path} ({orig_w}x{orig_h} → {new_w}x{new_h} → padded {DINO_INPUT_W}x{DINO_INPUT_H})"
+    )
 
     # =========================================================================
     # PyTorch reference: run full pipeline and capture intermediates
@@ -195,15 +197,21 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
     # TTNN: run full pipeline with intermediates
     # =========================================================================
     from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import (
-        load_backbone_weights, load_neck_weights,
-        load_encoder_weights, load_decoder_weights, compute_attn_masks,
+        load_backbone_weights,
+        load_neck_weights,
+        load_encoder_weights,
+        load_decoder_weights,
+        compute_attn_masks,
     )
     from models.experimental.dino_5scale_swin_l.tt.tt_dino import TtDINO
 
     logger.info("Loading all weights...")
     backbone_params = load_backbone_weights(
-        ckpt_path, device, embed_dim=SWIN_L_EMBED_DIM,
-        depths=tuple(SWIN_L_DEPTHS), num_heads=tuple(SWIN_L_NUM_HEADS),
+        ckpt_path,
+        device,
+        embed_dim=SWIN_L_EMBED_DIM,
+        depths=tuple(SWIN_L_DEPTHS),
+        num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
     )
     neck_params = load_neck_weights(ckpt_path, device)
@@ -212,16 +220,26 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
     attn_masks = compute_attn_masks(DINO_INPUT_H, DINO_INPUT_W, 4, SWIN_L_WINDOW_SIZE, device)
 
     tt_dino = TtDINO(
-        encoder_params=encoder_params, decoder_params=decoder_params,
-        device=device, backbone_params=backbone_params,
-        neck_params=neck_params, attn_masks=attn_masks,
-        num_queries=NUM_QUERIES, num_classes=NUM_CLASSES,
-        num_levels=NUM_LEVELS, embed_dims=ENCODER_EMBED_DIMS,
-        num_heads=ENCODER_NUM_HEADS, num_points=ENCODER_NUM_POINTS,
-        encoder_num_layers=ENCODER_NUM_LAYERS, decoder_num_layers=DECODER_NUM_LAYERS,
-        pe_temperature=20, embed_dim=SWIN_L_EMBED_DIM,
-        depths=tuple(SWIN_L_DEPTHS), backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
-        window_size=SWIN_L_WINDOW_SIZE, in_channels=tuple(NECK_IN_CHANNELS),
+        encoder_params=encoder_params,
+        decoder_params=decoder_params,
+        device=device,
+        backbone_params=backbone_params,
+        neck_params=neck_params,
+        attn_masks=attn_masks,
+        num_queries=NUM_QUERIES,
+        num_classes=NUM_CLASSES,
+        num_levels=NUM_LEVELS,
+        embed_dims=ENCODER_EMBED_DIMS,
+        num_heads=ENCODER_NUM_HEADS,
+        num_points=ENCODER_NUM_POINTS,
+        encoder_num_layers=ENCODER_NUM_LAYERS,
+        decoder_num_layers=DECODER_NUM_LAYERS,
+        pe_temperature=20,
+        embed_dim=SWIN_L_EMBED_DIM,
+        depths=tuple(SWIN_L_DEPTHS),
+        backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
+        window_size=SWIN_L_WINDOW_SIZE,
+        in_channels=tuple(NECK_IN_CHANNELS),
     )
 
     logger.info("Running full TTNN forward_image (with intermediates)...")
@@ -278,7 +296,9 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
     with torch.no_grad():
         ref_det = ref.model
         ref_output_memory, ref_output_proposals = ref_det.gen_encoder_output_proposals(
-            ref_enc_out["memory"], ref_enc_out.get("memory_mask"), ref_enc_out["spatial_shapes"],
+            ref_enc_out["memory"],
+            ref_enc_out.get("memory_mask"),
+            ref_enc_out["spatial_shapes"],
         )
         ref_enc_cls = ref_det.bbox_head.cls_branches[ref_det.decoder.num_layers](ref_output_memory)
         ref_topk_indices = torch.topk(ref_enc_cls.max(-1)[0], k=NUM_QUERIES, dim=1)[1]
@@ -292,8 +312,10 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
         logger.info(f"  Top-K overlap: {overlap}/{NUM_QUERIES} ({overlap_pct:.1f}%)")
         logger.info(f"  Divergent queries: {NUM_QUERIES - overlap}")
         if overlap_pct < 100:
-            logger.info(f"  (Divergence caused by encoder bfloat16 → memory_trans_fc amplifies "
-                         f"tiny differences → different top-K ranking)")
+            logger.info(
+                f"  (Divergence caused by encoder bfloat16 → memory_trans_fc amplifies "
+                f"tiny differences → different top-K ranking)"
+            )
 
     ref_query_init = ref_dec_out.get("reference_points_init")
     tt_ref_points = result.get("decoder_references")
@@ -349,12 +371,19 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
         ref_boxes, ref_scores, ref_labels = _postprocess_raw(ref_cls[-1], ref_coords[-1], score_thr=score_thr)
         tt_boxes, tt_scores, tt_labels = _postprocess_raw(tt_cls[-1], tt_coords[-1], score_thr=score_thr)
         n_matched, avg_iou, avg_sdiff = _match_detections(
-            ref_boxes, ref_scores, ref_labels, tt_boxes, tt_scores, tt_labels,
+            ref_boxes,
+            ref_scores,
+            ref_labels,
+            tt_boxes,
+            tt_scores,
+            tt_labels,
         )
         match_rate = n_matched / len(ref_boxes) * 100 if len(ref_boxes) > 0 else 0
-        logger.info(f"  score_thr={score_thr}: ref={len(ref_boxes)}, tt={len(tt_boxes)}, "
-                     f"matched={n_matched} ({match_rate:.1f}%), "
-                     f"avg_IoU={avg_iou:.3f}, avg_score_diff={avg_sdiff:.4f}")
+        logger.info(
+            f"  score_thr={score_thr}: ref={len(ref_boxes)}, tt={len(tt_boxes)}, "
+            f"matched={n_matched} ({match_rate:.1f}%), "
+            f"avg_IoU={avg_iou:.3f}, avg_score_diff={avg_sdiff:.4f}"
+        )
 
     # =========================================================================
     # Summary + assertions

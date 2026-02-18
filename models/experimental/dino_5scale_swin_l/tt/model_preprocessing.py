@@ -8,7 +8,7 @@ Backbone weights and attention masks are loaded from the shared swin_l module:
   from models.experimental.swin_l.tt import load_backbone_weights, compute_attn_masks
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 
 import torch
 import ttnn
@@ -63,7 +63,7 @@ def load_neck_weights(
         conv_w = _get(sd, f"{prefix}.conv.weight")  # [out, in, 1, 1]
         conv_b = torch.zeros(1, 1, 1, out_channels)
         gn_w = _get(sd, f"{prefix}.gn.weight")  # [256]
-        gn_b = _get(sd, f"{prefix}.gn.bias")    # [256]
+        gn_b = _get(sd, f"{prefix}.gn.bias")  # [256]
 
         params["convs"][i] = {
             "conv": {
@@ -217,7 +217,9 @@ def load_decoder_weights(
                     _get(sd, f"{prefix}.self_attn.attn.in_proj_weight"), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 ),
                 "in_proj_bias": ttnn.from_torch(
-                    _get(sd, f"{prefix}.self_attn.attn.in_proj_bias").reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                    _get(sd, f"{prefix}.self_attn.attn.in_proj_bias").reshape(1, -1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
                 ),
                 "out_proj": {
                     "weight": _to_ttnn_linear_weight(_get(sd, f"{prefix}.self_attn.attn.out_proj.weight")),
@@ -295,10 +297,12 @@ def load_decoder_weights(
     for i in range(num_reg_branches):
         branch = []
         for layer_idx in [0, 2, 4]:
-            branch.append({
-                "weight": _to_ttnn_linear_weight(_get(sd, f"bbox_head.reg_branches.{i}.{layer_idx}.weight")),
-                "bias": _to_ttnn_linear_bias(_get(sd, f"bbox_head.reg_branches.{i}.{layer_idx}.bias")),
-            })
+            branch.append(
+                {
+                    "weight": _to_ttnn_linear_weight(_get(sd, f"bbox_head.reg_branches.{i}.{layer_idx}.weight")),
+                    "bias": _to_ttnn_linear_bias(_get(sd, f"bbox_head.reg_branches.{i}.{layer_idx}.bias")),
+                }
+            )
         params["reg_branches"][i] = branch
 
     # memory_trans_fc and memory_trans_norm (used in pre_decoder / gen_encoder_output_proposals)

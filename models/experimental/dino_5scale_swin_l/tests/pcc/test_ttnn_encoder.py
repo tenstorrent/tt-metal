@@ -32,6 +32,7 @@ from loguru import logger
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -93,11 +94,17 @@ def test_ttnn_encoder_pcc(device, reset_seeds):
     # --- Transfer to TTNN device ---
     logger.info("Transferring feat to device...")
     feat_tt = ttnn.from_torch(
-        feat_flatten, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        feat_flatten,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
     )
     logger.info("Transferring feat_pos to device...")
     feat_pos_tt = ttnn.from_torch(
-        feat_pos_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        feat_pos_torch,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     # --- TTNN Encoder ---
@@ -108,7 +115,8 @@ def test_ttnn_encoder_pcc(device, reset_seeds):
     encoder_params = load_encoder_weights(ckpt_path, device)
     logger.info("Encoder weights loaded. Creating encoder...")
     ttnn_encoder = TtDINOEncoder(
-        encoder_params, device,
+        encoder_params,
+        device,
         num_layers=ENCODER_NUM_LAYERS,
         embed_dims=ENCODER_EMBED_DIMS,
         num_heads=ENCODER_NUM_HEADS,

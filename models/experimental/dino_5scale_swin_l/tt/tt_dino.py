@@ -98,9 +98,7 @@ def gen_encoder_output_proposals(
         _cur += H * W
 
     output_proposals = torch.cat(proposals, 1)
-    output_proposals_valid = (
-        (output_proposals > 0.01) & (output_proposals < 0.99)
-    ).sum(-1, keepdim=True) == 4
+    output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).sum(-1, keepdim=True) == 4
 
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
     output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
@@ -158,9 +156,12 @@ class TtDINO:
         self.backbone = None
         if backbone_params is not None:
             self.backbone = TtSwinLBackbone(
-                device, backbone_params,
-                embed_dim=embed_dim, depths=depths,
-                num_heads=backbone_num_heads, window_size=window_size,
+                device,
+                backbone_params,
+                embed_dim=embed_dim,
+                depths=depths,
+                num_heads=backbone_num_heads,
+                window_size=window_size,
                 attn_masks=attn_masks,
             )
 
@@ -171,7 +172,8 @@ class TtDINO:
 
         # --- Encoder ---
         self.encoder = TtDINOEncoder(
-            encoder_params, device,
+            encoder_params,
+            device,
             num_layers=encoder_num_layers,
             embed_dims=embed_dims,
             num_heads=num_heads,
@@ -183,7 +185,8 @@ class TtDINO:
 
         # --- Decoder ---
         self.decoder = TtDINODecoder(
-            decoder_params, device,
+            decoder_params,
+            device,
             num_layers=decoder_num_layers,
             embed_dims=embed_dims,
             num_heads=num_heads,
@@ -195,22 +198,19 @@ class TtDINO:
         # Top-K selection is extremely sensitive to precision — using original
         # float32 weights (not bfloat16-quantized) matches the PyTorch reference.
         pd = decoder_params["_torch_pre_decoder"]
-        self.memory_trans_fc_w_torch = pd["memory_trans_fc_w"]      # [out=256, in=256]
-        self.memory_trans_fc_b_torch = pd["memory_trans_fc_b"]      # [256]
-        self.memory_trans_norm_w_torch = pd["memory_trans_norm_w"]   # [256]
-        self.memory_trans_norm_b_torch = pd["memory_trans_norm_b"]   # [256]
-        self.query_embedding_torch = pd["query_embedding"]           # [900, 256]
-        self.cls_enc_w_torch = pd["cls_enc_w"]                       # [out=80, in=256]
-        self.cls_enc_b_torch = pd["cls_enc_b"]                       # [80]
-        self.reg_enc_layers_torch = [
-            (layer["weight"], layer["bias"]) for layer in pd["reg_enc_layers"]
-        ]
+        self.memory_trans_fc_w_torch = pd["memory_trans_fc_w"]  # [out=256, in=256]
+        self.memory_trans_fc_b_torch = pd["memory_trans_fc_b"]  # [256]
+        self.memory_trans_norm_w_torch = pd["memory_trans_norm_w"]  # [256]
+        self.memory_trans_norm_b_torch = pd["memory_trans_norm_b"]  # [256]
+        self.query_embedding_torch = pd["query_embedding"]  # [900, 256]
+        self.cls_enc_w_torch = pd["cls_enc_w"]  # [out=80, in=256]
+        self.cls_enc_b_torch = pd["cls_enc_b"]  # [80]
+        self.reg_enc_layers_torch = [(layer["weight"], layer["bias"]) for layer in pd["reg_enc_layers"]]
 
         # Device-side weights still needed for detection heads
         self.cls_branches = decoder_params["cls_branches"]
         self.reg_branches_head = [
-            TtRegBranch(decoder_params["reg_branches"][i], device)
-            for i in range(decoder_num_layers)
+            TtRegBranch(decoder_params["reg_branches"][i], device) for i in range(decoder_num_layers)
         ]
 
     def pre_transformer(
@@ -250,7 +250,9 @@ class TtDINO:
             feat_flatten_list.append(feat_flat)
 
             pos_embed = sine_positional_encoding(
-                H, W, num_feats=self.embed_dims // 2,
+                H,
+                W,
+                num_feats=self.embed_dims // 2,
                 temperature=self.pe_temperature,
             )
             pos_flat = pos_embed.flatten(2).permute(0, 2, 1)  # [1, H*W, 256]
@@ -260,14 +262,15 @@ class TtDINO:
         feat_flatten = torch.cat(feat_flatten_list, dim=1)
         feat_pos = torch.cat(lvl_pos_embed_list, dim=1)
         spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
-        level_start_index = torch.cat([
-            spatial_shapes.new_zeros((1,)),
-            spatial_shapes.prod(1).cumsum(0)[:-1],
-        ])
+        level_start_index = torch.cat(
+            [
+                spatial_shapes.new_zeros((1,)),
+                spatial_shapes.prod(1).cumsum(0)[:-1],
+            ]
+        )
         valid_ratios = feat_flatten.new_ones(B, len(mlvl_feats), 2)
 
-        logger.info(f"Pre-transformer: feat_flatten {feat_flatten.shape}, "
-                     f"spatial_shapes {spatial_shapes.tolist()}")
+        logger.info(f"Pre-transformer: feat_flatten {feat_flatten.shape}, " f"spatial_shapes {spatial_shapes.tolist()}")
 
         return {
             "feat_flatten": feat_flatten,
@@ -304,7 +307,8 @@ class TtDINO:
         bs = memory_torch.shape[0]
 
         output_proposals, output_proposals_valid = gen_encoder_output_proposals(
-            memory_torch, spatial_shapes,
+            memory_torch,
+            spatial_shapes,
         )
 
         output_memory = memory_torch.masked_fill(~output_proposals_valid, 0.0)
@@ -312,10 +316,13 @@ class TtDINO:
         # memory_trans_fc + memory_trans_norm — host float32
         logger.info("Pre-decoder: memory_trans_fc + norm (host float32)...")
         output_memory = torch.nn.functional.linear(
-            output_memory, self.memory_trans_fc_w_torch, self.memory_trans_fc_b_torch,
+            output_memory,
+            self.memory_trans_fc_w_torch,
+            self.memory_trans_fc_b_torch,
         )
         output_memory = torch.nn.functional.layer_norm(
-            output_memory, [self.embed_dims],
+            output_memory,
+            [self.embed_dims],
             weight=self.memory_trans_norm_w_torch,
             bias=self.memory_trans_norm_b_torch,
         )
@@ -323,7 +330,9 @@ class TtDINO:
         # cls_branches[6] — host float32: [B, N, 256] → [B, N, 80]
         logger.info("Pre-decoder: cls_branches[6] scoring (host float32)...")
         enc_cls = torch.nn.functional.linear(
-            output_memory, self.cls_enc_w_torch, self.cls_enc_b_torch,
+            output_memory,
+            self.cls_enc_w_torch,
+            self.cls_enc_b_torch,
         )
 
         # reg_branches[6] — host float32: [B, N, 256] → [B, N, 4]
@@ -339,11 +348,14 @@ class TtDINO:
         # top-K selection — host float32
         logger.info("Pre-decoder: top-K selection (K=%d, host float32)...", self.num_queries)
         topk_indices = torch.topk(
-            enc_cls.max(-1)[0], k=self.num_queries, dim=1,
+            enc_cls.max(-1)[0],
+            k=self.num_queries,
+            dim=1,
         )[1]
 
         topk_coords_unact = torch.gather(
-            enc_coords_unact, 1,
+            enc_coords_unact,
+            1,
             topk_indices.unsqueeze(-1).repeat(1, 1, 4),
         )
         topk_coords_unact = topk_coords_unact.detach()
@@ -352,17 +364,18 @@ class TtDINO:
         query = self.query_embedding_torch[:, None, :].repeat(1, bs, 1).transpose(0, 1)
         query_tt = ttnn.from_torch(
             query.to(torch.bfloat16),
-            device=self.device, layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
         )
 
-        logger.info(f"Pre-decoder: selected {self.num_queries} queries, "
-                     f"reference_points {reference_points.shape}")
+        logger.info(f"Pre-decoder: selected {self.num_queries} queries, " f"reference_points {reference_points.shape}")
 
         return {
             "query": query_tt,
             "reference_points": reference_points,
             "topk_score": torch.gather(
-                enc_cls, 1,
+                enc_cls,
+                1,
                 topk_indices.unsqueeze(-1).repeat(1, 1, self.num_classes),
             ),
             "topk_coords": reference_points,
@@ -397,12 +410,12 @@ class TtDINO:
             cls_w = self.cls_branches[layer_id]["weight"]
             cls_b = self.cls_branches[layer_id]["bias"]
             cls_out_tt = ttnn.linear(hidden_state, cls_w, bias=cls_b)
-            cls_out = ttnn.to_torch(cls_out_tt).float()[:, :self.num_queries, :]
+            cls_out = ttnn.to_torch(cls_out_tt).float()[:, : self.num_queries, :]
             ttnn.deallocate(cls_out_tt)
 
             # Regression: reg_branch on device + inverse_sigmoid(reference)
             reg_out_tt = self.reg_branches_head[layer_id](hidden_state)
-            reg_out = ttnn.to_torch(reg_out_tt).float()[:, :self.num_queries, :]
+            reg_out = ttnn.to_torch(reg_out_tt).float()[:, : self.num_queries, :]
             ttnn.deallocate(reg_out_tt)
 
             ref_inv = inverse_sigmoid_torch(reference, eps=1e-3)
@@ -436,11 +449,13 @@ class TtDINO:
 
         feat_tt = ttnn.from_torch(
             pre_trans["feat_flatten"].to(torch.bfloat16),
-            device=self.device, layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
         )
         feat_pos_tt = ttnn.from_torch(
             pre_trans["feat_pos"].to(torch.bfloat16),
-            device=self.device, layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
         )
 
         logger.info("Running encoder...")
@@ -504,17 +519,18 @@ class TtDINO:
         # --- Backbone ---
         logger.info(f"Backbone: input {image.shape}")
         image_tt = ttnn.from_torch(
-            image, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            image,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         backbone_feats_tt = self.backbone(image_tt)
         logger.info(f"Backbone: {len(backbone_feats_tt)} feature maps")
 
         backbone_feats_torch = None
         if return_intermediates:
-            backbone_feats_torch = [
-                ttnn.to_torch(ttnn.from_device(bf)).float() for bf in backbone_feats_tt
-            ]
+            backbone_feats_torch = [ttnn.to_torch(ttnn.from_device(bf)).float() for bf in backbone_feats_tt]
 
         # --- Neck ---
         logger.info("Neck: ChannelMapper...")
@@ -534,16 +550,20 @@ class TtDINO:
 
         feat_tt = ttnn.from_torch(
             pre_trans["feat_flatten"].to(torch.bfloat16),
-            device=self.device, layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
         )
         feat_pos_tt = ttnn.from_torch(
             pre_trans["feat_pos"].to(torch.bfloat16),
-            device=self.device, layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
         )
 
         logger.info("Running encoder...")
         memory_tt = self.encoder(
-            feat=feat_tt, feat_pos=feat_pos_tt, feat_mask=None,
+            feat=feat_tt,
+            feat_pos=feat_pos_tt,
+            feat_mask=None,
             spatial_shapes=pre_trans["spatial_shapes"],
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
@@ -560,8 +580,10 @@ class TtDINO:
 
         logger.info("Running decoder...")
         hidden_states, references = self.decoder(
-            query=pre_dec["query"], value=memory_tt,
-            key_padding_mask=None, self_attn_mask=None,
+            query=pre_dec["query"],
+            value=memory_tt,
+            key_padding_mask=None,
+            self_attn_mask=None,
             reference_points=pre_dec["reference_points"],
             spatial_shapes=pre_trans["spatial_shapes"],
             level_start_index=pre_trans["level_start_index"],
@@ -580,9 +602,7 @@ class TtDINO:
             result["backbone_feats"] = backbone_feats_torch
             result["neck_feats"] = neck_feats_torch
             result["encoder_memory"] = encoder_memory_torch
-            result["decoder_hidden_states"] = [
-                ttnn.to_torch(hs).float()[:, :N_q, :] for hs in hidden_states
-            ]
+            result["decoder_hidden_states"] = [ttnn.to_torch(hs).float()[:, :N_q, :] for hs in hidden_states]
             result["decoder_references"] = references
             result["topk_indices"] = pre_dec.get("topk_indices")
 
