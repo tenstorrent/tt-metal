@@ -85,7 +85,8 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
-        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=self.tt_sampling.max_batch_size)
+        seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
+        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=seed_batch_size)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -505,6 +506,13 @@ class SeedManager:
         self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
         self.rngs = [random.Random(seed) for seed in self.seeds]
         self.tt_sampling = tt_sampling
+        # Mesh mapper for sharding seeds across rows when sampling_dp > 1
+        if tt_sampling._sampling_dp > 1:
+            self._seed_mapper = ttnn.ShardTensor2dMesh(
+                tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
+            )
+        else:
+            self._seed_mapper = None
 
     def reset_seed(self, seeds, user_ids):
         for i, user in enumerate(user_ids):
@@ -521,5 +529,7 @@ class SeedManager:
             assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
             new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
         # send new seeds to sampling module
-        new_seed_tt = ttnn.from_torch(torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        new_seed_tt = ttnn.from_torch(
+            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
+        )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)

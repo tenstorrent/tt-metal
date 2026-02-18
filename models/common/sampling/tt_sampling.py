@@ -102,11 +102,17 @@ class TTSampling(LightweightModule):
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
 
-        # sampling_dp > 1 when multiple mesh rows each sample 32 users independently
-        # (e.g. GPT-OSS on [4,8] Galaxy: 4 rows × 32 users = 128 total users)
+        # sampling_dp > 1 when multiple mesh groups each sample users independently
+        # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
         self._sampling_dp = getattr(args, "sampling_dp", 1)
-        # Row-shard k/p/temp across mesh rows; replicate within each row (across TP cols)
-        self._param_dims = (0, None) if self._sampling_dp > 1 else (None, None)
+        # Shard params along the non-all-gather axis; replicate along the all-gather axis
+        if self._sampling_dp > 1:
+            if self.sampling_all_gather_axis == 0:
+                self._param_dims = (None, 0)  # shard along cols
+            else:
+                self._param_dims = (0, None)  # shard along rows
+        else:
+            self._param_dims = (None, None)
 
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
@@ -176,11 +182,17 @@ class TTSampling(LightweightModule):
             self.mesh_device, self.sub_core_grids, self.tt_ccl, batch_size=self.max_batch_size
         )
 
-        self.seeds_tt_tensor = ttnn.as_tensor(
-            torch.arange(self.max_batch_size).to(torch.uint32),
+        # Seeds tensor: one RNG slot per user across all rows.
+        # When sampling_dp > 1, shard across rows so each row gets its own slice.
+        # user_ids tensor: core routing only (32 per row, replicated).
+        self.seeds_tt_tensor = ttnn.from_torch(
+            torch.arange(total_param_size).to(torch.uint32),
+            device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
+            if self._sampling_dp > 1
+            else None,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.user_ids_tt_tensor = ttnn.as_tensor(

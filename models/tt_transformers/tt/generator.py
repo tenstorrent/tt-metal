@@ -353,7 +353,7 @@ class Generator:
                 self.model[model_id].sampling.apply_prefill_state(
                     sampling_params=per_request_params,
                     prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
-                    empty_slots=[user_id % 32],
+                    empty_slots=[user_id],
                 )
 
             if enable_trace_current_prompt:
@@ -437,7 +437,7 @@ class Generator:
                 idx = res["idx"]
                 last_token_idx = res["last_token_idx"]
                 model_id = res["model_id"]
-                num_cached_tokens = int(start_pos[elem_idx]) if start_pos is not None else 0
+                num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
                 last_token_idx_relative = last_token_idx - num_cached_tokens
                 ttnn.synchronize_device(self.model[model_id].mesh_device)
 
