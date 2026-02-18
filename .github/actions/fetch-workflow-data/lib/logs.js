@@ -193,12 +193,23 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
 
       // Skip if this exact (run ID, attempt) combination is already cached
       // Note: Different attempts of the same run ID need different logs/annotations
+      // IMPORTANT: Only skip when we actually HAVE the log/annotation data. If we have the run
+      // in cachedRunAttempts (from merged workflow-data) but artifact restoration failed
+      // (e.g. "Bad credentials" when restoring workflow-other-logs), we would have no index
+      // entry and no data on disk - we must re-download to avoid "No error info found".
       const targetRunIdStr = String(targetRun.id);
       const targetRunAttempt = targetRun.run_attempt || 1;
       const targetRunKey = `${targetRunIdStr}:${targetRunAttempt}`;
-      if (cachedRunAttempts.has(targetRunKey)) {
+      const hasAnnotations = annotationsIndex[targetRunIdStr];
+      const hasGtestLogs = gtestLogsIndex[targetRunIdStr];
+      const hasOtherLogs = otherLogsIndex[targetRunIdStr];
+      const hasCachedData = hasAnnotations || hasGtestLogs || hasOtherLogs;
+      if (cachedRunAttempts.has(targetRunKey) && hasCachedData) {
         core.info(`[LOGS] Skipping download for run ${targetRunIdStr} attempt ${targetRunAttempt} (workflow: ${name}) - already in cache`);
         continue;
+      }
+      if (cachedRunAttempts.has(targetRunKey) && !hasCachedData) {
+        core.info(`[LOGS] Re-downloading run ${targetRunIdStr} (workflow: ${name}) - in cache but no log/annotation data (e.g. restore failed)`);
       }
 
       core.info(`[LOGS] Processing failing run ${targetRun.id} for workflow '${name}' (conclusion: ${targetRun.conclusion})`);
