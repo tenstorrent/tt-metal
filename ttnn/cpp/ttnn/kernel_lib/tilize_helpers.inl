@@ -14,6 +14,12 @@
 #include "chlkc_pack_tile_dims.h"
 #define PACK_TILE_DIMS_AVAILABLE
 #endif
+
+#if __has_include("chlkc_unpack_data_format.h")
+#include "chlkc_unpack_data_format.h"
+#define UNPACK_DATA_FORMAT_AVAILABLE
+#endif
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -36,9 +42,25 @@ constexpr bool has_32x32_tiles() {
 #endif
 }
 
-template <uint32_t output_cb>
+template <uint32_t input_cb>
+constexpr bool has_supported_fast_tilize_format() {
+#ifdef UNPACK_DATA_FORMAT_AVAILABLE
+    // Fast tilize only supports Float32 (0) and Float16_b/bfp16 (5)
+    // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
+    constexpr std::int32_t format = unpack_src_format[input_cb];
+    return format == 0 || format == 5;  // Float32 or Float16_b (bfp16)
+#else
+    // If header not available, conservatively disallow fast_tilize
+    // Only enable fast_tilize when we can confirm the format is supported
+    return false;
+#endif
+}
+
+template <uint32_t input_cb, uint32_t output_cb>
 constexpr bool can_use_fast_tilize() {
-    return has_32x32_tiles<output_cb>() && !get_dst_full_sync_enabled();
+    return has_32x32_tiles<output_cb>() &&
+           !get_dst_full_sync_enabled() &&
+           has_supported_fast_tilize_format<input_cb>();
 }
 
 // =============================================================================
@@ -68,8 +90,8 @@ ALWI void tilize(
     ASSERT(block_width_tiles > 0);
     ASSERT(num_blocks > 0);
 
-    // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
-    constexpr bool use_fast = can_use_fast_tilize<output_cb>();
+    // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format)
+    constexpr bool use_fast = can_use_fast_tilize<input_cb, output_cb>();
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
