@@ -125,4 +125,5 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+    upstream_fabric_connection.close();
 }

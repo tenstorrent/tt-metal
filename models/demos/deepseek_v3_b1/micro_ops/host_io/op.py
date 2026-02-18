@@ -101,8 +101,16 @@ class SocketInterface:
         num_whole_fabric_packets = self.page_size // fabric_max_payload_size
         partial_packet_size = self.page_size % fabric_max_payload_size
 
-        num_fwd_links = 1
+        num_fwd_links = 2
         num_bwd_links = 1
+
+        if num_whole_fabric_packets > 0:
+            num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // num_fwd_links) + int(partial_packet_size > 0)
+            num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
+            num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
+        else:
+            num_whole_fabric_packets_link_0 = 0
+            num_whole_fabric_packets_link_1 = 0
 
         packet_header_cb_num_pages = num_fwd_links + num_bwd_links
         packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
@@ -125,7 +133,8 @@ class SocketInterface:
             upstream_socket_config_addr,
             ttnn.get_global_semaphore_address(self.termination_semaphore),
             self.page_size,
-            num_whole_fabric_packets,
+            num_whole_fabric_packets_link_0,
+            num_whole_fabric_packets_link_1,
             fabric_max_payload_size,
             partial_packet_size,
             packet_header_cb_index,
@@ -256,11 +265,6 @@ class HostInterface:
         self.h2d_mesh_core_coord = self.h2d_socket.get_active_cores()[0]
         self.d2h_mesh_core_coord = self.d2h_socket.get_active_cores()[0]
 
-        print(f"H2D Mesh Core Coord: {self.h2d_mesh_core_coord}")
-        print(f"D2H Mesh Core Coord: {self.d2h_mesh_core_coord}")
-        print(f"H2D Downstream Core: {h2d_downstream_core}")
-        print(f"D2H Upstream Core: {d2h_upstream_core}")
-
         # if (self.h2d_mesh_core_coord.core_coord == self.d2h_mesh_core_coord.core_coord):
         termination_semaphore_core_range = ttnn.CoreRangeSet(
             [
@@ -328,7 +332,7 @@ class HostInterface:
             self.embedding_cb_index = 2
 
         self.fabric_packet_header_cb_index = 1
-        self.num_fwd_links = 1
+        self.num_fwd_links = 2
         self.num_bwd_links = 1
 
     def _create_h2d_kernel(self):
@@ -336,9 +340,15 @@ class HostInterface:
         num_whole_fabric_packets = self.h2d_page_size // fabric_max_payload_size
         partial_packet_size = self.h2d_page_size % fabric_max_payload_size
 
-        print(f"Fabric Max Payload Size: {fabric_max_payload_size}")
-        print(f"Num Whole Fabric Packets: {num_whole_fabric_packets}")
-        print(f"Partial Packet Size: {partial_packet_size}")
+        if num_whole_fabric_packets > 0:
+            num_whole_fabric_packets_link_0 = (num_whole_fabric_packets // self.num_fwd_links) + int(
+                partial_packet_size > 0
+            )
+            num_whole_fabric_packets_link_0 = min(num_whole_fabric_packets_link_0, num_whole_fabric_packets)
+            num_whole_fabric_packets_link_1 = num_whole_fabric_packets - num_whole_fabric_packets_link_0
+        else:
+            num_whole_fabric_packets_link_0 = 0
+            num_whole_fabric_packets_link_1 = 0
 
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
@@ -351,7 +361,8 @@ class HostInterface:
             else self.downstream_socket_pair[0].get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
             fabric_max_payload_size,
-            num_whole_fabric_packets,
+            num_whole_fabric_packets_link_0,
+            num_whole_fabric_packets_link_1,
             partial_packet_size,
         ]
         # Add CTAs for fused embedding op if needed
@@ -367,7 +378,6 @@ class HostInterface:
             else "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_receiver.cpp"
         )
 
-        print(f"Create H2D Kernel on core {self.h2d_mesh_core_coord}")
         h2d_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -389,7 +399,6 @@ class HostInterface:
             self.intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[1].get_config_buffer_address(),
             self.fabric_packet_header_cb_index,
         ]
-        print(f"Create D2H Kenel on core {self.d2h_mesh_core_coord}")
         d2h_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2h_sender.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -434,9 +443,8 @@ class HostInterface:
             cb_descriptors.append(embedding_cb_desc)
 
         packet_header_cb_num_pages = self.num_fwd_links + self.num_bwd_links
-        packet_header_cb_page_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
 
-        print(f"Create Packet Header CB on core {mesh_core_coord}")
         packet_header_cb_desc = ttnn.CBDescriptor(
             total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
             core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
@@ -448,6 +456,7 @@ class HostInterface:
                 )
             ],
         )
+        cb_descriptors.append(packet_header_cb_desc)
         return cb_descriptors
 
     def run(self):
