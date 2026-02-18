@@ -50,7 +50,7 @@ flowchart TB
 Tool and venv layers are injected into Dockerfiles via [Docker Buildx Bake contexts](https://docs.docker.com/build/bake/). Each downstream Dockerfile declares stub stages (`FROM scratch AS ccache-layer`, etc.) that Bake overrides:
 
 - **Locally:** `"target:ccache"` -- Bake builds the `ccache` target from `Dockerfile.tools` first, then wires its output into the main build.
-- **In CI:** `"docker-image://ghcr.io/.../ccache:tag"` -- `docker/bake-action` uses the pre-built GHCR image directly via `set` overrides.
+- **In CI:** `"docker-image://ghcr.io/.../ccache:tag"` -- workflows pass context overrides to manual `docker buildx bake` CLI invocations.
 
 This eliminates the need for `--build-arg TOOL_X_IMAGE=...` plumbing between Dockerfiles, shell scripts, and workflows.
 
@@ -111,9 +111,34 @@ flowchart TD
 | 🐳 | Docker image builds |
 | 🏷️ | Tagging / labeling |
 
+### Why CI Uses Manual Bake
+
+CI intentionally runs `docker buildx bake` through shell commands (wrapped by `.github/actions/manual-docker-bake`) instead of `docker/bake-action`.
+
+- `docker/bake-action` consistently failed in this repository with registry metadata resolution timeouts during `HEAD` requests.
+- The observed failures triggered after a short timeout window that is not configurable through the action inputs.
+- Manual CLI invocation with explicit retries and host-builder selection proved reliable on the same runners.
+
+The result is: same Bake targets and contexts, but a more controllable execution path.
+
+### Manual Bake Command Pattern (CI)
+
+Workflows build a newline-delimited `set` payload, then run bake manually:
+
+```bash
+docker buildx bake -f dockerfile/docker-bake.hcl \
+  --set "ci-build.contexts.cmake-layer=docker-image://ghcr.io/.../tools/cmake:tag" \
+  --set "ci-build.contexts.ci-build-venv-layer=docker-image://ghcr.io/.../python-venv/ci-build:tag" \
+  --set "ci-build.tags=ghcr.io/.../ubuntu-22.04-ci-build-amd64:<hash>" \
+  --set "ci-build.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true" \
+  ci-build
+```
+
+The same pattern is used for tools, venvs, main images, basic images, and manylinux.
+
 ### Tool Tags JSON Bundle
 
-Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. In CI, the JSON is parsed to generate Bake `set` context overrides for `docker/bake-action`.
+Tool image tags are passed between workflows as a single JSON bundle instead of 9 individual parameters. In CI, the JSON is parsed to generate Bake `--set` context overrides for manual `docker buildx bake` invocations.
 
 **JSON bundle format:**
 ```json
@@ -132,7 +157,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 
 ## When to Use CI vs Local Builds
 
-- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using `docker/bake-action` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
+- **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using manual `docker buildx bake` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
 - **Local development**: Use `docker buildx bake` (directly or via `build-local.sh`) to build images locally. Bake automatically builds tool and venv dependencies first.
 
 ## Local Builds
@@ -161,6 +186,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 ```bash
 ./dockerfile/build-local.sh dev
 ./dockerfile/build-local.sh --ubuntu 24.04 ci-test
+./dockerfile/build-local.sh --set ci-build.output=type=docker ci-build
 ./dockerfile/build-local.sh --no-cache dev
 ./dockerfile/build-local.sh --help
 ```
@@ -171,6 +197,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 |--------|-------------|
 | `--ubuntu VERSION` | Ubuntu version (default: 22.04) |
 | `--tag TAG` | Output image tag override |
+| `--set KEY=VALUE` | Extra Bake override; repeatable |
 | `--no-cache` | Build without Docker cache |
 | `--print` | Dry run: show what would be built |
 

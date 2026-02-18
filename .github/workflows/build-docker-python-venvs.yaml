@@ -3,9 +3,12 @@ name: "[internal] Build Docker Python venv images"
 # Reusable workflow that checks and builds Python venv images (ci-build-venv, ci-test-venv).
 # Called by build-docker-artifact.yaml. Venv images are pushed to GHCR.
 #
-# Uses docker/bake-action (dockerfile/docker-bake.hcl) for builds.
+# Uses manual docker buildx bake (dockerfile/docker-bake.hcl) for builds.
 permissions:
   packages: write
+
+env:
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_call:
@@ -52,6 +55,7 @@ jobs:
       - name: Compute Python venv image tags
         id: tags
         run: |
+          set -euo pipefail
           VERSION="${{ steps.platform.outputs.version }}"
           VERSION_NODOT="${VERSION//.}"
 
@@ -64,6 +68,7 @@ jobs:
       - name: Check if Python venv images exist
         id: check
         run: |
+          set -euo pipefail
           any_missing=false
           check_image() {
             local tag="$1"
@@ -83,7 +88,7 @@ jobs:
 
           echo "any-missing=${any_missing}" >> $GITHUB_OUTPUT
 
-  # Build any venv images that don't exist yet using docker/bake-action
+  # Build any venv images that don't exist yet using manual docker bake
   build:
     name: "🐍 Build missing venvs"
     needs: tags
@@ -103,17 +108,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [worker.oci]
-              max-parallelism = 4
-
       - name: Prepare bake overrides
         id: bake
         run: |
-          BAKE_OUTPUT="type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          set -euo pipefail
           UBUNTU_VERSION="${{ needs.tags.outputs.ubuntu-version }}"
 
           if [ "$UBUNTU_VERSION" = "24.04" ]; then
@@ -148,26 +146,11 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push ci-build-venv
-        if: needs.tags.outputs.ci-build-venv-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
-          PYTHON_VERSION: ${{ steps.bake.outputs.python-version }}
+      - name: Build and push missing venv images
+        if: steps.bake.outputs.targets != ''
+        uses: ./.github/actions/manual-docker-bake
         with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: ci-build-venv
-          set: ${{ steps.bake.outputs.set }}
-
-      - name: Build and push ci-test-venv
-        if: needs.tags.outputs.ci-test-venv-exists != 'true'
-        uses: docker/bake-action@v6
-        env:
-          UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
-          PYTHON_VERSION: ${{ steps.bake.outputs.python-version }}
-        with:
-          source: .
-          files: dockerfile/docker-bake.hcl
-          targets: ci-test-venv
-          set: ${{ steps.bake.outputs.set }}
+          targets: ${{ steps.bake.outputs.targets }}
+          set-lines: ${{ steps.bake.outputs.set }}
+          ubuntu-version: ${{ steps.bake.outputs.ubuntu-version }}
+          python-version: ${{ steps.bake.outputs.python-version }}

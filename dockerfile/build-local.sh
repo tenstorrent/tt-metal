@@ -17,6 +17,7 @@ Usage:
 Options:
   --ubuntu VERSION    Ubuntu version (default: 22.04)
   --tag TAG           Output image tag override
+  --set KEY=VALUE     Additional bake --set override (repeatable)
   --no-cache          Build without Docker cache
   --print             Dry run: show what would be built
   --help              Show this help message
@@ -37,6 +38,7 @@ Targets:
 Examples:
   ./dockerfile/build-local.sh dev
   ./dockerfile/build-local.sh --ubuntu 24.04 ci-test
+  ./dockerfile/build-local.sh --set ci-build.output=type=docker ci-build
   ./dockerfile/build-local.sh --no-cache dev
   ./dockerfile/build-local.sh --print dev
 
@@ -74,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tag)
             TAG_OVERRIDE="$2"
+            shift 2
+            ;;
+        --set)
+            BAKE_FLAGS+=("--set" "$2")
             shift 2
             ;;
         --no-cache)

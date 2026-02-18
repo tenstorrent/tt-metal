@@ -2,7 +2,10 @@ name: "Build all Docker images"
 # =============================================================================
 # This workflow builds ALL Docker images needed by the CI pipeline by calling
 # build-docker-artifact.yaml once per platform in parallel. build-docker-artifact
-# is the single source of truth for hash calculation, tool images, and image builds.
+# is the single source of truth for hash calculation and image builds.
+#
+# NOTE: build-docker-artifact uses manual `docker buildx bake` execution
+# (via .github/actions/manual-docker-bake), not docker/bake-action.
 #
 # It should be called once at the start of the pipeline (e.g., by merge-gate.yaml),
 # and all subsequent jobs should use the pre-built images via the outputs.
@@ -57,13 +60,13 @@ permissions:
   packages: write
 
 jobs:
-  # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share
+  # Tool images (ccache, mold, doxygen, etc.) are platform-agnostic; build once and share.
   build-tools:
     name: "🔧 Build tool images"
     uses: ./.github/workflows/build-docker-tools.yaml
     secrets: inherit
 
-  # Ubuntu 22.04: full build via single source of truth; this run also builds manylinux (once for all platforms)
+  # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms.
   build-2204:
     name: "🐳 Ubuntu 22.04"
     needs: [build-tools]
@@ -75,7 +78,7 @@ jobs:
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
     secrets: inherit
 
-  # Ubuntu 24.04: full build via single source of truth (runs in parallel with build-2204); skip manylinux (handled by build-2204)
+  # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here.
   build-2404:
     name: "🐳 Ubuntu 24.04"
     needs: [build-tools]

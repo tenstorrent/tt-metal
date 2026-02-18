@@ -30,6 +30,9 @@ name: "Build tt-metal docker artifact"
 permissions:
   packages: write
 
+env:
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
 on:
   workflow_call:
     inputs:
@@ -173,6 +176,7 @@ jobs:
       - name: Determine Python version
         id: python-version
         run: |
+          set -euo pipefail
           VERSION="${{ steps.platform.outputs.version }}"
           # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
           if [ "$VERSION" = "24.04" ]; then
@@ -185,6 +189,7 @@ jobs:
 
       - name: Set environment variables
         run: |
+          set -euo pipefail
           DISTRO="${{ steps.platform.outputs.distro }}"
           VERSION="${{ steps.platform.outputs.version }}"
           ARCH="${{ inputs.architecture || 'amd64' }}"
@@ -199,6 +204,7 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
+          set -euo pipefail
           # Include workflow and Dockerfile.tools. The hash script extracts COPY sources from
           # any Dockerfile passed as extra, so Dockerfile.tools brings in all tool install
           # scripts (install-sfpi.sh, etc.). When a tool is updated, both tool image tag and
@@ -229,7 +235,8 @@ jobs:
       - name: Query images exist
         id: images
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
+          set -euo pipefail
+          if docker manifest inspect "${{ steps.tags.outputs.dev-tag }}" > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.dev-tag }} exists"
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
             echo "ci-test-exists=true" >> $GITHUB_OUTPUT
@@ -241,14 +248,14 @@ jobs:
             echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect "${{ steps.tags.outputs.basic-dev-tag }}" > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
             echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
           else
             echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
             echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
           fi
-          if docker manifest inspect ${{ steps.tags.outputs.basic-ttnn-runtime-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect "${{ steps.tags.outputs.basic-ttnn-runtime-tag }}" > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} exists"
             echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
           else
@@ -256,7 +263,7 @@ jobs:
             echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect "${{ steps.tags.outputs.manylinux-tag }}" > /dev/null 2>&1; then
             echo "${{ steps.tags.outputs.manylinux-tag }} exists"
             echo "manylinux-exists=true" >> $GITHUB_OUTPUT
           else
@@ -290,10 +297,6 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Use host buildx builder
-        run: |
-          docker buildx ls
-          docker buildx use default || true
       - name: Prepare bake overrides
         id: bake
         env:
@@ -301,7 +304,7 @@ jobs:
           CI_BUILD_VENV_TAG: ${{ needs.venvs.outputs.ci-build-venv-tag }}
           CI_TEST_VENV_TAG: ${{ needs.venvs.outputs.ci-test-venv-tag }}
         run: |
-          BAKE_OUTPUT="type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          set -euo pipefail
           TARGETS=""
           SET=""
 
@@ -362,41 +365,14 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push Ubuntu images via docker bake CLI
-        env:
-          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
-          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
-        run: |
-          export UBUNTU_VERSION PYTHON_VERSION
-
-          mapfile -t BAKE_SET_LINES <<'EOF'
-          ${{ steps.bake.outputs.set }}
-          EOF
-
-          BAKE_SETS=()
-          for s in "${BAKE_SET_LINES[@]}"; do
-            [ -n "$s" ] && BAKE_SETS+=(--set "$s")
-          done
-
-          build_target() {
-            local target="$1"
-            echo "Building target: ${target}"
-            docker buildx bake -f dockerfile/docker-bake.hcl "${BAKE_SETS[@]}" "${target}"
-          }
-
-          if [ "${{ needs.image-tags.outputs.dev-exists }}" != "true" ]; then
-            build_target ci-build
-            build_target ci-test
-            build_target dev
-          fi
-
-          if [ "${{ needs.image-tags.outputs.basic-dev-exists }}" != "true" ]; then
-            build_target basic-dev
-          fi
-
-          if [ "${{ needs.image-tags.outputs.basic-ttnn-runtime-exists }}" != "true" ]; then
-            build_target basic-ttnn-runtime
-          fi
+      - name: Build and push Ubuntu images
+        if: steps.bake.outputs.targets != ''
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: ${{ steps.bake.outputs.targets }}
+          set-lines: ${{ steps.bake.outputs.set }}
+          ubuntu-version: ${{ needs.image-tags.outputs.version }}
+          python-version: ${{ needs.image-tags.outputs.python-version }}
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   # Uses docker buildx bake CLI with context overrides for pre-built GHCR tool images.
@@ -423,16 +399,12 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Use host buildx builder
-        run: |
-          docker buildx ls
-          docker buildx use default || true
       - name: Prepare bake overrides
         id: bake
         env:
           TOOL_TAGS: ${{ inputs.tool-tags || needs.tools.outputs.tool-tags }}
         run: |
-          BAKE_OUTPUT="type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true"
+          set -euo pipefail
           SET=""
 
           for tool in ccache mold sfpi openmpi; do
@@ -449,18 +421,11 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push ManyLinux image via docker bake CLI
-        run: |
-          mapfile -t BAKE_SET_LINES <<'EOF'
-          ${{ steps.bake.outputs.set }}
-          EOF
-
-          BAKE_SETS=()
-          for s in "${BAKE_SET_LINES[@]}"; do
-            [ -n "$s" ] && BAKE_SETS+=(--set "$s")
-          done
-
-          docker buildx bake -f dockerfile/docker-bake.hcl "${BAKE_SETS[@]}" manylinux
+      - name: Build and push ManyLinux image
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: manylinux
+          set-lines: ${{ steps.bake.outputs.set }}
 
   # tag-latest runs after image-tags only (not after build jobs) because adding
   # needs.ubuntu would cause this job to be skipped when builds are skipped

@@ -23,7 +23,9 @@
 #   docker buildx bake --no-cache dev
 #
 # USAGE (CI / GHCR overrides):
-#   Workflows override tool/venv contexts to point to pre-built GHCR images:
+#   Workflows override tool/venv contexts to point to pre-built GHCR images and
+#   invoke bake one target at a time via .github/actions/manual-docker-bake.
+#   This avoids large multi-target metadata fan-out on registry lookups.
 #     docker buildx bake dev \
 #       --set '*.contexts.ccache-layer=docker-image://ghcr.io/.../ccache:tag' \
 #       --set '*.contexts.mold-layer=docker-image://ghcr.io/.../mold:tag' \
