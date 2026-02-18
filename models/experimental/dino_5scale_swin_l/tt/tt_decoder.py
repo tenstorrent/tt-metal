@@ -75,23 +75,30 @@ class TtMultiheadAttention:
 
         # Pre-split QKV weights and transpose for ttnn.linear: [in, out]
         in_proj_w = ttnn.to_layout(params["in_proj_weight"], ttnn.TILE_LAYOUT)
-        in_proj_b = ttnn.squeeze(
-            ttnn.to_layout(params["in_proj_bias"], ttnn.TILE_LAYOUT), 0
-        )
+        in_proj_b = ttnn.squeeze(ttnn.to_layout(params["in_proj_bias"], ttnn.TILE_LAYOUT), 0)
         E = embed_dims
         self.q_w = ttnn.permute(in_proj_w[:E, :], (1, 0))
-        self.k_w = ttnn.permute(in_proj_w[E:2*E, :], (1, 0))
-        self.v_w = ttnn.permute(in_proj_w[2*E:, :], (1, 0))
+        self.k_w = ttnn.permute(in_proj_w[E : 2 * E, :], (1, 0))
+        self.v_w = ttnn.permute(in_proj_w[2 * E :, :], (1, 0))
         self.q_b = in_proj_b[:E]
-        self.k_b = in_proj_b[E:2*E]
-        self.v_b = in_proj_b[2*E:]
+        self.k_b = in_proj_b[E : 2 * E]
+        self.v_b = in_proj_b[2 * E :]
 
         self.out_proj_weight = params["out_proj"]["weight"]
         self.out_proj_bias = params["out_proj"]["bias"]
 
-    def __call__(self, query, key=None, value=None, identity=None,
-                 query_pos=None, key_pos=None, attn_mask=None,
-                 key_padding_mask=None, **kwargs):
+    def __call__(
+        self,
+        query,
+        key=None,
+        value=None,
+        identity=None,
+        query_pos=None,
+        key_pos=None,
+        attn_mask=None,
+        key_padding_mask=None,
+        **kwargs,
+    ):
         if key is None:
             key = query
         if value is None:
@@ -195,12 +202,18 @@ class TtDINODecoderLayer:
 
     def __init__(self, params, device, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
         self.self_attn = TtMultiheadAttention(
-            params["self_attn"], device, embed_dims=embed_dims, num_heads=num_heads,
+            params["self_attn"],
+            device,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
         )
         self.cross_attn = TtMSDeformAttn(
-            params["cross_attn"], device,
-            embed_dims=embed_dims, num_heads=num_heads,
-            num_levels=num_levels, num_points=num_points,
+            params["cross_attn"],
+            device,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            num_levels=num_levels,
+            num_points=num_points,
         )
         self.ffn = TtFFN(params["ffn"], device)
         self.norm1_w = params["norms"][0]["weight"]
@@ -210,20 +223,34 @@ class TtDINODecoderLayer:
         self.norm3_w = params["norms"][2]["weight"]
         self.norm3_b = params["norms"][2]["bias"]
 
-    def __call__(self, query, query_pos, value, key_padding_mask,
-                 self_attn_mask, spatial_shapes, level_start_index,
-                 valid_ratios, reference_points, **kwargs):
+    def __call__(
+        self,
+        query,
+        query_pos,
+        value,
+        key_padding_mask,
+        self_attn_mask,
+        spatial_shapes,
+        level_start_index,
+        valid_ratios,
+        reference_points,
+        **kwargs,
+    ):
         logger.info("  DecoderLayer: self-attention...")
         query = self.self_attn(
-            query=query, key=query, value=query,
-            query_pos=query_pos, key_pos=query_pos,
+            query=query,
+            key=query,
+            value=query,
+            query_pos=query_pos,
+            key_pos=query_pos,
             attn_mask=self_attn_mask,
         )
         query = ttnn.layer_norm(query, weight=self.norm1_w, bias=self.norm1_b)
 
         logger.info("  DecoderLayer: cross-attention...")
         query = self.cross_attn(
-            query=query, value=value,
+            query=query,
+            value=value,
             query_pos=query_pos,
             key_padding_mask=key_padding_mask,
             reference_points=reference_points,
@@ -246,17 +273,19 @@ class TtDINODecoder:
     returns intermediate hidden states and reference points for each layer.
     """
 
-    def __init__(self, params, device, num_layers=6, embed_dims=256, num_heads=8,
-                 num_levels=5, num_points=4):
+    def __init__(self, params, device, num_layers=6, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
         self.device = device
         self.num_layers = num_layers
         self.embed_dims = embed_dims
 
         self.layers = [
             TtDINODecoderLayer(
-                params["layers"][i], device,
-                embed_dims=embed_dims, num_heads=num_heads,
-                num_levels=num_levels, num_points=num_points,
+                params["layers"][i],
+                device,
+                embed_dims=embed_dims,
+                num_heads=num_heads,
+                num_levels=num_levels,
+                num_points=num_points,
             )
             for i in range(num_layers)
         ]
@@ -267,10 +296,7 @@ class TtDINODecoder:
 
         self.reg_branches = None
         if "reg_branches" in params:
-            self.reg_branches = [
-                TtRegBranch(params["reg_branches"][i], device)
-                for i in range(num_layers)
-            ]
+            self.reg_branches = [TtRegBranch(params["reg_branches"][i], device) for i in range(num_layers)]
 
     def __call__(
         self,
@@ -325,7 +351,9 @@ class TtDINODecoder:
             if self_attn_mask is not None:
                 self_attn_mask_tt = ttnn.from_torch(
                     self_attn_mask.unsqueeze(0).unsqueeze(0).float().masked_fill(self_attn_mask, -1e9),
-                    device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
                 )
 
             output = layer(

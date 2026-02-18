@@ -119,9 +119,9 @@ def test_ttnn_neck_pcc(device, reset_seeds):
     level_names = ["P2", "P3", "P4", "P5", "P6"]
     for i, (torch_feat, ttnn_feat) in enumerate(zip(torch_neck_feats, ttnn_neck_feats)):
         ttnn_out = ttnn.to_torch(ttnn.from_device(ttnn_feat))
-        assert ttnn_out.shape == torch_feat.shape, (
-            f"{level_names[i]} shape mismatch: TTNN {ttnn_out.shape} vs PyTorch {torch_feat.shape}"
-        )
+        assert (
+            ttnn_out.shape == torch_feat.shape
+        ), f"{level_names[i]} shape mismatch: TTNN {ttnn_out.shape} vs PyTorch {torch_feat.shape}"
         passing, pcc_val = comp_pcc(torch_feat, ttnn_out, pcc_threshold)
         logger.info(f"{level_names[i]}: shape={list(torch_feat.shape)}, PCC={pcc_val:.6f}, pass={passing}")
         assert passing, f"{level_names[i]} PCC {pcc_val:.6f} < {pcc_threshold}"

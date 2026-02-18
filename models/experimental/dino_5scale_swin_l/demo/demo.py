@@ -19,7 +19,7 @@ import argparse
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -44,19 +44,86 @@ from models.experimental.dino_5scale_swin_l.common import (
 )
 
 COCO_CLASSES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
-    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
-    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
-    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
-    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
 ]
 
 IMAGENET_MEAN = [123.675, 116.28, 103.53]
@@ -72,6 +139,7 @@ SAMPLE_IMAGES = {
 # ---------------------------------------------------------------------------
 # Preprocessing
 # ---------------------------------------------------------------------------
+
 
 def preprocess_image(image_path: str) -> Tuple[torch.Tensor, Tuple[int, int], float]:
     """
@@ -106,6 +174,7 @@ def preprocess_image(image_path: str) -> Tuple[torch.Tensor, Tuple[int, int], fl
 # PyTorch reference inference
 # ---------------------------------------------------------------------------
 
+
 def run_pytorch_reference(ref_model, image_tensor, orig_shape, resize_scale, score_thr, nms_thr):
     """Run PyTorch mmdet DINO and return postprocessed detections."""
     from torchvision.ops import batched_nms
@@ -117,7 +186,9 @@ def run_pytorch_reference(ref_model, image_tensor, orig_shape, resize_scale, sco
         enc_out = ref_model.forward_encoder(neck_feats)
         det = ref_model.model
         output_memory, output_proposals = det.gen_encoder_output_proposals(
-            enc_out["memory"], enc_out.get("memory_mask"), enc_out["spatial_shapes"],
+            enc_out["memory"],
+            enc_out.get("memory_mask"),
+            enc_out["spatial_shapes"],
         )
         enc_cls = det.bbox_head.cls_branches[det.decoder.num_layers](output_memory)
         ref_topk_indices = torch.topk(enc_cls.max(-1)[0], k=NUM_QUERIES, dim=1)[1]
@@ -170,6 +241,7 @@ def run_pytorch_reference(ref_model, image_tensor, orig_shape, resize_scale, sco
 # TTNN inference
 # ---------------------------------------------------------------------------
 
+
 def run_ttnn_inference(tt_model, image_tensor, orig_shape, resize_scale, score_thr, nms_thr):
     """Run full TTNN DINO pipeline and return postprocessed detections."""
     from models.experimental.dino_5scale_swin_l.tt.tt_dino import TtDINO
@@ -179,7 +251,8 @@ def run_ttnn_inference(tt_model, image_tensor, orig_shape, resize_scale, score_t
     bbox_preds = result["all_bbox_preds"][-1]
 
     detections = TtDINO.postprocess(
-        cls_scores, bbox_preds,
+        cls_scores,
+        bbox_preds,
         img_shape=(DINO_INPUT_H, DINO_INPUT_W),
         score_thr=score_thr,
         nms_thr=nms_thr,
@@ -207,6 +280,7 @@ def run_ttnn_inference(tt_model, image_tensor, orig_shape, resize_scale, score_t
 # ---------------------------------------------------------------------------
 # Detection comparison
 # ---------------------------------------------------------------------------
+
 
 def compute_iou(box1, box2):
     """IoU between two [4] boxes in xyxy format."""
@@ -253,34 +327,40 @@ def compare_detections(ref_dets, tt_dets, iou_thr=0.5):
                 best_iou = iou
                 best_j = j
         if best_iou >= iou_thr and best_j >= 0:
-            matched_pairs.append({
-                "class": COCO_CLASSES[ref_labels[i].item()],
-                "ref_score": ref_scores[i].item(),
-                "tt_score": tt_scores[best_j].item(),
-                "iou": best_iou,
-                "ref_box": ref_boxes[i].tolist(),
-                "tt_box": tt_boxes[best_j].tolist(),
-            })
+            matched_pairs.append(
+                {
+                    "class": COCO_CLASSES[ref_labels[i].item()],
+                    "ref_score": ref_scores[i].item(),
+                    "tt_score": tt_scores[best_j].item(),
+                    "iou": best_iou,
+                    "ref_box": ref_boxes[i].tolist(),
+                    "tt_box": tt_boxes[best_j].tolist(),
+                }
+            )
             ref_matched.add(i)
             tt_matched.add(best_j)
 
     ref_only = []
     for i in range(len(ref_boxes)):
         if i not in ref_matched:
-            ref_only.append({
-                "class": COCO_CLASSES[ref_labels[i].item()],
-                "score": ref_scores[i].item(),
-                "box": ref_boxes[i].tolist(),
-            })
+            ref_only.append(
+                {
+                    "class": COCO_CLASSES[ref_labels[i].item()],
+                    "score": ref_scores[i].item(),
+                    "box": ref_boxes[i].tolist(),
+                }
+            )
 
     tt_only = []
     for j in range(len(tt_boxes)):
         if j not in tt_matched:
-            tt_only.append({
-                "class": COCO_CLASSES[tt_labels[j].item()],
-                "score": tt_scores[j].item(),
-                "box": tt_boxes[j].tolist(),
-            })
+            tt_only.append(
+                {
+                    "class": COCO_CLASSES[tt_labels[j].item()],
+                    "score": tt_scores[j].item(),
+                    "box": tt_boxes[j].tolist(),
+                }
+            )
 
     return {
         "matched": matched_pairs,
@@ -294,6 +374,7 @@ def compare_detections(ref_dets, tt_dets, iou_thr=0.5):
 # ---------------------------------------------------------------------------
 # Visualization
 # ---------------------------------------------------------------------------
+
 
 def draw_detections_on_image(img, boxes, scores, labels, color_offset=0):
     """Draw boxes on a PIL Image (in-place). Returns the image."""
@@ -358,8 +439,10 @@ def save_side_by_side(image_path, ref_dets, tt_dets, output_path, comparison):
 # Download helpers
 # ---------------------------------------------------------------------------
 
+
 def download_image(url: str, dest_dir: str, name: str) -> str:
     import urllib.request
+
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, name)
     if not os.path.isfile(dest):
@@ -371,6 +454,7 @@ def download_image(url: str, dest_dir: str, name: str) -> str:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="DINO-5scale Swin-L: TTNN vs PyTorch Comparison Demo")
@@ -385,7 +469,8 @@ def main():
     config_path = str(base / "models/experimental/dino_5scale_swin_l/reference/dino_5scale_swin_l.py")
 
     ckpt_path = str(
-        base / "models/experimental/dino_5scale_swin_l/checkpoints/dino_5scale_swin_l"
+        base
+        / "models/experimental/dino_5scale_swin_l/checkpoints/dino_5scale_swin_l"
         / "dino-5scale_swin-l_8xb2-36e_coco-5486e051.pth"
     )
     if not Path(ckpt_path).is_file():
@@ -399,33 +484,38 @@ def main():
     if args.image:
         image_paths = args.image
     else:
-        image_paths = [
-            download_image(url, demo_dir, f"{name}.jpg")
-            for name, url in SAMPLE_IMAGES.items()
-        ]
+        image_paths = [download_image(url, demo_dir, f"{name}.jpg") for name, url in SAMPLE_IMAGES.items()]
 
     # ---- Load PyTorch reference ----
     logger.info("Loading PyTorch reference model...")
     from models.experimental.dino_5scale_swin_l.reference.dino_staged_forward import DINOStagedForward
+
     ref_model = DINOStagedForward(config_path, ckpt_path)
 
     # ---- Load TTNN model ----
     import ttnn
+
     logger.info(f"Opening TT device {args.device_id}...")
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768)
 
     try:
         from models.experimental.dino_5scale_swin_l.tt.model_preprocessing import (
-            load_backbone_weights, load_neck_weights,
-            load_encoder_weights, load_decoder_weights, compute_attn_masks,
+            load_backbone_weights,
+            load_neck_weights,
+            load_encoder_weights,
+            load_decoder_weights,
+            compute_attn_masks,
         )
         from models.experimental.dino_5scale_swin_l.tt.tt_dino import TtDINO
 
         logger.info("Loading TTNN weights...")
         t0 = time.time()
         backbone_params = load_backbone_weights(
-            ckpt_path, device, embed_dim=SWIN_L_EMBED_DIM,
-            depths=tuple(SWIN_L_DEPTHS), num_heads=tuple(SWIN_L_NUM_HEADS),
+            ckpt_path,
+            device,
+            embed_dim=SWIN_L_EMBED_DIM,
+            depths=tuple(SWIN_L_DEPTHS),
+            num_heads=tuple(SWIN_L_NUM_HEADS),
             window_size=SWIN_L_WINDOW_SIZE,
         )
         neck_params = load_neck_weights(ckpt_path, device)
@@ -435,16 +525,26 @@ def main():
         logger.info(f"Weights loaded in {time.time() - t0:.1f}s")
 
         tt_model = TtDINO(
-            encoder_params=encoder_params, decoder_params=decoder_params,
-            device=device, backbone_params=backbone_params,
-            neck_params=neck_params, attn_masks=attn_masks,
-            num_queries=NUM_QUERIES, num_classes=NUM_CLASSES,
-            num_levels=NUM_LEVELS, embed_dims=ENCODER_EMBED_DIMS,
-            num_heads=ENCODER_NUM_HEADS, num_points=ENCODER_NUM_POINTS,
-            encoder_num_layers=ENCODER_NUM_LAYERS, decoder_num_layers=DECODER_NUM_LAYERS,
-            pe_temperature=20, embed_dim=SWIN_L_EMBED_DIM,
-            depths=tuple(SWIN_L_DEPTHS), backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
-            window_size=SWIN_L_WINDOW_SIZE, in_channels=tuple(NECK_IN_CHANNELS),
+            encoder_params=encoder_params,
+            decoder_params=decoder_params,
+            device=device,
+            backbone_params=backbone_params,
+            neck_params=neck_params,
+            attn_masks=attn_masks,
+            num_queries=NUM_QUERIES,
+            num_classes=NUM_CLASSES,
+            num_levels=NUM_LEVELS,
+            embed_dims=ENCODER_EMBED_DIMS,
+            num_heads=ENCODER_NUM_HEADS,
+            num_points=ENCODER_NUM_POINTS,
+            encoder_num_layers=ENCODER_NUM_LAYERS,
+            decoder_num_layers=DECODER_NUM_LAYERS,
+            pe_temperature=20,
+            embed_dim=SWIN_L_EMBED_DIM,
+            depths=tuple(SWIN_L_DEPTHS),
+            backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
+            window_size=SWIN_L_WINDOW_SIZE,
+            in_channels=tuple(NECK_IN_CHANNELS),
         )
 
         # ---- Process each image ----
@@ -462,8 +562,12 @@ def main():
             logger.info("Running PyTorch reference...")
             t0 = time.time()
             ref_dets = run_pytorch_reference(
-                ref_model, image_tensor, orig_shape, resize_scale,
-                args.score_thr, args.nms_thr,
+                ref_model,
+                image_tensor,
+                orig_shape,
+                resize_scale,
+                args.score_thr,
+                args.nms_thr,
             )
             pt_time = time.time() - t0
             logger.info(f"PyTorch: {len(ref_dets['boxes'])} detections in {pt_time:.2f}s")
@@ -472,8 +576,12 @@ def main():
             logger.info("Running TTNN inference...")
             t0 = time.time()
             tt_dets = run_ttnn_inference(
-                tt_model, image_tensor, orig_shape, resize_scale,
-                args.score_thr, args.nms_thr,
+                tt_model,
+                image_tensor,
+                orig_shape,
+                resize_scale,
+                args.score_thr,
+                args.nms_thr,
             )
             tt_time = time.time() - t0
             logger.info(f"TTNN: {len(tt_dets['boxes'])} detections in {tt_time:.2f}s")
@@ -485,8 +593,10 @@ def main():
                 ref_set = set(ref_tk[0].tolist())
                 tt_set = set(tt_tk[0].tolist())
                 topk_overlap = len(ref_set & tt_set)
-                logger.info(f"  Top-K overlap (real image): {topk_overlap}/{NUM_QUERIES} "
-                            f"({topk_overlap / NUM_QUERIES * 100:.1f}%)")
+                logger.info(
+                    f"  Top-K overlap (real image): {topk_overlap}/{NUM_QUERIES} "
+                    f"({topk_overlap / NUM_QUERIES * 100:.1f}%)"
+                )
 
             # Compare
             comparison = compare_detections(ref_dets, tt_dets, iou_thr=0.5)
@@ -527,14 +637,16 @@ def main():
             out_path = os.path.join(demo_dir, f"{img_name}_comparison.jpg")
             save_side_by_side(img_path, ref_dets, tt_dets, out_path, comparison)
 
-            all_summaries.append({
-                "image": img_name,
-                "ref_count": comparison["num_ref"],
-                "tt_count": comparison["num_tt"],
-                "matched": len(comparison["matched"]),
-                "ref_only": len(comparison["ref_only"]),
-                "tt_only": len(comparison["tt_only"]),
-            })
+            all_summaries.append(
+                {
+                    "image": img_name,
+                    "ref_count": comparison["num_ref"],
+                    "tt_count": comparison["num_tt"],
+                    "matched": len(comparison["matched"]),
+                    "ref_only": len(comparison["ref_only"]),
+                    "tt_only": len(comparison["tt_only"]),
+                }
+            )
 
         # ---- Overall summary ----
         logger.info(f"\n{'='*60}")
@@ -553,13 +665,11 @@ def main():
             total_matched += s["matched"]
         logger.info("-" * 60)
         match_rate = total_matched / total_ref * 100 if total_ref > 0 else 0
-        logger.info(
-            f"{'TOTAL':20s} {total_ref:4d} {total_tt:5d} "
-            f"{total_matched:6d} ({match_rate:.1f}% match rate)"
-        )
+        logger.info(f"{'TOTAL':20s} {total_ref:4d} {total_tt:5d} " f"{total_matched:6d} ({match_rate:.1f}% match rate)")
 
     finally:
         import ttnn
+
         ttnn.close_device(device)
 
     logger.info("\nDone!")
