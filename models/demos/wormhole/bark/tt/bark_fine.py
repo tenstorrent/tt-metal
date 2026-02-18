@@ -30,6 +30,11 @@ from models.demos.wormhole.bark.tt.bark_gpt import (
 )
 
 
+def preprocess_embedding_weight(w, device):
+    """Preprocess embedding weights for ttnn.embedding (2D ROW_MAJOR)."""
+    return ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
 class TtBarkFineModel:
     """Bark Fine model: non-causal GPT for generating fine EnCodec codebooks.
 
@@ -56,11 +61,11 @@ class TtBarkFineModel:
         # One embedding layer per codebook (all 8) in TTNN
         self.input_embeds_layers = []
         for i in range(n_codes_total):
-            weight = preprocess_linear_weight(parameters["input_embeds_layers"][str(i)]["weight"], device)
+            weight = preprocess_embedding_weight(parameters["input_embeds_layers"][str(i)]["weight"], device)
             self.input_embeds_layers.append(weight)
 
         # Position embedding (shared across codebooks) in TTNN
-        self.position_embeds_weight = preprocess_linear_weight(parameters["position_embeds_layer"]["weight"], device)
+        self.position_embeds_weight = preprocess_embedding_weight(parameters["position_embeds_layer"]["weight"], device)
 
         # Transformer blocks (non-causal)
         self.blocks = []
@@ -155,10 +160,11 @@ class TtBarkFineModel:
             tt_hidden, _ = block(tt_hidden, layer_past=None, use_cache=False, memory_config=memory_config)
 
         # Final layer norm
+        prev_hidden = tt_hidden
         tt_hidden = ttnn.layer_norm(
             tt_hidden, epsilon=1e-5, weight=self.ln_f_weight, bias=self.ln_f_bias, memory_config=memory_config
         )
-
+        ttnn.deallocate(prev_hidden)
         # LM head for the specific codebook
         lm_head_idx = codebook_idx - self.n_codes_given
         logits = ttnn.linear(

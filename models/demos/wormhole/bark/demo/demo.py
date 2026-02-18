@@ -24,8 +24,10 @@ def save_audio(audio: np.ndarray, filename: str, sample_rate: int = 24000):
     try:
         from scipy.io import wavfile
 
-        # Normalize to int16 range
-        audio_int16 = (audio * 32767).astype(np.int16)
+        # Ensure NumPy array and clip to valid range before converting to int16
+        audio = np.asarray(audio, dtype=np.float32)
+        audio_clipped = np.clip(audio, -1.0, 1.0)
+        audio_int16 = (audio_clipped * 32767).astype(np.int16)
         wavfile.write(filename, sample_rate, audio_int16)
         print(f"Audio saved to {filename}")
     except ImportError:
@@ -61,6 +63,9 @@ def run_demo(text: str = None, output_file: str = "bark_output.wav", verbose: bo
         t0 = time.time()
         audio = model.generate(text, verbose=verbose)
         total_time = time.time() - t0
+
+        # Clip audio to valid range [-1, 1]
+        audio = np.clip(audio, -1.0, 1.0)
 
         # Save output
         save_audio(audio, output_file)
