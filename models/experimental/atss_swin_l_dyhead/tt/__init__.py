@@ -16,6 +16,7 @@ from models.experimental.atss_swin_l_dyhead.tt.tt_swin_backbone import build_ats
 from models.experimental.atss_swin_l_dyhead.tt.tt_fpn import TtFPN
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_head import TtATSSHead
 from models.experimental.atss_swin_l_dyhead.tt.tt_atss_model import TtATSSModel
+from models.experimental.atss_swin_l_dyhead.tt.tt_dyhead import TtHybridDyHead
 from models.experimental.atss_swin_l_dyhead.tt.weight_loading import (
     load_fpn_weights,
     load_atss_head_weights,

@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Full TTNN ATSS model: Swin-L (TTNN) + FPN (TTNN) + DyHead (PyTorch) + ATSS Head (TTNN).
+Full TTNN ATSS model: Swin-L (TTNN) + FPN (TTNN) + DyHead (hybrid) + ATSS Head (TTNN).
 
-The DyHead uses modulated deformable convolution (DCNv2) which does not have
-a native TTNN implementation, so it runs on CPU via PyTorch.  All other
-components are accelerated on device via TTNN.
+DyHead supports two modes (controlled by hybrid_dyhead flag):
+  hybrid=True  (default):
+    - DCNv2 spatial attention runs on CPU (no native TTNN kernel)
+    - Scale-aware and task-aware attention run on TTNN device
+  hybrid=False:
+    - Entire DyHead runs on CPU via PyTorch
 
-Data flow:
-  [device] Swin-L backbone  →  3 NCHW feature maps
-  [device] FPN               →  5 NCHW feature maps
-  [host]   DyHead (PyTorch)  →  5 NCHW feature maps
-  [device] ATSS Head          →  (cls, reg, centerness) per level
-  [host]   Post-processing    →  bboxes, scores, labels
+Data flow (hybrid mode):
+  [device] Swin-L backbone   -> 3 NCHW feature maps
+  [device] FPN                -> 5 NCHW feature maps
+  [host]   DyHead spatial     -> DCNv2 on CPU
+  [device] DyHead scale/task  -> attention on TTNN
+  [device] ATSS Head          -> (cls, reg, centerness) per level
+  [host]   Post-processing    -> bboxes, scores, labels
 """
 
 import torch
@@ -42,6 +46,7 @@ from models.experimental.atss_swin_l_dyhead.tt.weight_loading import (
 )
 from models.experimental.atss_swin_l_dyhead.reference.dyhead import build_dyhead_for_atss
 from models.experimental.atss_swin_l_dyhead.reference.postprocess import atss_postprocess
+from models.experimental.atss_swin_l_dyhead.tt.tt_dyhead import TtHybridDyHead
 
 
 class TtATSSModel:
@@ -74,7 +79,14 @@ class TtATSSModel:
         self.pad_size_divisor = pad_size_divisor
 
     @classmethod
-    def from_checkpoint(cls, checkpoint_path: str, device: ttnn.Device, input_h=None, input_w=None):
+    def from_checkpoint(
+        cls,
+        checkpoint_path: str,
+        device: ttnn.Device,
+        input_h=None,
+        input_w=None,
+        hybrid_dyhead: bool = True,
+    ):
         """Build the full model from an mmdet checkpoint.
 
         Args:
@@ -82,6 +94,8 @@ class TtATSSModel:
             device: TTNN device.
             input_h: padded input height (default: ATSS_INPUT_H).
             input_w: padded input width  (default: ATSS_INPUT_W).
+            hybrid_dyhead: if True, run scale/task attention on TTNN device
+                (spatial DCNv2 stays on CPU). If False, run entire DyHead on CPU.
         """
         # 1. Swin-L backbone (TTNN)
         backbone = build_atss_backbone(checkpoint_path, device, input_h=input_h, input_w=input_w)
@@ -102,11 +116,16 @@ class TtATSSModel:
             num_outs=ATSS_FPN_NUM_OUTS,
         )
 
-        # 3. DyHead (PyTorch — DCNv2 not available in TTNN)
-        dyhead = build_dyhead_for_atss()
+        # 3. DyHead — load PyTorch model first (needed in both modes for DCNv2)
+        pt_dyhead = build_dyhead_for_atss()
         dyhead_sd = load_dyhead_weights(checkpoint_path, device)
-        dyhead.load_state_dict(dyhead_sd, strict=True)
-        dyhead.eval()
+        pt_dyhead.load_state_dict(dyhead_sd, strict=True)
+        pt_dyhead.eval()
+
+        if hybrid_dyhead:
+            dyhead = TtHybridDyHead(device, pt_dyhead)
+        else:
+            dyhead = pt_dyhead
 
         # 4. ATSS Head (TTNN)
         head_params = load_atss_head_weights(checkpoint_path, device)
@@ -139,15 +158,18 @@ class TtATSSModel:
         fpn_feats = self.fpn(backbone_feats)
         return fpn_feats
 
-    def forward_dyhead_on_host(self, fpn_feats_ttnn):
-        """Transfer FPN features to host, run DyHead on CPU, return list of torch tensors."""
+    def forward_dyhead(self, fpn_feats_ttnn):
+        """Run DyHead on FPN features (hybrid TTNN or pure PyTorch)."""
         torch_feats = []
         for feat in fpn_feats_ttnn:
             t = ttnn.to_torch(ttnn.from_device(feat)).float()
             torch_feats.append(t)
 
         with torch.no_grad():
-            dy_feats = self.dyhead(torch_feats)
+            if isinstance(self.dyhead, TtHybridDyHead):
+                dy_feats = self.dyhead(torch_feats)
+            else:
+                dy_feats = self.dyhead(torch_feats)
         return dy_feats
 
     def forward_head(self, dy_feats_torch):
@@ -177,7 +199,7 @@ class TtATSSModel:
         Returns: (cls_scores, bbox_preds, centernesses) as torch tensors.
         """
         fpn_feats = self.forward_backbone_fpn(x_ttnn)
-        dy_feats = self.forward_dyhead_on_host(fpn_feats)
+        dy_feats = self.forward_dyhead(fpn_feats)
         cls_scores, bbox_preds, centernesses = self.forward_head(dy_feats)
         return cls_scores, bbox_preds, centernesses
 
