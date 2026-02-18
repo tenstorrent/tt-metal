@@ -159,11 +159,7 @@ class SdpaTailSingleCore:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_cores,
             compile_time_args=reader_compile_time_args,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1,
-                noc=ttnn.NOC.RISCV_1_default,
-                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
-            ),
+            config=ttnn.ReaderConfigDescriptor(),
         )
 
         # Writer kernel
@@ -180,11 +176,7 @@ class SdpaTailSingleCore:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=all_cores,
             compile_time_args=writer_compile_time_args,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0,
-                noc=ttnn.NOC.RISCV_0_default,
-                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
-            ),
+            config=ttnn.WriterConfigDescriptor(),
         )
 
         # Compute kernel - simplified args

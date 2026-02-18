@@ -220,7 +220,6 @@ class GatherSingleCore:
                             config=ttnn.DataMovementConfigDescriptor(
                                 processor=ttnn.DataMovementProcessor.RISCV_1,
                                 noc=noc_type,
-                                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                             ),
                         )
                     )
@@ -255,7 +254,6 @@ class GatherSingleCore:
                         config=ttnn.DataMovementConfigDescriptor(
                             processor=ttnn.DataMovementProcessor.RISCV_1,
                             noc=noc_type,
-                            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                         ),
                     )
                 ]
@@ -293,7 +291,6 @@ class GatherSingleCore:
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0,
                 noc=receiver_noc,
-                noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
             ),
         )
         kernels.append(receiver_kernel_descriptor)
