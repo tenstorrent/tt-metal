@@ -116,13 +116,16 @@ For production operations requiring full C++ TTNN registration:
 
 Pipeline: analyzer → planner → scaffolder → factory-builder → kernel-designer → kernel-writer
 
-### Generic Op Workflow (Python-based)
-For rapid prototyping using `ttnn.generic_op()` and ProgramDescriptor APIs:
-`ttnn/experimental/claude_ttnn_agents/references/ttnn-generic-op-workflow.md`
+### Generic Op Workflow (Python-based) — use `/create-op` skill
+For rapid prototyping using `ttnn.generic_op()` and ProgramDescriptor APIs.
+Invoke with `/create-op` — the skill encodes the full pipeline:
 
-Pipeline: analyzer → planner → (generic_op_builder || kernel-designer) → kernel-writer
+Pipeline: analyzer → planner → (generic_op_builder || kernel-designer) → TDD kernel-writer
 
-Key difference: `generic_op_builder` and `kernel-designer` run in **parallel**, and `kernel-writer` waits for both to complete.
+Key features:
+- `generic_op_builder` and `kernel-designer` run in **parallel**
+- Kernel implementation uses stage-gated TDD (see `/tdd-kernels` skill)
+- Supports interactive (default) and fully automated modes
 
 ### Additional Resources
 - `ttnn/experimental/claude_ttnn_agents/subagent_breakdown.md` - Detailed agent breakdown
