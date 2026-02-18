@@ -63,14 +63,22 @@ class SocketInterface:
             self.upstream_socket.get_mesh_device(), self.downstream_socket.get_mesh_device(), socket_config
         )
 
+        # if (self.send_core_coord.core_coord == self.recv_core_coord.core_coord):
+        termination_semaphore_core_range = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
+            ]
+        )
+        # else:
+        #     termination_semaphore_core_range = ttnn.CoreRangeSet(
+        #         [
+        #             ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
+        #             ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord),
+        #         ]
+        #     )
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.upstream_socket.get_mesh_device(),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord),
-                    ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord),
-                ]
-            ),
+            termination_semaphore_core_range,
             0,
             ttnn.BufferType.L1,
         )
@@ -79,12 +87,12 @@ class SocketInterface:
         self,
         my_mesh_device,
         my_core_coord,
-        my_device_coord,
         my_upstream_socket,
         my_downstream_socket,
     ):
-        assert self.upstream_socket.get_active_cores()[0] == send_core_coord
-        assert self.downstream_socket.get_active_cores()[0] == recv_core_coord
+        # Upstream Socket (feeding this stage) and Downstream Socket (draining this stage) must be on my_core.
+        assert my_upstream_socket.get_active_cores()[0] == my_core_coord
+        assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 
         upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
         downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
@@ -102,7 +110,7 @@ class SocketInterface:
 
         packet_header_cb_desc = ttnn.CBDescriptor(
             total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord, my_core_coord)]),
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=packet_header_cb_index,
@@ -126,7 +134,7 @@ class SocketInterface:
         exchange_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2d_exchange.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord, my_core_coord)]),
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
             compile_time_args=kernel_ct_args,
             config=ttnn.WriterConfigDescriptor(),
         )
@@ -140,7 +148,7 @@ class SocketInterface:
         my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
         my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
 
-        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_device_coord)
+        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_core_coord.device_coord)
         my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
             ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
         )
@@ -148,48 +156,48 @@ class SocketInterface:
             ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
         )
 
-        rt_args_ref = program.kernels[0].runtime_args[my_core_coord.x][my_core_coord.y]
+        program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y] = []
+        rt_args_ref = program.kernels[0].runtime_args[my_core_coord.core_coord.x][my_core_coord.core_coord.y]
 
         for idx in range(num_fwd_links):
-            fwd_fabric_args = ttnn.setup_routing_plane_connection(
+            fwd_fabric_args = ttnn.setup_fabric_connection(
                 my_fabric_node_id,
-                [my_downstream_fabric_node_id],
-                [idx],
+                my_downstream_fabric_node_id,
+                idx,
                 program,
-                0,
-                my_core_coord,
+                my_core_coord.core_coord,
             )
-            rt_args_ref.extend(send_fabric_args)
+            rt_args_ref.extend(fwd_fabric_args)
 
         for idx in range(num_bwd_links):
-            bwd_fabric_args = ttnn.setup_routing_plane_connection(
+            bwd_fabric_args = ttnn.setup_fabric_connection(
                 my_fabric_node_id,
-                [my_upstream_fabric_node_id],
-                [idx],
+                my_upstream_fabric_node_id,
+                idx,
                 program,
-                0,
-                my_core_coord,
+                my_core_coord.core_coord,
             )
             rt_args_ref.extend(bwd_fabric_args)
         return program
 
     def run(self):
+        dummy_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.upstream_socket.get_mesh_device()
+        )
         sender_program = self._create_program(
             self.upstream_socket.get_mesh_device(),
             self.send_core_coord,
-            self.send_device_coord,
             self.upstream_socket,
-            self.socket_pair[0],
+            self.intermed_socket_pair[0],
         )
 
         receiver_program = self._create_program(
             self.downstream_socket.get_mesh_device(),
             self.recv_core_coord,
-            self.recv_device_coord,
-            self.socket_pair[1],
+            self.intermed_socket_pair[1],
             self.downstream_socket,
         )
-
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         mesh_program_descriptor[
             ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
         ] = sender_program
@@ -231,20 +239,44 @@ class HostInterface:
         self.loopback_mode = loopback_mode
         self.core_to_core_socket_buffer_size = core_to_core_socket_buffer_size
         self.embedding_tensor = embedding_tensor
+        self.h2d_downstream_core = h2d_downstream_core
+        self.d2h_upstream_core = d2h_upstream_core
         # Validate single-core, single-chip constraint
         # Current implementation only supports host communication with one core on one chip
         if len(h2d_socket.get_active_cores()) != 1 or len(d2h_socket.get_active_cores()) != 1:
             raise ValueError("Host <-> Device Communication for Blitz Decode must be on a single core.")
-        if h2d_socket.get_active_cores()[0] != d2h_socket.get_active_cores()[0]:
-            raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same core.")
         if h2d_socket.get_mesh_device().id() != d2h_socket.get_mesh_device().id():
             raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same mesh device.")
 
+        if loopback_mode:
+            if h2d_socket.get_active_cores()[0] != d2h_socket.get_active_cores()[0]:
+                raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same core.")
+
         self.mesh_device = h2d_socket.get_mesh_device()
-        self.mesh_core_coord = self.h2d_socket.get_active_cores()[0]
+        self.h2d_mesh_core_coord = self.h2d_socket.get_active_cores()[0]
+        self.d2h_mesh_core_coord = self.d2h_socket.get_active_cores()[0]
+
+        print(f"H2D Mesh Core Coord: {self.h2d_mesh_core_coord}")
+        print(f"D2H Mesh Core Coord: {self.d2h_mesh_core_coord}")
+        print(f"H2D Downstream Core: {h2d_downstream_core}")
+        print(f"D2H Upstream Core: {d2h_upstream_core}")
+
+        # if (self.h2d_mesh_core_coord.core_coord == self.d2h_mesh_core_coord.core_coord):
+        termination_semaphore_core_range = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
+            ]
+        )
+        # else:
+        #     termination_semaphore_core_range = ttnn.CoreRangeSet(
+        #         [
+        #             ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord),
+        #             ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord),
+        #         ]
+        #     )
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.mesh_device,
-            ttnn.CoreRangeSet([ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]),
+            termination_semaphore_core_range,
             0,
             ttnn.BufferType.L1,
         )
@@ -253,12 +285,12 @@ class HostInterface:
         # NOTE: Downstream and upstream cores must be on the same device as the host I/O core (single-chip constraint)
         if not loopback_mode:
             downstream_socket_connection = ttnn.SocketConnection(
-                self.mesh_core_coord,
-                h2d_downstream_core,
+                self.h2d_mesh_core_coord,
+                self.h2d_downstream_core,
             )
             upstream_socket_connection = ttnn.SocketConnection(
-                d2h_upstream_core,
-                self.mesh_core_coord,
+                self.d2h_upstream_core,
+                self.d2h_mesh_core_coord,
             )
             socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, core_to_core_socket_buffer_size)
 
@@ -295,7 +327,19 @@ class HostInterface:
             self.embedding_page_size = self.embedding_tensor.shape[3] * dtype_size(self.embedding_tensor.dtype)
             self.embedding_cb_index = 2
 
+        self.fabric_packet_header_cb_index = 1
+        self.num_fwd_links = 1
+        self.num_bwd_links = 1
+
     def _create_h2d_kernel(self):
+        fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        num_whole_fabric_packets = self.h2d_page_size // fabric_max_payload_size
+        partial_packet_size = self.h2d_page_size % fabric_max_payload_size
+
+        print(f"Fabric Max Payload Size: {fabric_max_payload_size}")
+        print(f"Num Whole Fabric Packets: {num_whole_fabric_packets}")
+        print(f"Partial Packet Size: {partial_packet_size}")
+
         h2d_socket_kernel_ct_args = [
             self.h2d_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
@@ -305,6 +349,10 @@ class HostInterface:
             self.intermed_cb_index
             if self.loopback_mode
             else self.downstream_socket_pair[0].get_config_buffer_address(),
+            self.fabric_packet_header_cb_index,
+            fabric_max_payload_size,
+            num_whole_fabric_packets,
+            partial_packet_size,
         ]
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
@@ -319,11 +367,12 @@ class HostInterface:
             else "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_receiver.cpp"
         )
 
+        print(f"Create H2D Kernel on core {self.h2d_mesh_core_coord}")
         h2d_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
+                [ttnn.CoreRange(self.h2d_mesh_core_coord.core_coord, self.h2d_mesh_core_coord.core_coord)]
             ),
             compile_time_args=h2d_socket_kernel_ct_args,
             config=ttnn.WriterConfigDescriptor(),
@@ -338,27 +387,26 @@ class HostInterface:
             self.loopback_mode,
             # Use a local CB if doing loopback, otherwise communicate with downstream over sockets
             self.intermed_cb_index if self.loopback_mode else self.upstream_socket_pair[1].get_config_buffer_address(),
+            self.fabric_packet_header_cb_index,
         ]
-
+        print(f"Create D2H Kenel on core {self.d2h_mesh_core_coord}")
         d2h_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2h_sender.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
+                [ttnn.CoreRange(self.d2h_mesh_core_coord.core_coord, self.d2h_mesh_core_coord.core_coord)]
             ),
             compile_time_args=d2h_socket_kernel_ct_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
         return d2h_kernel
 
-    def _create_cb_descriptors(self):
+    def _create_cb_descriptors(self, mesh_core_coord):
         cb_descriptors = []
         if self.loopback_mode:
             intermed_cb_desc = ttnn.CBDescriptor(
                 total_size=self.core_to_core_socket_buffer_size,
-                core_ranges=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
-                ),
+                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.intermed_cb_index,
@@ -374,9 +422,7 @@ class HostInterface:
         if self.has_embedding:
             embedding_cb_desc = ttnn.CBDescriptor(
                 total_size=self.embedding_page_size,
-                core_ranges=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(self.mesh_core_coord.core_coord, self.mesh_core_coord.core_coord)]
-                ),
+                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.embedding_cb_index,
@@ -386,6 +432,22 @@ class HostInterface:
                 ],
             )
             cb_descriptors.append(embedding_cb_desc)
+
+        packet_header_cb_num_pages = self.num_fwd_links + self.num_bwd_links
+        packet_header_cb_page_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+
+        print(f"Create Packet Header CB on core {mesh_core_coord}")
+        packet_header_cb_desc = ttnn.CBDescriptor(
+            total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=self.fabric_packet_header_cb_index,
+                    data_format=ttnn.uint32,
+                    page_size=packet_header_cb_page_size,
+                )
+            ],
+        )
         return cb_descriptors
 
     def run(self):
@@ -393,19 +455,70 @@ class HostInterface:
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.h2d_socket.get_mesh_device()
         )
 
+        h2d_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_mesh_core_coord.device_coord)
+        d2h_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_mesh_core_coord.device_coord)
+
+        my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_downstream_core.device_coord)
+        my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
+
         h2d_kernel = self._create_h2d_kernel()
         d2h_kernel = self._create_d2h_kernel()
-        cb_descriptors = self._create_cb_descriptors()
+        h2d_cb_descriptors = self._create_cb_descriptors(self.h2d_mesh_core_coord)
+        d2h_cb_descriptors = self._create_cb_descriptors(self.d2h_mesh_core_coord)
 
-        program = ttnn.ProgramDescriptor(
-            kernels=[h2d_kernel, d2h_kernel],
+        h2d_program = ttnn.ProgramDescriptor(
+            kernels=[h2d_kernel],
             semaphores=[],
-            cbs=cb_descriptors,
+            cbs=h2d_cb_descriptors,
         )
+        h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+            self.h2d_mesh_core_coord.core_coord.y
+        ] = []
+        h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
+            self.h2d_mesh_core_coord.core_coord.y
+        ]
+
+        for idx in range(self.num_fwd_links):
+            fwd_fabric_args = ttnn.setup_fabric_connection(
+                h2d_fabric_node_id,
+                my_downstream_fabric_node_id,
+                idx,
+                h2d_program,
+                self.h2d_mesh_core_coord.core_coord,
+            )
+            h2d_rt_args_ref.extend(fwd_fabric_args)
+
+        d2h_program = ttnn.ProgramDescriptor(
+            kernels=[d2h_kernel],
+            semaphores=[],
+            cbs=d2h_cb_descriptors,
+        )
+
+        d2h_program.kernels[0].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+            self.d2h_mesh_core_coord.core_coord.y
+        ] = []
+        d2h_rt_args_ref = d2h_program.kernels[0].runtime_args[self.d2h_mesh_core_coord.core_coord.x][
+            self.d2h_mesh_core_coord.core_coord.y
+        ]
+
+        for idx in range(self.num_bwd_links):
+            bwd_fabric_args = ttnn.setup_fabric_connection(
+                d2h_fabric_node_id,
+                my_upstream_fabric_node_id,
+                idx,
+                d2h_program,
+                self.d2h_mesh_core_coord.core_coord,
+            )
+            d2h_rt_args_ref.extend(bwd_fabric_args)
+
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         mesh_program_descriptor[
-            ttnn.MeshCoordinateRange(self.mesh_core_coord.device_coord, self.mesh_core_coord.device_coord)
-        ] = program
+            ttnn.MeshCoordinateRange(self.h2d_mesh_core_coord.device_coord, self.h2d_mesh_core_coord.device_coord)
+        ] = h2d_program
+
+        mesh_program_descriptor[
+            ttnn.MeshCoordinateRange(self.d2h_mesh_core_coord.device_coord, self.d2h_mesh_core_coord.device_coord)
+        ] = d2h_program
 
         io_tensors = [
             dummy_tensor,

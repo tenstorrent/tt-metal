@@ -19,6 +19,22 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
     return true;
 }
 
+FORCE_INLINE void write_data_to_remote_core_with_ack(
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
+    uint32_t l1_read_addr,
+    uint64_t dst_addr,
+    uint64_t downstream_bytes_sent_noc_addr,
+    uint32_t packet_size) {
+    packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
+    DPRINT << "H2D wait for empty write slot" << ENDL();
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 void kernel_main() {
     DPRINT << "Starting h2d receiver kernel" << ENDL();
     // Get this value from MeshSocket struct on host
@@ -28,6 +44,15 @@ void kernel_main() {
     constexpr bool pull_from_host = get_compile_time_arg_val(3);
     constexpr bool loopback_mode = get_compile_time_arg_val(4);
     constexpr uint32_t downstream_interface_index = get_compile_time_arg_val(5);
+    constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
+    constexpr uint32_t num_whole_fabric_packets = get_compile_time_arg_val(8);
+    constexpr uint32_t partial_packet_size = get_compile_time_arg_val(9);
+
+    size_t rt_args_idx = 0;
+
+    tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = {};
@@ -37,6 +62,7 @@ void kernel_main() {
         set_sender_socket_page_size(sender_socket, page_size);
     }
     set_receiver_socket_page_size(receiver_socket, page_size);
+    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     uint32_t read_addr_hi = receiver_socket.h2d.data_addr_hi;
     uint32_t read_addr_lo = receiver_socket.h2d.data_addr_lo;
@@ -44,10 +70,25 @@ void kernel_main() {
 
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
+    downstream_fabric_connection.open();
+
+    fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
+
+    uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
+        downstream_enc.d2d.downstream_noc_x,
+        downstream_enc.d2d.downstream_noc_y,
+        sender_socket.downstream_bytes_sent_addr);
+    uint64_t downstream_data_addr = get_noc_addr(
+        downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
+
     while (true) {
         // Wait for pages in H2D socket
+        DPRINT << "Waiting for pages in H2D socket" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
@@ -70,19 +111,41 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_push_back(downstream_interface_index, 1);
         } else {
-            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+            DPRINT << "Reserve pages downstream" << ENDL();
             socket_reserve_pages(sender_socket, 1);
-            noc_async_write(
-                receiver_socket.read_ptr,
-                get_noc_addr(
-                    downstream_enc.d2d.downstream_noc_x,
-                    downstream_enc.d2d.downstream_noc_y,
-                    sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                page_size);
+
+            auto l1_read_addr = receiver_socket.read_ptr;
+            uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
+
+            for (uint32_t i = 0; i < num_whole_fabric_packets; ++i) {
+                write_data_to_remote_core_with_ack(
+                    downstream_fabric_connection,
+                    downstream_data_packet_header_addr,
+                    l1_read_addr,
+                    dst_addr,
+                    downstream_bytes_sent_noc_addr,
+                    whole_packet_size);
+                l1_read_addr += whole_packet_size;
+                dst_addr += whole_packet_size;
+            }
+
+            if constexpr (partial_packet_size > 0) {
+                DPRINT << "H2D Write to core and fabric node: " << downstream_enc.d2d.downstream_noc_x << ","
+                       << downstream_enc.d2d.downstream_noc_y << "," << downstream_enc.d2d.downstream_chip_id << ","
+                       << downstream_enc.d2d.downstream_mesh_id << ENDL();
+                write_data_to_remote_core_with_ack(
+                    downstream_fabric_connection,
+                    downstream_data_packet_header_addr,
+                    l1_read_addr,
+                    dst_addr,
+                    downstream_bytes_sent_noc_addr,
+                    partial_packet_size);
+                DPRINT << "H2D Done writing partial packet" << ENDL();
+            }
+
             socket_push_pages(sender_socket, 1);
-            socket_notify_receiver(sender_socket);
-            noc_async_writes_flushed();
         }
+        DPRINT << "Pop pages from H2D socket" << ENDL();
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);

@@ -184,6 +184,7 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
 )
 
 from ttnn._ttnn.hd_socket import (

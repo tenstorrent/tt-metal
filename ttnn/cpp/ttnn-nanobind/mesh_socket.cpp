@@ -12,12 +12,17 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/pair.h>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace ttnn::mesh_socket {
 
 void py_module_types(nb::module_& mod) {
+    nb::enum_<tt::tt_metal::distributed::SocketEndpoint>(mod, "SocketEndpoint")
+        .value("SENDER", tt::tt_metal::distributed::SocketEndpoint::SENDER, "Sender endpoint")
+        .value("RECEIVER", tt::tt_metal::distributed::SocketEndpoint::RECEIVER, "Receiver endpoint");
+
     nb::class_<tt::tt_metal::distributed::MeshCoreCoord>(mod, "MeshCoreCoord")
         .def(
             nb::init<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord>(),
@@ -59,7 +64,10 @@ void py_module_types(nb::module_& mod) {
                 Args:
                     sender_core (MeshCoreCoord): The mesh core coordinate of the sender
                     receiver_core (MeshCoreCoord): The mesh core coordinate of the receiver
-            )doc");
+            )doc")
+        .def_rw("sender_core", &tt::tt_metal::distributed::SocketConnection::sender_core, "Sender core coordinate")
+        .def_rw(
+            "receiver_core", &tt::tt_metal::distributed::SocketConnection::receiver_core, "Receiver core coordinate");
     nb::class_<tt::tt_metal::distributed::SocketMemoryConfig>(mod, "SocketMemoryConfig")
         .def(
             nb::init<
@@ -157,6 +165,30 @@ void py_module_types(nb::module_& mod) {
             },
             R"doc(
             Returns the connection config of the socket.
+            )doc")
+        .def(
+            "get_socket_endpoint_type",
+            &tt::tt_metal::distributed::MeshSocket::get_socket_endpoint_type,
+            R"doc(
+                Returns the socket endpoint type (SENDER or RECEIVER).
+
+                Returns:
+                    SocketEndpoint: The endpoint type of this socket.
+            )doc")
+        .def(
+            "get_fabric_node_id",
+            &tt::tt_metal::distributed::MeshSocket::get_fabric_node_id,
+            nb::arg("endpoint"),
+            nb::arg("coord"),
+            R"doc(
+                Returns the fabric node ID for a given endpoint and device coordinate.
+
+                Args:
+                    endpoint (SocketEndpoint): The endpoint type (SENDER or RECEIVER).
+                    coord (MeshCoordinate): The device coordinate to look up.
+
+                Returns:
+                    FabricNodeId: The fabric node ID for the given endpoint and coordinate.
             )doc");
 }
 
