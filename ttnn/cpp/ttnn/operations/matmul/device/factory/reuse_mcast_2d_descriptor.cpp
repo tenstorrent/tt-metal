@@ -537,7 +537,7 @@ tt::tt_metal::ProgramDescriptor ReuseMcast2DDescriptorFactory::create_descriptor
             device->arch(),
             cores.size(),
             stagger_defs,
-            ttnn::get_throttle_level(operation_attributes.compute_kernel_config.value()));
+            ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
         for (auto& [k, v] : stagger_defs) {
             mm_kernel_defines.emplace_back(k, v);
         }
