@@ -52,6 +52,7 @@ def create_fabric_router_config(max_payload_size):
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DEDICATED_NOC, ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,
@@ -64,6 +65,7 @@ def test_pre_sdpa(
     secondary_cluster_axis,
     num_iters,
     position_id,
+    noc_mode,
 ):
     """Test TTNN pre-SDPA fused operation with CCL broadcast and full Qnope/Qrope pipeline"""
     num_devices = mesh_rows * mesh_cols
@@ -641,6 +643,7 @@ def test_pre_sdpa(
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
         )
     ttnn.synchronize_device(submesh)
 
