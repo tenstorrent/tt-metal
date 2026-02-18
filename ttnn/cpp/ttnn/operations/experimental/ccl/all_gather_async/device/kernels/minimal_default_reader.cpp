@@ -282,7 +282,7 @@ void kernel_main() {
             }
 
             uint32_t num_channels_processed_in_current_batch = 0;
-            {
+
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                     chunk_count = 0;
                     while (tiles_read < tiles_to_read) {
@@ -361,7 +361,7 @@ void kernel_main() {
                         tiles_to_read = input_tile_id_end;
                     }
                 }
-            }
+
             slices_forwarded++;  // Track forwarded slices for split-forwarding logic
         } else {
             // Not forwarding - just wait for semaphores indicating data has arrived
