@@ -46,7 +46,8 @@ class TtSwinPatchMerge:
             output,
             self.parameters["reduction"]["weight"],
             dtype=ttnn.bfloat16,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

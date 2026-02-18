@@ -127,10 +127,10 @@ class TtSwinLBackbone:
 
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-            math_approx_mode=True,
+            packer_l1_acc=True,
+            math_approx_mode=False,
         )
 
         [output, [out_h, out_w], [self.patch_embed_weight, self.patch_embed_bias]] = ttnn.conv2d(
