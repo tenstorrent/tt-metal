@@ -665,7 +665,6 @@ on:
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name || github.event.schedule }}
   cancel-in-progress: false
-
 jobs:
   display-workflow-options:
     name: 📋 Display workflow options
@@ -715,6 +714,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   call-api:
+    permissions:
+      id-token: write
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python
