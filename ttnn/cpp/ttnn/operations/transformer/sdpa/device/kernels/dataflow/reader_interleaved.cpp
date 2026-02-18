@@ -22,30 +22,28 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
     const uint32_t num_tiles = dst_rows * dst_cols;
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
-    {
-        const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-        const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+    const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
+    const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
-        uint32_t tile_id = start_tile_id;
-        for (uint32_t row = 0; row < src_rows; ++row) {
-            uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-            for (uint32_t col = 0; col < src_cols; ++col) {
-                noc_async_read_tile(tile_id++, reader, write_ptr);
-                write_ptr += inner_ptr_stride;
-            }
-            tile_id += skip_src_cols;
+    uint32_t tile_id = start_tile_id;
+    for (uint32_t row = 0; row < src_rows; ++row) {
+        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        for (uint32_t col = 0; col < src_cols; ++col) {
+            noc_async_read_tile(tile_id++, reader, write_ptr);
+            write_ptr += inner_ptr_stride;
         }
-        for (uint32_t row = 0; row < dst_rows; ++row) {
-            for (uint32_t col = 0; col < dst_cols; ++col) {
-                if (row < src_rows && col < src_cols) {
-                    continue;
-                }
-                uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
-                fill_tile_zeros<tile_bytes, false>(cb_id, tile_idx);
-            }
-        }
-        noc_async_read_barrier();
+        tile_id += skip_src_cols;
     }
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_tile_zeros<tile_bytes, false>(cb_id, tile_idx);
+        }
+    }
+    noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
     return base_write_ptr;
 }
@@ -250,7 +248,6 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
-    uint32_t barrier_count = 0;
     uint32_t chunked_q_chunk_offset = 0;
     if constexpr (is_chunked) {
         if (chunk_start_idx_addr != 0) {
@@ -411,53 +408,49 @@ void kernel_main() {
                         // K: either read locally (injector or not participant) or receive from previous core
                         uint32_t cb_k_start_address = 0;
 
-                        {
-                            if (should_receive) {
-                                // Receive forwarded K chunk from previous core
-                                cb_reserve_back(cb_k_in, k_chunk_tiles);
-                                {
-                                    cb_k_start_address = get_write_ptr(cb_k_in);
-                                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                                }
-                                cb_push_back(cb_k_in, k_chunk_tiles);
+                        if (should_receive) {
+                            // Receive forwarded K chunk from previous core
+                            cb_reserve_back(cb_k_in, k_chunk_tiles);
+                            cb_k_start_address = get_write_ptr(cb_k_in);
+                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                            cb_push_back(cb_k_in, k_chunk_tiles);
+                        } else {
+                            // Read K chunk from DRAM
+                            if constexpr (is_chunked) {
+                                // Use page table to read K chunk (forwarding not supported for paged mode)
+                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                    k_reader,
+                                    cb_k_in,
+                                    k_head,
+                                    k_chunk_start_row_num,
+                                    kv_row_tile_count,
+                                    DHt,
+                                    Sk_chunk_t,
+                                    DHt,
+                                    k_tile_bytes,
+                                    barrier_threshold,
+                                    page_table_ptr,
+                                    true  // transpose=true for K reads
+                                );
                             } else {
-                                // Read K chunk from DRAM
-                                if constexpr (is_chunked) {
-                                    // Use page table to read K chunk (forwarding not supported for paged mode)
-                                    const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                                    read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                if (should_forward) {
+                                    cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
+                                        k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
+                                } else {
+                                    read_chunk_with_padding<k_tile_bytes>(
                                         k_reader,
                                         cb_k_in,
-                                        k_head,
-                                        k_chunk_start_row_num,
+                                        k_start_tile_id,
                                         kv_row_tile_count,
                                         DHt,
                                         Sk_chunk_t,
                                         DHt,
-                                        k_tile_bytes,
                                         barrier_threshold,
-                                        page_table_ptr,
                                         true  // transpose=true for K reads
                                     );
-                                } else {
-                                    if (should_forward) {
-                                        cb_k_start_address = read_chunk_for_forwarding<k_tile_bytes, true>(
-                                            k_reader, cb_k_in, k_start_tile_id, kv_row_tile_count, DHt, Sk_chunk_t, DHt);
-                                    } else {
-                                        read_chunk_with_padding<k_tile_bytes>(
-                                            k_reader,
-                                            cb_k_in,
-                                            k_start_tile_id,
-                                            kv_row_tile_count,
-                                            DHt,
-                                            Sk_chunk_t,
-                                            DHt,
-                                            barrier_threshold,
-                                            true  // transpose=true for K reads
-                                        );
-                                    }
                                 }
                             }
                         }
@@ -467,28 +460,22 @@ void kernel_main() {
                         // The companion must be issued immediately after the linked write —
                         // any noc_async_read_barrier() between them deadlocks (the read barrier
                         // blocks while a linked write awaits its companion).
-                        {
-                            if (should_forward) {
-                                noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                                {
-                                    noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                                    if constexpr (mcast_enabled) {
-                                        uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
-                                        noc_async_write_multicast(
-                                            cb_k_start_address,
-                                            k_mcast_addr,
-                                            k_chunk_tiles * k_tile_bytes,
-                                            mcast_num_dests,
-                                            true /* linked: semaphore mcast follows */);
-                                        noc_semaphore_set_multicast(
-                                            valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
-                                    } else {
-                                        uint64_t k_unicast_data_addr =
-                                            get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                                        noc_async_write(
-                                            cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                                    }
-                                }
+                        if (should_forward) {
+                            noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
+                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                            if constexpr (mcast_enabled) {
+                                uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
+                                noc_async_write_multicast(
+                                    cb_k_start_address,
+                                    k_mcast_addr,
+                                    k_chunk_tiles * k_tile_bytes,
+                                    mcast_num_dests,
+                                    true /* linked: semaphore mcast follows */);
+                                noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                            } else {
+                                uint64_t k_unicast_data_addr =
+                                    get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
+                                noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
                             }
                         }
 
@@ -496,7 +483,7 @@ void kernel_main() {
                         if constexpr (use_provided_mask) {
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                            barrier_count = 0;
+                            uint32_t barrier_count = 0;
 
                             uint32_t mask_row_start = mask_batch_offset + q_chunk * Sq_chunk_t * valid_Skt;
                             if constexpr (!broadcast_provided_mask_heads) {
@@ -533,12 +520,10 @@ void kernel_main() {
 
                         // Complete K forward: flush write and signal receiver(s)
                         // (mcast path already completed above — companion sent with linked write)
-                        {
-                            if (should_forward) {
-                                if constexpr (!mcast_enabled) {
-                                    noc_async_writes_flushed();
-                                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
-                                }
+                        if (should_forward) {
+                            if constexpr (!mcast_enabled) {
+                                noc_async_writes_flushed();
+                                noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                             }
                         }
 

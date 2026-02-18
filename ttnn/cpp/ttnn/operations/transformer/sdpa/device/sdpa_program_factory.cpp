@@ -951,21 +951,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             // Note: Physical X contiguity is NOT required. Harvested (non-worker) cores
             // in the multicast rectangle safely discard the data.
 
-            // Check eligibility condition 2: All chain cores have equal q_chunk_count
+            // equal q_chunk_count is already guaranteed by the second pass chain construction
+            // filter (cores with mismatched q_chunk_count are excluded from chain_order).
             const uint32_t ref_q_chunks = core_chain_info[chain_core_indices[0]].q_chunk_count;
-            bool equal_q_chunks = true;
-            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
-                if (core_chain_info[chain_core_indices[ci]].q_chunk_count != ref_q_chunks) {
-                    equal_q_chunks = false;
-                    break;
-                }
-            }
-
-            if (!equal_q_chunks) {
-                all_eligible = false;
-                log_debug(tt::LogOp, "Head {}: mcast ineligible - unequal q_chunk_count across chain", head_id);
-                break;
-            }
 
             candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
         }
@@ -1022,6 +1010,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                     auto& receiver_chain = core_chain_info[ci];
                     receiver_chain.use_mcast = true;
                     receiver_chain.prev_physical = core_work[injector_idx].physical_core;
+                    receiver_chain.next_physical = CoreCoord{0, 0};
+                    receiver_chain.next_core_q_chunks = 0;
                     receiver_chain.is_sink = true;
                 }
 
