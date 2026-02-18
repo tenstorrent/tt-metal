@@ -165,11 +165,6 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         (uint32_t)output_cb_index,
     };
 
-    std::map<std::string, std::string> compute_kernel_defines;
-    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
-        input_cb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
-    }
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
@@ -196,8 +191,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_args,
-            .defines = compute_kernel_defines});
+            .compile_args = compute_args});
 
     // reader runtime args
     const std::array reader_rt_args = {

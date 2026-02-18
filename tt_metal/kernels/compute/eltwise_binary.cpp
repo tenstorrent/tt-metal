@@ -43,7 +43,7 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if defined(BINARY_DEST_ACCUM) || defined(ELTWISE_DEST_REUSE_TYPE)
         cb_wait_front(cb_in2, per_core_block_size);
         copy_tile_to_dst_init_short(cb_in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -52,8 +52,7 @@ void kernel_main() {
         cb_pop_front(cb_in2, per_core_block_size);
 #endif
 
-#ifdef DST_ACCUM_MODE
-// The following define is needed if mul_tiles/_init is used
+#ifdef BINARY_DEST_ACCUM
 #ifdef MUL_TILES_WITH_DST_ACCUM
         ELTWISE_OP_INIT(cb_inp0, cb_inp1);
 #else

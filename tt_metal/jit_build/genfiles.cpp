@@ -237,6 +237,13 @@ void jit_build_genfiles_triscs_src(
         throw std::runtime_error("Cannot create file: " + generated_defines_fname);
     }
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
+        if (define == "DST_ACCUM_MODE") {
+            log_warning(
+                tt::LogBuildKernels,
+                "DST_ACCUM_MODE should not be set via defines -- it is generated from "
+                "ComputeConfig.fp32_dest_acc_en. Ignoring user-defined value.");
+            return;
+        }
         gen_defines_file << "#define " << define << " " << value << endl;
     });
     if (!gen_defines_file) {

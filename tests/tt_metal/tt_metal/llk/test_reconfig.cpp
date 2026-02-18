@@ -181,7 +181,7 @@ bool single_core_reconfig(
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
 
-    defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
+    defines["BINARY_DEST_ACCUM"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";

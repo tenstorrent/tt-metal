@@ -9,11 +9,7 @@
 #include "common.cpp"
 
 void kernel_main() {
-#ifdef DST_ACCUM_MODE
-    constexpr uint32_t max_bct = 4;
-#else
-    constexpr uint32_t max_bct = 8;
-#endif
+    constexpr uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
     const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(0);

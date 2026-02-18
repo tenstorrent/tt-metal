@@ -100,10 +100,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         (uint32_t)output_cb_index};
 
     // Compute kernel
-    std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
-    }
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
@@ -127,8 +123,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_kernel_defines});
+            .compile_args = compute_compile_time_args});
 
     // Run-time args
     auto cores =

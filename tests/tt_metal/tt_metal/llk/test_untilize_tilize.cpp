@@ -209,9 +209,6 @@ void run_single_core_tilize_program(
 
     std::map<std::string, std::string> defines = {};
 
-    if (test_config.fp32_dest_acc_en) {
-        defines["DST_ACCUM_MODE"] = "1";
-    }
     if (test_config.fast_tilize) {
         defines["FAST_TILIZE"] = "1";
     }

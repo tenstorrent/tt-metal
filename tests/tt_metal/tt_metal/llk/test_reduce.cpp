@@ -385,7 +385,6 @@ void run_single_core_reduce_program(
         }
     }
     reduce_defines["MATH_ONLY"] = test_config.math_only_reduce ? "1" : "0";
-    reduce_defines["DST_ACCUM_MODE"] = test_config.fp32_dest_acc_en ? "1" : "0";
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 

@@ -245,10 +245,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
     KernelHandle untilize_kernel_id = 0;
-    std::map<std::string, std::string> compute_kernel_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
-    }
     if (!full_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
@@ -259,8 +255,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = compute_compile_time_args,
-                .defines = compute_kernel_defines});
+                .compile_args = compute_compile_time_args});
     }
 
     // Compute Cliff compile_time args and kernel
@@ -276,8 +271,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = compute_compile_time_args_cliff,
-                .defines = compute_kernel_defines});
+                .compile_args = compute_compile_time_args_cliff});
     }
 
     // Run-time arg assignment

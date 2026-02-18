@@ -265,10 +265,6 @@ void matmul_tile(
 
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines["DST_ACCUM_MODE"] = "1";
-    }
-
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program_,
         cfg.reader_kernel,

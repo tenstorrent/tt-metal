@@ -136,10 +136,6 @@ void run_single_core_copy_block_matmul_partials(
         uint(ouput_cb_index)               // Output CB idx
     };
 
-    std::map<std::string, std::string> defines;
-    if (test_config.fp32_dest_acc_en) {
-        defines["DST_ACCUM_MODE"] = "1";
-    }
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
@@ -147,8 +143,7 @@ void run_single_core_copy_block_matmul_partials(
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
-            .compile_args = compute_kernel_args,
-            .defines = defines});
+            .compile_args = compute_kernel_args});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
