@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifdef ARCH_QUASAR
+#include "api/debug/assert.h"
+#endif
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
 #endif
