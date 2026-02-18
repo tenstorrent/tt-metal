@@ -207,7 +207,7 @@ def test_reduce_to_one_b1_with_sockets(bh_2d_mesh_device):
     received_tensor = ttnn.from_torch(received_tensor_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Set page size and read into tensor
-    d2h_socket.set_page_size(page_size)
+    d2h_socket.set_page_size(total_bytes)
     d2h_socket.read_tensor(received_tensor)
 
     # Convert back to torch for processing

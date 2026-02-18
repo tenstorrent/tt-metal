@@ -222,9 +222,11 @@ class ReduceToOneB1:
         termination_semaphore = d2h_infrastructure["d2h_termination_semaphore"]
 
         # Compile-time args for D2H receiver kernel
+        total_page_size = 14 * 1024  # 14k = 8 cores * 896 * 2
         ct_args = [
             d2h_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(termination_semaphore),
+            total_page_size,
             page_size_bytes,
             num_shard_cores,  # Number of upstream sockets
         ]
@@ -376,7 +378,7 @@ class ReduceToOneB1:
             if d2h_infrastructure is None:
                 # D2H page size is based on shard width (not tile width)
                 # Each worker core sends one shard worth of data
-                d2h_page_size_bytes = shard_width * element_size
+                d2h_page_size_bytes = 8 * shard_width * element_size
 
                 # Create D2H infrastructure
                 d2h_infra = ReduceToOneB1.create_d2h_infrastructure(
@@ -723,11 +725,11 @@ class ReduceToOneB1:
                 # Add D2H receiver kernel to ROOT1 device program if enabled
                 if is_root1 and d2h_infra is not None:
                     # D2H page size is based on shard width (not tile width)
-                    d2h_page_size_bytes = shard_width * element_size
+                    single_page_size_bytes = shard_width * element_size
 
                     d2h_kernel = ReduceToOneB1.create_d2h_receiver_kernel(
                         d2h_infra,
-                        d2h_page_size_bytes,
+                        single_page_size_bytes,
                         len(shard_cores),
                     )
                     all_kernels = all_kernels + [d2h_kernel]
