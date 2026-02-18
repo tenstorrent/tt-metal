@@ -183,7 +183,7 @@ def run_llasa_tts(
     logger.info(f"Prefill completed in {prefill_time:.3f}s ({prompt_len / prefill_time:.1f} tok/s)")
 
     # Sample first token
-    _, out_tok = sample_host(logits, temperature=0.8, top_p=1.0, on_host=True)
+    _, out_tok = sample_host(logits, temperature=0.5, top_p=1.0, on_host=True)
     generated_tokens = [out_tok[0].item()]
     current_pos = torch.tensor([prompt_len])
 
@@ -205,7 +205,7 @@ def run_llasa_tts(
             reset_batch=(iteration == 0),
         )
 
-        _, out_tok = sample_host(logits, temperature=0.8, top_p=1.0, on_host=True)
+        _, out_tok = sample_host(logits, temperature=0.5, top_p=1.0, on_host=True)
         iter_time = time.time() - t_iter_start
 
         if iteration == 0:
@@ -252,14 +252,13 @@ def run_llasa_tts(
     speech_ids = extract_speech_ids(speech_token_strs)
     logger.info(f"Extracted {len(speech_ids)} speech IDs from {len(generated_tokens)} generated tokens")
 
-    # For prompted TTS, prepend the prompt speech IDs so the full audio
-    # includes the prompt voice + generated continuation (matching the reference)
-    if is_prompted and prompt_speech_tokens:
-        from models.demos.llasa3b.tt.llasa_utils import extract_speech_ids as _extract
-
-        prompt_speech_ids = _extract(prompt_speech_tokens)
-        speech_ids = prompt_speech_ids + speech_ids
-        logger.info(f"Total speech IDs (prompt + generated): {len(speech_ids)}")
+    # For prompted TTS, we typically want only the generated audio (the new text).
+    # If you want to include the prompt in the output, uncomment the following:
+    # if is_prompted and prompt_speech_tokens:
+    #     from models.demos.llasa3b.tt.llasa_utils import extract_speech_ids as _extract
+    #     prompt_speech_ids = _extract(prompt_speech_tokens)
+    #     speech_ids = prompt_speech_ids + speech_ids
+    #     logger.info(f"Total speech IDs (prompt + generated): {len(speech_ids)}")
 
     metrics = {
         "prompt_len": prompt_len,
@@ -375,8 +374,8 @@ ANNA_PROMPT_TEXT = (
 # )
 
 ANNA_TARGET_TEXT = (
-    "I'm afraid that this test will not be very interesting. "
-    "hopefully I can complete this task in a satisfying way"
+    "I'm afraid that this test will not be very interesting, "
+    "hopefully I can complete this task in a satisfying way "
     "Until then, Anna, please, bear with me."
 )
 
@@ -397,7 +396,7 @@ def download_anna_wav():
     return str(wav_path)
 
 
-@pytest.mark.parametrize("max_generated_tokens", [500])
+@pytest.mark.parametrize("max_generated_tokens", [1000])
 @pytest.mark.parametrize("optimizations", OPTIMIZATIONS, ids=["performance"])
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_SHAPE, indirect=True)

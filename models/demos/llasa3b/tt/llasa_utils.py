@@ -81,7 +81,12 @@ def format_llasa_chat(text, tokenizer, prompt_text=None, prompt_speech_tokens=No
     """
     if prompt_text and prompt_speech_tokens:
         # Prompted TTS (voice cloning): combine prompt text + target text
-        combined_text = prompt_text + text
+        # Ensure there is a space between prompt and target text
+        if prompt_text and not prompt_text.endswith(" ") and not text.startswith(" "):
+            combined_text = prompt_text + " " + text
+        else:
+            combined_text = prompt_text + text
+
         formatted_text = f"<|TEXT_UNDERSTANDING_START|>{combined_text}<|TEXT_UNDERSTANDING_END|>"
         chat = [
             {"role": "user", "content": "Convert the text to speech:" + formatted_text},
@@ -107,9 +112,9 @@ def format_llasa_chat(text, tokenizer, prompt_text=None, prompt_speech_tokens=No
 XCODEC2_TOKENS_PER_SECOND = 50
 XCODEC2_SAMPLE_RATE = 16000
 
-# Max prompt speech tokens for voice cloning (~3 seconds of audio)
+# Max prompt speech tokens for voice cloning (~20 seconds of audio)
 # This leaves room for generation within the 2048 token training limit
-MAX_PROMPT_SPEECH_TOKENS = 150
+MAX_PROMPT_SPEECH_TOKENS = 1000
 
 
 def encode_prompt_audio(wav_path, max_tokens=MAX_PROMPT_SPEECH_TOKENS, device="cpu"):

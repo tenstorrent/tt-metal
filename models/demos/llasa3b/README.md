@@ -10,7 +10,7 @@ This implementation runs the Llasa-3B model on Tenstorrent N300 hardware using t
 
 ### Key Features
 - **Zero-shot TTS**: Generate natural speech from text alone (TTNN + PyTorch reference)
-- **Prompted TTS (Voice Cloning)**: Clone a voice from a short audio sample — no training required (PyTorch reference; TTNN in progress)
+- **Prompted TTS (Voice Cloning)**: Clone a voice from a short audio sample — no training required (TTNN + PyTorch reference)
 - **Full audio pipeline**: Text → TTNN inference → speech tokens → XCodec2 decode → 16kHz WAV file
 - **Large vocabulary support**: Handles the extended 193k token vocabulary (128k text + 65k speech)
 - **Supports English and Chinese** text input
@@ -82,14 +82,21 @@ export HF_MODEL=HKUSTAudio/Llasa-3B
 pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_tts"
 ```
 
-This will:
-1. Tokenize the input text using the Llasa chat template
+**Process:**
+1. Tokenize input text (from `models/demos/llasa3b/demo/input_data.json`)
 2. Run prefill and autoregressive decode on TTNN
-3. Extract speech token IDs from the generated output
-4. Decode speech tokens to a waveform using XCodec2 (on CPU)
-5. Save the audio to `models/demos/llasa3b/demo/output/llasa_output.wav`
+3. Extract speech token IDs from generated output
+4. Decode speech tokens to waveform using XCodec2 (on CPU)
+5. Save audio to `models/demos/llasa3b/demo/output/llasa_output.wav`
 
-To change the input text, edit `models/demos/llasa3b/demo/input_data.json`.
+### Prompted TTS / Voice Cloning (TTNN Demo)
+Clone the voice from `Anna.wav` and generate new speech:
+```bash
+export HF_MODEL=HKUSTAudio/Llasa-3B
+# Modify ANNA_PROMPT_TEXT and ANNA_TARGET_TEXT in llasa_demo.py to customize
+pytest models/demos/llasa3b/demo/llasa_demo.py -s -k "test_llasa_tts_prompted"
+```
+Output: `models/demos/llasa3b/demo/output/llasa_output_prompted.wav` (contains only the generated speech).
 
 ### PyTorch Reference
 
@@ -120,7 +127,7 @@ python models/demos/llasa3b/reference/llasa_reference.py \
     --device cpu
 ```
 
-> **Note on prompt length:** The model was trained with a total sequence limit of 2048 tokens. Prompt audio is automatically truncated to ~3 seconds (150 speech tokens) to leave room for generation. Use short, clear audio clips for best results.
+> **Note on prompt length:** The model was trained with a total sequence limit of 2048 tokens. Prompt audio is automatically truncated to ~20 seconds (1000 speech tokens) to leave room for generation. Use clear audio clips for best results.
 
 ## Performance
 
@@ -160,7 +167,7 @@ The model was trained with `max_length=2048`. This budget is shared across all i
 - ~M tokens for prompt speech tokens (50 tokens per second of prompt audio)
 - ~R tokens for generated speech tokens (50 tokens per second of output audio)
 
-Without a prompt, you can generate up to ~40 seconds of audio. With a 3-second prompt, you get ~36 seconds.
+The prompt audio is automatically truncated to 1000 tokens (~20 seconds) to ensure it fits within the context window while leaving room for generation.
 
 ### Implementation Notes
 
