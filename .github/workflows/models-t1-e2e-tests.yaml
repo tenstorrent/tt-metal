@@ -1,6 +1,9 @@
 name: "[Tier 1] Models End-To-End Tests"
 
 on:
+  push:
+    branches:
+      - models-ci/model_unit_pipeline
   workflow_dispatch:
     inputs:
       model:
