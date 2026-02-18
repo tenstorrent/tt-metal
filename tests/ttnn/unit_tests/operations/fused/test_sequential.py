@@ -4565,3 +4565,290 @@ class TestOpGraphExecution:
                 ],
                 device=device,
             )
+
+
+class TestSequentialParallelAPI:
+    """Tests for Sequential/Parallel high-level API with real device execution."""
+
+    def test_sequential_api_linear_chain(self, device, test_tensors):
+        """Sequential(rms, rms) produces same result as build_op_graph linear chain."""
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        rms1_desc = rms_norm.rms_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms2_desc = rms_norm.rms_norm(
+            rms1_desc.output_tensors[0],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+
+        fused = Sequential(rms1_desc, rms2_desc).build(device)
+        outputs = composite.launch([fused])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        temp = torch_rms_norm(test_tensors["torch_input"], test_tensors["torch_weight1"])
+        golden = torch_rms_norm(temp, test_tensors["torch_weight2"])
+
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.99)
+        assert passing, f"PCC: {pcc}"
+
+    def test_sequential_api_branching(self, device, opgraph_tensors):
+        """Sequential(stem, Parallel(branch_a, branch_b)) matches build_op_graph."""
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        t = opgraph_tensors
+        union_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+        branch_a_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+        branch_b_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))})
+
+        stem_op = rms_norm.rms_norm(t["tt_input"], core_range_set=union_range, weight=t["tt_weights"][0], epsilon=1e-5)
+        branch_a_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_a_range, weight=t["tt_weights"][1], epsilon=1e-5
+        )
+        branch_b_op = rms_norm.rms_norm(
+            stem_op.output_tensors[0], core_range_set=branch_b_range, weight=t["tt_weights"][2], epsilon=1e-5
+        )
+
+        fused = Sequential(stem_op, Parallel(branch_a_op, branch_b_op)).build(device)
+        outputs = composite.launch([fused])
+
+        golden_stem = torch_rms_norm(t["torch_input"], t["torch_weights"][0])
+        golden_a = torch_rms_norm(golden_stem, t["torch_weights"][1])
+        golden_b = torch_rms_norm(golden_stem, t["torch_weights"][2])
+
+        result_a = ttnn.to_torch(outputs[0][0])
+        result_b = ttnn.to_torch(outputs[0][1])
+
+        passing_a, pcc_a = comp_pcc(golden_a, result_a, pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_b, result_b, pcc=0.98)
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+    def test_parallel_full_grid_mixed_ops(self, device):
+        """Parallel trees of LN, RMS, matmul spanning the entire 8x8 grid (64 cores).
+
+        Layout:
+          - Matmul 1:          (0,0)-(3,1)  4x2 = 8 cores
+          - LN→RMS chain:     (4,0)-(7,1)  4x2 = 8 cores
+          - RMS→LN chain:     (0,2)-(3,3)  4x2 = 8 cores
+          - RMS→RMS→RMS chain: (4,2)-(7,3) 4x2 = 8 cores
+          - Branching tree:    stem (0,4)-(7,5) 16 cores → A (0,4)-(3,5) + B (4,4)-(7,5) 8c each
+          - Matmul 2:          (0,6)-(3,7)  4x2 = 8 cores
+          - Single RMS:        (4,6)-(7,7)  4x2 = 8 cores
+        Total: 64 cores = full 8x8 grid
+        """
+        from models.experimental.ops.descriptors.sequential import Sequential, Parallel
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        torch.manual_seed(42)
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
+        hidden = 128
+        weight_shape = (1, 1, 1, hidden)
+        torch_w = torch.ones(weight_shape, dtype=torch.bfloat16)
+        torch_b = torch.zeros(weight_shape, dtype=torch.bfloat16)
+
+        def tt(t):
+            return ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        tt_w = tt(torch_w)
+        tt_b = tt(torch_b)
+
+        # Norm tensors: NCHt=8 so 8 cores can each get 1 height tile
+        norm_shape = (1, 1, 256, hidden)
+        torch_inputs = [torch.randn(norm_shape, dtype=torch.bfloat16) for _ in range(4)]
+        tt_inputs = [tt(t) for t in torch_inputs]
+
+        # ── Matmul 1: (0,0)-(3,1) = 8 cores ──
+        torch_mm1_a = torch.randn(1, 1, 256, 64, dtype=torch.bfloat16)
+        torch_mm1_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+        mm1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+        mm1_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        mm1 = matmul_desc(tt(torch_mm1_a), tt(torch_mm1_b), core_range_set=mm1_cores, program_config=mm1_config)
+
+        # ── LN→RMS chain: (4,0)-(7,1) = 8 cores ──
+        chain1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 1))})
+        ln1 = layer_norm.layer_norm(tt_inputs[0], core_range_set=chain1_cores, weight=tt_w, epsilon=1e-5)
+        rms1 = rms_norm.rms_norm(
+            ln1.output_tensors[0],
+            core_range_set=chain1_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        fused_chain1 = Sequential(ln1, rms1).build(device)
+
+        # ── RMS→LN chain: (0,2)-(3,3) = 8 cores ──
+        chain2_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(3, 3))})
+        rms2 = rms_norm.rms_norm(
+            tt_inputs[1],
+            core_range_set=chain2_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
+        )
+        ln2 = layer_norm.layer_norm(
+            rms2.output_tensors[0],
+            core_range_set=chain2_cores,
+            weight=tt_w,
+            bias=tt_b,
+            epsilon=1e-5,
+        )
+        fused_chain2 = Sequential(rms2, ln2).build(device)
+
+        # ── RMS→RMS→RMS chain: (4,2)-(7,3) = 8 cores ──
+        chain3_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(7, 3))})
+        rms3a = rms_norm.rms_norm(tt_inputs[2], core_range_set=chain3_cores, weight=tt_w, epsilon=1e-5)
+        rms3b = rms_norm.rms_norm(
+            rms3a.output_tensors[0],
+            core_range_set=chain3_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+        )
+        rms3c = rms_norm.rms_norm(
+            rms3b.output_tensors[0],
+            core_range_set=chain3_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+        )
+        fused_chain3 = Sequential(rms3a, rms3b, rms3c).build(device)
+
+        # ── Branching tree: stem (0,4)-(7,5) → A (0,4)-(3,5) + B (4,4)-(7,5) ──
+        # Stem uses 16 cores (8x2), so input needs NCHt>=16: shape (1,1,512,128)
+        stem_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(7, 5))})
+        branch_a_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(3, 5))})
+        branch_b_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 4), ttnn.CoreCoord(7, 5))})
+        torch_stem_in = torch.randn(1, 1, 512, hidden, dtype=torch.bfloat16)
+        torch_stem_w = torch.ones((1, 1, 1, hidden), dtype=torch.bfloat16)
+        stem_op = rms_norm.rms_norm(tt(torch_stem_in), core_range_set=stem_cores, weight=tt_w, epsilon=1e-5)
+        branch_a = rms_norm.rms_norm(
+            stem_op.output_tensors[0],
+            core_range_set=branch_a_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+        )
+        branch_b = rms_norm.rms_norm(
+            stem_op.output_tensors[0],
+            core_range_set=branch_b_cores,
+            weight=tt_w,
+            epsilon=1e-5,
+        )
+        fused_tree = Sequential(stem_op, Parallel(branch_a, branch_b)).build(device)
+
+        # ── Matmul 2: (0,6)-(3,7) = 8 cores ──
+        torch_mm2_a = torch.randn(1, 1, 256, 64, dtype=torch.bfloat16)
+        torch_mm2_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+        mm2_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(3, 7))})
+        mm2_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=4,
+        )
+        mm2 = matmul_desc(tt(torch_mm2_a), tt(torch_mm2_b), core_range_set=mm2_cores, program_config=mm2_config)
+
+        # ── Single RMS: (4,6)-(7,7) = 8 cores ──
+        single_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(7, 7))})
+        single_rms = rms_norm.rms_norm(tt_inputs[3], core_range_set=single_cores, weight=tt_w, epsilon=1e-5)
+
+        # ── Launch all 7 items on full 8x8 grid ──
+        outputs = composite.launch([mm1, fused_chain1, fused_chain2, fused_chain3, fused_tree, mm2, single_rms])
+        assert len(outputs) == 7
+
+        # ── Verify matmul 1 ──
+        golden_mm1 = torch_mm1_a @ torch_mm1_b
+        passing, pcc = comp_pcc(golden_mm1, ttnn.to_torch(outputs[0][0]), pcc=0.99)
+        assert passing, f"Matmul 1 PCC: {pcc}"
+
+        # ── Verify LN→RMS chain ──
+        golden1 = torch_rms_norm(torch_layer_norm(torch_inputs[0], torch_w), torch_w)
+        passing, pcc = comp_pcc(golden1, ttnn.to_torch(outputs[1][0]), pcc=0.98)
+        assert passing, f"LN→RMS chain PCC: {pcc}"
+
+        # ── Verify RMS→LN chain ──
+        golden2 = torch_layer_norm(torch_rms_norm(torch_inputs[1], torch_w), torch_w, torch_b)
+        passing, pcc = comp_pcc(golden2, ttnn.to_torch(outputs[2][0]), pcc=0.98)
+        assert passing, f"RMS→LN chain PCC: {pcc}"
+
+        # ── Verify RMS→RMS→RMS chain ──
+        golden3 = torch_rms_norm(torch_rms_norm(torch_rms_norm(torch_inputs[2], torch_w), torch_w), torch_w)
+        passing, pcc = comp_pcc(golden3, ttnn.to_torch(outputs[3][0]), pcc=0.98)
+        assert passing, f"RMS×3 chain PCC: {pcc}"
+
+        # ── Verify branching tree (2 outputs) ──
+        golden_stem = torch_rms_norm(torch_stem_in, torch_w)
+        golden_ba = torch_rms_norm(golden_stem, torch_w)
+        golden_bb = torch_rms_norm(golden_stem, torch_w)
+        passing_a, pcc_a = comp_pcc(golden_ba, ttnn.to_torch(outputs[4][0]), pcc=0.98)
+        passing_b, pcc_b = comp_pcc(golden_bb, ttnn.to_torch(outputs[4][1]), pcc=0.98)
+        assert passing_a, f"Branch A PCC: {pcc_a}"
+        assert passing_b, f"Branch B PCC: {pcc_b}"
+
+        # ── Verify matmul 2 ──
+        golden_mm2 = torch_mm2_a @ torch_mm2_b
+        passing, pcc = comp_pcc(golden_mm2, ttnn.to_torch(outputs[5][0]), pcc=0.99)
+        assert passing, f"Matmul 2 PCC: {pcc}"
+
+        # ── Verify single RMS ──
+        golden_single = torch_rms_norm(torch_inputs[3], torch_w)
+        passing, pcc = comp_pcc(golden_single, ttnn.to_torch(outputs[6][0]), pcc=0.99)
+        assert passing, f"Single RMS PCC: {pcc}"
+
+    def test_sequential_api_add_method(self, device, test_tensors):
+        """Incremental .add() produces same result as inline construction."""
+        from models.experimental.ops.descriptors.sequential import Sequential
+        from models.experimental.ops.descriptors.normalization import rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        rms1_desc = rms_norm.rms_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            epsilon=1e-5,
+        )
+        rms2_desc = rms_norm.rms_norm(
+            rms1_desc.output_tensors[0],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+
+        s = Sequential(rms1_desc)
+        s.add(rms2_desc)
+        fused = s.build(device)
+        outputs = composite.launch([fused])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        temp = torch_rms_norm(test_tensors["torch_input"], test_tensors["torch_weight1"])
+        golden = torch_rms_norm(temp, test_tensors["torch_weight2"])
+
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.99)
+        assert passing, f"PCC: {pcc}"

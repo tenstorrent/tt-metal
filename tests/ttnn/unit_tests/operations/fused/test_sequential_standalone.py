@@ -2960,5 +2960,313 @@ class TestMustMatchDefines:
         assert "BCAST_LLKOP" in uniform_names
 
 
+# =============================================================================
+# Sequential / Parallel High-Level API Tests
+# =============================================================================
+
+
+def _make_mock_op(name="op"):
+    """Create a mock OpDescriptor instance for tree-structure tests.
+
+    Uses the real OpDescriptor NamedTuple with mock field values.
+    """
+    OpDescriptor = _mock_sequential.OpDescriptor
+    return OpDescriptor(
+        descriptor=MagicMock(name=f"{name}_desc"),
+        input_tensors=[MagicMock(name=f"{name}_in")],
+        output_tensors=[MagicMock(name=f"{name}_out")],
+        keepalive=(),
+    )
+
+
+def _tree_shape(node):
+    """Return a nested tuple representing the tree shape.
+
+    Each node becomes (node.op, [child_shapes...]).  This makes it easy
+    to assert tree structure without comparing MagicMock internals.
+    """
+    OpNode = _mock_sequential.OpNode
+    if not isinstance(node, OpNode):
+        raise TypeError(f"Expected OpNode, got {type(node)}")
+    return (node.op, [_tree_shape(c) for c in node.children])
+
+
+class TestSequentialParallelAPI:
+    """Tests for the Sequential/Parallel high-level API."""
+
+    def test_linear_chain(self):
+        """Sequential(a, b, c) produces a→b→c chain."""
+        _resolve = _mock_sequential._resolve
+
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+        seq = _mock_sequential.Sequential(a, b, c)
+        nodes = _resolve(seq)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        assert root.op is a
+        assert len(root.children) == 1
+        assert root.children[0].op is b
+        assert len(root.children[0].children) == 1
+        assert root.children[0].children[0].op is c
+        assert root.children[0].children[0].children == []
+
+    def test_stem_and_branches(self):
+        """Sequential(a, Parallel(b, c)) produces a→[b, c]."""
+        _resolve = _mock_sequential._resolve
+
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+        seq = _mock_sequential.Sequential(a, _mock_sequential.Parallel(b, c))
+        nodes = _resolve(seq)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        assert root.op is a
+        assert len(root.children) == 2
+        assert root.children[0].op is b
+        assert root.children[1].op is c
+
+    def test_nested_sequential_flattening(self):
+        """Sequential(Sequential(a, b), c) flattens to a→b→c."""
+        _resolve = _mock_sequential._resolve
+
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+        inner = _mock_sequential.Sequential(a, b)
+        outer = _mock_sequential.Sequential(inner, c)
+        nodes = _resolve(outer)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        assert root.op is a
+        assert len(root.children) == 1
+        assert root.children[0].op is b
+        assert len(root.children[0].children) == 1
+        assert root.children[0].children[0].op is c
+
+    def test_nested_branches(self):
+        """Sequential(a, Parallel(Sequential(b, c), d)) produces correct tree."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+        Parallel = _mock_sequential.Parallel
+
+        a, b, c, d = [_make_mock_op(n) for n in "abcd"]
+        seq = Sequential(a, Parallel(Sequential(b, c), d))
+        nodes = _resolve(seq)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        assert root.op is a
+        assert len(root.children) == 2
+        # First branch: b→c
+        assert root.children[0].op is b
+        assert len(root.children[0].children) == 1
+        assert root.children[0].children[0].op is c
+        # Second branch: d (leaf)
+        assert root.children[1].op is d
+        assert root.children[1].children == []
+
+    def test_add_method(self):
+        """Incremental .add() matches inline construction."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+        Parallel = _mock_sequential.Parallel
+
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+
+        # Inline
+        inline = Sequential(a, b, c)
+        inline_nodes = _resolve(inline)
+
+        # Incremental
+        incremental = Sequential(a)
+        incremental.add(b)
+        incremental.add(c)
+        inc_nodes = _resolve(incremental)
+
+        # Same shape
+        assert _tree_shape(inline_nodes[0]) == _tree_shape(inc_nodes[0])
+
+    def test_add_chaining(self):
+        """s.add(a).add(b) returns self."""
+        Sequential = _mock_sequential.Sequential
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+
+        s = Sequential(a)
+        result = s.add(b).add(c)
+        assert result is s
+        assert len(s._items) == 3
+
+    def test_single_op(self):
+        """Sequential(op) produces a single OpNode(op)."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+
+        a = _make_mock_op("a")
+        nodes = _resolve(Sequential(a))
+        assert len(nodes) == 1
+        assert nodes[0].op is a
+        assert nodes[0].children == []
+
+    def test_parallel_requires_two(self):
+        """Parallel(op) raises ValueError."""
+        Parallel = _mock_sequential.Parallel
+        a = _make_mock_op("a")
+        with pytest.raises(ValueError, match="at least 2"):
+            Parallel(a)
+
+    def test_parallel_in_middle_errors(self):
+        """Sequential(a, Parallel(b, c), d) raises ValueError."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+        Parallel = _mock_sequential.Parallel
+
+        a, b, c, d = [_make_mock_op(n) for n in "abcd"]
+        seq = Sequential(a, Parallel(b, c), d)
+        with pytest.raises(ValueError, match="diverge"):
+            _resolve(seq)
+
+    def test_empty_sequential(self):
+        """Sequential() raises ValueError."""
+        Sequential = _mock_sequential.Sequential
+        with pytest.raises(ValueError, match="at least 1"):
+            Sequential()
+
+    def test_parallel_add(self):
+        """Parallel(a, b).add(c) adds a third branch."""
+        _resolve = _mock_sequential._resolve
+        Parallel = _mock_sequential.Parallel
+
+        a, b, c = _make_mock_op("a"), _make_mock_op("b"), _make_mock_op("c")
+        p = Parallel(a, b)
+        p.add(c)
+        nodes = _resolve(p)
+        assert len(nodes) == 3
+        assert nodes[0].op is a
+        assert nodes[1].op is b
+        assert nodes[2].op is c
+
+    def test_deep_nested_split(self):
+        """Split of a split: Sequential(a, Parallel(Sequential(b, Parallel(c, d)), e))."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+        Parallel = _mock_sequential.Parallel
+
+        a, b, c, d, e = [_make_mock_op(n) for n in "abcde"]
+        seq = Sequential(a, Parallel(Sequential(b, Parallel(c, d)), e))
+        nodes = _resolve(seq)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        assert root.op is a
+        assert len(root.children) == 2
+
+        # First branch: b→[c, d]
+        branch0 = root.children[0]
+        assert branch0.op is b
+        assert len(branch0.children) == 2
+        assert branch0.children[0].op is c
+        assert branch0.children[1].op is d
+
+        # Second branch: e (leaf)
+        branch1 = root.children[1]
+        assert branch1.op is e
+        assert branch1.children == []
+
+    def test_merge_op_descriptors(self):
+        """_merge_op_descriptors deduplicates inputs, concatenates outputs."""
+        _merge = _mock_sequential._merge_op_descriptors
+        OpDescriptor = _mock_sequential.OpDescriptor
+
+        shared_input = MagicMock(name="shared_in")
+        in_a = MagicMock(name="in_a")
+        in_b = MagicMock(name="in_b")
+        out_a = MagicMock(name="out_a")
+        out_b = MagicMock(name="out_b")
+        keep_a = MagicMock(name="keep_a")
+        keep_b = MagicMock(name="keep_b")
+
+        op_a = OpDescriptor(
+            descriptor=MagicMock(name="desc_a"),
+            input_tensors=[shared_input, in_a],
+            output_tensors=[out_a],
+            keepalive=(keep_a,),
+        )
+        op_b = OpDescriptor(
+            descriptor=MagicMock(name="desc_b"),
+            input_tensors=[shared_input, in_b],
+            output_tensors=[out_b],
+            keepalive=(keep_b,),
+        )
+
+        merged = _merge([op_a, op_b])
+
+        # shared_input deduped — only 3 unique inputs
+        assert len(merged.input_tensors) == 3
+        assert merged.input_tensors[0] is shared_input
+        assert merged.input_tensors[1] is in_a
+        assert merged.input_tensors[2] is in_b
+
+        # Outputs concatenated
+        assert len(merged.output_tensors) == 2
+        assert merged.output_tensors[0] is out_a
+        assert merged.output_tensors[1] is out_b
+
+        # Keepalive unioned
+        assert len(merged.keepalive) == 2
+        assert merged.keepalive[0] is keep_a
+        assert merged.keepalive[1] is keep_b
+
+    def test_merge_op_descriptors_single(self):
+        """_merge_op_descriptors with single op returns it directly."""
+        _merge = _mock_sequential._merge_op_descriptors
+        op = _make_mock_op("solo")
+        assert _merge([op]) is op
+
+    def test_resolve_raw_op_descriptor(self):
+        """_resolve(OpDescriptor) returns [OpNode(op)]."""
+        _resolve = _mock_sequential._resolve
+        OpNode = _mock_sequential.OpNode
+
+        op = _make_mock_op("raw")
+        nodes = _resolve(op)
+        assert len(nodes) == 1
+        assert isinstance(nodes[0], OpNode)
+        assert nodes[0].op is op
+
+    def test_parallel_add_chaining(self):
+        """p.add(c).add(d) returns self for chaining."""
+        Parallel = _mock_sequential.Parallel
+        a, b, c, d = [_make_mock_op(n) for n in "abcd"]
+        p = Parallel(a, b)
+        result = p.add(c).add(d)
+        assert result is p
+        assert len(p._items) == 4
+
+    def test_unsupported_type_raises(self):
+        """_resolve with unsupported type raises TypeError."""
+        _resolve = _mock_sequential._resolve
+        with pytest.raises(TypeError, match="Unsupported"):
+            _resolve(42)
+
+    def test_multi_level_sequential_flattening(self):
+        """Sequential(Sequential(a, Sequential(b, c)), d) deeply flattens."""
+        _resolve = _mock_sequential._resolve
+        Sequential = _mock_sequential.Sequential
+
+        a, b, c, d = [_make_mock_op(n) for n in "abcd"]
+        inner_inner = Sequential(b, c)
+        inner = Sequential(a, inner_inner)
+        outer = Sequential(inner, d)
+        nodes = _resolve(outer)
+
+        assert len(nodes) == 1
+        root = nodes[0]
+        # Should be a→b→c→d
+        assert root.op is a
+        assert root.children[0].op is b
+        assert root.children[0].children[0].op is c
+        assert root.children[0].children[0].children[0].op is d
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
