@@ -191,9 +191,11 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
+        DPRINT << "H2D Waiting for pages from Host" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "H2D Received pages from Host" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -205,7 +207,7 @@ void kernel_main() {
                 page_size);
             noc_async_read_barrier();
         }
-
+        DPRINT << "Loopback mode: " << static_cast<int>(loopback_mode) << ENDL();
         if constexpr (loopback_mode) {
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
