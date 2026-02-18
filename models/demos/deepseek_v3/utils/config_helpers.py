@@ -842,7 +842,6 @@ def _shard_device_impl(
     if padding_needed != (0, 0, 0):
         # Tuple format: (pad_third_to_last_dim, pad_second_to_last_dim, pad_last_dim)
         pad_third_to_last, pad_second_to_last, pad_last = padding_needed
-
         # Determine which dimension(s) to shard and split the tensor accordingly
         if shard_dims[0] is not None and shard_dims[1] is not None:
             # 2D sharding - but check which dimensions actually need sharding
@@ -1045,6 +1044,13 @@ def _shard_device_impl(
                 shards.append(shard)
 
             tensor = torch.cat(shards, dim=dim)
+        elif shard_dims[0] is None and shard_dims[1] is None:
+            if pad_third_to_last > 0:
+                tensor = torch.nn.functional.pad(
+                    tensor, (0, pad_last, 0, pad_second_to_last, 0, pad_third_to_last), mode="constant", value=0
+                )
+            elif pad_second_to_last > 0 or pad_last > 0:
+                tensor = torch.nn.functional.pad(tensor, (0, pad_last, 0, pad_second_to_last), mode="constant", value=0)
     if shard_dims[0] is None and shard_dims[1] is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
