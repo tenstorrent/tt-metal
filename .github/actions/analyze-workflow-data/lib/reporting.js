@@ -1055,41 +1055,49 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
 }
 
 /**
- * Promotes stayed_failing workflows matching a workflow file name to regressions,
+ * Promotes stayed_failing workflows matching a run name to regressions,
  * so auto-triage picks them up. Used when a stayed_failing workflow was never
  * properly triaged (e.g. error info was unavailable at the time of the original
- * regression).
+ * regression). When used, all other (non-promoted) regressions are cleared so
+ * that auto-triage only targets the forced workflow.
  *
- * @param {string} forceWorkflowName - Workflow file name without extension (e.g. "apc-nightly-debug")
+ * @param {string} forceRunName - Workflow run name or substring (e.g. "apc nightly debug run with watcher")
  * @param {Array} stayedFailingDetails - Array of stayed_failing detail objects (modified: matching items removed)
- * @param {Array} regressedDetails - Array of regressed detail objects (modified: promoted items appended)
+ * @param {Array} regressedDetails - Array of regressed detail objects (modified: cleared then promoted items set)
  * @param {Array} changes - Array of change objects (modified: matching entries updated to success_to_fail)
  * @returns {number} Number of workflows promoted
  */
-function promoteStayedFailingToRegressed(forceWorkflowName, stayedFailingDetails, regressedDetails, changes) {
-  if (!forceWorkflowName) return 0;
+function promoteStayedFailingToRegressed(forceRunName, stayedFailingDetails, regressedDetails, changes) {
+  if (!forceRunName) return 0;
 
-  const pattern = `.github/workflows/${forceWorkflowName}.y`;
+  const needle = forceRunName.toLowerCase();
   const toPromote = [];
   const toRemoveIndices = [];
 
   for (let i = 0; i < stayedFailingDetails.length; i++) {
     const item = stayedFailingDetails[i];
-    const wp = item.workflow_path || '';
-    if (wp.startsWith(pattern.slice(0, -1)) && (wp.endsWith('.yaml') || wp.endsWith('.yml'))) {
+    const name = (item.name || '').toLowerCase();
+    if (name.includes(needle)) {
       toPromote.push(item);
       toRemoveIndices.push(i);
     }
   }
 
   if (toPromote.length === 0) {
-    core.warning(`[FORCE-REGRESSION] No stayed_failing workflows matched "${forceWorkflowName}"`);
+    core.warning(`[FORCE-REGRESSION] No stayed_failing workflows matched "${forceRunName}"`);
     return 0;
   }
 
-  // Remove from stayedFailingDetails (reverse order to preserve indices)
+  // Remove matched items from stayedFailingDetails (reverse order to preserve indices)
   for (let i = toRemoveIndices.length - 1; i >= 0; i--) {
     stayedFailingDetails.splice(toRemoveIndices[i], 1);
+  }
+
+  // Clear existing regressions so auto-triage only targets the forced workflow
+  const existingCount = regressedDetails.length;
+  regressedDetails.length = 0;
+  if (existingCount > 0) {
+    core.info(`[FORCE-REGRESSION] Cleared ${existingCount} existing regression(s) to focus on forced workflow only`);
   }
 
   for (const item of toPromote) {
