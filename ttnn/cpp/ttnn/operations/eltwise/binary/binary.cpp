@@ -48,45 +48,6 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
 
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
-    if (not detail::is_block_format(input.dtype())) {
-        return false;
-    }
-
-    using enum BinaryOpType;
-
-    return op != ADD and op != SUB and op != MUL;
-}
-
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] float other) {
-    return detail::needs_typecast_to_bfloat16(op, input);
-}
-
-inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] const Tensor& other) {
-    // TODO: soon remove this function, as it will always return false
-    //  confirm after all CI passes
-    if (not detail::is_block_format(input.dtype())) {
-        return false;
-    }
-
-    using enum BinaryOpType;
-
-    if (op != ADD and op != SUB and op != MUL) {
-        // return true;
-        return false;
-    }
-
-    // For ADD/SUB/MUL with block-float formats (BFLOAT8_B and BFLOAT4_B), binary_ng can
-    // handle subtile broadcast (scalar, row, or column) natively using format-aware fill
-    // functions -- no typecast needed.
-    return false;
-}
-
-inline bool needs_typecast_to_bfloat16(
-    [[maybe_unused]] BinaryOpType op, [[maybe_unused]] float input, [[maybe_unused]] const Tensor& other) {
-    return false;
-}
-
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
@@ -350,67 +311,42 @@ inline auto invoke_binary_ng(
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
     }
 
-    const auto typecast_a = detail::needs_typecast_to_bfloat16(binary_op_type, lhs, rhs);
-    const auto typecast_b = detail::needs_typecast_to_bfloat16(binary_op_type, rhs, lhs);
-    const auto typecast_out = detail::is_block_format(out_dtype);
-
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
-    if (not typecast_a and not typecast_b) {
-        const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
-        const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
-        const auto input_a = detail::to_layout(lhs, Layout::TILE);
-        const auto input_b = detail::to_layout(rhs, Layout::TILE);
+    const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
+    const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
 
-        if (input_a_rm and input_b_rm) {
-            // we don't support to_layout with optional output tensor
-            TT_FATAL(
-                !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise "
-                "operations");
-        }
-
-        auto result = ttnn::prim::binary_ng(
-            input_a,
-            input_b,
-            binary_op_type,
-            out_dtype,
-            memory_config,
-            output,
-            fast_and_approximate_mode,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            std::nullopt,
-            sub_core_grids);
-
-        // if both inputs are in row major, convert the output to row major
-        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-        // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
-            return detail::to_layout(result, Layout::ROW_MAJOR);
-        }
-
-        return result;
+    if (input_a_rm and input_b_rm) {
+        // we don't support to_layout with optional output tensor
+        TT_FATAL(
+            !output_preallocated,
+            "Optional output tensor with Row Major input is not supported right now for Elementwise "
+            "operations");
     }
-    const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
-    const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
-    const auto output_tensor =
-        output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
+    const auto input_a = detail::to_layout(lhs, Layout::TILE);
+    const auto input_b = detail::to_layout(rhs, Layout::TILE);
 
-    Tensor result = ttnn::prim::binary_ng(
+    auto result = ttnn::prim::binary_ng(
         input_a,
         input_b,
         binary_op_type,
-        input_a.dtype(),
+        out_dtype,
         memory_config,
-        output_tensor,
+        output,
         fast_and_approximate_mode,
         lhs_activations,
         rhs_activations,
         post_activations,
         std::nullopt,
         sub_core_grids);
-    return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
+
+    // if both inputs are in row major, convert the output to row major
+    // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+    // since it leads to better perf
+    if (input_a_rm and input_b_rm) {
+        return detail::to_layout(result, Layout::ROW_MAJOR);
+    }
+
+    return result;
 }
 }  // namespace detail
 

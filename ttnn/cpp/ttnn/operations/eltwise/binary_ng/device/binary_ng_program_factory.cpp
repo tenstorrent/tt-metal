@@ -550,11 +550,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto c_num_tiles_per_shard = has_sharding ? shard_volumes->c_shard_volume : std::nullopt;
 
     const auto a_dtype = a.dtype();
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    const auto b_dtype = b.has_value() ? b->dtype()
-                         : is_quant_op ? DataType::FLOAT32
-                         : is_sfpu_op  ? a_dtype
-                                       : DataType::BFLOAT16;
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
+    // When b is a scalar, it is packed as bfloat16 for block-float input types (BFLOAT8_B,
+    // BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype.
+    const auto b_dtype = b.has_value()                              ? b->dtype()
+                         : is_quant_op                              ? DataType::FLOAT32
+                         : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
+                                                                    : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
@@ -591,6 +593,23 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
         if (op_config.process_rhs.has_value()) {
             rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
+        // intermediate CB is Float16_b (due to op_has_exp), but LHS has no
+        // activation and stays in its original block-float format (BFLOAT8_B /
+        // BFLOAT4_B).  The resulting data-format mismatch between the two FPU
+        // binary operands produces incorrect results.  Adding a typecast for
+        // LHS forces it through a Float16_b intermediate CB so both operands
+        // use the same format.
+        // Note: LOGADDEXP / LOGADDEXP2 are not affected because they process
+        // both sides (EXP/EXP2), so lhs_activations is never empty for them.
+        if (!is_sfpu_op && lhs_activations.empty() && !rhs_activations.empty() && op_type == BinaryOpType::LDEXP &&
+            (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
+            lhs_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(DataType::BFLOAT16)},
+            });
         }
 
         if (op_config.postprocess.has_value()) {
