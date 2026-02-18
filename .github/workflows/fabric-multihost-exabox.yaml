@@ -67,9 +67,60 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-metal
 
+  reset:
+    name: Reset cards
+    needs: [build-artifact, create-allocation]
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    env:
+      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 5
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+          allocationName:  ci-${{ github.run_id }}-metal
+          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+
+      # We use setup-tt-run just to setup MPI, MGD can be dummy
+      - name: Setup tt-run
+        uses: ./.github/actions/ttop-configure-tt-run
+        timeout-minutes: 5
+        with:
+          directory: /ci/ttrun
+          mgdFile: /tmp/dummy/doesnotexist.textproto
+          copyToWorkers: false
+          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+
+      - name: Print hostnames
+        working-directory: /tmp
+        run: |
+          mpirun --tag-output --pernode \
+            hostname
+
+      - name: Reset cards
+        working-directory: /tmp
+        run: |
+          mpirun --tag-output --pernode \
+            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
+
+      - name: Delete environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+
   run:
     name: Run test
-    needs: [build-artifact, create-allocation]
+    needs: [build-artifact, create-allocation, reset]
     runs-on:
       group: exabox
       labels: exabox-multihost-with-nfs
@@ -139,7 +190,7 @@ jobs:
 
   cleanup:
     name: Cleanup
-    needs: [run, create-allocation]
+    needs: [run, reset, create-allocation]
     if: always()
     runs-on:
       group: exabox
@@ -152,6 +203,12 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-metal
+
+      # Redundantly try to drop reset env - reset job might have failed
+      - name: Delete reset environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation
