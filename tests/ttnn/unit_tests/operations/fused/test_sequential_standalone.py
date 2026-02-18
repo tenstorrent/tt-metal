@@ -246,32 +246,24 @@ class TestSourceTransformations:
         result = _prefix_named_args_in_source(source, 2)
         assert 'get_named_compile_time_arg_val("phase2_blk")' in result
 
-    def test_offset_runtime_args_phase0_unchanged(self):
-        """Test that phase 0 runtime args are unchanged."""
-        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
+    def test_emit_rt_arg_wrapper_bakes_offset(self):
+        """Test that wrapper function bakes the literal offset value."""
+        _emit_rt_arg_wrapper = _mock_sequential._emit_rt_arg_wrapper
+        result = _emit_rt_arg_wrapper(1, 12)
+        joined = "\n".join(result)
+        assert "arg_idx + 12" in joined
+        assert "__phase1_get_arg_val" in joined
+        # Wrapper should NOT contain a #define (that's separate)
+        assert "#define" not in joined
+        assert "get_named_compile_time_arg_val" not in joined
 
-        source = "uint32_t val = get_arg_val<uint32_t>(3);"
-        result = _offset_runtime_args_in_source(source, 0)
-        assert result == source
-
-    def test_offset_runtime_args_phase1(self):
-        """Test phase 1 runtime arg offsetting."""
-        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
-
-        source = "uint32_t val = get_arg_val<uint32_t>(3);"
-        result = _offset_runtime_args_in_source(source, 1)
-        assert "__phase1_rt_offset + 3" in result
-        assert "phase1_rt_arg_offset" in result
-
-    def test_offset_runtime_args_variable_init(self):
-        """Test that incrementing variable init pattern is offset."""
-        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
-
-        source = "uint32_t rt_args_idx = 0;"
-        result = _offset_runtime_args_in_source(source, 1)
-        assert "__phase1_rt_offset" in result
-        # The variable should be initialized to the offset, not 0
-        assert "= 0;" not in result or "__phase1_rt_offset" in result
+    def test_emit_rt_arg_define_and_undef(self):
+        """Test that define/undef emit the correct preprocessor directives."""
+        _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
+        _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
+        assert _emit_rt_arg_define(1) == "#define get_arg_val __phase1_get_arg_val"
+        assert _emit_rt_arg_define(2) == "#define get_arg_val __phase2_get_arg_val"
+        assert _emit_rt_arg_undef() == "#undef get_arg_val"
 
     def test_offset_compile_time_args_phase0_unchanged(self):
         """Test that phase 0 positional args are unchanged."""
@@ -299,7 +291,12 @@ class TestSourceTransformations:
         assert "TensorAccessorArgs<7>" in result
 
     def test_transform_phase_source_combines_all(self):
-        """Test that _transform_phase_source applies all transforms."""
+        """Test that _transform_phase_source applies all transforms.
+
+        Note: runtime arg offsetting is now handled by #define/#undef redirect
+        (see _emit_rt_arg_define/_emit_rt_arg_undef), NOT by source-level rewriting in
+        _transform_phase_source. So get_arg_val calls are left unchanged.
+        """
         _transform_phase_source = _mock_sequential._transform_phase_source
 
         source = (
@@ -312,7 +309,8 @@ class TestSourceTransformations:
         assert "phase1_cb_in" in result
         assert "get_compile_time_arg_val(5)" in result  # offset from 0
         assert "TensorAccessorArgs<7>" in result  # offset from 2
-        assert "__phase1_rt_offset + 3" in result
+        # get_arg_val is NOT rewritten in source — redirect is done via #define
+        assert "get_arg_val<uint32_t>(3)" in result
 
 
 class TestKernelBodyExtraction:
@@ -486,8 +484,8 @@ class TestMergeNamedCompileTimeArgs:
         assert "cb_in" in names  # Phase 0
         assert "phase1_cb_in" in names  # Phase 1
 
-    def test_rt_arg_offsets_added(self):
-        """Test that runtime arg offsets are added for phase 1+."""
+    def test_rt_arg_offsets_not_in_named_args(self):
+        """RT arg offsets are baked into source, not passed as named compile-time args."""
         _merge_named_compile_time_args = _mock_sequential._merge_named_compile_time_args
 
         phase_kernels = [
@@ -495,11 +493,9 @@ class TestMergeNamedCompileTimeArgs:
             {"reader": MagicMock(named_compile_time_args=[("cb_in", 0)])},
         ]
 
-        rt_offsets = {0: 0, 1: 10}
-        result = _merge_named_compile_time_args(phase_kernels, "reader", rt_offsets)
+        result = _merge_named_compile_time_args(phase_kernels, "reader")
         names = dict(result)
-        assert "phase1_rt_arg_offset" in names
-        assert names["phase1_rt_arg_offset"] == 10
+        assert "phase1_rt_arg_offset" not in names
 
     def test_barrier_rt_offset_added(self):
         """Test that barrier_rt_offset named arg is added."""
@@ -1766,26 +1762,24 @@ class TestCategorizePreMainVariables:
         assert len(var_blocks) == 0
 
 
-class TestRuntimeArgsPattern:
-    """Tests for the runtime args variable offset pattern."""
+class TestRuntimeArgRedirect:
+    """Tests for the #define/#undef runtime arg redirect approach."""
 
-    def test_matches_arg_variables(self):
-        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
+    def test_wrapper_bakes_literal_offset(self):
+        """Wrapper for phase 2 should bake the literal offset."""
+        _emit_rt_arg_wrapper = _mock_sequential._emit_rt_arg_wrapper
+        result = _emit_rt_arg_wrapper(2, 18)
+        joined = "\n".join(result)
+        assert "arg_idx + 18" in joined
+        assert "__phase2_get_arg_val" in joined
+        assert "get_named_compile_time_arg_val" not in joined
 
-        source = "uint32_t rt_args_idx = 0;\nint x = get_arg_val<uint32_t>(0);"
-        result = _offset_runtime_args_in_source(source, 1)
-        assert "__phase1_rt_offset" in result
-        # rt_args_idx should be offset
-        assert "rt_args_idx = __phase1_rt_offset" in result
-
-    def test_does_not_match_unrelated_variables(self):
-        _offset_runtime_args_in_source = _mock_sequential._offset_runtime_args_in_source
-
-        source = "uint32_t counter = 0;\nuint32_t flags = 0;"
-        result = _offset_runtime_args_in_source(source, 1)
-        # counter and flags should NOT be offset (no "arg" or "rt" in name)
-        assert "counter = 0" in result
-        assert "flags = 0" in result
+    def test_define_and_undef(self):
+        """Define/undef should emit correct preprocessor directives."""
+        _emit_rt_arg_define = _mock_sequential._emit_rt_arg_define
+        _emit_rt_arg_undef = _mock_sequential._emit_rt_arg_undef
+        assert _emit_rt_arg_define(2) == "#define get_arg_val __phase2_get_arg_val"
+        assert _emit_rt_arg_undef() == "#undef get_arg_val"
 
 
 class TestPrefixPhaseNamesSkipsStrings:

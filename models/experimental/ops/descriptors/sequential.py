@@ -1089,38 +1089,29 @@ def _offset_compile_time_args_in_source(source: str, phase_idx: int, ct_arg_offs
     return source
 
 
-def _offset_runtime_args_in_source(source: str, phase_idx: int) -> str:
-    """Replace get_arg_val<T>(N) with offset version for phase N>0."""
-    if phase_idx == 0:
-        return source
+def _emit_rt_arg_wrapper(phase_idx: int, rt_offset: int) -> List[str]:
+    """Emit the wrapper function definition for phase N>0.
 
-    offset_name = f"__phase{phase_idx}_rt_offset"
-    offset_decl = (
-        f'    constexpr uint32_t {offset_name} = get_named_compile_time_arg_val("phase{phase_idx}_rt_arg_offset");\n'
-    )
+    Emitted once at file scope (before any #define) so the wrapper body
+    references the real get_arg_val.
+    """
+    wrapper_name = f"__phase{phase_idx}_get_arg_val"
+    return [
+        f"template <typename T>",
+        f"FORCE_INLINE T {wrapper_name}(int arg_idx) {{",
+        f"    return get_arg_val<T>(arg_idx + {rt_offset});",
+        f"}}",
+    ]
 
-    def replace_rt_arg(match):
-        type_name = match.group(1)
-        arg_idx = match.group(2)
-        return f"get_arg_val<{type_name}>({offset_name} + {arg_idx})"
 
-    source = re.sub(
-        r"get_arg_val<(\w+)>\((\d+)\)",
-        replace_rt_arg,
-        source,
-    )
+def _emit_rt_arg_define(phase_idx: int) -> str:
+    """Emit #define to redirect get_arg_val to the phase wrapper."""
+    return f"#define get_arg_val __phase{phase_idx}_get_arg_val"
 
-    # Handle incrementing variable pattern: uint32_t rt_args_idx = 0;
-    # Requires "arg" in the variable name to avoid false positives on
-    # unrelated uint32_t initializations (e.g., "start_dst_index" matched
-    # "rt" from "start" when we used (?:arg|rt)).
-    source = re.sub(
-        r"(uint32_t\s+\w*arg\w*\s*=\s*)0(\s*;)",
-        rf"\g<1>{offset_name}\2",
-        source,
-    )
 
-    return offset_decl + source
+def _emit_rt_arg_undef() -> str:
+    """Emit #undef to restore get_arg_val after a phase."""
+    return "#undef get_arg_val"
 
 
 def _transform_phase_source(
@@ -1140,7 +1131,9 @@ def _transform_phase_source(
     """
     source = _prefix_named_args_in_source(source, phase_idx)
     source = _offset_compile_time_args_in_source(source, phase_idx, ct_arg_offset)
-    source = _offset_runtime_args_in_source(source, phase_idx)
+    # Runtime arg offsetting is now handled by #define/#undef redirect of
+    # get_arg_val (see _emit_rt_arg_define/_emit_rt_arg_undef), not by
+    # source-level regex rewriting.
     source = _prefix_phase_names_in_source(source, phase_idx, phase_names or [])
     return source
 
@@ -1292,6 +1285,7 @@ def _generate_fused_riscv0_source(
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     op_semaphore_info: Optional[List[Tuple[int, int]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
+    rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
     """Generate fused RISCV_0 (reader/BRISC) kernel source with two-level barrier sync.
 
@@ -1341,17 +1335,30 @@ def _generate_fused_riscv0_source(
     if shared_pre_main.strip():
         lines.append(shared_pre_main)
         lines.append("")
+
+    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    if rt_arg_offsets:
+        for phase_idx, _ in reader_sources:
+            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+                lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
+        lines.append("")
+
     # Per-phase pre-main code, each wrapped with that phase's varying defines
+    # and RT arg redirect so helper functions get the offset too
     for phase_idx, _ in reader_sources:
         phase_code = per_phase_pre_main.get(phase_idx, "")
         if not phase_code.strip():
             continue
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         if varying:
             lines.extend(_emit_define_lines(varying))
         lines.append(phase_code)
         if varying:
             lines.extend(_emit_undef_lines(varying))
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     is_multi_phase = len(reader_sources) > 1
@@ -1443,6 +1450,8 @@ def _generate_fused_riscv0_source(
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         lines.append(f"// Phase {phase_idx} reader")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_reader() {{")
         if varying:
@@ -1454,6 +1463,8 @@ def _generate_fused_riscv0_source(
             for ul in _emit_undef_lines(varying):
                 lines.append(f"    {ul}")
         lines.append("}")
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     # Generate kernel_main
@@ -1558,6 +1569,7 @@ def _generate_fused_riscv1_source(
     sweep_cb_indices: List[int],
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
+    rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
     """Generate fused RISCV_1 (writer/NCRISC) kernel source with L1 flag barrier sync.
 
@@ -1603,16 +1615,30 @@ def _generate_fused_riscv1_source(
     if shared_pre_main.strip():
         lines.append(shared_pre_main)
         lines.append("")
+
+    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    if rt_arg_offsets:
+        for phase_idx, _ in writer_sources:
+            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+                lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
+        lines.append("")
+
+    # Per-phase pre-main code, each wrapped with that phase's varying defines
+    # and RT arg redirect so helper functions get the offset too
     for phase_idx, _ in writer_sources:
         phase_code = per_phase_pre_main.get(phase_idx, "")
         if not phase_code.strip():
             continue
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         if varying:
             lines.extend(_emit_define_lines(varying))
         lines.append(phase_code)
         if varying:
             lines.extend(_emit_undef_lines(varying))
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     is_multi_phase = len(writer_sources) > 1
@@ -1644,6 +1670,8 @@ def _generate_fused_riscv1_source(
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         lines.append(f"// Phase {phase_idx} writer")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_writer() {{")
         if varying:
@@ -1655,6 +1683,8 @@ def _generate_fused_riscv1_source(
             for ul in _emit_undef_lines(varying):
                 lines.append(f"    {ul}")
         lines.append("}")
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     # Generate kernel_main
@@ -1736,6 +1766,7 @@ def _generate_fused_compute_source(
     sweep_cb_indices: Optional[List[int]] = None,
     rebind_info: Optional[Dict[int, List[Tuple[int, int, int]]]] = None,
     multi_barrier: Optional[MultiBarrierSpec] = None,
+    rt_arg_offsets: Optional[Dict[int, int]] = None,
 ) -> Optional[str]:
     """Generate fused compute kernel with L1 flag barrier sync.
 
@@ -1788,16 +1819,30 @@ def _generate_fused_compute_source(
     if shared_pre_main.strip():
         lines.append(shared_pre_main)
         lines.append("")
+
+    # Emit RT arg wrapper function definitions at file scope (before any #define)
+    if rt_arg_offsets:
+        for phase_idx, _ in compute_sources:
+            if phase_idx > 0 and phase_idx in rt_arg_offsets:
+                lines.extend(_emit_rt_arg_wrapper(phase_idx, rt_arg_offsets[phase_idx]))
+        lines.append("")
+
+    # Per-phase pre-main code, each wrapped with that phase's varying defines
+    # and RT arg redirect so helper functions get the offset too
     for phase_idx, _ in compute_sources:
         phase_code = per_phase_pre_main.get(phase_idx, "")
         if not phase_code.strip():
             continue
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         if varying:
             lines.extend(_emit_define_lines(varying))
         lines.append(phase_code)
         if varying:
             lines.extend(_emit_undef_lines(varying))
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     is_multi_phase = len(compute_sources) > 1
@@ -1852,6 +1897,8 @@ def _generate_fused_compute_source(
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
         varying = per_phase_defines.get(phase_idx, [])
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_define(phase_idx))
         lines.append(f"// Phase {phase_idx} compute")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_compute() {{")
         if varying:
@@ -1863,6 +1910,8 @@ def _generate_fused_compute_source(
             for ul in _emit_undef_lines(varying):
                 lines.append(f"    {ul}")
         lines.append("}")
+        if phase_idx > 0 and rt_arg_offsets and phase_idx in rt_arg_offsets:
+            lines.append(_emit_rt_arg_undef())
         lines.append("")
 
     # Generate kernel_main
@@ -2118,14 +2167,12 @@ def _concatenate_common_runtime_args(
 def _merge_named_compile_time_args(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,
-    rt_arg_offsets: Optional[Dict[int, int]] = None,
     barrier_rt_offset: Optional[int] = None,
     phase_remaps: Optional[List[Dict[int, int]]] = None,
 ) -> List[Tuple[str, int]]:
     """Merge named compile-time args from all phases with phase prefixes.
 
     Phase 0 keeps original names. Phase N>0 gets "phaseN_" prefix.
-    Runtime arg offsets are added as named args.
     CB-reference args (names starting with "cb_") are remapped to pool slot indices.
     Per-segment barrier constants are added externally by the caller.
     """
@@ -2148,10 +2195,6 @@ def _merge_named_compile_time_args(
                 merged.append((name, actual_value))
             else:
                 merged.append((f"phase{i}_{name}", actual_value))
-
-        # Add runtime arg offset for phase 1+
-        if i > 0 and rt_arg_offsets is not None and i in rt_arg_offsets:
-            merged.append((f"phase{i}_rt_arg_offset", rt_arg_offsets[i]))
 
     # Add barrier runtime arg offset
     if barrier_rt_offset is not None:
@@ -2544,6 +2587,7 @@ def _build_fused_descriptor(
                 rebind_info=rebind_info,
                 op_semaphore_info=op_semaphore_info,
                 multi_barrier=multi_barrier,
+                rt_arg_offsets=rt_offsets,
             )
             barrier_addrs = []
             if multi_barrier is not None:
@@ -2559,6 +2603,7 @@ def _build_fused_descriptor(
                 sweep_cb_indices,
                 rebind_info=rebind_info,
                 multi_barrier=multi_barrier,
+                rt_arg_offsets=rt_offsets,
             )
             barrier_addrs = []
             if multi_barrier is not None:
@@ -2574,6 +2619,7 @@ def _build_fused_descriptor(
                 sweep_cb_indices,
                 rebind_info=rebind_info,
                 multi_barrier=multi_barrier,
+                rt_arg_offsets=rt_offsets,
             )
             barrier_addrs = []
             if multi_barrier is not None:
@@ -2594,7 +2640,6 @@ def _build_fused_descriptor(
         named_ct_args = _merge_named_compile_time_args(
             phase_kernels,
             role_key,
-            rt_offsets,
             barrier_rt_offset=barrier_offset if barrier_addrs else None,
             phase_remaps=pool.phase_remaps,
         )
