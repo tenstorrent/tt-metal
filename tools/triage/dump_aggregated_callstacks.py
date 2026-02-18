@@ -240,7 +240,7 @@ def _collect_aggregated(
             device_label=device_label,
         )
 
-    # Sort descending by # of cores
+    # Sort ascending by op_id
     sorted_buckets = sorted(buckets.values(), key=lambda b: b.op_id)
     return [b.to_row(visualize_devices, verbose, context) for b in sorted_buckets]
 
