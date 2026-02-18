@@ -25,6 +25,7 @@ import io
 from triage import (
     ScriptConfig,
     TTTriageError,
+    log_warning,
     recurse_field,
     triage_field,
     hex_serializer,
@@ -366,6 +367,17 @@ def run(args, context: Context):
     gdb_callstack: bool = args["--gdb-callstack"]
     active_eth: bool = args["--active-eth"]
     force_active_eth = (full_callstack or gdb_callstack) and active_eth
+
+    if context.devices[0].is_blackhole():
+        if full_callstack:
+            log_warning(
+                "Full callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+        if gdb_callstack:
+            log_warning(
+                "GDB callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+
     if force_active_eth:
         WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."

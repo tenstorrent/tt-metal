@@ -395,6 +395,7 @@ jobs:
       matrix:
         platform: [
           "N150",
+          "N300",
         ]
     uses: ./.github/workflows/triage.yaml
     with:
