@@ -480,12 +480,8 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 }
 
 void DeviceManager::reset_dispatch_topology() {
-    auto dispatch_kernel_initializer =
-        std::make_unique<DispatchKernelInitializer>(descriptor_, MetalContext::instance().get_dispatch_core_manager());
-    const auto& active_devices = this->get_all_active_devices_impl();
-    dispatch_kernel_initializer->populate_fd_kernels_only(active_devices);
-    initializers_[DispatchKernelInitializer::key] = std::move(dispatch_kernel_initializer);
-    init_done_.erase(DispatchKernelInitializer::key);
+    initializers_.erase(DispatchKernelInitializer::key);
+    init_done_.insert(DispatchKernelInitializer::key);
 }
 
 void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
