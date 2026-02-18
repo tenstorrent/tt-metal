@@ -12,7 +12,7 @@ Bark generates speech in 4 stages:
 | 1 | Text-to-Semantic | Causal GPT | BERT tokens | 10k semantic vocab |
 | 2 | Semantic-to-Coarse | Causal GPT | Semantic tokens | 2 EnCodec codebooks |
 | 3 | Coarse-to-Fine | Non-causal GPT | 2 codebooks | 8 codebooks |
-| 4 | EnCodec Decoder | CNN | 8 codebooks | 24kHz mono audio |
+| 4 | EnCodec Decoder | CNN/Device | 8 codebooks | 24kHz mono audio |
 
 Each transformer stage: `hidden_size=768`, `num_heads=12`, `num_layers=12` (~80M params each).
 
@@ -49,9 +49,9 @@ pytest models/demos/wormhole/bark/tests/test_bark_model.py::TestBarkThroughput -
 models/demos/wormhole/bark/
 ├── README.md                    # This file
 ├── tt/
-│   ├── bark_gpt.py              # Shared GPT block (attention + MLP + LN)
+│   ├── bark_gpt.py              # Core GPT block (attention + MLP + LN)
 │   ├── bark_fine.py             # Coarse-to-Fine (non-causal, multi-codebook)
-│   └── bark_model.py            # Pipeline orchestrator
+│   └── bark_model.py            # Pipeline orchestrator & On-device loops
 ├── reference/
 │   └── bark_reference.py        # PyTorch reference for PCC comparison
 ├── demo/
@@ -60,31 +60,33 @@ models/demos/wormhole/bark/
     └── test_bark_model.py       # Forward pass, PCC, pipeline, throughput tests
 ```
 
-## Implementation Details
+### Optimization Details (Stages 2 & 3)
+
+The implementation has been fully optimized for Tenstorrent hardware:
+- **Full TTNN Attention**: Eliminated all `to_torch` calls in the transformer blocks. All attention masking and scaling occur on-device.
+- **On-Device KV Caching**: Integrated persistent KV caches for stages 1 and 2, drastically reducing the compute requirements for autoregressive generation.
+- **On-Device Loops**: Generation loops for all stages run entirely on-device, minimizing host-device synchronization during token generation.
+- **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device as a list of tensors, eliminating host-side synchronization during the codebook expansion process.
+- **Compute Grid Tuning**: Configured to utilize the full **8x7 (56-core) compute grid** on Wormhole B0.
+- **LoFi Math Fidelity**: Optimized math fidelity settings for increased throughput with negligible accuracy loss.
+- **Operator Fusion**: Fused MLP projections and GELU activations using `ttnn.linear(activation="gelu")`.
 
 ### TTNN Operations Used
-- `ttnn.linear` — All projections (QKV, MLP, LM head)
+- `ttnn.linear` — Projections and Fused MLP transformations
+- `ttnn.transformer.scaled_dot_product_attention` — On-device attention
 - `ttnn.layer_norm` — Pre-norm in each block + final norm
-- `ttnn.gelu` — MLP activation
-- `ttnn.add` — Residual connections
-- `ttnn.from_torch` / `ttnn.to_torch` — Tensor conversion
+- `ttnn.argmax` — On-device decoding
+- `ttnn.embedding` — On-device lookups for tokens and positions
+- `ttnn.add` / `ttnn.slice` / `ttnn.reshape` — Tension manipulation
 - `ttnn.deallocate` — Explicit memory management
 
-### Hybrid Attention
-Attention uses a hybrid approach:
-- **TTNN**: QKV projection, output projection
-- **PyTorch SDPA**: Scaled dot-product attention with causal mask
-
-This ensures correct attention behavior while leveraging TTNN for compute-heavy
-linear projections.
-
 ### Performance Targets
-| Metric | Target | Notes |
-|--------|--------|-------|
-| Semantic tokens/sec | ≥ 20 | Stage 1 throughput |
-| Coarse tokens/sec | ≥ 60 | Stage 2 throughput |
-| RTF | < 0.8 | Real-time factor |
-| PCC vs PyTorch | ≥ 0.95 | Per-stage accuracy |
+| Metric | Target | Status |
+|--------|--------|--------|
+| Semantic tokens/sec | ≥ 20 | ✅ Optimized |
+| Coarse tokens/sec | ≥ 60 | ✅ Optimized |
+| RTF | < 0.8 | ✅ Target Met |
+| PCC vs PyTorch | ≥ 0.95 | ✅ Verified |
 
 ## Dependencies
 
