@@ -218,6 +218,10 @@ def main(argv: Optional[list[str]] = None) -> None:
                 coco_dir=args.coco_dir,
                 max_images=int(args.coco_max_images),
                 report_path=report_path,
+                resize_hw=(
+                    (int(args.height), int(args.width)) if args.height is not None and args.width is not None else None
+                ),
+                id2label=id2label,
                 processor=processor,
                 forward_fn=lambda pv: runner.forward(pv, device=device),
                 sync_fn=(lambda: tt.synchronize_device(device)) if hasattr(tt, "synchronize_device") else None,
@@ -636,6 +640,8 @@ def _run_coco_eval(
     coco_dir: Path,
     max_images: int,
     report_path: Optional[Path],
+    resize_hw: Optional[Tuple[int, int]],
+    id2label: Mapping[int, str],
     processor,
     forward_fn,
     sync_fn,
@@ -667,6 +673,19 @@ def _run_coco_eval(
 
     with panoptic_json.open("r", encoding="utf-8") as fh:
         gt_payload = json.load(fh)
+    name_to_cat_id = {
+        str(cat["name"]): int(cat["id"])
+        for cat in gt_payload.get("categories", [])
+        if isinstance(cat, dict) and "name" in cat and "id" in cat
+    }
+    max_label_id = max([int(i) for i in id2label.keys()], default=-1)
+    label_to_cat_id = [0] * (max_label_id + 1) if max_label_id >= 0 else []
+    for lid, name in id2label.items():
+        li = int(lid)
+        if 0 <= li <= max_label_id:
+            label_to_cat_id[li] = int(name_to_cat_id.get(str(name), 0))
+    label_to_cat_id_arr = _np.asarray(label_to_cat_id, dtype=_np.int32) if label_to_cat_id else None
+
     ann_by_image_id = {ann["image_id"]: ann for ann in gt_payload.get("annotations", [])}
     file_to_image_id = {img["file_name"]: img["id"] for img in gt_payload.get("images", [])}
     image_by_id = {img["id"]: img for img in gt_payload.get("images", [])}
@@ -690,9 +709,15 @@ def _run_coco_eval(
         pred_dir.mkdir(parents=True, exist_ok=True)
         pred_json = report_path.parent / "panoptic_predictions.json"
 
-    for img_path in images:
+    proc_kwargs: Dict[str, object] = {}
+    if resize_hw is not None:
+        proc_kwargs.update({"size": {"height": int(resize_hw[0]), "width": int(resize_hw[1])}, "do_resize": True})
+
+    progress_every = int(os.environ.get("MASKFORMER_COCO_PROGRESS_EVERY", "5"))
+
+    for idx, img_path in enumerate(images):
         image = _Image.open(img_path).convert("RGB")
-        pixel_values = processor(images=image, return_tensors="pt")["pixel_values"]
+        pixel_values = processor(images=image, return_tensors="pt", **proc_kwargs)["pixel_values"]
 
         start = time.perf_counter()
         outputs = forward_fn(pixel_values)
@@ -703,6 +728,10 @@ def _run_coco_eval(
         mf_output = _make_hf_output(outputs)
         pred_sem = processor.post_process_semantic_segmentation(mf_output, target_sizes=[image.size[::-1]])[0]
         pred_sem = pred_sem.cpu().numpy().astype(_np.int32)
+        if label_to_cat_id_arr is not None and pred_sem.size > 0:
+            # HF returns contiguous label ids; map them to COCO category ids for comparison with panoptic GT.
+            pred_valid = (pred_sem >= 0) & (pred_sem < int(label_to_cat_id_arr.shape[0]))
+            pred_sem = _np.where(pred_valid, label_to_cat_id_arr[pred_sem], 0)
 
         gt_entry = pan_gt_by_file.get(img_path.name)
         if gt_entry is None:
@@ -710,6 +739,14 @@ def _run_coco_eval(
         num_with_gt += 1
         subset_image_ids.add(int(gt_entry["image_id"]))
         subset_gt_annotations.append(gt_entry)
+
+        if progress_every > 0 and (num_with_gt == 1 or num_with_gt % progress_every == 0):
+            avg_ms = float(sum(inference_latencies_ms) / len(inference_latencies_ms)) if inference_latencies_ms else 0.0
+            print(
+                f"[maskformer][coco] {num_with_gt}/{max_images} images with GT "
+                f"(scanned={idx+1}) avg_latency={avg_ms:.1f}ms",
+                flush=True,
+            )
 
         if have_panoptic and rgb2id is not None:
             gt_png = panoptic_root / gt_entry["file_name"]
@@ -742,8 +779,12 @@ def _run_coco_eval(
             for seg_meta in pan_pred.get("segments_info", []):
                 seg_id = int(seg_meta.get("id", -1))
                 label_id = int(seg_meta.get("label_id", seg_meta.get("category_id", 0)))
+                if label_to_cat_id_arr is not None and 0 <= label_id < int(label_to_cat_id_arr.shape[0]):
+                    label_id = int(label_to_cat_id_arr[label_id])
                 area = int((seg == seg_id).sum()) if seg_id >= 0 else 0
-                segments_info.append({"id": seg_id, "category_id": label_id, "area": area, "iscrowd": 0})
+                if label_id <= 0:
+                    continue
+                segments_info.append({"id": seg_id, "category_id": int(label_id), "area": area, "iscrowd": 0})
             pred_annotations.append(
                 {"image_id": int(gt_entry["image_id"]), "file_name": out_name, "segments_info": segments_info}
             )
