@@ -186,9 +186,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}
-          build-args: |
-            UBUNTU_VERSION=22.04
-            PYTHON_VERSION=3.10
+          build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -201,9 +199,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}
-          build-args: |
-            UBUNTU_VERSION=22.04
-            PYTHON_VERSION=3.10
+          build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -216,9 +212,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=22.04
-            PYTHON_VERSION=3.10
+          build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -231,9 +225,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=22.04
-            PYTHON_VERSION=3.10
+          build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -246,9 +238,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-          build-args: |
-            UBUNTU_VERSION=22.04
-            PYTHON_VERSION=3.10
+          build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -280,9 +270,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}
-          build-args: |
-            UBUNTU_VERSION=24.04
-            PYTHON_VERSION=3.12
+          build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -295,9 +283,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}
-          build-args: |
-            UBUNTU_VERSION=24.04
-            PYTHON_VERSION=3.12
+          build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -310,9 +296,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=24.04
-            PYTHON_VERSION=3.12
+          build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -325,9 +309,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
-          build-args: |
-            UBUNTU_VERSION=24.04
-            PYTHON_VERSION=3.12
+          build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
           outputs: |
@@ -340,9 +322,7 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-          build-args: |
-            UBUNTU_VERSION=24.04
-            PYTHON_VERSION=3.12
+          build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
           outputs: |
