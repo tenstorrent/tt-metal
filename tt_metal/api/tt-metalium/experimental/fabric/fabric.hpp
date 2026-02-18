@@ -121,6 +121,18 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 tt::tt_fabric::Topology get_fabric_topology();
 
+struct FabricEriscDatamoverKernelConfig {
+    tt::tt_metal::Program& program;
+    const std::string& kernel_path;
+    const tt::tt_metal::CoreCoord& eth_core;
+    tt::tt_metal::DataMovementProcessor risc_id;
+    tt::tt_metal::NOC noc_id;
+    const std::vector<uint32_t>& compile_time_args;
+    const std::unordered_map<std::string, uint32_t>& named_compile_time_args;
+    const std::vector<uint32_t>& runtime_args;
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level;
+};
+
 tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**

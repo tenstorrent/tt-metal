@@ -6,11 +6,6 @@
 
 #include <cstdint>
 #include <iostream>
-#include <optional>
-#include <string>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
 
 namespace tt::tt_fabric {
 
@@ -94,17 +89,5 @@ struct EDMChannelWorkerLocationInfo {
 };
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
-
-struct FabricEriscDatamoverKernelConfig {
-    tt::tt_metal::Program& program;
-    const std::string& kernel_path;
-    CoreCoord eth_core;
-    tt::tt_metal::DataMovementProcessor risc_id;
-    tt::tt_metal::NOC noc_id;
-    const std::vector<uint32_t>& compile_time_args;
-    const std::unordered_map<std::string, uint32_t>& named_compile_time_args;
-    const std::vector<uint32_t>& runtime_args;
-    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level;
-};
 
 }  // namespace tt::tt_fabric
