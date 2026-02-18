@@ -20,7 +20,7 @@
   skus:
     wh_n150:
       timeout: 30
-      tier: 2
+      tier: 1
     wh_llmbox_perf:
       timeout: 30
       tier: 2

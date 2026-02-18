@@ -1,9 +1,6 @@
 name: "[Tier 2] Models Unit Tests"
 
 on:
-  push:
-    branches:
-      - models-ci/model_unit_pipeline  # Temporary: force first run so workflow appears in GHA UI
   workflow_dispatch:
     inputs:
       model:
