@@ -9,12 +9,12 @@ import os
 from pathlib import Path
 
 import pytest
-import torch
 
 
 def _mmdet_importable():
     try:
         from mmdet.apis import init_detector  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -46,6 +46,7 @@ def swin_l_ref():
     if not Path(ckpt_path).is_file():
         pytest.skip(CKPT_SKIP)
     from models.experimental.dino_5scale_swin_l.reference.swin_l_reference import SwinLReference
+
     return SwinLReference(config_path, ckpt_path)
 
 
