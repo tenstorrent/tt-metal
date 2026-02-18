@@ -24,6 +24,8 @@ autograd::TensorPtr all_gather(
     const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr broadcast(
     const autograd::TensorPtr& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
+autograd::TensorPtr all_gather_grad_replicated(
+    const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr ring_shift(
     const autograd::TensorPtr& tensor,
     const std::optional<uint32_t> cluster_axis = std::nullopt,

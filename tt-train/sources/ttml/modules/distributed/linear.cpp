@@ -113,7 +113,8 @@ autograd::TensorPtr ColumnParallelLinear::operator()(const autograd::TensorPtr& 
     x = ops::linear_op(x, m_weight, m_bias);
     if (m_gather_output) {
         // All-gather output along TP dimension to gather sharded outputs within each DP group
-        x = ops::distributed::all_gather(x, tensor->get_rank() - 1U, m_shard_dim);
+        // m_gather_output is true only at classification head for which output gradient is replicated across TP devices
+        x = ops::distributed::all_gather_grad_replicated(x, tensor->get_rank() - 1U, m_shard_dim);
     }
     return x;
 }

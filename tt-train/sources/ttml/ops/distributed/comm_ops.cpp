@@ -63,6 +63,26 @@ autograd::TensorPtr all_gather(
     return out;
 }
 
+autograd::TensorPtr all_gather_grad_replicated(
+    const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    auto* device = &autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    uint32_t tp_size =
+        cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] : static_cast<uint32_t>(device->num_devices());
+    auto out = autograd::create_tensor(ttnn_fixed::distributed::all_gather(tensor->get_value(), dim, cluster_axis));
+
+    autograd::GradFunction grad = [tensor, out, dim, cluster_axis, tp_size]() {
+        if (out->is_grad_initialized()) {
+            tensor->add_grad(ttnn::multiply(
+                ttnn_fixed::distributed::reduce_scatter(out->get_grad(), dim, cluster_axis),
+                1.F / static_cast<float>(tp_size)));
+        }
+    };
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 autograd::TensorPtr all_reduce(
     const autograd::TensorPtr& tensor, const bool noop_backward, const std::optional<uint32_t> cluster_axis) {
     auto out = autograd::create_tensor(ttnn_fixed::distributed::all_reduce(tensor->get_value(), cluster_axis));

@@ -752,8 +752,6 @@ int main(int argc, char **argv) {
                 memory_snapshot("BACKWARD_PASS");
             }
 
-            fmt::print("loss_float: {}\n", loss_float);
-
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().logical_shape()[0];
