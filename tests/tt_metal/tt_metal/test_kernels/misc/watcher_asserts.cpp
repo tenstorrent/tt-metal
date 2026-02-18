@@ -19,6 +19,7 @@ void kernel_main() {
     uint32_t a = get_arg_val<uint32_t>(0);
     uint32_t b = get_arg_val<uint32_t>(1);
     uint32_t assert_type = get_arg_val<uint32_t>(2);
+
 #if defined(COMPILE_FOR_DM)
     constexpr uint32_t dm_id = get_compile_time_arg_val(0);
     uint64_t cpu_index = 0;
@@ -56,12 +57,13 @@ void kernel_main() {
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
 #endif
-
-// For slow dispatch
+    if (a == b) {
+    // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
 #if !defined(COMPILE_FOR_ERISC) && defined(COMPILE_FOR_DM)
-    volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-    go_message_ptr->signal = RUN_MSG_DONE;
+        volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+        go_message_ptr->signal = RUN_MSG_DONE;
 #endif
+    }
     ASSERT(a != b, static_cast<debug_assert_type_t>(assert_type));
 
 #endif

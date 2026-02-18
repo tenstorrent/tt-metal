@@ -60,6 +60,8 @@ static void RunTest(
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    constexpr uint32_t line_num = 67;  // Note: this should match the assert line # in watcher_asserts.cpp
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc
@@ -79,7 +81,7 @@ static void RunTest(
                         uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
                         assert_kernel = experimental::quasar::CreateKernel(
                             program_,
-                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
+                            kernel,
                             logical_core,
                             experimental::quasar::QuasarDataMovementConfig{
                                 .num_processors_per_cluster = 8, .compile_args = {dm_id}});
@@ -90,11 +92,7 @@ static void RunTest(
                                          enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_1))
                                             ? tt_metal::NOC::RISCV_1_default
                                             : tt_metal::NOC::RISCV_0_default;
-                        assert_kernel = CreateKernel(
-                            program_,
-                            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                            logical_core,
-                            dm_config);
+                        assert_kernel = CreateKernel(program_, kernel, logical_core, dm_config);
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
@@ -108,10 +106,9 @@ static void RunTest(
                         processor.processor_type);
                     assert_kernel = CreateKernel(
                         program_,
-                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
+                        kernel,
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
-
                     break;
             }
             break;
@@ -122,11 +119,7 @@ static void RunTest(
             }
             logical_core = *(device->get_active_ethernet_cores(true).begin());
             virtual_core = device->ethernet_core_from_logical_core(logical_core);
-            assert_kernel = CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+            assert_kernel = CreateKernel(program_, kernel, logical_core, EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
         case HalProgrammableCoreType::IDLE_ETH:
@@ -137,24 +130,21 @@ static void RunTest(
             logical_core = *(device->get_inactive_ethernet_cores().begin());
             virtual_core = device->ethernet_core_from_logical_core(logical_core);
             assert_kernel = CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
+                program_, kernel, logical_core, EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
-    // // Write runtime args that should not trip an assert.
-    // const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
-    // SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
+    // Write runtime args that should not trip an assert.
+    const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
+    SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
 
-    // // Run the kernel, don't expect an issue here.
-    // log_info(LogTest, "Running args that shouldn't assert...");
-    // fixture->RunProgram(mesh_device, workload, true);
-    // log_info(LogTest, "Args did not assert!");
+    // Run the kernel, don't expect an issue here.
+    log_info(LogTest, "Running args that shouldn't assert...");
+    fixture->RunProgram(mesh_device, workload);
+    log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type)};
@@ -166,52 +156,51 @@ static void RunTest(
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
-    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    std::string expected;
-    if (assert_type == dev_msgs::DebugAssertTripped) {
-        const uint32_t line_num = 65;
-        expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
-            "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
-            "from a different file. Current kernel: {}.",
-            device->id(),
-            (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
-            logical_core.x,
-            logical_core.y,
-            virtual_core.x,
-            virtual_core.y,
-            risc);
-        std::string after_line = fmt::format(
-            ". Note that file name reporting is not yet implemented, and the reported line number for the assert may "
-            "be from a different file. Current kernel: {}.",
-            kernel);
-        expected = regex_escape(before_line) + "\\d+" + regex_escape(after_line);
-    } else {
-        std::string barrier;
-        if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
-            barrier = "NOC non-posted atomics flushed";
-        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped) {
-            barrier = "NOC non-posted writes sent";
-        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped) {
-            barrier = "NOC posted writes sent";
-        } else if (assert_type == dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped) {
-            barrier = "NOC reads flushed";
-        }
+    std::string_view core_str = (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker";
+    std::string msg;
 
-        expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} detected an inter-kernel data race due to "
-            "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
-            "{}.",
-            device->id(),
-            (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
-            logical_core.x,
-            logical_core.y,
-            virtual_core.x,
-            virtual_core.y,
-            risc,
-            barrier,
-            kernel);
+    switch (assert_type) {
+        case dev_msgs::DebugAssertTripped:
+            msg = fmt::format(
+                "tripped an assert on line {}. Note that file name reporting is not yet implemented, and the reported "
+                "line number for the assert may be from a different file",
+                line_num);
+            break;
+
+        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
+        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped:
+        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped:
+        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
+            constexpr std::string_view barriers[] = {
+                "reads flushed", "non-posted writes sent", "non-posted atomics flushed", "posted writes sent"};
+            msg = fmt::format(
+                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
+                "NOC {} barrier)",
+                barriers[assert_type - dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped]);
+            break;
+        }
+        case dev_msgs::DebugAssertRtaOutOfBounds:
+        case dev_msgs::DebugAssertCrtaOutOfBounds:
+            msg = fmt::format(
+                "accessed {} runtime arg index out of bounds",
+                (assert_type == dev_msgs::DebugAssertRtaOutOfBounds) ? "unique" : "common");
+            break;
+
+        default: TT_THROW("Unhandled assert type {}", static_cast<int>(assert_type));
     }
+
+    // Combine everything in one final pass
+    std::string expected = fmt::format(
+        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} {}. Current kernel: {}.",
+        device->id(),
+        core_str,
+        logical_core.x,
+        logical_core.y,
+        virtual_core.x,
+        virtual_core.y,
+        risc,
+        msg,
+        kernel);
 
     std::string exception;
     do {
@@ -259,6 +248,7 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
+    // TODO: SD is only used for Quasar watcher assert tests. Remove once FD is enabled on quasar
     if (this->slow_dispatch_ && (tt::tt_metal::MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR)) {
         GTEST_SKIP();
     }
@@ -301,9 +291,18 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         WatcherTestParams{"Brisc", {TENSIX, DM, 0}, dev_msgs::DebugAssertTripped},
         WatcherTestParams{"NCrisc", {TENSIX, DM, 1}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        // DM2 to DM7 only run on Quasar
+        WatcherTestParams{"DM2", {TENSIX, DM, 2}, dev_msgs::DebugAssertTripped},
+        WatcherTestParams{"DM3", {TENSIX, DM, 3}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"DM4", {TENSIX, DM, 4}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
+        WatcherTestParams{"DM5", {TENSIX, DM, 5}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"DM6", {TENSIX, DM, 6}, dev_msgs::DebugAssertRtaOutOfBounds},
+        WatcherTestParams{"DM7", {TENSIX, DM, 7}, dev_msgs::DebugAssertCrtaOutOfBounds},
         WatcherTestParams{"Trisc0", {TENSIX, COMPUTE, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped},
         WatcherTestParams{"Trisc1", {TENSIX, COMPUTE, 1}, dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped},
         WatcherTestParams{"Trisc2", {TENSIX, COMPUTE, 2}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{
+            "Trisc3", {TENSIX, COMPUTE, 3}, dev_msgs::DebugAssertRtaOutOfBounds},  // Trisc3 only Runs on Quasar
         WatcherTestParams{"Erisc", {ACTIVE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
         WatcherTestParams{"IErisc", {IDLE_ETH, DM, 0}, dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
