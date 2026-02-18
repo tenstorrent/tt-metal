@@ -127,9 +127,6 @@ class TestTypecast:
                 partial(generation_funcs.gen_rand, low=in_low, high=in_high), pt_input_dtype
             )
         ]
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=100), pt_input_dtype)
-        ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["tt_input_dtype"] = [tt_input_dtype]
         test_args["tt_output_dtype"] = [tt_output_dtype]
