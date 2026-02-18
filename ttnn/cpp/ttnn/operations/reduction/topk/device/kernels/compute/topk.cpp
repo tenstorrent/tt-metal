@@ -63,24 +63,18 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
 }
 
 /**
- * Read tiles from circular buffer and transpose them to destination registers
+ * Read tile from circular buffer and transpose it to destination register
  * Used to prepare input tiles for sorting operations
  *
- * @param cb               Circular buffer index to read tiles from
- * @param base_offset      Base offset in destination registers where transposed tiles will be stored
- * @param get_two         Boolean flag: true to transpose two tiles (tiles 0,1 -> dest base_offset, base_offset+1),
- *                        false to transpose only one tile (tile 0 -> dest base_offset)
+ * @param cb               Circular buffer index to read tile from
+ * @param base_offset      Base offset in destination register where transposed tile will be stored
  */
-FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset, const bool get_two = true) {
+FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
     reconfig_data_format_srca(cb);
     transpose_wh_init_short(cb);
 
     // Transpose first tile to destination register
-    transpose_wh_tile(cb, 0, base_offset + 0);
-    if (get_two) {
-        // Transpose second tile if processing two tiles at once (initial iteration)
-        transpose_wh_tile(cb, 1, base_offset + 1);
-    }
+    transpose_wh_tile(cb, 0, base_offset);
 }
 
 /**
@@ -130,9 +124,13 @@ void kernel_main() {
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
+    constexpr uint32_t DST_VAL = 0;
+    constexpr uint32_t DST_IND = 2;
+
     constexpr int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
         uint32_t ktiles_saved = 0;
+
         /*
         ================================================================================================
         TOPK ALGORITHM IMPLEMENTATION - INSERTION SORT WITH DOUBLE BUFFERING
@@ -207,40 +205,37 @@ void kernel_main() {
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
         for (uint32_t count = 1; count < Wt; count++) {
-            // Read input tiles (2 on first iteration, 1 on subsequent) and transpose to HW format
-            // Wait for input tiles to become available
-            cb_wait_front(input_val_cb_index, input_take);
-            cb_wait_front(input_ind_cb_index, input_take);
-
-            // Reserve space in transposed buffers for processing
             cb_reserve_back(transposed_val_cb_index, input_take);
             cb_reserve_back(transposed_ind_cb_index, input_take);
 
-            acquire_dst();
-
             // Transpose input tiles from WH to HW format and pack to intermediate buffers
-            read_cb_and_transpose(input_val_cb_index, 0, (2 == input_take));  // Values: dest regs 0,1
-            read_cb_and_transpose(input_ind_cb_index, 2, (2 == input_take));  // Indices: dest regs 2,3
 
-            // Pack transposed values
-            pack_reconfig_data_format(transposed_val_cb_index);
-            pack_tile(0, transposed_val_cb_index);
-            if (input_take == 2) {
-                pack_tile(1, transposed_val_cb_index);  // Pack second tile on first iteration
+            for (uint32_t i = 0; i < input_take; i++) {
+                cb_wait_front(input_val_cb_index, 1);
+                cb_wait_front(input_ind_cb_index, 1);
+
+                tile_regs_acquire();
+
+                read_cb_and_transpose(input_val_cb_index, DST_VAL);  // Values: dest regs 0,1
+                read_cb_and_transpose(input_ind_cb_index, DST_IND);  // Indices: dest regs 2,3
+
+                tile_regs_commit();
+
+                tile_regs_wait();
+
+                // Pack transposed values
+                pack_reconfig_data_format(transposed_val_cb_index);
+                pack_tile(DST_VAL, transposed_val_cb_index);
+
+                // Pack transposed indices
+                pack_reconfig_data_format(transposed_ind_cb_index);
+                pack_tile(DST_IND, transposed_ind_cb_index);
+
+                tile_regs_release();
+
+                cb_pop_front(input_val_cb_index, 1);
+                cb_pop_front(input_ind_cb_index, 1);
             }
-
-            // Pack transposed indices
-            pack_reconfig_data_format(transposed_ind_cb_index);
-            pack_tile(2, transposed_ind_cb_index);
-            if (input_take == 2) {
-                pack_tile(3, transposed_ind_cb_index);  // Pack second tile on first iteration
-            }
-
-            release_dst();
-
-            // Remove processed tiles from input buffers
-            cb_pop_front(input_val_cb_index, input_take);
-            cb_pop_front(input_ind_cb_index, input_take);
 
             // Store transposed tiles for insertion sort processing
             cb_push_back(transposed_val_cb_index, input_take);
@@ -301,11 +296,11 @@ void kernel_main() {
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
                 copy_tile_to_dst_init_short_with_dt(cb1, cb0);
-                copy_tile(cb0, 0, 0);
+                copy_tile(cb0, 0, DST_VAL);
 
                 // Load existing sorted indices into dest reg 2
                 copy_tile_to_dst_init_short_with_dt(cb0, cb1);
-                copy_tile(cb1, 0, 2);
+                copy_tile(cb1, 0, DST_IND);
 
                 // Load new input values into dest reg 1
                 copy_tile_to_dst_init_short_with_dt(transposed_ind_cb_index, transposed_val_cb_index);
