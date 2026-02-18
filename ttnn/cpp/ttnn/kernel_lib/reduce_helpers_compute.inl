@@ -47,7 +47,7 @@ ALWI void reduce_init_short_with_dt(uint32_t old_cbid, uint32_t input_cb, uint32
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, input_cb)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
-    UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, enforce_fp32_accumulation>(input_cb, scaler_cb)));
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(input_cb, scaler_cb)));
 
     // Reconfigure math for reduce operation
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>()));
