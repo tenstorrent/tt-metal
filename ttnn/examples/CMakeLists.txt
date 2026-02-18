@@ -29,6 +29,15 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_executable(example_lab3_ex3)
+target_sources(example_lab3_ex3 PRIVATE lab3_ex3/lab3_ex3.cpp)
+target_link_libraries(
+    example_lab3_ex3
+    PRIVATE
+        TT::Metalium
+        TTNN::CPP
+)
+
 add_executable(example_lab3_ex2)
 target_sources(example_lab3_ex2 PRIVATE lab3_ex2/lab3_ex2.cpp)
 target_link_libraries(
@@ -38,19 +47,19 @@ target_link_libraries(
         TTNN::CPP
 )
 
-add_executable(example_lab3_matmul_ex1)
-target_sources(example_lab3_matmul_ex1 PRIVATE lab3_matmul_ex1/lab3_matmul_ex1.cpp)
+add_executable(example_lab3_matmul_ex3)
+target_sources(example_lab3_matmul_ex3 PRIVATE lab3_matmul_ex3/lab3_matmul_ex3.cpp)
 target_link_libraries(
-    example_lab3_matmul_ex1
+    example_lab3_matmul_ex3
     PRIVATE
         TT::Metalium
         TTNN::CPP
 )
 
-add_executable(example_lab3_matmul_ex3)
-target_sources(example_lab3_matmul_ex3 PRIVATE lab3_matmul_ex3/lab3_matmul_ex3.cpp)
+add_executable(example_lab3_ex4)
+target_sources(example_lab3_ex4 PRIVATE lab3_ex4/lab3_ex4.cpp)
 target_link_libraries(
-    example_lab3_matmul_ex3
+    example_lab3_ex4
     PRIVATE
         TT::Metalium
         TTNN::CPP
