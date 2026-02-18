@@ -470,8 +470,42 @@ class DistributedExpert:
         hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, hidden_size))
 
         # Expert indices: [1, 1, tokens_per_device, K]
-        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, num_experts_per_tok))
+        # Need ROW_MAJOR layout AND uint16 dtype for all_to_all_dispatch
+
+        # First reshape if needed
+        indices_shape = topk_expert_indices.shape
+        if (
+            len(indices_shape) == 4
+            and indices_shape[2] == tokens_per_device
+            and indices_shape[3] == num_experts_per_tok
+        ):
+            # Already in the right shape
+            reshaped_indices = topk_expert_indices
+        else:
+            # Need to reshape
+            reshaped_indices = ttnn.reshape(topk_expert_indices, shape=(1, 1, tokens_per_device, num_experts_per_tok))
+
+        # Convert to ROW_MAJOR layout - this changes dtype but we'll fix it
+        topk_indices_rm = ttnn.to_layout(reshaped_indices, ttnn.ROW_MAJOR_LAYOUT)
+
+        # If num_experts_per_tok is not a multiple of 32, pad it for typecast
+        if num_experts_per_tok < 32:
+            # Pad to 32 for typecast compatibility
+            padded_indices = ttnn.pad(
+                topk_indices_rm,
+                [1, 1, tokens_per_device, 32],  # Pad last dim to 32
+                [0, 0, 0, 0],  # Start indices
+                value=0.0,
+            )
+            # Now typecast to uint16
+            padded_indices_uint16 = ttnn.typecast(padded_indices, dtype=ttnn.uint16)
+            # Slice back to original size
+            topk_indices_rm = ttnn.slice(
+                padded_indices_uint16, [0, 0, 0, 0], [1, 1, tokens_per_device, num_experts_per_tok]
+            )
+        else:
+            # Already a multiple of 32, can typecast directly
+            topk_indices_rm = ttnn.typecast(topk_indices_rm, dtype=ttnn.uint16)
 
         # ==========================================================================
         # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices

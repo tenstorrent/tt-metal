@@ -523,8 +523,8 @@ class MoEBlock:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
 
-        indices_rm = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        indices_rm = ttnn.reshape(indices_rm, shape=(batch_size_per_device, 1, seq_len, self.num_experts_per_tok))
+        # Keep indices as-is to preserve uint16 dtype from router
+        indices_rm = indices  # Don't convert layout or reshape yet
 
         # Get chunk size
         chunk_config = self.config.get("chunking", {})
@@ -538,9 +538,27 @@ class MoEBlock:
 
             # Slice inputs
             x_chunk = ttnn.slice(x_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, hidden_size])
-            indices_chunk = ttnn.slice(
-                indices_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
-            )
+
+            # For indices: only convert/slice if we're actually chunking
+            if chunk_size < batch_size_per_device:
+                # Need to convert to ROW_MAJOR for slicing
+                if indices_rm.dtype == ttnn.uint16:
+                    # Already have the original uint16 indices
+                    indices_rm_temp = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+                    indices_rm_temp = ttnn.reshape(
+                        indices_rm_temp, shape=(batch_size_per_device, 1, seq_len, self.num_experts_per_tok)
+                    )
+                    indices_chunk = ttnn.slice(
+                        indices_rm_temp, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
+                    )
+                else:
+                    # Already converted
+                    indices_chunk = ttnn.slice(
+                        indices_rm, [batch_start, 0, 0, 0], [batch_end, 1, seq_len, self.num_experts_per_tok]
+                    )
+            else:
+                # No chunking needed, pass indices directly
+                indices_chunk = indices_rm  # This is still the original uint16 tensor
 
             # Prepare weights for experts
             batch_chunk = batch_end - batch_start
