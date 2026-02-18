@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
     run_multi_core_matmul_1d,
     num_cores_to_rectangle_grid,
     round_up,
