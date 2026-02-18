@@ -52,7 +52,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     # Conservative L1 limit: account for prefetcher static CBs (~262KB) and input shards
     # Total L1 ~1.46MB, prefetcher CBs end at ~762KB, need room for input shards
     # Use ~500KB as safe limit for global CB per core
-    MAX_L1_PER_BANK = 900000
+    MAX_L1_PER_BANK = 1000000
 
     dim, hidden_dim = VERIFIED_MODEL_CONFIGS[model_name]["dim"], VERIFIED_MODEL_CONFIGS[model_name]["hidden_dim"]
     n_per_device = hidden_dim // num_devices
