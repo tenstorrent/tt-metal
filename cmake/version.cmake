@@ -21,23 +21,30 @@ function(ParseGitDescribe)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
-        execute_process(
-            COMMAND
-                ${GIT_EXECUTABLE} rev-parse --short=10 HEAD
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            OUTPUT_VARIABLE VERSION_HASH
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
+        # Only compute VERSION_HASH if TT_METAL_USE_GIT_HASH is not explicitly disabled
+        if(NOT DEFINED TT_METAL_USE_GIT_HASH OR TT_METAL_USE_GIT_HASH)
+            execute_process(
+                COMMAND
+                    ${GIT_EXECUTABLE} rev-parse --short=10 HEAD
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE VERSION_HASH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+        endif()
     endif()
-    if(NOT VERSION_HASH)
+    if(NOT VERSION_HASH AND (NOT DEFINED TT_METAL_USE_GIT_HASH OR TT_METAL_USE_GIT_HASH))
         set(VERSION_HASH ${fallbackHash})
     endif()
     if(NOT version)
         set(version ${fallbackVersion})
         # A shallow Git clone will fail a git describe, but also will not have substituted the fallbackVersion
         if(version MATCHES "Format")
-            set(version "0.0-alpha0-1-g${VERSION_HASH}-dirty")
+            if(VERSION_HASH)
+                set(version "0.0-alpha0-1-g${VERSION_HASH}-dirty")
+            else()
+                set(version "0.0-alpha0-1-dirty")
+            endif()
         endif()
     endif()
 
@@ -86,8 +93,13 @@ function(ParseGitDescribe)
         string(APPEND VERSION_DEB "~${VERSION_STATUS}") # Debian versioning uses a ~ for "less than blank"
     endif()
     if(VERSION_COMMIT_COUNT)
-        string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
-        string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
+        if(VERSION_HASH)
+            string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
+            string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
+        else()
+            string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}")
+            string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}")
+        endif()
     endif()
     if(VERSION_DIRTY)
         string(APPEND VERSION_FULL "+m")

@@ -51,6 +51,7 @@ show_help() {
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
+    echo "  --disable-git-hash               Disable git commit hash in build (useful for CI to avoid cache invalidation)."
 }
 
 clean() {
@@ -92,6 +93,7 @@ enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
+use_git_hash="ON"
 
 declare -a cmake_args
 
@@ -131,6 +133,7 @@ without-distributed
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
+disable-git-hash
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -194,6 +197,8 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
+        --disable-git-hash)
+            use_git_hash="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -400,6 +405,10 @@ fi
 
 if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
+fi
+
+if [ "$use_git_hash" = "OFF" ]; then
+    cmake_args+=("-DTT_METAL_USE_GIT_HASH=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother
