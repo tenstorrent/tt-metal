@@ -948,7 +948,7 @@ std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
     return std::make_shared<ContextDescriptor>(
         *hal_,
         *cluster_,
-        rtoptions(),
+        rtoptions_,
         fabric_config_,
         fabric_reliability_mode_,
         fabric_tensix_config_,

@@ -9,7 +9,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
 #include "common/executor.hpp"
-#include "device/firmware/fabric_firmware_initializer.hpp"
 #include "device/firmware/firmware_initializer.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
@@ -61,8 +60,7 @@ void DispatchKernelInitializer::init(
 
     // Dispatch requires Fabric, Profiler, and Command Queue
     TT_ASSERT(
-        init_done.contains(FabricFirmwareInitializer::key),
-        "Fabric firmware must be initialized before dispatch firmware");
+        init_done.contains(InitializerKey::Fabric), "Fabric firmware must be initialized before dispatch firmware");
     TT_ASSERT(
         init_done.contains(InitializerKey::Profiler), "Profiler firmware must be initialized before dispatch firmware");
     TT_ASSERT(
@@ -166,7 +164,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
         events.emplace_back(detail::async([this, dev, mmio_device_id]() {
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(mmio_device_id);
             dev->init_command_queue_device_with_topology(dispatch_topology_.get());
-            log_trace(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
+            log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             for (const auto& tunnel : tunnels_from_mmio) {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
@@ -175,7 +173,7 @@ void DispatchKernelInitializer::init_device_command_queues() {
                     });
                     if (it != devices_.end()) {
                         (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
-                        log_trace(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
+                        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
                     }
                 }
             }
@@ -192,7 +190,6 @@ void DispatchKernelInitializer::terminate_command_queues() {
         TT_ASSERT(device != nullptr, "Expected concrete Device but got different IDevice subclass");
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
             auto& cq = device->command_queue(cq_id);
-            log_info(tt::LogMetal, "Terminating command queue {} on device {}", cq_id, dev->id());
             cq.terminate();
         }
     }
@@ -214,14 +211,6 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
         }
 
         auto dispatch_cores = get_virtual_dispatch_cores(dev->id());
-        log_info(
-            tt::LogMetal,
-            "Waiting for dispatch cores to finish on device {}. {} dispatch cores",
-            dev->id(),
-            dispatch_cores.size());
-        for (const auto& core : dispatch_cores) {
-            log_info(tt::LogMetal, "Dispatch core: {}", core.str());
-        }
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
         // This allows the device handles to be properly released, enabling subsequent
         // device opens and tt-smi resets to succeed.
