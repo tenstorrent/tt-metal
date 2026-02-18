@@ -24,7 +24,7 @@
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.1-8b
   skus:
-    wh_n150_civ2:
+    wh_n150:
       timeout: 30
       tier: 1
     wh_llmbox_perf:

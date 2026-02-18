@@ -18,7 +18,7 @@
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: llama3.1-8b
   skus:
-    wh_n150_civ2:
+    wh_n150:
       timeout: 30
       tier: 1
     wh_llmbox_perf:
