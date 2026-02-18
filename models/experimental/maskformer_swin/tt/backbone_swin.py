@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import math
 import os
+import time
 
 try:
     import torch
@@ -66,6 +67,36 @@ def _env_flag(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _backbone_compute_kernel_config():
+    """Compute kernel config for Swin backbone matmul/linear ops.
+
+    Defaults are set for Stage 1 correctness; override via env vars:
+      - MASKFORMER_TT_BACKBONE_MATH_FIDELITY: lofi|hifi2|hifi4 (default: hifi2)
+      - MASKFORMER_TT_BACKBONE_FP32_DEST_ACC: 0|1 (default: 1)
+      - MASKFORMER_TT_BACKBONE_MATH_APPROX: 0|1 (default: 0)
+    """
+
+    if ttnn is None:
+        raise RuntimeError("TTNN runtime is required to construct backbone compute kernel configs.")
+
+    fidelity_name = os.environ.get("MASKFORMER_TT_BACKBONE_MATH_FIDELITY", "hifi2").strip().lower()
+    fidelity = ttnn.MathFidelity.HiFi2
+    if fidelity_name in {"lofi", "low"}:
+        fidelity = ttnn.MathFidelity.LoFi
+    elif fidelity_name in {"hifi4", "high"} and hasattr(ttnn.MathFidelity, "HiFi4"):
+        fidelity = ttnn.MathFidelity.HiFi4
+
+    fp32_dest_acc = os.environ.get("MASKFORMER_TT_BACKBONE_FP32_DEST_ACC", "1").strip() == "1"
+    math_approx = os.environ.get("MASKFORMER_TT_BACKBONE_MATH_APPROX", "0").strip() == "1"
+
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_dest_acc,
+        packer_l1_acc=False,
+    )
 
 
 def _roll(x, shifts: Tuple[int, int], dims: Tuple[int, int], *, memory_config: Optional[Any] = None):
@@ -126,6 +157,7 @@ class MaskFormerSwinBackbone:
         # Patch embed weights
         self._patch_w = None
         self._patch_b = None
+        self._patch_conv_prepared = False
         self._patch_norm_w = None
         self._patch_norm_b = None
 
@@ -331,7 +363,16 @@ class MaskFormerSwinBackbone:
             self._stages.append({"blocks": blocks, "downsample": downsample})
 
     def _get_attn_mask(self, *, stage_idx: int, height: int, width: int) -> Any:
-        """Compute and cache the shifted-window attention mask for (stage_idx, H, W)."""
+        """Compute and cache the shifted-window attention mask for (stage_idx, H, W).
+
+        The cached mask is stored in broadcast-ready shape: [1, nW, 1, N, N] (row-major),
+        where nW is the number of windows and N = window_size^2.
+
+        Notes
+        -----
+        We return a cloned TT tensor on every call so the caller can safely deallocate the
+        per-use mask without risking the cached buffer.
+        """
 
         if self.device is None or ttnn is None:
             require_ttnn("build Swin attention masks")
@@ -339,9 +380,21 @@ class MaskFormerSwinBackbone:
             raise RuntimeError("torch is required to build Swin attention masks.")
 
         key = (stage_idx, height, width)
-        cached = self._attn_mask_cache.get(key)
+        cache_enabled = os.environ.get("MASKFORMER_TT_DISABLE_ATTN_MASK_CACHE", "0").strip() != "1"
+        cached = self._attn_mask_cache.get(key) if cache_enabled else None
         if cached is not None:
-            return cached
+            if os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_MASK", "0").strip() == "1":
+                print(
+                    f"[maskformer][backbone] attn_mask cache hit stage={stage_idx} H={height} W={width}",
+                    flush=True,
+                )
+            return ttnn.clone(cached, memory_config=self._activation_memory_config())
+        if os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_MASK", "0").strip() == "1":
+            state = "miss" if cache_enabled else "disabled"
+            print(
+                f"[maskformer][backbone] attn_mask cache {state} stage={stage_idx} H={height} W={width}",
+                flush=True,
+            )
 
         window = int(self.config.window_size)
         shift = window // 2
@@ -364,7 +417,7 @@ class MaskFormerSwinBackbone:
         mask_windows = mask_windows.view(-1, window * window)
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        # [num_windows, N, N]
+        # [num_windows, N, N] (torch)
 
         dtype = self.dtype or DEFAULT_TT_DTYPE
         tt_mask = ttnn.from_torch(
@@ -374,7 +427,13 @@ class MaskFormerSwinBackbone:
             device=self.device,
             memory_config=self._activation_memory_config(),
         )
-        self._attn_mask_cache[key] = tt_mask
+        num_windows = int(attn_mask.shape[0])
+        N = int(window * window)
+        # Cache in broadcast-ready shape to avoid per-forward reshapes and accidental deallocation of the cached buffer.
+        tt_mask = ttnn.reshape(tt_mask, (1, num_windows, 1, N, N), memory_config=self._activation_memory_config())
+        if cache_enabled:
+            self._attn_mask_cache[key] = tt_mask
+            return ttnn.clone(tt_mask, memory_config=self._activation_memory_config())
         return tt_mask
 
     def forward(self, images: Any) -> Tuple[List[Any], List[Any]]:
@@ -395,6 +454,14 @@ class MaskFormerSwinBackbone:
         dtype = self.dtype or DEFAULT_TT_DTYPE
         mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         act_mem_cfg = self._activation_memory_config()
+        debug = os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE", "0").strip() == "1"
+        sync_per_block = os.environ.get("MASKFORMER_TT_SYNC_BACKBONE_PER_BLOCK", "0").strip() == "1"
+        sync_stage_boundaries = os.environ.get("MASKFORMER_TT_SYNC_BACKBONE_STAGE_BOUNDARIES", "0").strip() == "1"
+        tt = require_ttnn("sync Swin backbone per-block") if sync_per_block else None
+        tt_stage = require_ttnn("sync Swin backbone stage boundaries") if sync_stage_boundaries else None
+        ts0 = time.perf_counter()
+        if debug:
+            print("[maskformer][backbone] forward begin", flush=True)
 
         # Convert input to TT tensor (NHWC)
         if torch is not None and isinstance(images, torch.Tensor):
@@ -410,28 +477,52 @@ class MaskFormerSwinBackbone:
         B = int(x.shape[0])
         H = int(x.shape[1])
         W = int(x.shape[2])
+        if debug:
+            print(f"[maskformer][backbone] input BHW=({B},{H},{W}) C={int(x.shape[3])}", flush=True)
 
         # Patch embedding conv (stride=patch_size)
         patch = int(cfg.patch_size)
-        x, [out_h, out_w], [self._patch_w, self._patch_b] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self._patch_w,
-            bias_tensor=self._patch_b,
-            in_channels=int(x.shape[-1]),
-            out_channels=int(cfg.embed_dim),
-            batch_size=B,
-            input_height=H,
-            input_width=W,
-            kernel_size=(patch, patch),
-            stride=(patch, patch),
-            padding=(0, 0),
-            dilation=(1, 1),
-            groups=1,
-            device=self.device,
-            memory_config=mem_cfg,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
+        if self._patch_conv_prepared:
+            [x, [out_h, out_w]] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self._patch_w,
+                bias_tensor=self._patch_b,
+                in_channels=int(x.shape[-1]),
+                out_channels=int(cfg.embed_dim),
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                kernel_size=(patch, patch),
+                stride=(patch, patch),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=mem_cfg,
+                return_output_dim=True,
+                return_weights_and_bias=False,
+            )
+        else:
+            x, [out_h, out_w], [self._patch_w, self._patch_b] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self._patch_w,
+                bias_tensor=self._patch_b,
+                in_channels=int(x.shape[-1]),
+                out_channels=int(cfg.embed_dim),
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                kernel_size=(patch, patch),
+                stride=(patch, patch),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=mem_cfg,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+            self._patch_conv_prepared = True
         x = ttnn.reshape(x, (B, out_h, out_w, int(cfg.embed_dim)))
         # Patch norm
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
@@ -445,15 +536,39 @@ class MaskFormerSwinBackbone:
 
         # Stage loop
         for stage_idx, stage in enumerate(self._stages):
+            if debug:
+                print(f"[maskformer][backbone] stage {stage_idx} begin x_shape={tuple(int(s) for s in x.shape)}", flush=True)
             # Blocks
             for block_idx, block in enumerate(stage["blocks"]):
                 shift = 0 if (block_idx % 2 == 0) else window // 2
+                if debug:
+                    print(f"[maskformer][backbone] stage{stage_idx} block{block_idx} shift={shift} begin", flush=True)
+                debug_steps = (
+                    debug
+                    and os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_STEPS", "0").strip() == "1"
+                    and tt is not None
+                    and hasattr(tt, "synchronize_device")
+                )
+                if debug_steps:
+                    try:
+                        stage_filter = int(os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_STEPS_STAGE", "2"))
+                        block_filter = int(os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_STEPS_BLOCK", "0"))
+                    except ValueError:
+                        stage_filter = 2
+                        block_filter = 0
+                    debug_steps = stage_idx == stage_filter and block_idx == block_filter
 
                 # LN before attention
                 x_ln = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
                 xn = ttnn.layer_norm(x_ln, weight=block["ln1_w"], bias=block["ln1_b"], memory_config=act_mem_cfg)
                 ttnn.deallocate(x_ln)
                 xn = ttnn.to_layout(xn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} ln1 done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
                 attn_out = self._window_attention(
                     xn,
                     block=block,
@@ -462,20 +577,57 @@ class MaskFormerSwinBackbone:
                     stage_idx=stage_idx,
                 )
                 ttnn.deallocate(xn)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} attn done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
                 x = ttnn.add(x, attn_out, memory_config=act_mem_cfg)
                 ttnn.deallocate(attn_out)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} attn+residual done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
 
                 # LN + MLP
                 x_ln2 = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
                 xn2 = ttnn.layer_norm(x_ln2, weight=block["ln2_w"], bias=block["ln2_b"], memory_config=act_mem_cfg)
                 ttnn.deallocate(x_ln2)
                 xn2 = ttnn.to_layout(xn2, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} ln2 done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
                 mlp_out = self._mlp(
                     xn2, fc1_w=block["fc1_w"], fc1_b=block["fc1_b"], fc2_w=block["fc2_w"], fc2_b=block["fc2_b"]
                 )
                 ttnn.deallocate(xn2)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} mlp done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
                 x = ttnn.add(x, mlp_out, memory_config=act_mem_cfg)
                 ttnn.deallocate(mlp_out)
+                if debug_steps:
+                    tt.synchronize_device(self.device)
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} mlp+residual done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
+                if sync_per_block and tt is not None and hasattr(tt, "synchronize_device"):
+                    tt.synchronize_device(self.device)
+                if debug and sync_per_block:
+                    print(
+                        f"[maskformer][backbone] stage{stage_idx} block{block_idx} done t={time.perf_counter() - ts0:.2f}s",
+                        flush=True,
+                    )
 
             # Per-stage output norm (used by FPN and transformer module)
             out_norm = self._out_norms[stage_idx]
@@ -492,6 +644,13 @@ class MaskFormerSwinBackbone:
                 x = self._patch_merging(
                     x, norm_w=down["norm_w"], norm_b=down["norm_b"], reduction_w=down["reduction_w"]
                 )
+                if sync_stage_boundaries and tt_stage is not None and hasattr(tt_stage, "synchronize_device"):
+                    tt_stage.synchronize_device(self.device)
+                    if debug:
+                        print(
+                            f"[maskformer][backbone] stage {stage_idx} downsample sync t={time.perf_counter() - ts0:.2f}s",
+                            flush=True,
+                        )
 
         return feature_maps, hidden_states
 
@@ -501,6 +660,7 @@ class MaskFormerSwinBackbone:
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin MLP.")
         act_mem_cfg = self._activation_memory_config()
+        compute_cfg = _backbone_compute_kernel_config()
         B, H, W, C = x.shape
         seq = ttnn.reshape(x, (int(B), int(H) * int(W), int(C)))
         seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
@@ -509,7 +669,7 @@ class MaskFormerSwinBackbone:
             fc1_w,
             bias=fc1_b,
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         # Swin MLP uses GELU; fail fast instead of silently changing activation.
         if not hasattr(ttnn, "gelu"):
@@ -520,7 +680,7 @@ class MaskFormerSwinBackbone:
             fc2_w,
             bias=fc2_b,
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         y = ttnn.reshape(y, (int(B), int(H), int(W), int(C)))
@@ -532,6 +692,7 @@ class MaskFormerSwinBackbone:
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin patch merging.")
         act_mem_cfg = self._activation_memory_config()
+        compute_cfg = _backbone_compute_kernel_config()
         B, H, W, C = x.shape
         H = int(H)
         W = int(W)
@@ -563,7 +724,7 @@ class MaskFormerSwinBackbone:
             reduction_w,
             bias=None,
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.reshape(out, (int(B2), int(H2), int(W2), int(out.shape[-1])))
@@ -576,6 +737,17 @@ class MaskFormerSwinBackbone:
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin window attention.")
         act_mem_cfg = self._activation_memory_config()
+        compute_cfg = _backbone_compute_kernel_config()
+        debug_attn = os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_ATTN", "0").strip() == "1"
+        sync_attn = debug_attn and os.environ.get("MASKFORMER_TT_SYNC_BACKBONE_ATTN_STEPS", "0").strip() == "1"
+        tt_dbg = require_ttnn("sync Swin window attention debug") if sync_attn else None
+        attn_ts = time.perf_counter()
+
+        def _attn_mark(msg: str) -> None:
+            if debug_attn:
+                print(f"[maskformer][backbone_attn] {msg} t={time.perf_counter() - attn_ts:.2f}s", flush=True)
+            if sync_attn and tt_dbg is not None and hasattr(tt_dbg, "synchronize_device"):
+                tt_dbg.synchronize_device(self.device)
 
         B, H, W, C = x.shape
         B = int(B)
@@ -586,10 +758,16 @@ class MaskFormerSwinBackbone:
         head_dim = C // num_heads
         assert head_dim * num_heads == C
 
+        if debug_attn:
+            print(f"[maskformer][backbone_attn] begin BHW=({B},{H},{W}) C={C} window={window}", flush=True)
+
         pad_h = (window - (H % window)) % window
         pad_w = (window - (W % window)) % window
         if pad_h or pad_w:
+            if debug_attn:
+                print("[maskformer][backbone_attn] pad begin", flush=True)
             x = ttnn.pad(x, (B, H + pad_h, W + pad_w, C), [0, 0, 0, 0], 0)
+            _attn_mark("pad end")
         Hp = int(x.shape[1])
         Wp = int(x.shape[2])
 
@@ -599,6 +777,11 @@ class MaskFormerSwinBackbone:
         num_windows_h = Hp // window
         num_windows_w = Wp // window
         num_windows = num_windows_h * num_windows_w
+        safety_sync_windows1 = (
+            num_windows == 1 and os.environ.get("MASKFORMER_TT_SYNC_WINDOW_ATTN_WINDOWS1", "1").strip() == "1"
+        )
+        if debug_attn:
+            print("[maskformer][backbone_attn] window partition begin", flush=True)
         xw = ttnn.reshape(
             x,
             (B, num_windows_h, window, num_windows_w, window, C),
@@ -606,35 +789,39 @@ class MaskFormerSwinBackbone:
         )
         xw = ttnn.permute(xw, (0, 1, 3, 2, 4, 5), memory_config=act_mem_cfg)
         xw = ttnn.reshape(xw, (B * num_windows, window * window, C), memory_config=act_mem_cfg)
+        _attn_mark("window partition end")
 
         # Q, K, V projections
+        if debug_attn:
+            print("[maskformer][backbone_attn] qkv begin", flush=True)
         xw = ttnn.to_layout(xw, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         q = ttnn.linear(
             xw,
             block["q_w"],
             bias=block["q_b"],
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         k = ttnn.linear(
             xw,
             block["k_w"],
             bias=block["k_b"],
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         v = ttnn.linear(
             xw,
             block["v_w"],
             bias=block["v_b"],
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
         )
         ttnn.deallocate(xw)
 
         q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         k = ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+        _attn_mark("qkv end")
 
         # [B*nW, N, C] -> [B*nW, H, N, Hd]
         N = window * window
@@ -645,6 +832,8 @@ class MaskFormerSwinBackbone:
         k = ttnn.permute(k, (0, 2, 1, 3), memory_config=act_mem_cfg)
         v = ttnn.permute(v, (0, 2, 1, 3), memory_config=act_mem_cfg)
 
+        if debug_attn:
+            print("[maskformer][backbone_attn] scores begin", flush=True)
         q = q * (head_dim**-0.5)
         k_t = ttnn.permute(k, (0, 1, 3, 2), memory_config=act_mem_cfg)
 
@@ -653,7 +842,7 @@ class MaskFormerSwinBackbone:
         attn = ttnn.matmul(
             q,
             k_t,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
             memory_config=act_mem_cfg,
         )
         ttnn.deallocate(q)
@@ -662,39 +851,56 @@ class MaskFormerSwinBackbone:
 
         # Add relative position bias (broadcast on batch/windows)
         attn = ttnn.add(attn, block["rel_bias"], memory_config=act_mem_cfg)
+        _attn_mark("scores end")
 
         # Add attention mask for shifted blocks
         if shift:
-            mask = self._get_attn_mask(stage_idx=stage_idx, height=Hp, width=Wp)  # [nW, N, N] row-major
+            mask_rm = self._get_attn_mask(stage_idx=stage_idx, height=Hp, width=Wp)  # [1, nW, 1, N, N] row-major
             attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
             attn_rm = ttnn.reshape(attn_rm, (B, num_windows, num_heads, N, N), memory_config=act_mem_cfg)
-            mask_rm = ttnn.reshape(mask, (1, num_windows, 1, N, N), memory_config=act_mem_cfg)
             attn_rm = ttnn.add(attn_rm, mask_rm, memory_config=act_mem_cfg, use_legacy=False)
             attn = ttnn.reshape(attn_rm, (B * num_windows, num_heads, N, N), memory_config=act_mem_cfg)
             attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
             ttnn.deallocate(attn_rm)
             ttnn.deallocate(mask_rm)
 
+        if debug_attn:
+            print("[maskformer][backbone_attn] softmax begin", flush=True)
         attn = ttnn.softmax(attn, dim=-1, memory_config=act_mem_cfg)
+        if safety_sync_windows1:
+            tt_sync = require_ttnn("synchronize window attention (windows=1)")
+            if hasattr(tt_sync, "synchronize_device"):
+                tt_sync.synchronize_device(self.device)
+        _attn_mark("softmax end")
+        if debug_attn:
+            print("[maskformer][backbone_attn] ctx begin", flush=True)
         v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         ctx = ttnn.matmul(
             attn,
             v,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
             memory_config=act_mem_cfg,
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
+        if safety_sync_windows1:
+            tt_sync = require_ttnn("synchronize window attention (windows=1)")
+            if hasattr(tt_sync, "synchronize_device"):
+                tt_sync.synchronize_device(self.device)
+        _attn_mark("ctx end")
 
+        if debug_attn:
+            print("[maskformer][backbone_attn] out proj begin", flush=True)
         ctx = ttnn.permute(ctx, (0, 2, 1, 3), memory_config=act_mem_cfg)
         ctx = ttnn.reshape(ctx, (B * num_windows, N, C), memory_config=act_mem_cfg)
         ctx = ttnn.to_layout(ctx, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.linear(
             ctx,
             block["attn_out_w"],
-            bias=block["attn_out_b"],
+            bias=block.get("attn_out_b"),
             transpose_b=True,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=compute_cfg,
+            memory_config=act_mem_cfg,
         )
         ttnn.deallocate(ctx)
 
@@ -704,9 +910,27 @@ class MaskFormerSwinBackbone:
         )
         out = ttnn.permute(out, (0, 1, 3, 2, 4, 5), memory_config=act_mem_cfg)
         out = ttnn.reshape(out, (B, Hp, Wp, C), memory_config=act_mem_cfg)
+        _attn_mark("out proj end")
 
         if shift:
             out = _roll(out, shifts=(shift, shift), dims=(1, 2), memory_config=act_mem_cfg)
+            _attn_mark("roll back end")
         if pad_h or pad_w:
-            out = out[:, :H, :W, :]
+            if debug_attn:
+                print("[maskformer][backbone_attn] crop begin", flush=True)
+            out_flat = ttnn.reshape(out, (B, Hp, Wp * C), memory_config=act_mem_cfg)
+            out_flat = ttnn.slice(
+                out_flat,
+                slice_start=[0, 0, 0],
+                slice_end=[B, H, W * C],
+                slice_step=[1, 1, 1],
+                memory_config=act_mem_cfg,
+            )
+            out = ttnn.reshape(out_flat, (B, H, W, C), memory_config=act_mem_cfg)
+            if safety_sync_windows1:
+                tt_sync = require_ttnn("synchronize window attention (windows=1)")
+                if hasattr(tt_sync, "synchronize_device"):
+                    tt_sync.synchronize_device(self.device)
+            _attn_mark("crop end")
+        _attn_mark("return")
         return out
