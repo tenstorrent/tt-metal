@@ -25,22 +25,22 @@ using ckernel::ReduceDim;
  * @param scaler Packed bf16 value (bf16 << 16 | bf16)
  */
 template <bool half_tile = false>
-FORCE_INLINE void generate_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler);
+FORCE_INLINE void calculate_and_prepare_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler);
 
 // =============================================================================
 // Reduce scaler helpers API
 //
-// generate_reduce_scaler: Automatically computes the correct scaler based on
+// calculate_and_prepare_reduce_scaler: Automatically computes the correct scaler based on
 //   pool type, reduce dimension, and reduce factor (e.g. 1/N for AVG, 1.0 for
 //   SUM/MAX). Use this when performing standard reduce operations.
 //
-// fill_cb_with_scaler: Fills a CB tile with a caller-provided float scaler.
-//   Use this when you need a custom scaler value that doesn't follow the
-//   standard reduce conventions. Accepts a runtime float value.
+// prepare_reduce_scaler: Prepares a CB tile for reduce using a caller-provided
+//   float scaler. Use this when you need a custom scaler value that doesn't
+//   follow the standard reduce conventions. Accepts a runtime float value.
 // =============================================================================
 
 /**
- * @brief Fill a circular buffer tile with a scaler value
+ * @brief Prepares a CB tile for reduce using a caller-provided float scaler
  *
  * Converts the float scaler to the appropriate bit representation based on
  * the circular buffer's data format, then fills row 0 of each face.
@@ -50,7 +50,7 @@ FORCE_INLINE void generate_reduce_scaler_legacy(const uint32_t cb_id, const uint
  * @param scaler_f Float scaler value to fill the tile with
  */
 template <uint32_t cb_id>
-FORCE_INLINE void fill_cb_with_scaler(float scaler_f);
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from cb_id
@@ -61,16 +61,16 @@ FORCE_INLINE void fill_cb_with_scaler(float scaler_f);
  *
  * For AVG pooling with REDUCE_SCALAR, uses 1/sqrt(N) since the LLK applies the
  * scaler twice (row then col). For AVG with REDUCE_ROW/REDUCE_COL, uses 1/N.
- * For SUM/MAX, the reduce_factor is ignored and the scaler is 1.0.
+ * For SUM/MAX, the reduce_volume is ignored and the scaler is 1.0.
  *
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam reduce_factor Number of elements being reduced (N). Must be non-zero for AVG.
+ * @tparam reduce_volume Number of elements being reduced (N). Must be non-zero for AVG.
  * @param input_scaler Multiplicative scaler applied to the computed value (default 1.0f)
  */
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = 1>
-FORCE_INLINE void generate_reduce_scaler(float input_scaler = 1.0f);
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_volume = 1>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(float input_scaler = 1.0f);
 
 }  // namespace dataflow_kernel_lib
 

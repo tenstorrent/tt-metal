@@ -27,7 +27,8 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;
     constexpr auto src_args = TensorAccessorArgs<3>();
-    dataflow_kernel_lib::generate_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
 
     constexpr uint32_t cb_id_mask_h = 3;

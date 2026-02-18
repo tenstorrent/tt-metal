@@ -81,11 +81,11 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
 }
 
 // =============================================================================
-// Legacy generate_reduce_scaler (pre-computed scaler)
+// Legacy calculate_and_prepare_reduce_scaler (pre-computed scaler)
 // =============================================================================
 
 template <bool half_tile>
-FORCE_INLINE void generate_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler) {
+FORCE_INLINE void calculate_and_prepare_reduce_scaler_legacy(const uint32_t cb_id, const uint32_t scaler) {
     ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
     // Verify scaler is properly packed: high 16 bits must equal low 16 bits
     ASSERT((scaler >> 16) == (scaler & 0xFFFF));
@@ -103,11 +103,11 @@ FORCE_INLINE void generate_reduce_scaler_legacy(const uint32_t cb_id, const uint
 }
 
 // =============================================================================
-// Fill CB with scaler value
+// Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
 template <uint32_t cb_id>
-FORCE_INLINE void fill_cb_with_scaler(float scaler_f) {
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
     ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
 
     constexpr DataFormat data_format = get_dataformat(cb_id);
@@ -115,7 +115,7 @@ FORCE_INLINE void fill_cb_with_scaler(float scaler_f) {
 
     static_assert(
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
-        "fill_cb_with_scaler only supports Float16_b (bfloat16) and Float32 formats");
+        "prepare_reduce_scaler only supports Float16_b (bfloat16) and Float32 formats");
 
     uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
 
@@ -132,15 +132,15 @@ FORCE_INLINE void fill_cb_with_scaler(float scaler_f) {
 }
 
 // =============================================================================
-// Format-aware generate_reduce_scaler (cb_id-deduced format and tile shape)
+// Format-aware calculate_and_prepare_reduce_scaler (cb_id-deduced format and tile shape)
 // =============================================================================
 
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t reduce_factor>
-FORCE_INLINE void generate_reduce_scaler(float input_scaler) {
+    uint32_t reduce_volume>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(const float input_scaler) {
 
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
@@ -155,24 +155,25 @@ FORCE_INLINE void generate_reduce_scaler(float input_scaler) {
     float scaler_f;
     if constexpr (pool_type == PoolType::AVG) {
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            static_assert(reduce_factor > 0, "reduce_factor must be greater than 0");
-            scaler_f = 1.0f / sqrtf(static_cast<float>(reduce_factor));
+            static_assert(reduce_volume > 0, "reduce_volume must be greater than 0");
+            scaler_f = 1.0f / sqrtf(static_cast<float>(reduce_volume));
         } else {
-            scaler_f = 1.0f / static_cast<float>(reduce_factor);
+            scaler_f = 1.0f / static_cast<float>(reduce_volume);
         }
     } else {
         scaler_f = 1.0f;
     }
 
     // -------------------------------------------------------------------------
-    // 1b. Apply compile-time input_scaler multiplier
+    // 1b. Apply input_scaler multiplier
+    //     For REDUCE_SCALAR, sqrt the input_scaler since the LLK squares it
     // -------------------------------------------------------------------------
     scaler_f *= input_scaler;
 
     // -------------------------------------------------------------------------
     // 2. Fill the CB with the computed scaler
     // -------------------------------------------------------------------------
-    fill_cb_with_scaler<cb_id>(scaler_f);
+    prepare_reduce_scaler<cb_id>(scaler_f);
 }
 
 }  // namespace dataflow_kernel_lib

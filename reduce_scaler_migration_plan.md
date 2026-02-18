@@ -18,7 +18,7 @@
 The codebase has 38 kernel files calling `dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_id, packed_scaler)`, which takes a pre-packed bf16 uint32_t. Two new APIs in `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp` replace it:
 
 - **`generate_reduce_scaler<cb_id, pool_type, reduce_dim, reduce_factor>()`** — Auto-computes the scaler (1.0 for SUM/MAX, 1/N for AVG). Use when the scaler is a known constant.
-- **`fill_cb_with_scaler<cb_id>(float scaler_f)`** — Fills CB with a caller-provided float. Use when the scaler is computed on the host and varies per invocation.
+- **`prepare_reduce_scaler<cb_id>(float scaler_f)`** — Fills CB with a caller-provided float. Use when the scaler is computed on the host and varies per invocation.
 
 Both auto-deduce data format (bf16/f32) and tile shape (half/full) from the CB.
 
@@ -245,7 +245,7 @@ All use `identity_scalar_packed = 1.0` for SUM reduce. The scaler is a fixed con
 - **Sampling** (`sampling_program_factory.cpp` lines 239-240, 262): Remove `packed_identity_scalar` computation and CT arg slot. Shift subsequent CT arg indices.
 
 ### Special case
-`writer_decode_all.cpp` has an **additional** call: `generate_reduce_scaler_legacy(cb_zero_in, zero_scalar_packed)` (scaler = 0.0). Replace this with `fill_cb_with_scaler<cb_zero_in>(0.0f)`.
+`writer_decode_all.cpp` has an **additional** call: `generate_reduce_scaler_legacy(cb_zero_in, zero_scalar_packed)` (scaler = 0.0). Replace this with `prepare_reduce_scaler<cb_zero_in>(0.0f)`.
 
 ### Testing
 **Sanity check:**
@@ -292,9 +292,9 @@ pytest tests/ttnn/unit_tests/operations/fused/test_softmax.py -v
 
 ---
 
-## Phase 5: Layernorm (9 files) → `fill_cb_with_scaler`
+## Phase 5: Layernorm (9 files) → `prepare_reduce_scaler`
 
-Mixed scalers: interleaved variants use 1.0, sharded variants use variable scalers (`1/block_w`, `1/num_blocks`). Using `fill_cb_with_scaler` for all since sharded variants need host-passed values.
+Mixed scalers: interleaved variants use 1.0, sharded variants use variable scalers (`1/block_w`, `1/num_blocks`). Using `prepare_reduce_scaler` for all since sharded variants need host-passed values.
 
 ### Kernel files
 1. `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp`
