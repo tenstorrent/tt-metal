@@ -2686,8 +2686,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
     EXPECT_EQ(mesh_8x16.items.size(), 4u) << "8x16_Mesh should have 4 instances (hosts)";
 
     // Build the flattened adjacency mesh
-    // Note: This function is currently not implemented, so the test will fail until it's implemented
-    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_8x16);
+    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_8x16);
 
     // Verify the result is a valid adjacency graph
     // The flattened mesh should have 128 nodes (one per ASIC)
@@ -2695,10 +2694,10 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8
     EXPECT_EQ(nodes.size(), 128u) << "Flattened mesh should have 128 nodes (one per ASIC)";
 
     // Verify that nodes are connected (each node should have neighbors in a 2D mesh)
-    for (uint32_t node : nodes) {
+    for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
     }
 }
 
@@ -2721,15 +2720,15 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x4Mesh) {
     EXPECT_EQ(mesh_4x4.asic_count, 16u) << "4x4_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
     EXPECT_EQ(mesh_4x4.items.size(), 2u) << "4x4_Mesh should have 2 instances (trays)";
 
-    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x4);
+    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x4);
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
 
-    for (uint32_t node : nodes) {
+    for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
     }
 }
 
@@ -2752,15 +2751,15 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
     EXPECT_EQ(mesh_2x8.asic_count, 16u) << "2x8_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
     EXPECT_EQ(mesh_2x8.items.size(), 2u) << "2x8_Mesh should have 2 instances (trays)";
 
-    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_2x8);
+    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_2x8);
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
 
-    for (uint32_t node : nodes) {
+    for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 3u) << "Node " << node << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 3u) << "Node " << node.unique_id << " should have at most 3 neighbors";
     }
 }
 
@@ -2783,15 +2782,15 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
     EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2_Mesh_Halftray should have 4 ASICs (1 halftray)";
     EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2_Mesh_Halftray should have 1 instance (halftray)";
 
-    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_halftray);
+    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_halftray);
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 4u) << "Flattened mesh should have 4 nodes";
 
-    for (uint32_t node : nodes) {
+    for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors (2x2 mesh)";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors (2x2 mesh)";
     }
 }
 
@@ -2814,16 +2813,32 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x32Mesh) {
     EXPECT_EQ(mesh_4x32.asic_count, 128u) << "4x32_Mesh should have 128 ASICs (4 hosts * 32 ASICs each)";
     EXPECT_EQ(mesh_4x32.items.size(), 4u) << "4x32_Mesh should have 4 instances (hosts)";
 
-    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x32);
+    auto flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x32);
 
     auto nodes = flattened_mesh.get_nodes();
     EXPECT_EQ(nodes.size(), 128u) << "Flattened mesh should have 128 nodes";
 
-    for (uint32_t node : nodes) {
+    // Print node information
+    std::cout << "\n=== Flattened Mesh Node Information ===\n";
+    for (const auto& node : nodes) {
         const auto& neighbors = flattened_mesh.get_neighbors(node);
-        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
-        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node.unique_id << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node.unique_id << " should have at most 4 neighbors";
+
+        // Print node metadata
+        std::cout << "Node " << node.unique_id << ": unique_id=" << node.unique_id
+                  << ", asic_location=" << (node.asic_location > 0 ? std::to_string(node.asic_location) : "N/A")
+                  << ", tray_id=" << (node.tray_id > 0 ? std::to_string(node.tray_id) : "N/A") << ", path=[";
+        for (size_t i = 0; i < node.grouping_path.size(); ++i) {
+            if (i > 0) {
+                std::cout << "->";
+            }
+            std::cout << node.grouping_path[i];
+        }
+        std::cout << "]"
+                  << ", neighbors=" << neighbors.size() << "\n";
     }
+    std::cout << "========================================\n\n";
 }
 
 // Corner-inferred dims: dims inferred from items' corners, not stored in GroupingInfo
@@ -2878,14 +2893,30 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
 
     auto flat_1x1 = desc.build_flattened_adjacency_mesh(mesh_1x1);
     EXPECT_EQ(flat_1x1.get_nodes().size(), 1u);  // 1 tray with 1 ASIC (from required groupings)
-    expect_neighbors(flat_1x1, 0, {});           // Single node has no neighbors
+    expect_neighbors_by_id(flat_1x1, 0, {});     // Single node has no neighbors
 
     auto flat_1x4 = desc.build_flattened_adjacency_mesh(mesh_1x4);
     EXPECT_EQ(flat_1x4.get_nodes().size(), 4u);  // 4 trays x 1 ASIC each
     // 1x4 chain: endpoints have 1 neighbor, interior nodes have 2 (row-major IDs 0..3)
-    expect_neighbors(flat_1x4, 0, {1});
-    expect_neighbors(flat_1x4, 1, {0, 2});
-    expect_neighbors(flat_1x4, 2, {1, 3});
-    expect_neighbors(flat_1x4, 3, {2});
+    expect_neighbors_by_id(flat_1x4, 0, {1});
+    expect_neighbors_by_id(flat_1x4, 1, {0, 2});
+    expect_neighbors_by_id(flat_1x4, 2, {1, 3});
+    expect_neighbors_by_id(flat_1x4, 3, {2});
+}
+
+TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithGalaxyGroupings) {
+    const std::string psd_path = "tests/tt_metal/tt_fabric/custom_mock_PSDs/triple_8x16_cluster_psd.textproto";
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd{psd_path};
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+
+    bool valid = pgd.validate_preformed_groups_from_physical_system_descriptor(psd);
+    EXPECT_FALSE(valid) << "Expected validation to fail: PGD host structure (tray orientations) "
+                           "does not match PSD; fix ASIC orientation in groupings to match physical topology";
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
