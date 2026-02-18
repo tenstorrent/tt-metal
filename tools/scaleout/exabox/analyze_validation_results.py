@@ -451,13 +451,34 @@ def get_cluster_info(analyses: list[LogAnalysis]) -> dict[str, Any]:
     return {"hosts": sorted(hosts), "chips": chips, "config": config}
 
 
-def print_summary(analyses: list[LogAnalysis], show_files: bool = True) -> None:
-    """Print analysis summary."""
+def calculate_metrics(analyses: list[LogAnalysis]) -> dict:
+    """Calculate validation metrics from analyses."""
     total = len(analyses)
     cat_counts = defaultdict(list)
     for a in analyses:
         for cat in a.categories:
             cat_counts[cat].append(a.filepath)
+
+    healthy_count = len(cat_counts.get("healthy", []))
+    success_rate = (healthy_count / total * 100) if total > 0 else 0
+
+    timeout_count = len(cat_counts.get("workload_timeout", []))
+    timeout_rate = (timeout_count / total * 100) if total > 0 else 0
+
+    return {
+        "total": total,
+        "cat_counts": cat_counts,
+        "healthy_count": healthy_count,
+        "success_rate": success_rate,
+        "timeout_count": timeout_count,
+        "timeout_rate": timeout_rate,
+    }
+
+
+def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool = True) -> None:
+    """Print analysis summary."""
+    total = metrics["total"]
+    cat_counts = metrics["cat_counts"]
 
     print("=" * 50)
     print("Validation Results Analysis")
@@ -518,9 +539,8 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True) -> None:
     print()
 
     # Success rate
-    healthy = len(cat_counts.get("healthy", []))
     if total > 0:
-        rate = healthy / total * 100
+        rate = metrics["success_rate"]
         color = (
             Colors.GREEN
             if rate >= SUCCESS_RATE_EXCELLENT
@@ -1164,6 +1184,46 @@ def generate_plots(analyses: list[LogAnalysis], output_dir: str) -> None:
     print()
 
 
+def validate_results(analyses: list[LogAnalysis], metrics: dict) -> tuple[str, int]:
+    """
+    Validate analysis results against expected thresholds.
+
+    Returns:
+        tuple of (exit_message, exit_code) where:
+            exit_message: Formatted string describing validation result
+            exit_code: 0 if cluster meets stability criteria, 1 otherwise
+    """
+    if not analyses:
+        return (f"{Colors.RED}VALIDATION FAILED:{Colors.NC} No log files analyzed", 1)
+
+    success_rate = metrics["success_rate"]
+    timeout_rate = metrics["timeout_rate"]
+
+    # Determine exit code based on thresholds
+    exit_code = 0
+    messages = []
+
+    if success_rate < SUCCESS_RATE_STABLE:
+        messages.append(
+            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Success rate {success_rate:.1f}% is below threshold {SUCCESS_RATE_STABLE}%"
+        )
+        exit_code = 1
+
+    if timeout_rate >= TIMEOUT_ESCALATION_THRESHOLD:
+        messages.append(
+            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Timeout rate {timeout_rate:.1f}% exceeds threshold {TIMEOUT_ESCALATION_THRESHOLD}%"
+        )
+        exit_code = 1
+
+    if exit_code == 0:
+        return (
+            f"{Colors.GREEN}VALIDATION PASSED:{Colors.NC} Cluster meets stability criteria (success: {success_rate:.1f}%, timeout: {timeout_rate:.1f}%)",
+            0,
+        )
+
+    return ("\n".join(messages), exit_code)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze validation logs.")
     parser.add_argument("directory", nargs="?", default="validation_output", help="Log directory")
@@ -1193,11 +1253,12 @@ def main():
         sys.exit(1)
 
     analyses = [analyze_log_file(str(f)) for f in log_files]
+    metrics = calculate_metrics(analyses)
 
     if args.json:
         output_json(analyses)
     else:
-        print_summary(analyses)
+        print_summary(analyses, metrics)
         # Always show recommendations - they're actionable and concise
         print_recommendations(analyses)
         if args.all:
@@ -1214,6 +1275,18 @@ def main():
             print_verbose(analyses)
         if args.plot:
             generate_plots(analyses, args.plot_dir)
+
+    # Validate results and exit with appropriate code
+    exit_message, exit_code = validate_results(analyses, metrics)
+
+    # Print validation message only if not in JSON mode
+    if not args.json and exit_message:
+        if exit_code != 0:
+            print(exit_message, file=sys.stderr)
+        else:
+            print(exit_message)
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
