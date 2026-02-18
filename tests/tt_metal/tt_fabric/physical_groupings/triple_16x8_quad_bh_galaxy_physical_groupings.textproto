@@ -104,6 +104,35 @@ groupings {
   ]
 }
 
+# HALFTRAY: 4 ASICs in 2x2 layout - either locations 1-4 or 5-8
+# For triple connection / smaller pipeline stages
+groupings {
+  name: "halftray_1_4"
+  custom_type: "halftray"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_1 },
+    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+groupings {
+  name: "halftray_5_8"
+  custom_type: "halftray"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_5 },
+    { id: 1 asic_location: ASIC_LOCATION_6 },
+    { id: 2 asic_location: ASIC_LOCATION_7 },
+    { id: 3 asic_location: ASIC_LOCATION_8 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
 # MESH preset groupings for different mesh sizes to cover all MGD cases
 
 # MESH: 1 tray (8 ASICs)
@@ -112,6 +141,16 @@ groupings {
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+
+# MESH: 1 halftray (4 ASICs in 2x2) - for triple connection / smaller pipeline stages
+# Uses halftray_1_4 (ASICs 1-4); halftray_5_8 (ASICs 5-8) is also available
+groupings {
+  name: "2x2_Mesh_Halftray"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "halftray" } }
   ]
 }
 
