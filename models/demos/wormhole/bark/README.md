@@ -77,7 +77,7 @@ The implementation has been fully optimized for Tenstorrent hardware:
 - `ttnn.layer_norm` — Pre-norm in each block + final norm
 - `ttnn.argmax` — On-device decoding
 - `ttnn.embedding` — On-device lookups for tokens and positions
-- `ttnn.add` / `ttnn.slice` / `ttnn.reshape` — Tension manipulation
+- `ttnn.add` / `ttnn.slice` / `ttnn.reshape` — Tensor manipulation
 - `ttnn.deallocate` — Explicit memory management
 
 ### Performance Targets

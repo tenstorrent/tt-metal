@@ -61,7 +61,7 @@ def preprocess_layernorm_weight(weight_tensor, device):
     tt_w = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return tt_w
 
-
+class TtBarkMLP:
     def __init__(self, device, parameters, config: BarkConfig):
         self.device = device
         self.config = config
@@ -194,8 +194,11 @@ class TtBarkAttention:
         if layer_past is not None:
             past_key, past_value = layer_past
             # Update KV cache
-            key = ttnn.concat([past_key, key], dim=-2, memory_config=memory_config)
-            value = ttnn.concat([past_value, value], dim=-2, memory_config=memory_config)
+            new_key = ttnn.concat([past_key, key], dim=-2, memory_config=memory_config)
+            new_value = ttnn.concat([past_value, value], dim=-2, memory_config=memory_config)
+            ttnn.deallocate(key)
+            ttnn.deallocate(value)
+            key, value = new_key, new_value
 
         layer_present = (key, value) if use_cache else None
 
