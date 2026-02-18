@@ -130,7 +130,8 @@ private:
     std::map<ChipId, tt_metal::IDevice*> devices_map;
 
 public:
-    ConnectedDevicesHelper(BenchmarkType benchmark_type) {
+    ConnectedDevicesHelper(
+        BenchmarkType benchmark_type, uint32_t sender_noc_index = 1, uint32_t receiver_noc_index = 1) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -150,7 +151,7 @@ public:
             this->devices.push_back(device);
         }
 
-        this->initialize_sender_receiver_pairs(benchmark_type);
+        this->initialize_sender_receiver_pairs(benchmark_type, sender_noc_index, receiver_noc_index);
         device_open_ = true;
     }
 
@@ -239,7 +240,8 @@ public:
     }
 
 private:
-    std::optional<CoreCoord> assign_tensix(BenchmarkType benchmark_type, const tt_cxy_pair& logical_eth_core) {
+    std::optional<CoreCoord> assign_tensix(
+        BenchmarkType benchmark_type, const tt_cxy_pair& logical_eth_core, uint32_t tensix_noc_index = 1) {
         if (benchmark_type != BenchmarkType::EthEthTensixUniDir and
             benchmark_type != BenchmarkType::EthEthTensixBiDir and
             benchmark_type != BenchmarkType::TensixEthEthTensixUniDir) {
@@ -253,15 +255,34 @@ private:
 
         const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0);
 
+        // Pick the tensix core in the same x-column as the eth core.
+        // Eth is at NOC y=1, tensix cores at y=2..11.
+        //
+        // NOC_1 goes upward (-y): top row (y=2) is 1 hop from eth → forward iteration picks y=2.
+        // NOC_0 goes downward (+y): bottom row (y=11) wraps around to eth → reverse iteration picks y=11.
         std::optional<CoreCoord> closest_phys_tensix = std::nullopt;
-        for (auto phys_tensix : tensix_cores) {
-            if (assigned_phys_tensix.contains(phys_tensix)) {
-                continue;
+        if (tensix_noc_index == 0) {
+            // NOC_0: reverse iterate to pick bottom row (highest y) — closest via +y wrap
+            for (auto it = tensix_cores.rbegin(); it != tensix_cores.rend(); ++it) {
+                auto phys_tensix = *it;
+                if (assigned_phys_tensix.contains(phys_tensix)) {
+                    continue;
+                }
+                if (phys_tensix.x == physical_eth_core.x and phys_tensix.y > physical_eth_core.y) {
+                    closest_phys_tensix = phys_tensix;
+                    break;
+                }
             }
-            // TODO: uplift this for BH col harvesting when that is enabled
-            if (phys_tensix.x == physical_eth_core.x and phys_tensix.y > physical_eth_core.y) {
-                closest_phys_tensix = phys_tensix;
-                break;
+        } else {
+            // NOC_1: forward iterate to pick top row (lowest y) — closest via -y direction
+            for (auto phys_tensix : tensix_cores) {
+                if (assigned_phys_tensix.contains(phys_tensix)) {
+                    continue;
+                }
+                if (phys_tensix.x == physical_eth_core.x and phys_tensix.y > physical_eth_core.y) {
+                    closest_phys_tensix = phys_tensix;
+                    break;
+                }
             }
         }
         TT_FATAL(
@@ -307,7 +328,8 @@ private:
         return tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device);
     }
 
-    void initialize_sender_receiver_pairs(BenchmarkType benchmark_type) {
+    void initialize_sender_receiver_pairs(
+        BenchmarkType benchmark_type, uint32_t sender_noc_index = 1, uint32_t receiver_noc_index = 1) {
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)
         auto all_eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
 
@@ -384,8 +406,8 @@ private:
                     tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
                         std::make_tuple(sender_chip_id, logical_active_eth));
                 auto receiver_eth = tt_cxy_pair(std::get<0>(receiver_eth_tuple), std::get<1>(receiver_eth_tuple));
-                auto sender_tensix = assign_tensix(benchmark_type, sender_eth);
-                auto receiver_tensix = assign_tensix(benchmark_type, receiver_eth);
+                auto sender_tensix = assign_tensix(benchmark_type, sender_eth, sender_noc_index);
+                auto receiver_tensix = assign_tensix(benchmark_type, receiver_eth, receiver_noc_index);
                 this->unique_links.insert(SenderReceiverPair{
                     .sender = sender_eth,
                     .receiver = receiver_eth,
@@ -406,7 +428,6 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
         chip_to_index[device_helper.devices[i]->get_devices()[0]->id()] = i;
-        log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);
     }
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
@@ -559,16 +580,17 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
 
         // Create Tensix DataMovement kernels for TensixEthEthTensixUniDir
         if (params.benchmark_type == BenchmarkType::TensixEthEthTensixUniDir && link.sender_tensix.has_value()) {
+            auto* raw_sender_device = sender_device->get_devices()[0];
             uint32_t eth_unreserved_base = tt_metal::MetalContext::instance().hal().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
             uint32_t eth_slot_addr = eth_unreserved_base + sizeof(eth_buffer_slot_sync_t);
             uint32_t push_counter_addr = eth_slot_addr + params.packet_size;
 
-            // Sender tensix: virtual coords of sender eth core
-            auto virtual_sender_eth =
-                sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
-            // Receiver tensix: virtual coords of receiver eth core
-            auto virtual_receiver_eth = receiver_device->virtual_core_from_logical_core(
+            // Get virtual eth coords for the tensix kernel runtime args
+            auto* raw_receiver_device = receiver_device->get_devices()[0];
+            auto virtual_sender_eth = raw_sender_device->virtual_core_from_logical_core(
+                CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
+            auto virtual_receiver_eth = raw_receiver_device->virtual_core_from_logical_core(
                 CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
 
             // Tensix buffer layout: [landing_buffer(msg_size)][tensix_sem(4B)][pad(12B)][test_data(msg_size)]
@@ -946,11 +968,13 @@ void run(
                     double cycles_to_ns = 1000.0 / 1350.0;
                     log_info(
                         tt::LogTest,
-                        "Timestamps: sender_tensix=({},{}), num_iters={}, "
+                        "Timestamps: sender_tensix=({},{}), receiver_tensix=({},{}), num_iters={}, "
                         "mean={:.1f} cycles ({:.1f} ns), min={} cycles ({:.1f} ns), "
                         "max={} cycles ({:.1f} ns), stddev={:.1f} cycles",
                         link.sender_tensix.value().x,
                         link.sender_tensix.value().y,
+                        link.receiver_tensix.value().x,
+                        link.receiver_tensix.value().y,
                         num_timed,
                         mean,
                         mean * cycles_to_ns,
@@ -1012,7 +1036,8 @@ int main(int argc, char** argv) {
     uint32_t num_iterations = std::stoi(argv[arg_idx++]);
 
     // Optional trailing args: sweep_cores, noc_index, receiver_noc_index
-    // sweep_cores: 0=no sweep, 1=sweep sender (receiver fixed closest), 2=sweep both
+    // sweep_cores: 0=no sweep, 1=sweep sender (receiver fixed closest),
+    //              2=sweep both, 3=sweep receiver (sender fixed closest)
     uint32_t sweep_cores = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
     uint32_t noc_index = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
     uint32_t receiver_noc_index = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
@@ -1023,7 +1048,7 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Setting up test fixture");
-    ConnectedDevicesHelper device_helper(benchmark_type_enum.value());
+    ConnectedDevicesHelper device_helper(benchmark_type_enum.value(), noc_index, receiver_noc_index);
     log_info(tt::LogTest, "Done setting up test fixture");
     if (device_helper.num_devices < 2) {
         log_info(tt::LogTest, "Need at least 2 devices to run this test");
@@ -1034,6 +1059,7 @@ int main(int argc, char** argv) {
     //   sweep_cores=0: no sweep, single run with assign_tensix defaults
     //   sweep_cores=1: sweep sender_tensix only, receiver_tensix fixed at closest-to-eth
     //   sweep_cores=2: sweep sender_tensix × receiver_tensix (N^2)
+    //   sweep_cores=3: sweep receiver_tensix only, sender_tensix fixed at closest-to-eth
     std::vector<CoreCoord> all_cores;
     std::vector<CoreCoord> sender_cores_to_test;
     std::vector<CoreCoord> receiver_cores_to_test;
@@ -1044,7 +1070,9 @@ int main(int argc, char** argv) {
 
         auto& link = *device_helper.unique_links.begin();
         TT_FATAL(link.receiver_tensix.has_value(), "Expected receiver_tensix to be assigned for sweep mode");
+        TT_FATAL(link.sender_tensix.has_value(), "Expected sender_tensix to be assigned for sweep mode");
         fixed_receiver_core = link.receiver_tensix.value();
+        CoreCoord fixed_sender_core = link.sender_tensix.value();
 
         auto grid_size = device_helper.devices[0]->compute_with_storage_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -1053,9 +1081,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        sender_cores_to_test = all_cores;
         if (sweep_cores == 1) {
-            // Receiver fixed at closest core to eth
+            // Sweep sender, receiver fixed at closest core to eth
+            sender_cores_to_test = all_cores;
             receiver_cores_to_test.push_back(fixed_receiver_core);
             log_info(
                 tt::LogTest,
@@ -1068,8 +1096,9 @@ int main(int argc, char** argv) {
                 fixed_receiver_core.x,
                 fixed_receiver_core.y,
                 sender_cores_to_test.size());
-        } else {
+        } else if (sweep_cores == 2) {
             // Extended: sweep both
+            sender_cores_to_test = all_cores;
             receiver_cores_to_test = all_cores;
             log_info(
                 tt::LogTest,
@@ -1079,6 +1108,21 @@ int main(int argc, char** argv) {
                 noc_index,
                 receiver_noc_index,
                 sender_cores_to_test.size() * receiver_cores_to_test.size());
+        } else if (sweep_cores == 3) {
+            // Sweep receiver, sender fixed at closest core to eth
+            sender_cores_to_test.push_back(fixed_sender_core);
+            receiver_cores_to_test = all_cores;
+            log_info(
+                tt::LogTest,
+                "Receiver sweep: grid {}x{}, sender_noc={}, receiver_noc={}, "
+                "fixed sender_tensix=({},{}), {} iterations",
+                grid_size.x,
+                grid_size.y,
+                noc_index,
+                receiver_noc_index,
+                fixed_sender_core.x,
+                fixed_sender_core.y,
+                receiver_cores_to_test.size());
         }
     } else {
         sender_cores_to_test.push_back(CoreCoord(0, 0));
@@ -1094,6 +1138,70 @@ int main(int argc, char** argv) {
     std::filesystem::remove(profiler_dir / "new_zone_src_locations.log");
 
     bool success = true;
+
+    // Print full test configuration
+    {
+        auto& link = *device_helper.unique_links.begin();
+        auto sender_noc_str = noc_index == 0 ? "NOC_0" : "NOC_1";
+        auto receiver_noc_str = receiver_noc_index == 0 ? "NOC_0" : "NOC_1";
+        log_info(tt::LogTest, "=== Test Configuration ===");
+        log_info(
+            tt::LogTest,
+            "  benchmark_type={} ({})",
+            (int)benchmark_type_enum.value(),
+            enchantum::to_string(benchmark_type_enum.value()));
+        log_info(
+            tt::LogTest,
+            "  num_packets={}, packet_size(s)={}, channel_count(s)={}, num_iterations={}",
+            num_packets,
+            packet_sizes[0],
+            channel_counts[0],
+            num_iterations);
+        log_info(
+            tt::LogTest,
+            "  sender_tensix_noc={}, receiver_tensix_noc={}, eth_noc=NOC_0 (locked)",
+            sender_noc_str,
+            receiver_noc_str);
+        log_info(
+            tt::LogTest, "  sweep_cores={}, test_latency={}, disable_trid={}", sweep_cores, test_latency, disable_trid);
+        if (link.sender_tensix.has_value()) {
+            log_info(
+                tt::LogTest,
+                "  sender: chip={} eth=({},{}), tensix=({},{})",
+                link.sender.chip,
+                link.sender.x,
+                link.sender.y,
+                link.sender_tensix.value().x,
+                link.sender_tensix.value().y);
+        } else {
+            log_info(
+                tt::LogTest,
+                "  sender: chip={} eth=({},{}), tensix=N/A",
+                link.sender.chip,
+                link.sender.x,
+                link.sender.y);
+        }
+        if (link.receiver_tensix.has_value()) {
+            log_info(
+                tt::LogTest,
+                "  receiver: chip={} eth=({},{}), tensix=({},{})",
+                link.receiver.chip,
+                link.receiver.x,
+                link.receiver.y,
+                link.receiver_tensix.value().x,
+                link.receiver_tensix.value().y);
+        } else {
+            log_info(
+                tt::LogTest,
+                "  receiver: chip={} eth=({},{}), tensix=N/A",
+                link.receiver.chip,
+                link.receiver.x,
+                link.receiver.y);
+        }
+        log_info(tt::LogTest, "  num_links={}", device_helper.unique_links.size());
+        log_info(tt::LogTest, "==========================");
+    }
+
     log_info(tt::LogTest, "STARTING");
     try {
         for (auto packet_size : packet_sizes) {

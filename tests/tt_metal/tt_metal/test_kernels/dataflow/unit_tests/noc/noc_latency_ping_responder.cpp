@@ -20,7 +20,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* local_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_sem_addr);
 
-    *local_sem = 0;
+    noc_semaphore_set(local_sem, 0);
 
     // If sender_ready_sem_addr is nonzero, signal the sender that we're ready
     if (sender_ready_sem_addr != 0) {

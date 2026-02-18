@@ -32,9 +32,8 @@ void kernel_main() {
     // If ready_sem_addr is nonzero, wait for responder to signal it's ready
     if (ready_sem_addr != 0) {
         volatile tt_l1_ptr uint32_t* ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem_addr);
-        *ready_sem = 0;
-        while (*ready_sem == 0) {
-        }
+        noc_semaphore_set(ready_sem, 0);
+        noc_semaphore_wait(ready_sem, 1);
     }
 
     uint64_t responder_sem_noc_addr = get_noc_addr(responder_noc_x, responder_noc_y, responder_sem_addr);
@@ -42,9 +41,8 @@ void kernel_main() {
     // Warmup iterations (not timed)
     for (uint32_t i = 0; i < num_warmup; i++) {
         noc_semaphore_inc(responder_sem_noc_addr, 1);
-        while (*local_sem == 0) {
-        }
-        *local_sem = 0;
+        noc_semaphore_wait(local_sem, 1);
+        noc_semaphore_set(local_sem, 0);
     }
 
     // Timed iterations — store [issue_time, poll_time] pairs

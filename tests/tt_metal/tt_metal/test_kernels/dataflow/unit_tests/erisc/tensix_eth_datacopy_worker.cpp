@@ -16,6 +16,8 @@
 #include "risc_common.h"
 
 void kernel_main() {
+    set_l1_data_cache<false>();
+
     constexpr bool is_initiator = get_compile_time_arg_val(0) != 0;
 
     uint32_t arg_idx = 0;

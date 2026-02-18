@@ -90,18 +90,28 @@ PingResult run_ping_pong(
     uint32_t responder_base = (responder.type == CoreType::ETH) ? eth_unreserved : tensix_sem_base;
     uint32_t responder_sem_addr = align16(responder_base);
 
-    // Sender NOC: on BH, ERISC0 is locked to NOC0
+    // NOC selection: sender and responder must use OPPOSITE NOCs so both legs
+    // of the round-trip take the short path (same direction on the torus).
+    // If both use the same NOC, the round-trip distance is always the full torus
+    // circumference regardless of position (forward + return = grid_width).
+    //
+    // On BH, ERISC0 is locked to NOC0, so:
+    //   - When sender is ETH: sender=NOC0, responder=NOC1
+    //   - When responder is ETH: responder=NOC0, sender=NOC1
+    //   - When both are tensix: sender=user-selected, responder=opposite
     tt_metal::NOC actual_sender_noc = sender_noc;
-    if (sender.type == CoreType::ETH) {
-        actual_sender_noc = tt_metal::NOC::NOC_0;
-    }
-
-    // Responder uses opposite NOC so both directions traverse the same physical path
-    // Exception: ERISC0 on BH is locked to NOC0
     tt_metal::NOC responder_noc;
-    if (responder.type == CoreType::ETH) {
+
+    if (sender.type == CoreType::ETH) {
+        // ERISC sender locked to NOC0, tensix responder uses NOC1
+        actual_sender_noc = tt_metal::NOC::NOC_0;
+        responder_noc = tt_metal::NOC::NOC_1;
+    } else if (responder.type == CoreType::ETH) {
+        // ERISC responder locked to NOC0, tensix sender uses NOC1
+        actual_sender_noc = tt_metal::NOC::NOC_1;
         responder_noc = tt_metal::NOC::NOC_0;
     } else {
+        // Both tensix: use user-selected NOC for sender, opposite for responder
         responder_noc = (actual_sender_noc == tt_metal::NOC::NOC_0) ? tt_metal::NOC::NOC_1 : tt_metal::NOC::NOC_0;
     }
 
@@ -209,18 +219,21 @@ PingResult run_ping_pong(
     CoreCoord sender_phys = soc_desc.get_physical_core_from_logical_core(sender.logical, sender.type);
     CoreCoord responder_phys = soc_desc.get_physical_core_from_logical_core(responder.logical, responder.type);
 
-    uint32_t abs_dx =
-        (sender_phys.x > responder_phys.x) ? (sender_phys.x - responder_phys.x) : (responder_phys.x - sender_phys.x);
-    uint32_t abs_dy =
-        (sender_phys.y > responder_phys.y) ? (sender_phys.y - responder_phys.y) : (responder_phys.y - sender_phys.y);
+    // With sender and responder on opposite NOCs, both legs of the round-trip traverse
+    // the same number of hops in the same direction. The one-way hop count is the
+    // directional distance for the sender's NOC.
+    //
+    // NOC_0 goes rightward/downward: distance(A→B) = (B - A + G) mod G
+    // NOC_1 goes leftward/upward:    distance(A→B) = (A - B + G) mod G
+    //
+    // The round-trip = 2 × one_way_directional_hops.
     uint32_t dx, dy;
-    if (noc_index == 0) {
-        dx = abs_dx;
-        dy = abs_dy;
+    if (actual_sender_noc == tt_metal::NOC::NOC_0) {
+        dx = (responder_phys.x - sender_phys.x + noc_grid_size.x) % noc_grid_size.x;
+        dy = (responder_phys.y - sender_phys.y + noc_grid_size.y) % noc_grid_size.y;
     } else {
-        // NOC1 routes the opposite way around the torus grid
-        dx = noc_grid_size.x - abs_dx;
-        dy = noc_grid_size.y - abs_dy;
+        dx = (sender_phys.x - responder_phys.x + noc_grid_size.x) % noc_grid_size.x;
+        dy = (sender_phys.y - responder_phys.y + noc_grid_size.y) % noc_grid_size.y;
     }
 
     // Store raw per-iteration samples

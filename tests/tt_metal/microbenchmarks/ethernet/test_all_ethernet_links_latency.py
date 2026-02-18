@@ -320,6 +320,50 @@ def run_sender_sweep(
     return all_results
 
 
+def run_receiver_sweep(
+    benchmark_type,
+    num_packets,
+    packet_size,
+    channel_count,
+    disable_trid,
+    num_iterations,
+    noc_index,
+    receiver_noc_index,
+    request,
+):
+    """Sweep receiver cores (sender fixed at closest to eth). One table of receiver core latencies."""
+    num_iterations = request.config.getoption("--num-iterations") or num_iterations
+    num_packets = request.config.getoption("--num-packets") or num_packets
+    packet_size = request.config.getoption("--packet-size") or packet_size
+
+    _run_sweep_binary(
+        benchmark_type,
+        num_packets,
+        packet_size,
+        channel_count,
+        disable_trid,
+        num_iterations,
+        3,
+        noc_index,
+        receiver_noc_index,
+    )
+
+    all_results = _parse_sweep_results(packet_size, channel_count, benchmark_type, num_packets, 1, num_iterations)
+
+    # For sweep_cores=3, sender is fixed — all entries have the same single sender.
+    # Flatten: {(rx, ry): latency}
+    flat_results = {}
+    fixed_sender = None
+    for sender_core, receiver_map in all_results.items():
+        fixed_sender = sender_core
+        for receiver_core, latency in receiver_map.items():
+            flat_results[receiver_core] = latency
+    if flat_results:
+        _print_receiver_sweep_table(flat_results, packet_size, noc_index, receiver_noc_index, fixed_sender)
+
+    return all_results
+
+
 def run_extended_sweep(
     benchmark_type,
     num_packets,
@@ -357,15 +401,14 @@ def run_extended_sweep(
     return all_results
 
 
-# Default: sweep sender cores, receiver fixed closest to eth, one table per NOC config
+# Default: sweep sender cores, receiver fixed closest to eth
+# ETH is locked to NOC_0, tensix uses NOC_1 (opposite)
 @pytest.mark.parametrize("packet_size", [16, 256, 1024, 4096])
-@pytest.mark.parametrize("noc_index", [0, 1])
-def test_erisc_write_worker_latency_core_sweep(packet_size, noc_index, request):
+def test_erisc_write_worker_latency_core_sweep(packet_size, request):
     """Sweep sender cores with receiver fixed at closest-to-eth core.
 
-    Receiver tensix uses NOC1 (opposite of receiver eth which is on NOC0).
-    The receiver tensix is picked "below" the eth core (closest on NOC0),
-    so its return path on NOC1 (upward) is also minimal.
+    ETH kernels are locked to NOC_0 (ERISC constraint). Tensix kernels should use
+    NOC_1 (opposite) so eth→tensix and tensix→eth writes travel in opposite directions.
     """
     run_sender_sweep(
         benchmark_type=8,  # TensixEthEthTensixUniDir
@@ -374,13 +417,31 @@ def test_erisc_write_worker_latency_core_sweep(packet_size, noc_index, request):
         channel_count=2,
         disable_trid=0,
         num_iterations=1,
-        noc_index=noc_index,
-        receiver_noc_index=1,  # opposite of receiver eth (NOC0)
+        noc_index=1,  # tensix uses NOC_1 (opposite of eth NOC_0)
+        receiver_noc_index=1,  # both tensix on NOC_1
+        request=request,
+    )
+
+
+# Sweep receiver cores, sender fixed at closest to eth
+@pytest.mark.parametrize("packet_size", [16, 256, 1024, 4096])
+def test_erisc_write_worker_latency_receiver_sweep(packet_size, request):
+    """Sweep receiver cores with sender fixed at closest-to-eth core."""
+    run_receiver_sweep(
+        benchmark_type=8,  # TensixEthEthTensixUniDir
+        num_packets=100,
+        packet_size=packet_size,
+        channel_count=2,
+        disable_trid=0,
+        num_iterations=1,
+        noc_index=1,  # tensix uses NOC_1 (opposite of eth NOC_0)
+        receiver_noc_index=1,  # both tensix on NOC_1
         request=request,
     )
 
 
 # Extended: sweep both sender and receiver cores independently
+@pytest.mark.extended
 @pytest.mark.parametrize("packet_size", [16, 4096])
 @pytest.mark.parametrize("noc_index", [0, 1])
 @pytest.mark.parametrize("receiver_noc_index", [0, 1])
