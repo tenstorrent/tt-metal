@@ -210,7 +210,7 @@ void kernel_main() {
                 cb_pop_front(cb_out_o, out_chunk_tiles);
                 // Atomic barrier sure guarantee writes are completed
                 noc_async_atomic_barrier();
-                return;
+                break;
 
             } else if (role_code == 2) {
                 // RECEIVER
