@@ -972,4 +972,9 @@ struct MappingValidator {
 }  // namespace tt::tt_fabric
 
 // Include template implementations
+// Define guard macro to prevent circular include when .tpp includes this header
+#ifndef TOPOLOGY_SOLVER_TPP_INCLUDING
+#define TOPOLOGY_SOLVER_TPP_INCLUDING
+#endif
+// NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
 #include <tt-metalium/experimental/fabric/topology_solver.tpp>

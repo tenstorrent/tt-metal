@@ -9,6 +9,12 @@
 #ifndef TOPOLOGY_SOLVER_TPP
 #define TOPOLOGY_SOLVER_TPP
 
+// Only include the header if we're being compiled standalone (not included from the header)
+#ifndef TOPOLOGY_SOLVER_TPP_INCLUDING
+// NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#endif
+
 #include <algorithm>
 #include <sstream>
 #include <chrono>
@@ -22,7 +28,7 @@ namespace tt::tt_fabric {
 
 // AdjacencyGraph template method implementations
 template <typename NodeId>
-AdjacencyGraph<NodeId>::AdjacencyGraph(const AdjacencyMap& adjacency_map) : adj_map_(adjacency_map) {
+AdjacencyGraph<NodeId>::AdjacencyGraph(const typename AdjacencyGraph<NodeId>::AdjacencyMap& adjacency_map) : adj_map_(adjacency_map) {
     for (const auto& [node, neighbors] : adjacency_map) {
         nodes_cache_.push_back(node);
     }
