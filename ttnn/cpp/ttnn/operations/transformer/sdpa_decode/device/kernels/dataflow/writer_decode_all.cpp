@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "llk_defs.h"
 #include "api/debug/assert.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
@@ -135,8 +136,11 @@ void kernel_main() {
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_identity_scale_in, identity_scalar_packed);
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_zero_in, zero_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_zero_in>(0.0f);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {

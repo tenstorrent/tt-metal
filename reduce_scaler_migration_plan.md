@@ -7,7 +7,7 @@
 | 0 | moreh_sum_h (proof of concept) | Done |
 | 1 | Remaining moreh ops (3 kernels, 2 host files) | Done |
 | 2 | Generic reduce ops (3 kernels, 3 host factories) | Pending |
-| 3 | SDPA + MOE + Sampling (7 files) | Pending |
+| 3 | SDPA + MOE + Sampling (7 files) | Done |
 | 4 | Softmax (5 files) | Done |
 | 5 | Layernorm (9 files) | Pending |
 | 6 | GroupNorm + Experimental + Tests (10 files) | Pending |

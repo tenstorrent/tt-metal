@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "llk_defs.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
@@ -227,25 +228,25 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(4);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(5);
     constexpr uint32_t scale_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(7);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(9);
-    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(10);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(12);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_id_k = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_id_p = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
-    constexpr uint32_t core_id = get_compile_time_arg_val(17);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(10);
+    constexpr uint32_t out_stick_size = get_compile_time_arg_val(11);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_id_k = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_id_p = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(15);
+    constexpr uint32_t core_id = get_compile_time_arg_val(16);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(17);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(18);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scale_cb_index, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
