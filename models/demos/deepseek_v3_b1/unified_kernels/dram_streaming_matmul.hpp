@@ -119,13 +119,16 @@ struct DRAMStreamingMatmul {
     //             correctly wraps within [CBIn1ResetAddr, CBIn1ResetAddr+CB_size)
     //             across loop iterations. No CB pointer reset needed — fifo_wr_ptr
     //             and fifo_rd_ptr naturally wrap at the same boundary via cb_push/pop.
+    // PopIndex: If true, pops the index CB after reading the expert index.
+    //           Only the last consumer (e.g., down_proj) should set this to true.
     // ========================================================================
     template <
         typename CTArgs,
         bool IsActiveCore,
         bool PopIn0 = true,
         bool ResetCBIn1 = false,
-        uint32_t CBIn1ResetAddr = 0>
+        uint32_t CBIn1ResetAddr = 0,
+        bool PopIndex = false>
     class Op {
     public:
         void operator()() {
@@ -231,6 +234,11 @@ struct DRAMStreamingMatmul {
                 noc_async_read_barrier_with_trid(block_trid_to_wait);
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+            }
+
+            // Pop index CB after the last consumer is done reading
+            if constexpr (PopIndex && CTArgs::enable_indexing) {
+                cb_pop_front(CTArgs::cb_index, 1);
             }
 
 #elif defined(COMPILE_FOR_TRISC)
