@@ -138,7 +138,7 @@ def test_pre_sdpa(
         (kv_cache_shard_height, kvpe_dim),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    kv_cache_tensor = ttnn.from_torch(
+    sdpa_kv_cache_buffer = ttnn.from_torch(
         torch.randn((1, 1, kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
@@ -171,7 +171,7 @@ def test_pre_sdpa(
         (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    sdpa_out_interm_tensor = ttnn.from_torch(
+    sdpa_out_interm_buffer = ttnn.from_torch(
         torch.zeros((1, 1, sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -704,9 +704,9 @@ def test_pre_sdpa(
             ttnn_kv_cache,
             position_ids,
             ttnn_sdpa_input_output,
+            sdpa_kv_cache_buffer,
+            sdpa_out_interm_buffer,
             sender_coord,
-            kv_cache_tensor=kv_cache_tensor,
-            sdpa_out_interm_tensor=sdpa_out_interm_tensor,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
@@ -715,6 +715,8 @@ def test_pre_sdpa(
             skip_ccl=skip_ccl,
         )
     ttnn.synchronize_device(submesh)
+
+    kv_cache_output_torch = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
 
     # Convert back to torch for verification
     sdpa_input_output_torch = ttnn.to_torch(
