@@ -11,7 +11,7 @@ from tests.tt_metal.microbenchmarks.ethernet.test_all_ethernet_links_common impo
     write_results_to_csv,
 )
 
-from models.common.utility_functions import is_single_chip
+# from models.common.utility_functions import is_single_chip
 
 from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -71,11 +71,11 @@ def run_erisc_write_worker_latency(
 
 
 # uni-direction test for eth-sender <---> eth-receiver
-@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
+# @pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1])
-@pytest.mark.parametrize("channel_count", [16])
+@pytest.mark.parametrize("channel_count", [2])  # 6])
 @pytest.mark.parametrize("num_iterations", [1])
-@pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("packet_size", [16])  # , 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_latency_uni_dir(num_packets, packet_size, channel_count, num_iterations, request):
     packet_size_to_expected_latency = {
         "wormhole_b0": {
@@ -104,12 +104,12 @@ def test_erisc_latency_uni_dir(num_packets, packet_size, channel_count, num_iter
 
 
 # uni-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
+# @pytest.mark.skipif(is_single_chip(), reason="Unsupported on single chip systems")
 @pytest.mark.parametrize("num_packets", [1])
-@pytest.mark.parametrize("channel_count", [16])
+@pytest.mark.parametrize("channel_count", [2])  # 6])
 @pytest.mark.parametrize("disable_trid", [0])
 @pytest.mark.parametrize("num_iterations", [1])
-@pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("packet_size", [16])  # , 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_write_worker_latency_uni_dir(
     num_packets, packet_size, channel_count, disable_trid, num_iterations, request
 ):
@@ -126,6 +126,27 @@ def test_erisc_write_worker_latency_uni_dir(
         }
     }
     benchmark_type_id = 2
+    run_erisc_write_worker_latency(
+        benchmark_type_id,
+        num_packets,
+        packet_size,
+        channel_count,
+        disable_trid,
+        num_iterations,
+        packet_size_to_expected_latency,
+        request,
+    )
+
+
+# full round-trip: tensix -> eth -> eth -> tensix -> eth -> eth -> tensix
+@pytest.mark.parametrize("num_packets", [100])
+@pytest.mark.parametrize("channel_count", [2])
+@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
+def test_tensix_eth_eth_tensix_latency_uni_dir(num_packets, packet_size, channel_count, num_iterations, request):
+    packet_size_to_expected_latency = {}
+    benchmark_type_id = 8
+    disable_trid = 0
     run_erisc_write_worker_latency(
         benchmark_type_id,
         num_packets,

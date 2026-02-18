@@ -64,7 +64,15 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
         for core, core_data in devices_data["devices"][device_id]["cores"].items():
             if core == "DEVICE":
                 continue
-            timed_data = core_data["riscs"]["ERISC"]["timeseries"]
+            # Check ERISC first (eth kernels), then BRISC (tensix DataMovement kernels)
+            risc_key = None
+            for rk in ["ERISC", "BRISC"]:
+                if rk in core_data["riscs"]:
+                    risc_key = rk
+                    break
+            if risc_key is None:
+                continue
+            timed_data = core_data["riscs"][risc_key]["timeseries"]
             sender_chip = sender_eth = receiver_chip = receiver_eth = None
 
             is_sender_chip = False
@@ -137,7 +145,8 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
 
             main_loop_cycles = [end - start for end, start in zip(ends, starts)]
             if test_latency:
-                results = [main_loop_cycle / freq for main_loop_cycle in main_loop_cycles]
+                num_measured = num_packets - 1 if benchmark_type == 8 else num_packets
+                results = [main_loop_cycle / freq / num_measured for main_loop_cycle in main_loop_cycles]
             else:
                 results = [
                     packet_size / (main_loop_cycle / freq / num_packets / channel_count)
