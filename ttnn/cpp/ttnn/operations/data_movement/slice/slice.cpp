@@ -236,7 +236,7 @@ ttnn::Tensor SliceOperation::invoke(
     }
 
     // slice_dim and num_devices must be provided for device-only tensor args slice
-    if (slice_dim.has_value() && num_devices.has_value()) {
+    if (!slice_dim.has_value() || !num_devices.has_value()) {
         use_device_only_path = false;
     }
 
