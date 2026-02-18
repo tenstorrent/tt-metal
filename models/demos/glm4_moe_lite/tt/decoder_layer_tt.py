@@ -272,10 +272,10 @@ def _fused_kv_branch_forward(
     cos_batch: ttnn.Tensor,
     sin_batch: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    """Execute fused KV cache branch: matmul + RMSNorm + RoPE in one dispatch.
+    """Execute fused KV cache branch: matmul + gather + RMSNorm + RoPE in one dispatch.
 
     Input x: [1,1,1,2048] in DRAM (batch=1 only).
-    Returns kvpe_new: [1,1,1,576] in DRAM (nope + rope concatenated).
+    Returns kvpe_new: [1,1,1,576] in DRAM (RMSNorm'd nope + rope concatenated).
     """
     from models.demos.glm4_moe_lite.fused_ops.kv_cache_branch.op import GLMKVCacheBranch
 
@@ -317,7 +317,7 @@ def _fused_kv_branch_forward(
 
     # 2. Shard cos/sin for current position onto rope cores.
     # cos_batch/sin_batch: [1,1,1,64] in DRAM for batch=1.
-    # Shard shape (1, 32) requires 1x32 tile layout.  Same approach.
+    # Shard shape (1, 32) requires 1x32 tile layout.
     rope_dim = int(cos_batch.shape[-1])
     num_rope_cores = rope_crs.num_cores()
     cos_sin_shard_width = rope_dim // num_rope_cores
@@ -353,6 +353,7 @@ def _fused_kv_branch_forward(
     )
 
     # 3. Call fused op — returns (nope_sharded, rope_sharded) on their respective cores
+    #    nope_result is already RMSNorm'd by the kernel.
     nope_result, rope_result = GLMKVCacheBranch.op(
         input_tensor=x_sharded,
         dkv_matmul_weights_tensor=fused_kv["w_kv_a"],
@@ -365,12 +366,22 @@ def _fused_kv_branch_forward(
         epsilon=fused_kv["epsilon"],
     )
 
-    # 4. Read sharded results back to DRAM, then concat
-    nope_dram = ttnn.sharded_to_interleaved(nope_result, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
-    rope_dram = ttnn.sharded_to_interleaved(rope_result, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
-    kvpe_new = ttnn.concat([nope_dram, rope_dram], dim=-1)  # [1,1,1,576]
-    ttnn.deallocate(nope_dram, force=False)
-    ttnn.deallocate(rope_dram, force=False)
+    # 4. Read sharded results back to host, then concat.
+    # WORKAROUND: sharded_to_interleaved crashes on TILE_1x32 tensors (FPE: divides
+    # shard_height by TILE_HEIGHT=32, giving 0 for height=1). Use host round-trip instead.
+    # Output must be [1,1,B,kvpe_dim] ROW_MAJOR in DRAM — matching the non-fused path.
+    nope_torch = _to_torch_single(nope_result).reshape(1, -1)  # [1, kv_lora_rank]
+    rope_torch = _to_torch_single(rope_result).reshape(1, -1)  # [1, qk_rope_head_dim]
+
+    kvpe_torch = torch.cat([nope_torch, rope_torch], dim=-1)
+    kvpe_new = ttnn.from_torch(
+        kvpe_torch.reshape(1, 1, 1, -1),  # [1,1,1,576]
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR,
+        device=x.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
+    )
 
     # Cleanup sharded temporaries
     ttnn.deallocate(x_sharded, force=False)
