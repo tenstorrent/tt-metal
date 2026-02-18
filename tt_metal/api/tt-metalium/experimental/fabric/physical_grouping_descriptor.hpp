@@ -92,8 +92,10 @@ public:
     std::vector<GroupingInfo> get_all_groupings() const;
 
     // Main matching algorithm: Find valid groupings for MGD instances
-    std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> get_valid_groupings_for_mgd(
-        const MeshGraphDescriptor& mesh_graph_descriptor) const;
+    // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
+    // There can be multiple valid groupings for each MGD instance
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
+    get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const;
 
     // Validate predefined groupings (TRAYS and HOSTS) from PhysicalSystemDescriptor, making sure that they match
     bool validate_preformed_groups_from_physical_system_descriptor(
@@ -113,8 +115,6 @@ public:
         bool operator==(const FlattenedMeshNodeInfo& other) const { return unique_id == other.unique_id; }
         bool operator<(const FlattenedMeshNodeInfo& other) const { return unique_id < other.unique_id; }
     };
-
-    friend std::ostream& operator<<(std::ostream& os, const FlattenedMeshNodeInfo& info);
 
     // Build flattened adjacency graph forming one uniform mesh
     // Returns graph with FlattenedMeshNodeInfo as node type
@@ -170,6 +170,12 @@ private:
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
+
+    // Generate a GroupingInfo when no match is found for an MGD group
+    GroupingInfo generate_grouping_info_for_mgd_group(
+        const std::string& instance_name,
+        const std::string& instance_type,
+        const GroupingInfo& mgd_grouping_info) const;
 };
 
 }  // namespace tt::tt_fabric

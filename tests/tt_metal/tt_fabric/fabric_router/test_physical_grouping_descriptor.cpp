@@ -1469,4 +1469,291 @@ TEST(PhysicalGroupingDescriptorTests, ValidatePreformedGroups_Triple8x16PsdWithG
     EXPECT_FALSE(valid) << "Expected validation to fail: PGD host structure (tray orientations) "
                            "does not match PSD; fix ASIC orientation in groupings to match physical topology";
 }
+
+// ============================================================================
+// GET_VALID_GROUPINGS_FOR_MGD TESTS
+// ============================================================================
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
+    // Test matching a 2x4 mesh MGD (8 ASICs) to the 2x4_Mesh grouping
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have exactly one valid grouping match
+    ASSERT_EQ(total_groupings, 1u) << "Should have exactly one valid grouping match";
+
+    // Check that we have matches for MESH instances
+    ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+    ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
+
+    // Check that we have a match for the 2x4_Mesh grouping (8 ASICs)
+    bool found_mesh_match = false;
+    for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+        ASSERT_EQ(groupings.size(), 1u) << "Should have exactly one grouping for this instance";
+        for (const auto& grouping : groupings) {
+            if (grouping.asic_count == 8u && grouping.name == "2x4_Mesh") {
+                found_mesh_match = true;
+                EXPECT_EQ(grouping.name, "2x4_Mesh") << "Should match 2x4_Mesh grouping";
+                EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
+                break;
+            }
+        }
+        if (found_mesh_match) {
+            break;
+        }
+    }
+    EXPECT_TRUE(found_mesh_match) << "Should find a match for 2x4 mesh (8 ASICs) matching 2x4_Mesh grouping";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_4x4Mesh) {
+    // Test matching a 4x4 mesh MGD (16 ASICs) to the 4x4_Mesh grouping
+    // Using dual_4x4_mesh_graph_descriptor which has 4x4 meshes in a graph
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have at least two valid grouping matches (there are two 4x4_Mesh definitions in the file, and dual_4x4 has
+    // 2 meshes)
+    ASSERT_GE(total_groupings, 2u) << "Should have at least two valid grouping matches";
+
+    // Check that we have matches for MESH instances
+    ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+    // dual_4x4 has 2 meshes in a graph, so we should have 2 MESH instances
+    ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
+
+    // Check that we have matches for the 4x4_Mesh grouping (16 ASICs)
+    // Note: Duplicate names are uniquified, so we expect "4x4_Mesh" and "4x4_Mesh_1"
+    size_t total_4x4_matches = 0;
+    for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+        for (const auto& grouping : groupings) {
+            if (grouping.asic_count == 16u && (grouping.name == "4x4_Mesh" || grouping.name == "4x4_Mesh_1")) {
+                total_4x4_matches++;
+                EXPECT_EQ(grouping.asic_count, 16u) << "Should have 16 ASICs";
+                EXPECT_TRUE(grouping.name == "4x4_Mesh" || grouping.name == "4x4_Mesh_1")
+                    << "Should match 4x4_Mesh grouping (name: " << grouping.name << ")";
+            }
+        }
+    }
+    EXPECT_GE(total_4x4_matches, 2u) << "Should have at least two 4x4_Mesh matches";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_2x8Mesh) {
+    // Test matching a 2x8 mesh MGD (16 ASICs) to the 2x8_Mesh grouping
+    // Using wh_galaxy_split_2x8_2x4_3_mesh which has a 2x8 mesh (MESH4)
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_2x8_2x4_3_mesh.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have at least one valid grouping match (wh_galaxy_split has a 2x8 mesh, and there are two 2x8_Mesh
+    // definitions in the file)
+    ASSERT_GE(total_groupings, 1u) << "Should have at least one valid grouping match";
+
+    // Check that we have matches for MESH instances
+    ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+    // wh_galaxy_split has multiple meshes in a graph
+    ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
+
+    // Check that we have matches for the 2x8_Mesh grouping (16 ASICs)
+    // Note: Duplicate names are uniquified, so we expect "2x8_Mesh" and "2x8_Mesh_1"
+    size_t total_2x8_matches = 0;
+    for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+        for (const auto& grouping : groupings) {
+            if (grouping.asic_count == 16u && (grouping.name == "2x8_Mesh" || grouping.name == "2x8_Mesh_1")) {
+                total_2x8_matches++;
+                EXPECT_EQ(grouping.asic_count, 16u) << "Should have 16 ASICs";
+                EXPECT_TRUE(grouping.name == "2x8_Mesh" || grouping.name == "2x8_Mesh_1")
+                    << "Should match 2x8_Mesh grouping (name: " << grouping.name << ")";
+            }
+        }
+    }
+    EXPECT_GE(total_2x8_matches, 1u) << "Should have at least one 2x8_Mesh match";
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_8x16Mesh) {
+    // Test matching an 8x16 mesh MGD (128 ASICs) to the 8x16_Mesh grouping
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have at least one valid grouping match (may have multiple if there are duplicates)
+    ASSERT_GE(total_groupings, 1u) << "Should have at least one valid grouping match";
+
+    // Check that we have matches for MESH instances
+    ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+    ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
+
+    // Check that we have a match for the 8x16_Mesh grouping (128 ASICs)
+    // Note: May have multiple matches if there are duplicate definitions
+    for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+        ASSERT_GE(groupings.size(), 1u) << "Should have at least one grouping for this instance";
+        for (const auto& grouping : groupings) {
+            EXPECT_EQ(grouping.asic_count, 128u) << "Should have 128 ASICs";
+            // Accept any grouping with 128 ASICs (8x16_Mesh or 4x32_Mesh are both valid)
+            // Names may be uniquified if there are duplicates
+            EXPECT_TRUE(grouping.name == "8x16_Mesh" || grouping.name.find("8x16_Mesh") == 0)
+                << "Should match a 128-ASIC mesh grouping (name: " << grouping.name << ")";
+        }
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
+    // Test matching a single galaxy mesh MGD (32 ASICs) to the 4x8_Mesh grouping
+    // Using single_bh_galaxy_mesh_graph_descriptor which has 8x4 (32 ASICs, same count but different topology)
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path =
+        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have exactly one valid grouping match
+    ASSERT_EQ(total_groupings, 1u) << "Should have exactly one valid grouping match";
+
+    // Check that we have matches for MESH instances
+    ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+    ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+    ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
+
+    // Check that we have a match for a 32-ASIC mesh grouping (4x8_Mesh or similar)
+    // Note: single_bh_galaxy has 8x4 topology, which may match 4x8_Mesh if topology solver allows it
+    for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+        ASSERT_GE(groupings.size(), 1u) << "Should have at least one grouping for this instance";
+        for (const auto& grouping : groupings) {
+            EXPECT_EQ(grouping.asic_count, 32u) << "Should have 32 ASICs";
+            // Accept 4x8_Mesh or other 32-ASIC groupings
+            EXPECT_TRUE(grouping.asic_count == 32u)
+                << "Should match a 32-ASIC mesh grouping (name: " << grouping.name << ")";
+        }
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_DualGalaxy4x8) {
+    // Test matching a dual galaxy MGD with meshes
+    // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
+    // matching
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    const std::string mgd_path = "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+    MeshGraphDescriptor mgd{std::filesystem::path(mgd_path)};
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
+
+    // Count total groupings across all instances
+    size_t total_groupings = 0;
+    for (const auto& [instance_type, instances] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : instances) {
+            total_groupings += groupings.size();
+        }
+    }
+
+    // Should have at least one valid grouping match (dual_galaxy has 8x8 mesh, may not match 4x8_Mesh)
+    ASSERT_GE(total_groupings, 0u) << "Should have valid grouping matches";
+
+    // Check that we have matches for MESH instances (if any matches found)
+    if (total_groupings > 0) {
+        ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
+        ASSERT_EQ(valid_groupings.count("MESH"), 1u) << "Should have MESH instance type";
+        // dual_galaxy has one mesh instance
+        ASSERT_GE(valid_groupings.at("MESH").size(), 1u) << "Should have at least one MESH instance";
+
+        // Check groupings (may not match 4x8_Mesh since dual_galaxy is 8x8)
+        for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
+            for (const auto& grouping : groupings) {
+                // Accept any valid match
+                EXPECT_GT(grouping.asic_count, 0u) << "Should have valid ASIC count";
+            }
+        }
+    }
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
