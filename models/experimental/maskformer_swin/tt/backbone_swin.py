@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import inspect
 import math
 import os
 import time
@@ -99,6 +100,52 @@ def _backbone_compute_kernel_config():
     )
 
 
+def _grid_tuple() -> Tuple[int, int]:
+    # Wormhole N300 has an 8x8 grid; reserve one row for dispatch/safety margin.
+    return (8, 7)
+
+
+def _init_with_signature(cls, overrides: Dict[str, Any]) -> Optional[Any]:
+    """Best-effort instantiate a TTNN config class with partial overrides."""
+
+    try:
+        sig = inspect.signature(cls)
+    except Exception:
+        return None
+    kwargs: Dict[str, Any] = {}
+    for name, param in sig.parameters.items():
+        if name in overrides:
+            kwargs[name] = overrides[name]
+        elif param.default is not inspect._empty:
+            kwargs[name] = param.default
+        elif param.kind in (param.VAR_KEYWORD, param.VAR_POSITIONAL):
+            continue
+        else:
+            kwargs[name] = overrides.get(name, 1)
+    try:
+        return cls(**kwargs)
+    except Exception:
+        return None
+
+
+def _maybe_matmul_program_config(grid: Tuple[int, int]) -> Optional[Any]:
+    if ttnn is None or not hasattr(ttnn, "MatmulProgramConfig"):
+        return None
+    return _init_with_signature(
+        ttnn.MatmulProgramConfig,
+        {
+            "compute_with_storage_grid_size": grid,
+            "in0_block_w": 1,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+            "transpose_m0": False,
+            "transpose_m1": False,
+        },
+    )
+
+
 def _roll(x, shifts: Tuple[int, int], dims: Tuple[int, int], *, memory_config: Optional[Any] = None):
     """TTNN roll for NHWC tensors (dim indices are for H/W)."""
 
@@ -153,6 +200,9 @@ class MaskFormerSwinBackbone:
         self.dtype = dtype
         self._prefer_l1_activations = _env_flag("MASKFORMER_TT_BACKBONE_L1_ACT", False)
         self._attn_mask_cache: Dict[Tuple[int, int, int], Any] = {}
+        self._core_grid = None
+        self._matmul_pc = None
+        self._program_cfg_initialized = False
 
         # Patch embed weights
         self._patch_w = None
@@ -173,6 +223,36 @@ class MaskFormerSwinBackbone:
         if self._prefer_l1_activations:
             return ttnn.L1_MEMORY_CONFIG
         return ttnn.DRAM_MEMORY_CONFIG
+
+    def _maybe_init_program_configs(self) -> None:
+        if self._program_cfg_initialized:
+            return
+        self._program_cfg_initialized = True
+        if ttnn is None:
+            return
+        grid = _grid_tuple()
+        disable_core_grid = _env_flag("MASKFORMER_TT_DISABLE_CORE_GRID", False)
+        disable_matmul_pc = _env_flag("MASKFORMER_TT_DISABLE_MATMUL_PC", False)
+
+        if (not disable_core_grid) and hasattr(ttnn, "CoreGrid"):
+            try:
+                self._core_grid = ttnn.CoreGrid(y=grid[1], x=grid[0])  # type: ignore[attr-defined]
+            except Exception:
+                self._core_grid = None
+        if not disable_matmul_pc:
+            self._matmul_pc = _maybe_matmul_program_config(grid)
+
+    def _linear_matmul_kwargs(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        self._maybe_init_program_configs()
+        linear_kwargs: Dict[str, Any] = {}
+        matmul_kwargs: Dict[str, Any] = {}
+        if self._core_grid is not None:
+            linear_kwargs["core_grid"] = self._core_grid
+            matmul_kwargs["core_grid"] = self._core_grid
+        if self._matmul_pc is not None:
+            linear_kwargs["program_config"] = self._matmul_pc
+            matmul_kwargs["program_config"] = self._matmul_pc
+        return linear_kwargs, matmul_kwargs
 
     @classmethod
     def from_huggingface(
@@ -285,18 +365,38 @@ class MaskFormerSwinBackbone:
                 ln2_b = _to_tt_norm_param(weights[f"{block_prefix}.layernorm_after.bias"])
 
                 # Attention projections
-                q_w, q_b = _to_tt_linear(
-                    weights[f"{block_prefix}.attention.self.query.weight"],
-                    weights.get(f"{block_prefix}.attention.self.query.bias"),
-                )
-                k_w, k_b = _to_tt_linear(
-                    weights[f"{block_prefix}.attention.self.key.weight"],
-                    weights.get(f"{block_prefix}.attention.self.key.bias"),
-                )
-                v_w, v_b = _to_tt_linear(
-                    weights[f"{block_prefix}.attention.self.value.weight"],
-                    weights.get(f"{block_prefix}.attention.self.value.bias"),
-                )
+                q_w_torch = weights[f"{block_prefix}.attention.self.query.weight"]
+                q_b_torch = weights.get(f"{block_prefix}.attention.self.query.bias")
+                k_w_torch = weights[f"{block_prefix}.attention.self.key.weight"]
+                k_b_torch = weights.get(f"{block_prefix}.attention.self.key.bias")
+                v_w_torch = weights[f"{block_prefix}.attention.self.value.weight"]
+                v_b_torch = weights.get(f"{block_prefix}.attention.self.value.bias")
+
+                q_w, q_b = _to_tt_linear(q_w_torch, q_b_torch)
+                k_w, k_b = _to_tt_linear(k_w_torch, k_b_torch)
+                v_w, v_b = _to_tt_linear(v_w_torch, v_b_torch)
+
+                qkv_w = None
+                qkv_b = None
+                if os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1":
+                    try:
+                        qkv_w_torch = torch.cat(
+                            [q_w_torch.detach().contiguous(), k_w_torch.detach().contiguous(), v_w_torch.detach().contiguous()],
+                            dim=0,
+                        )
+                        qkv_b_torch = None
+                        if q_b_torch is not None and k_b_torch is not None and v_b_torch is not None:
+                            qkv_b_torch = torch.cat(
+                                [
+                                    q_b_torch.detach().contiguous(),
+                                    k_b_torch.detach().contiguous(),
+                                    v_b_torch.detach().contiguous(),
+                                ],
+                                dim=0,
+                            )
+                        qkv_w, qkv_b = _to_tt_linear(qkv_w_torch, qkv_b_torch)
+                    except Exception:
+                        qkv_w, qkv_b = (None, None)
                 attn_out_w, attn_out_b = _to_tt_linear(
                     weights[f"{block_prefix}.attention.output.dense.weight"],
                     weights.get(f"{block_prefix}.attention.output.dense.bias"),
@@ -342,6 +442,8 @@ class MaskFormerSwinBackbone:
                         "k_b": k_b,
                         "v_w": v_w,
                         "v_b": v_b,
+                        "qkv_w": qkv_w,
+                        "qkv_b": qkv_b,
                         "attn_out_w": attn_out_w,
                         "attn_out_b": attn_out_b,
                         "fc1_w": fc1_w,
@@ -661,26 +763,48 @@ class MaskFormerSwinBackbone:
             raise RuntimeError("TTNN runtime is required for Swin MLP.")
         act_mem_cfg = self._activation_memory_config()
         compute_cfg = _backbone_compute_kernel_config()
+        linear_kwargs, _ = self._linear_matmul_kwargs()
+        fuse_linear_act = os.environ.get("MASKFORMER_TT_FUSE_LINEAR_ACT", "0").strip() == "1"
         B, H, W, C = x.shape
         seq = ttnn.reshape(x, (int(B), int(H) * int(W), int(C)))
         seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-        y = ttnn.linear(
-            seq,
-            fc1_w,
-            bias=fc1_b,
-            transpose_b=True,
-            compute_kernel_config=compute_cfg,
-        )
-        # Swin MLP uses GELU; fail fast instead of silently changing activation.
-        if not hasattr(ttnn, "gelu"):
-            raise RuntimeError("Swin MLP requires ttnn.gelu, but it is unavailable in this runtime.")
-        y = ttnn.gelu(y)
+        y = None
+        if fuse_linear_act:
+            try:
+                y = ttnn.linear(
+                    seq,
+                    fc1_w,
+                    bias=fc1_b,
+                    transpose_b=True,
+                    activation="gelu",
+                    compute_kernel_config=compute_cfg,
+                    memory_config=act_mem_cfg,
+                    **linear_kwargs,
+                )
+            except Exception:
+                y = None
+        if y is None:
+            y = ttnn.linear(
+                seq,
+                fc1_w,
+                bias=fc1_b,
+                transpose_b=True,
+                compute_kernel_config=compute_cfg,
+                memory_config=act_mem_cfg,
+                **linear_kwargs,
+            )
+            # Swin MLP uses GELU; fail fast instead of silently changing activation.
+            if not hasattr(ttnn, "gelu"):
+                raise RuntimeError("Swin MLP requires ttnn.gelu, but it is unavailable in this runtime.")
+            y = ttnn.gelu(y)
         y = ttnn.linear(
             y,
             fc2_w,
             bias=fc2_b,
             transpose_b=True,
             compute_kernel_config=compute_cfg,
+            memory_config=act_mem_cfg,
+            **linear_kwargs,
         )
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         y = ttnn.reshape(y, (int(B), int(H), int(W), int(C)))
@@ -738,6 +862,7 @@ class MaskFormerSwinBackbone:
             raise RuntimeError("TTNN runtime is required for Swin window attention.")
         act_mem_cfg = self._activation_memory_config()
         compute_cfg = _backbone_compute_kernel_config()
+        linear_kwargs, matmul_kwargs = self._linear_matmul_kwargs()
         debug_attn = os.environ.get("MASKFORMER_TT_DEBUG_BACKBONE_ATTN", "0").strip() == "1"
         sync_attn = debug_attn and os.environ.get("MASKFORMER_TT_SYNC_BACKBONE_ATTN_STEPS", "0").strip() == "1"
         tt_dbg = require_ttnn("sync Swin window attention debug") if sync_attn else None
@@ -795,42 +920,78 @@ class MaskFormerSwinBackbone:
         if debug_attn:
             print("[maskformer][backbone_attn] qkv begin", flush=True)
         xw = ttnn.to_layout(xw, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-        q = ttnn.linear(
-            xw,
-            block["q_w"],
-            bias=block["q_b"],
-            transpose_b=True,
-            compute_kernel_config=compute_cfg,
-        )
-        k = ttnn.linear(
-            xw,
-            block["k_w"],
-            bias=block["k_b"],
-            transpose_b=True,
-            compute_kernel_config=compute_cfg,
-        )
-        v = ttnn.linear(
-            xw,
-            block["v_w"],
-            bias=block["v_b"],
-            transpose_b=True,
-            compute_kernel_config=compute_cfg,
-        )
-        ttnn.deallocate(xw)
+        enable_fused_qkv = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "0").strip() == "1"
+        q = None
+        k = None
+        v = None
+        if (
+            enable_fused_qkv
+            and block.get("qkv_w") is not None
+            and hasattr(ttnn, "transformer")
+            and hasattr(ttnn.transformer, "split_query_key_value_and_split_heads")
+        ):
+            qkv = ttnn.linear(
+                xw,
+                block["qkv_w"],
+                bias=block.get("qkv_b"),
+                transpose_b=True,
+                compute_kernel_config=compute_cfg,
+                memory_config=act_mem_cfg,
+                **linear_kwargs,
+            )
+            try:
+                q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                    qkv, num_heads=num_heads, transpose_key=False
+                )
+            except Exception:
+                q = None
+                k = None
+                v = None
+            ttnn.deallocate(qkv)
 
-        q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        k = ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        _attn_mark("qkv end")
+        if q is None or k is None or v is None:
+            q = ttnn.linear(
+                xw,
+                block["q_w"],
+                bias=block["q_b"],
+                transpose_b=True,
+                compute_kernel_config=compute_cfg,
+                memory_config=act_mem_cfg,
+                **linear_kwargs,
+            )
+            k = ttnn.linear(
+                xw,
+                block["k_w"],
+                bias=block["k_b"],
+                transpose_b=True,
+                compute_kernel_config=compute_cfg,
+                memory_config=act_mem_cfg,
+                **linear_kwargs,
+            )
+            v = ttnn.linear(
+                xw,
+                block["v_w"],
+                bias=block["v_b"],
+                transpose_b=True,
+                compute_kernel_config=compute_cfg,
+                memory_config=act_mem_cfg,
+                **linear_kwargs,
+            )
+        ttnn.deallocate(xw)
 
         # [B*nW, N, C] -> [B*nW, H, N, Hd]
         N = window * window
-        q = ttnn.reshape(q, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
-        k = ttnn.reshape(k, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
-        v = ttnn.reshape(v, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
-        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=act_mem_cfg)
-        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=act_mem_cfg)
-        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=act_mem_cfg)
+        if q is not None and (len(q.shape) == 3):
+            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+            k = ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+            v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+            q = ttnn.reshape(q, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+            k = ttnn.reshape(k, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+            v = ttnn.reshape(v, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+            q = ttnn.permute(q, (0, 2, 1, 3), memory_config=act_mem_cfg)
+            k = ttnn.permute(k, (0, 2, 1, 3), memory_config=act_mem_cfg)
+            v = ttnn.permute(v, (0, 2, 1, 3), memory_config=act_mem_cfg)
+        _attn_mark("qkv end")
 
         if debug_attn:
             print("[maskformer][backbone_attn] scores begin", flush=True)
@@ -844,6 +1005,7 @@ class MaskFormerSwinBackbone:
             k_t,
             compute_kernel_config=compute_cfg,
             memory_config=act_mem_cfg,
+            **matmul_kwargs,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
@@ -880,6 +1042,7 @@ class MaskFormerSwinBackbone:
             v,
             compute_kernel_config=compute_cfg,
             memory_config=act_mem_cfg,
+            **matmul_kwargs,
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
@@ -891,18 +1054,27 @@ class MaskFormerSwinBackbone:
 
         if debug_attn:
             print("[maskformer][backbone_attn] out proj begin", flush=True)
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), memory_config=act_mem_cfg)
-        ctx = ttnn.reshape(ctx, (B * num_windows, N, C), memory_config=act_mem_cfg)
-        ctx = ttnn.to_layout(ctx, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        ctx_seq = None
+        if hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "concatenate_heads"):
+            try:
+                ctx_seq = ttnn.transformer.concatenate_heads(ctx)
+            except Exception:
+                ctx_seq = None
+        if ctx_seq is None:
+            ctx_seq = ttnn.permute(ctx, (0, 2, 1, 3), memory_config=act_mem_cfg)
+            ctx_seq = ttnn.reshape(ctx_seq, (B * num_windows, N, C), memory_config=act_mem_cfg)
+        ttnn.deallocate(ctx)
+        ctx_seq = ttnn.to_layout(ctx_seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.linear(
-            ctx,
+            ctx_seq,
             block["attn_out_w"],
             bias=block.get("attn_out_b"),
             transpose_b=True,
             compute_kernel_config=compute_cfg,
             memory_config=act_mem_cfg,
+            **linear_kwargs,
         )
-        ttnn.deallocate(ctx)
+        ttnn.deallocate(ctx_seq)
 
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.reshape(
