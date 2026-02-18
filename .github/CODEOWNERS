@@ -295,6 +295,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
 models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
 models/common/sampling/ @sraizada-tt @djordje-tt @rdraskicTT @tchedaTT @tenstorrent/codeowner-bypass
+models/common/warmup/ @nostojicTT @skhorasganiTT @sraizada-tt @djordje-tt @rdraskicTT @tchedaTT @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass

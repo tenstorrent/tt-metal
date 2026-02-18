@@ -21,7 +21,7 @@
   model: llama3
   skus:
     wh_galaxy:
-      timeout: 20
+      timeout: 22
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
@@ -32,7 +32,7 @@
   model: llama3_8b_dp
   skus:
     wh_galaxy:
-      timeout: 20
+      timeout: 27
   owner_id: U08BH66EXAL # Radoica Draskic
   team: models
 

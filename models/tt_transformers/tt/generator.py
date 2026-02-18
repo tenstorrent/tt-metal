@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from typing import List
 
 import torch
@@ -20,6 +20,8 @@ from models.common.llama_models import (
     sample_top_p,
 )
 from models.common.sampling.generator import format_sampling_params
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -28,24 +30,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-
-
-@dataclass(frozen=True)
-class SamplingParams:
-    """
-    Used in Generator decode forward functions for greedy decoding / sampling on device.
-    The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
-    """
-
-    temperature: float | list[float]
-    top_k: int | list[int]
-    top_p: float | list[float]
-    presence_penalty: float | list[float] = 0.0
-    frequency_penalty: float | list[float] = 0.0
-    repetition_penalty: float | list[float] = 1.0
-    seed: int | list[int] | None = None
-    enable_log_probs: bool | list[bool] = False
-
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
@@ -106,7 +90,7 @@ def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
 
-class Generator:
+class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -153,15 +137,17 @@ class Generator:
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-    def warmup_model_prefill(
-        self,
-        kv_cache,
-        enable_trace,
-        sampling_params=[None],
-    ):
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
+
+        sampling_params = self._create_sampling_params(
+            can_sample_on_device,
+            non_greedy_decoding_on_device,
+            None,
+            mode="prefill",
+        )
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
@@ -197,6 +183,9 @@ class Generator:
                     )
                     break
                 for param in sampling_params:
+                    logger.info(
+                        f"Warming up prefill for sequence length: {supported_length} with sampling params: {param}"
+                    )
                     self.prefill_forward_text(
                         warmup_tokens,
                         page_table_warmup,
@@ -330,7 +319,11 @@ class Generator:
 
         # we need this here becuase of tt-metal tests
         if warmup_prefill:
-            self.warmup_model_prefill(kv_cache, enable_trace)
+            sampling_on_device_enabled = (
+                getattr(self.model[0], "_supports_on_device_sampling", False)
+                and getattr(self.model[0], "sampling", None) is not None
+            )
+            self.warmup_model_prefill(kv_cache, enable_trace, sampling_on_device_enabled, sampling_on_device_enabled)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -677,7 +670,7 @@ class Generator:
             return tt_logits
 
     # Note: This function is called by vLLM
-    def decode_forward_text(
+    def decode_forward(
         self,
         tokens,
         start_pos,
@@ -1240,50 +1233,6 @@ class Generator:
             return self.process_decode_output_host(to_host)
         else:
             return tt_logits
-
-    def decode_forward(
-        self,
-        start_pos,
-        tokens,
-        prefill_cross_attention_masks,
-        prefill_full_text_row_masked_out_mask,
-        decode_cross_attention_masks,
-        decode_full_text_row_masked_out_mask,
-        xattn_caches=None,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-        enable_trace=True,
-        read_from_device=True,
-    ):
-        if not self.model_args[0].is_llama_vision():
-            output = self.decode_forward_text(
-                tokens,
-                start_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=kv_cache,
-            )
-        else:
-            output = self.decode_forward_llama_vision(
-                start_pos,
-                tokens,
-                prefill_cross_attention_masks,
-                prefill_full_text_row_masked_out_mask,
-                decode_cross_attention_masks,
-                decode_full_text_row_masked_out_mask,
-                xattn_caches,
-                page_table,
-                kv_cache,
-                cross_page_table,
-                enable_trace,
-                read_from_device,
-            )
-        # skip returning log-probs
-        if isinstance(output, tuple):
-            return output[0]
-        else:
-            return output
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
@@ -1856,7 +1805,7 @@ class Generator:
             position_id = torch.tensor([prefill_len + gen_idx])
             next_token_tensor = next_token.reshape(1, 1)  # B, S
 
-            logits = self.decode_forward(
+            logits = self.decode_forward_llama_vision(
                 position_id,
                 next_token_tensor,
                 prefill_output_xattn_masks,
@@ -1866,6 +1815,10 @@ class Generator:
                 [xattn_caches],
                 enable_trace=False,
             )
+
+            if isinstance(logits, tuple):
+                logits = logits[0]
+
             next_token, text = sample(logits)
             yield TokenResult(
                 token=next_token[0].item(),
