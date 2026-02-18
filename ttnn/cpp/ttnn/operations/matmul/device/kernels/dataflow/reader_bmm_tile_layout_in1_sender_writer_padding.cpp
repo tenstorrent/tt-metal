@@ -23,6 +23,7 @@ void kernel_main() {
     // the farther away, the less cycles to wait (200 - distance * 1)
     const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
     const uint32_t cycles_to_wait = 220 - distance_from_super_sync_core * 9;
+    const uint32_t super_sync_core_wait_cycles = 600;
 
     // in1 tensor args
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -473,7 +474,7 @@ void kernel_main() {
                                 super_sync_receiver_semaphore_addr,
                                 super_sync_receiver_semaphore_noc_addr,
                                 num_cores_super_sync);
-                            ckernel::wait(600);
+                            ckernel::wait(super_sync_core_wait_cycles);
                         } else {
                             noc_semaphore_set(super_sync_receiver_semaphore_addr_ptr, INVALID);
                             noc_semaphore_inc(super_sync_sender_semaphore_noc_addr, 1);
