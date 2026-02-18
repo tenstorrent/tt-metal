@@ -27,14 +27,15 @@ def golden(input_tensor: torch.Tensor) -> torch.Tensor:
     the output after tilize + untilize should be identical to the input.
 
     Args:
-        input_tensor: Input tensor [16, N] in row-major format (N must be divisible by 32)
+        input_tensor: Input tensor [16, N] in row-major format (N must be divisible by 64)
+        (odd tile dimensions are not supported yet for fast tilize 16xN)
 
     Returns:
         Reference output tensor [16, N] in row-major format (same as input)
     """
     H, W = input_tensor.shape
     assert H == 16, f"Expected height=16, got {H}"
-    assert W % 32 == 0, f"Width must be divisible by 32, got {W}"
+    assert W % 64 == 0, f"Width must be divisible by 64, got {W}"
 
     # Tilize + untilize is a reversible operation, so output equals input
     return input_tensor.clone()

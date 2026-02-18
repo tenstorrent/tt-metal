@@ -23,7 +23,9 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.tilize_16x32.op impo
 @pytest.mark.parametrize(
     "N",
     [
-        # 96, #this should fail because it's not divisible by 64 (right now 16xN fast tilize only supports N divisible by 64)
+        pytest.param(
+            96, marks=pytest.mark.xfail(reason="Expected Failure: N must be divisible by 64")
+        ),  # this should fail because it's not divisible by 64 (right now 16xN fast tilize only supports N divisible by 64)
         256,  # 8 tiles - 1 block
         1792,  # Deepseek case 1
         7168,  # Deepseek case 2
@@ -35,7 +37,7 @@ def test_tilize_16x32(device, N):
 
     Args:
         device: TTNN device
-        N: Width dimension (must be divisible by 32)
+        N: Width dimension (must be divisible by 64)
     """
     torch.manual_seed(42)
 
