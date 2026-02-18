@@ -368,8 +368,8 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push images
-        if: steps.bake.outputs.targets != ''
+      - name: Build and push CI Build image
+        if: needs.image-tags.outputs.dev-exists != 'true'
         uses: docker/bake-action@v6
         env:
           UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
@@ -377,7 +377,55 @@ jobs:
         with:
           source: .
           files: dockerfile/docker-bake.hcl
-          targets: ${{ steps.bake.outputs.targets }}
+          targets: ci-build
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push CI Test image
+        if: needs.image-tags.outputs.dev-exists != 'true'
+        uses: docker/bake-action@v6
+        env:
+          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
+          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: ci-test
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push Dev image
+        if: needs.image-tags.outputs.dev-exists != 'true'
+        uses: docker/bake-action@v6
+        env:
+          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
+          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: dev
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push Basic Dev image
+        if: needs.image-tags.outputs.basic-dev-exists != 'true'
+        uses: docker/bake-action@v6
+        env:
+          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
+          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: basic-dev
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push Basic TTNN Runtime image
+        if: needs.image-tags.outputs.basic-ttnn-runtime-exists != 'true'
+        uses: docker/bake-action@v6
+        env:
+          UBUNTU_VERSION: ${{ needs.image-tags.outputs.version }}
+          PYTHON_VERSION: ${{ needs.image-tags.outputs.python-version }}
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: basic-ttnn-runtime
           set: ${{ steps.bake.outputs.set }}
 
   # Build ManyLinux image (runs in parallel with Ubuntu)

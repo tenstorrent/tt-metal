@@ -148,8 +148,8 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push missing venv images
-        if: steps.bake.outputs.targets != ''
+      - name: Build and push ci-build-venv
+        if: needs.tags.outputs.ci-build-venv-exists != 'true'
         uses: docker/bake-action@v6
         env:
           UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
@@ -157,5 +157,17 @@ jobs:
         with:
           source: .
           files: dockerfile/docker-bake.hcl
-          targets: ${{ steps.bake.outputs.targets }}
+          targets: ci-build-venv
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push ci-test-venv
+        if: needs.tags.outputs.ci-test-venv-exists != 'true'
+        uses: docker/bake-action@v6
+        env:
+          UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
+          PYTHON_VERSION: ${{ steps.bake.outputs.python-version }}
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: ci-test-venv
           set: ${{ steps.bake.outputs.set }}

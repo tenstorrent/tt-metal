@@ -3,8 +3,7 @@ name: "[internal] Build Docker tool images"
 # Reusable workflow that checks and builds tool images (ccache, mold, doxygen, etc.).
 # Called by build-docker-artifact.yaml. Tool images are pushed to GHCR.
 #
-# Uses docker/bake-action (dockerfile/docker-bake.hcl) to build missing tools
-# in a single invocation.
+# Uses docker/bake-action (dockerfile/docker-bake.hcl) to build missing tools.
 permissions:
   packages: write
 
@@ -170,11 +169,83 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build and push missing tool images
-        if: steps.bake.outputs.targets != ''
+      - name: Build and push ccache
+        if: needs.tags.outputs.ccache-exists != 'true'
         uses: docker/bake-action@v6
         with:
           source: .
           files: dockerfile/docker-bake.hcl
-          targets: ${{ steps.bake.outputs.targets }}
+          targets: ccache
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push mold
+        if: needs.tags.outputs.mold-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: mold
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push doxygen
+        if: needs.tags.outputs.doxygen-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: doxygen
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push cba
+        if: needs.tags.outputs.cba-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: cba
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push gdb
+        if: needs.tags.outputs.gdb-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: gdb
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push cmake
+        if: needs.tags.outputs.cmake-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: cmake
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push yq
+        if: needs.tags.outputs.yq-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: yq
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push sfpi
+        if: needs.tags.outputs.sfpi-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: sfpi
+          set: ${{ steps.bake.outputs.set }}
+
+      - name: Build and push openmpi
+        if: needs.tags.outputs.openmpi-exists != 'true'
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: dockerfile/docker-bake.hcl
+          targets: openmpi
           set: ${{ steps.bake.outputs.set }}
