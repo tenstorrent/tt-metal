@@ -425,8 +425,12 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in1", tt::CBIndex::c_1},
+        {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_in0_intermediate", tt::CBIndex::c_8},
+        {"cb_in1_intermediate", tt::CBIndex::c_9},
+        {"cb_in0_transposed", tt::CBIndex::c_10},
     };
 
     // Compute kernel compile time args (group 1)
