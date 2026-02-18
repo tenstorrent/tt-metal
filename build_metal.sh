@@ -131,7 +131,7 @@ without-distributed
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
-disable-git-hash
+"
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
 LONGOPTIONS=$(echo "$LONGOPTIONS" | tr '\n' ',' | sed 's/,$//')
@@ -194,8 +194,8 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
-        --disable-git-hash)
-            use_gi"OFF";;
+        --disable-unity-builds)
+	    unity_builds="OFF";;
         --disable-light-metal-trace)
             light_metal_trace="OFF";;
         --cxx-compiler-path)
@@ -402,9 +402,9 @@ if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
 fi
 
-if [ "$use_git_hash" = "OFF" ]; then
-    cmake_args+=("-DTT_METAL_USE_GIT_HASH=OFF")
-fi
+# toolchain and cxx_compiler settings would conflict with eachother
+# only use toolchain if not setting cxx compiler directly
+if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
