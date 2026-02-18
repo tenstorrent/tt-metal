@@ -101,9 +101,10 @@ class LMHeadSampling:
         Returns:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
-        enable_argmax = indices_tensor is not None or output_index_tensor is not None
-        if enable_argmax and (indices_tensor is None or output_index_tensor is None):
-            raise ValueError("indices_tensor and output_index_tensor must be provided together for fused argmax")
+        # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
+        enable_argmax = True
+        if indices_tensor is None or output_index_tensor is None:
+            raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
 
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
@@ -330,7 +331,7 @@ class LMHeadSampling:
                 # ================================================================
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("enable_argmax", 1 if enable_argmax else 0),
+                    ("enable_argmax", 1),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
@@ -382,7 +383,7 @@ class LMHeadSampling:
                 # ================================================================
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("enable_argmax", 1 if enable_argmax else 0),
+                    ("enable_argmax", 1),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_packet_size_in_pages", num_pages_per_packet if not skip_ccl else 0),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
@@ -419,7 +420,7 @@ class LMHeadSampling:
                 # ================================================================
                 trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("enable_argmax", 1 if enable_argmax else 0),
+                    ("enable_argmax", 1),
                     ("matmul_in0", mcast_dst_cb),  # Matmul reads from mcast destination
                     ("matmul_in1", matmul_in1_cb),
                     ("matmul_out", matmul_out_cb),

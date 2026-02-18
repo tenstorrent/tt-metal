@@ -270,7 +270,6 @@ void kernel_main() {
     matmul(matmul_args);
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::enable_argmax) {
 #if defined(COMPILE_FOR_NCRISC)
         constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
         uint32_t scores_addr = 0;
@@ -281,7 +280,7 @@ void kernel_main() {
             cb_wait_front(matmul_out_cb, out_w);
             scores_addr = get_read_ptr(matmul_out_cb);
         }
-        deepseek_b1_ops::Sampling::ReaderArgs argmax_args{
+        deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
             scores_addr,
             get_common_arg_val<uint32_t>(0),
             get_common_arg_val<uint32_t>(1),
@@ -293,14 +292,16 @@ void kernel_main() {
             get_write_ptr(gather_cb),
         };
 #elif defined(COMPILE_FOR_BRISC)
-        deepseek_b1_ops::Sampling::WriterArgs argmax_args{
-            get_common_arg_val<uint32_t>(0),
-            get_common_arg_val<uint32_t>(1),
-            get_common_arg_val<uint32_t>(2),
-        };
+    deepseek_b1_ops::Sampling::WriterArgs sampling_args{
+        get_common_arg_val<uint32_t>(0),
+        get_common_arg_val<uint32_t>(1),
+        get_common_arg_val<uint32_t>(2),
+    };
 #endif
-        deepseek_b1_ops::Sampling::Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, false> argmax;
-        argmax(argmax_args);
+        // k=1 fast path: fused sampling invocation matches micro-op style.
+        deepseek_b1_ops::Sampling::Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, false>
+            sampling_op;
+        sampling_op(sampling_args);
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_matmul_core) {
             constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
@@ -308,6 +309,5 @@ void kernel_main() {
             cb_pop_front(matmul_out_cb, out_w);
         }
 #endif
-    }
 #endif
 }
