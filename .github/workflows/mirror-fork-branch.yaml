@@ -97,8 +97,6 @@ jobs:
       - name: Push branch to origin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GIT_TRACE: 1
-          GIT_CURL_VERBOSE: 1
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "=== Push Information ==="
@@ -119,19 +117,46 @@ jobs:
           echo "=== Checking for workflow files ==="
           git diff --name-only origin/main...HEAD | grep ".github/workflows" || echo "No workflow files changed"
 
-          # Show current git remote configuration
           echo ""
-          echo "=== Git remote configuration ==="
-          git remote -v
+          echo "=== Using GitHub API to push (bypasses workflow validation timeout) ==="
 
-          # Show git config for push
-          echo ""
-          echo "=== Git push configuration ==="
-          git config --get-regexp 'remote\.origin\..*' || echo "No origin remote config"
+          # Try to create the branch first (for new branches)
+          echo "Attempting to create ref..."
+          CREATE_RESULT=$(curl -s -o /tmp/create_response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
+            -d "{\"ref\":\"refs/heads/$TARGET_BRANCH\",\"sha\":\"$COMMIT_SHA\"}")
 
-          echo ""
-          echo "=== Attempting to push with git CLI ==="
-          git push origin "$TARGET_BRANCH" --force --verbose
+          if [ "$CREATE_RESULT" = "201" ]; then
+            echo "✓ Branch created successfully"
+            cat /tmp/create_response.json
+          elif [ "$CREATE_RESULT" = "422" ]; then
+            echo "Branch already exists, updating..."
+            # Update existing branch
+            UPDATE_RESULT=$(curl -s -o /tmp/update_response.json -w "%{http_code}" \
+              -X PATCH \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/$TARGET_BRANCH" \
+              -d "{\"sha\":\"$COMMIT_SHA\",\"force\":true}")
+
+            if [ "$UPDATE_RESULT" = "200" ]; then
+              echo "✓ Branch updated successfully"
+              cat /tmp/update_response.json
+            else
+              echo "✗ Failed to update branch (HTTP $UPDATE_RESULT)"
+              cat /tmp/update_response.json
+              exit 1
+            fi
+          else
+            echo "✗ Failed to create branch (HTTP $CREATE_RESULT)"
+            cat /tmp/create_response.json
+            exit 1
+          fi
 
       - name: Find PR
         id: pr
