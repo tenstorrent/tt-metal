@@ -3833,7 +3833,6 @@ class TestCrossOpCompilation:
         import os
         from models.experimental.ops.descriptors.cpp_parser import (
             inline_local_includes,
-            resolve_ifdef_directives,
         )
 
         with open(kernel_path, "r") as f:
@@ -3841,7 +3840,6 @@ class TestCrossOpCompilation:
 
         kernel_dir = os.path.dirname(os.path.abspath(kernel_path))
         source = inline_local_includes(source, kernel_dir)
-        source = resolve_ifdef_directives(source, defines or set())
         return source
 
     @staticmethod
@@ -3858,7 +3856,7 @@ class TestCrossOpCompilation:
         all_sources = [s for _, s in sources_with_indices]
         includes = collect_includes(all_sources)
         defines = collect_defines(all_sources)
-        pre_main, _ = _collect_all_pre_main_code(sources_with_indices)
+        shared_pre_main, per_phase_pre_main, _ = _collect_all_pre_main_code(sources_with_indices)
 
         lines = [
             "// Auto-generated fused compute kernel - compilation test",
@@ -3868,9 +3866,14 @@ class TestCrossOpCompilation:
         lines.append("")
         lines.extend(includes)
         lines.append("")
-        if pre_main.strip():
-            lines.append(pre_main)
+        if shared_pre_main.strip():
+            lines.append(shared_pre_main)
             lines.append("")
+        for idx in sorted(per_phase_pre_main.keys()):
+            code = per_phase_pre_main[idx]
+            if code.strip():
+                lines.append(code)
+                lines.append("")
         lines.append("void kernel_main() {}")
         lines.append("")
         return "\n".join(lines)

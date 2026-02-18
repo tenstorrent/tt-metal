@@ -704,22 +704,28 @@ def _prefix_phase_names_in_source(source: str, phase_idx: int, names: List[str])
     return source
 
 
-def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> Tuple[str, Dict[int, List[str]]]:
+def _collect_all_pre_main_code(
+    sources_with_indices: List[Tuple[int, str]],
+) -> Tuple[str, Dict[int, str], Dict[int, List[str]]]:
     """Merge pre-main code from all phases with per-phase name isolation.
 
     Uses tree-sitter (via cpp_parser) to categorize top-level blocks
     before kernel_main into *shared* or *phase-specific*:
 
-    **Shared** (deduped across phases):
+    **Shared** (deduped across phases, no define wrapper needed):
       - Namespace blocks: dedup by signature (first occurrence wins).
       - Single-line declarations (namespace aliases, ``using``,
         ``typedef``): dedup by exact normalized content.
 
-    **Phase-specific** (prefixed with ``phaseN_``):
+    **Phase-specific** (prefixed with ``phaseN_``, wrapped by caller
+    with per-phase ``#define``/``#undef`` blocks):
       - Free function definitions (``ALWI``, ``FORCE_INLINE``, etc.):
         each phase gets its own copy with the function name prefixed.
       - Global/static variables: each phase gets its own copy with
         the variable name prefixed.
+      - Preprocessor conditional blocks (``#ifdef``/``#if``/``#ifndef``):
+        preserved as-is but with inner function/variable names prefixed.
+        Each phase gets its own copy.
 
     ALL phases (including phase 0) get prefixed.  This eliminates:
       - Silent first-wins drops when two phases define the same function
@@ -728,24 +734,48 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
         function that appears inline in another phase's pre-main.
 
     Returns:
-        A tuple of (pre_main_code, phase_names) where phase_names is a
-        dict mapping phase_idx -> list of original names that were prefixed.
-        Callers must apply the same prefixing to each phase's kernel body.
+        A tuple of (shared_pre_main, per_phase_pre_main, phase_names):
+        - shared_pre_main: namespace blocks, using declarations, etc.
+        - per_phase_pre_main: dict mapping phase_idx -> prefixed code.
+          Callers wrap each with ``#define``/``#undef`` for that phase.
+        - phase_names: dict mapping phase_idx -> list of original names
+          that were prefixed.  Callers apply the same prefixing to each
+          phase's kernel body.
     """
     if not sources_with_indices:
-        return "", {}
+        return "", {}, {}
 
-    all_blocks: List[str] = []
+    shared_blocks: List[str] = []
+    per_phase_blocks: Dict[int, List[str]] = {}
     seen_signatures: Set[str] = set()
-    seen_content: Set[str] = set()
+    seen_shared_content: Set[str] = set()
+    seen_phase_content: Dict[int, Set[str]] = {}
     phase_names: Dict[int, List[str]] = {}
 
     for phase_idx, source in sources_with_indices:
         blocks = cpp_parser.categorize_pre_main(source)
+        seen_phase_content.setdefault(phase_idx, set())
 
         for block in blocks:
             normalized = cpp_parser.normalize_block(block.text)
             if not normalized:
+                continue
+
+            # --- Phase-specific: preprocessor conditional blocks ---
+            if block.kind == "preproc_block":
+                text = block.text
+                names = block.inner_names or []
+                for name in names:
+                    text = re.sub(
+                        rf"\b{re.escape(name)}\b",
+                        f"phase{phase_idx}_{name}",
+                        text,
+                    )
+                    phase_names.setdefault(phase_idx, []).append(name)
+                prefixed_norm = cpp_parser.normalize_block(text)
+                if prefixed_norm not in seen_phase_content[phase_idx]:
+                    seen_phase_content[phase_idx].add(prefixed_norm)
+                    per_phase_blocks.setdefault(phase_idx, []).append(text)
                 continue
 
             # --- Phase-specific: global/static variables ---
@@ -757,9 +787,9 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
                 )
                 phase_names.setdefault(phase_idx, []).append(block.name)
                 prefixed_norm = cpp_parser.normalize_block(prefixed)
-                if prefixed_norm not in seen_content:
-                    seen_content.add(prefixed_norm)
-                    all_blocks.append(prefixed)
+                if prefixed_norm not in seen_phase_content[phase_idx]:
+                    seen_phase_content[phase_idx].add(prefixed_norm)
+                    per_phase_blocks.setdefault(phase_idx, []).append(prefixed)
                 continue
 
             # --- Phase-specific: free function definitions ---
@@ -771,9 +801,9 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
                 )
                 phase_names.setdefault(phase_idx, []).append(block.name)
                 prefixed_norm = cpp_parser.normalize_block(prefixed)
-                if prefixed_norm not in seen_content:
-                    seen_content.add(prefixed_norm)
-                    all_blocks.append(prefixed)
+                if prefixed_norm not in seen_phase_content[phase_idx]:
+                    seen_phase_content[phase_idx].add(prefixed_norm)
+                    per_phase_blocks.setdefault(phase_idx, []).append(prefixed)
                 continue
 
             # --- Shared: namespace blocks ---
@@ -781,14 +811,17 @@ def _collect_all_pre_main_code(sources_with_indices: List[Tuple[int, str]]) -> T
                 sig = block.text.split("{")[0].strip() if "{" in block.text else normalized
                 if sig not in seen_signatures:
                     seen_signatures.add(sig)
-                    all_blocks.append(block.text)
+                    shared_blocks.append(block.text)
             else:
                 # --- Shared: namespace_alias, using, struct, template, other ---
-                if normalized not in seen_content:
-                    seen_content.add(normalized)
-                    all_blocks.append(block.text)
+                if normalized not in seen_shared_content:
+                    seen_shared_content.add(normalized)
+                    shared_blocks.append(block.text)
 
-    return "\n\n".join(all_blocks), phase_names
+    shared_pre_main = "\n\n".join(shared_blocks)
+    per_phase_pre_main = {idx: "\n\n".join(blocks) for idx, blocks in per_phase_blocks.items()}
+
+    return shared_pre_main, per_phase_pre_main, phase_names
 
 
 # =============================================================================
@@ -1070,18 +1103,16 @@ def _generate_fused_riscv0_source(
         if not source:
             continue
         source = cpp_parser.inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
-        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
-        reader_sources.append((i, resolved))
+        reader_sources.append((i, source))
 
     if not reader_sources:
         return None
 
     all_sources = [s for _, s in reader_sources]
     includes = cpp_parser.collect_includes(all_sources)
-    defines = cpp_parser.collect_defines(all_sources)
-    # Merge pre-main code from all phases with per-phase name isolation.
-    pre_main, phase_names = _collect_all_pre_main_code(reader_sources)
+    source_defines = cpp_parser.collect_defines(all_sources)
+    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
+    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(reader_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1091,12 +1122,25 @@ def _generate_fused_riscv0_source(
         f"// Auto-generated fused reader kernel - {len(reader_sources)} phases",
         "",
     ]
-    lines.extend(defines)
+    lines.extend(_emit_define_lines(uniform_defines))
+    lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if pre_main.strip():
-        lines.append(pre_main)
+    if shared_pre_main.strip():
+        lines.append(shared_pre_main)
+        lines.append("")
+    # Per-phase pre-main code, each wrapped with that phase's varying defines
+    for phase_idx, _ in reader_sources:
+        phase_code = per_phase_pre_main.get(phase_idx, "")
+        if not phase_code.strip():
+            continue
+        varying = per_phase_defines.get(phase_idx, [])
+        if varying:
+            lines.extend(_emit_define_lines(varying))
+        lines.append(phase_code)
+        if varying:
+            lines.extend(_emit_undef_lines(varying))
         lines.append("")
 
     is_multi_phase = len(reader_sources) > 1
@@ -1181,16 +1225,23 @@ def _generate_fused_riscv0_source(
             lines.append("")
 
     # Generate phase functions
-    for phase_idx, resolved_source in reader_sources:
-        body = cpp_parser.extract_kernel_body(resolved_source)
+    for phase_idx, raw_source in reader_sources:
+        body = cpp_parser.extract_kernel_body(raw_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
+        varying = per_phase_defines.get(phase_idx, [])
         lines.append(f"// Phase {phase_idx} reader")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_reader() {{")
+        if varying:
+            for dl in _emit_define_lines(varying):
+                lines.append(f"    {dl}")
         for line in transformed.split("\n"):
             lines.append(f"    {line}")
+        if varying:
+            for ul in _emit_undef_lines(varying):
+                lines.append(f"    {ul}")
         lines.append("}")
         lines.append("")
 
@@ -1314,17 +1365,16 @@ def _generate_fused_riscv1_source(
         if not source:
             continue
         source = cpp_parser.inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in kernel.defines} if hasattr(kernel, "defines") else set()
-        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
-        writer_sources.append((i, resolved))
+        writer_sources.append((i, source))
 
     if not writer_sources:
         return None
 
     all_sources = [s for _, s in writer_sources]
     includes = cpp_parser.collect_includes(all_sources)
-    defines = cpp_parser.collect_defines(all_sources)
-    pre_main, phase_names = _collect_all_pre_main_code(writer_sources)
+    source_defines = cpp_parser.collect_defines(all_sources)
+    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
+    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(writer_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1334,12 +1384,24 @@ def _generate_fused_riscv1_source(
         f"// Auto-generated fused writer kernel - {len(writer_sources)} phases",
         "",
     ]
-    lines.extend(defines)
+    lines.extend(_emit_define_lines(uniform_defines))
+    lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if pre_main.strip():
-        lines.append(pre_main)
+    if shared_pre_main.strip():
+        lines.append(shared_pre_main)
+        lines.append("")
+    for phase_idx, _ in writer_sources:
+        phase_code = per_phase_pre_main.get(phase_idx, "")
+        if not phase_code.strip():
+            continue
+        varying = per_phase_defines.get(phase_idx, [])
+        if varying:
+            lines.extend(_emit_define_lines(varying))
+        lines.append(phase_code)
+        if varying:
+            lines.extend(_emit_undef_lines(varying))
         lines.append("")
 
     is_multi_phase = len(writer_sources) > 1
@@ -1364,16 +1426,23 @@ def _generate_fused_riscv1_source(
         lines.append("")
 
     # Generate phase functions
-    for phase_idx, resolved_source in writer_sources:
-        body = cpp_parser.extract_kernel_body(resolved_source)
+    for phase_idx, raw_source in writer_sources:
+        body = cpp_parser.extract_kernel_body(raw_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
+        varying = per_phase_defines.get(phase_idx, [])
         lines.append(f"// Phase {phase_idx} writer")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_writer() {{")
+        if varying:
+            for dl in _emit_define_lines(varying):
+                lines.append(f"    {dl}")
         for line in transformed.split("\n"):
             lines.append(f"    {line}")
+        if varying:
+            for ul in _emit_undef_lines(varying):
+                lines.append(f"    {ul}")
         lines.append("}")
         lines.append("")
 
@@ -1481,17 +1550,16 @@ def _generate_fused_compute_source(
         if not source:
             continue
         source = cpp_parser.inline_local_includes(source, kernel_dir)
-        phase_defs = {name for name, _ in kernel.defines}
-        resolved = cpp_parser.resolve_ifdef_directives(source, phase_defs)
-        compute_sources.append((i, resolved))
+        compute_sources.append((i, source))
 
     if not compute_sources:
         return None
 
     all_sources = [s for _, s in compute_sources]
     includes = cpp_parser.collect_includes(all_sources)
-    defines = cpp_parser.collect_defines(all_sources)
-    pre_main, phase_names = _collect_all_pre_main_code(compute_sources)
+    source_defines = cpp_parser.collect_defines(all_sources)
+    uniform_defines, per_phase_defines = _categorize_phase_defines(phase_kernels, role_key)
+    shared_pre_main, per_phase_pre_main, phase_names = _collect_all_pre_main_code(compute_sources)
 
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
@@ -1501,12 +1569,24 @@ def _generate_fused_compute_source(
         f"// Auto-generated fused compute kernel - {len(compute_sources)} phases",
         "",
     ]
-    lines.extend(defines)
+    lines.extend(_emit_define_lines(uniform_defines))
+    lines.extend(source_defines)
     lines.append("")
     lines.extend(includes)
     lines.append("")
-    if pre_main.strip():
-        lines.append(pre_main)
+    if shared_pre_main.strip():
+        lines.append(shared_pre_main)
+        lines.append("")
+    for phase_idx, _ in compute_sources:
+        phase_code = per_phase_pre_main.get(phase_idx, "")
+        if not phase_code.strip():
+            continue
+        varying = per_phase_defines.get(phase_idx, [])
+        if varying:
+            lines.extend(_emit_define_lines(varying))
+        lines.append(phase_code)
+        if varying:
+            lines.extend(_emit_undef_lines(varying))
         lines.append("")
 
     is_multi_phase = len(compute_sources) > 1
@@ -1554,16 +1634,23 @@ def _generate_fused_compute_source(
         lines.append("")
 
     # Generate phase functions
-    for phase_idx, resolved_source in compute_sources:
-        body = cpp_parser.extract_kernel_body(resolved_source)
+    for phase_idx, raw_source in compute_sources:
+        body = cpp_parser.extract_kernel_body(raw_source)
         offset = ct_arg_offsets.get(phase_idx, 0)
         pnames = phase_names.get(phase_idx, [])
         transformed = _transform_phase_source(body, phase_idx, offset, phase_names=pnames)
 
+        varying = per_phase_defines.get(phase_idx, [])
         lines.append(f"// Phase {phase_idx} compute")
         lines.append(f"FORCE_INLINE void phase{phase_idx}_compute() {{")
+        if varying:
+            for dl in _emit_define_lines(varying):
+                lines.append(f"    {dl}")
         for line in transformed.split("\n"):
             lines.append(f"    {line}")
+        if varying:
+            for ul in _emit_undef_lines(varying):
+                lines.append(f"    {ul}")
         lines.append("}")
         lines.append("")
 
@@ -1884,58 +1971,116 @@ def _merge_compile_time_args(
     return merged, offsets
 
 
-def _merge_defines(
+# These defines are referenced by LLK headers at include time and cannot
+# vary per-phase.  They MUST have identical values across all fused phases.
+_MUST_MATCH_DEFINES = frozenset({"REDUCE_OP", "REDUCE_DIM", "BCAST_LLKOP", "BCAST_DIM"})
+
+
+def _categorize_phase_defines(
     phase_kernels: List[Dict[str, Any]],
     kernel_type: str,
-) -> List[Tuple[str, str]]:
-    """Merge defines from all phases' kernels.
+) -> Tuple[List[Tuple[str, str]], Dict[int, List[Tuple[str, str]]]]:
+    """Categorize defines from all phases into uniform and per-phase.
 
-    Source-level defines (RMSNORM etc.) are resolved per-phase into source.
-    Common defines (REDUCE_OP etc.) must have consistent values across all
-    phases (they are referenced at include time and cannot change mid-kernel).
-    Others get phase-prefixed.
+    Uniform defines (same name+value in ALL phases) are emitted once as
+    ``#define`` lines at the top of the generated source.  Varying defines
+    (different value or present in only some phases) are emitted per-phase
+    with ``#define``/``#undef`` pairs around each phase's code.
+
+    ``_MUST_MATCH_DEFINES`` are validated for consistency and treated as
+    uniform.
+
+    Returns:
+        (uniform, per_phase) where:
+        - uniform: list of (name, value) for defines identical across all phases
+        - per_phase: dict mapping phase_index -> list of (name, value) for that phase
 
     Raises:
         ValueError: If a MUST_MATCH define has inconsistent values across phases.
     """
-    merged = []
-    seen_common = set()
-    # These defines are referenced by LLK headers at include time.
-    # They MUST have identical values across all fused phases.
-    common_defines = {"REDUCE_OP", "REDUCE_DIM", "BCAST_LLKOP", "BCAST_DIM"}
-    common_values: Dict[str, Tuple[str, int]] = {}  # name -> (value, first_phase)
-
+    # Collect per-phase define dicts: name -> value
+    per_phase_defs: Dict[int, Dict[str, str]] = {}
     for i, pk in enumerate(phase_kernels):
         kernel = pk.get(kernel_type)
         if kernel is None:
+            per_phase_defs[i] = {}
             continue
+        defs = {}
+        if hasattr(kernel, "defines"):
+            for name, value in kernel.defines:
+                defs[name] = value
+        per_phase_defs[i] = defs
 
-        for name, value in kernel.defines:
-            if name in common_defines:
-                # Validate consistency across phases
-                if name in common_values:
-                    prev_val, prev_phase = common_values[name]
+    # Collect all define names across all phases
+    all_names: Set[str] = set()
+    for defs in per_phase_defs.values():
+        all_names.update(defs.keys())
+
+    # Classify each define name
+    uniform: List[Tuple[str, str]] = []
+    seen_uniform: Set[str] = set()
+    varying_names: Set[str] = set()
+    must_match_values: Dict[str, Tuple[str, int]] = {}  # name -> (value, first_phase)
+
+    for name in sorted(all_names):
+        # Collect (value, phase_idx) for phases that have this define
+        occurrences = [(defs[name], idx) for idx, defs in per_phase_defs.items() if name in defs]
+
+        if name in _MUST_MATCH_DEFINES:
+            # Validate consistency
+            for value, phase_idx in occurrences:
+                if name in must_match_values:
+                    prev_val, prev_phase = must_match_values[name]
                     if value != prev_val:
                         raise ValueError(
                             f"Define '{name}' has inconsistent values across phases: "
-                            f"phase {prev_phase} has '{prev_val}', phase {i} has '{value}'. "
-                            f"These defines (REDUCE_OP, REDUCE_DIM, BCAST_LLKOP, BCAST_DIM) "
-                            f"must have identical values in all fused phases."
+                            f"phase {prev_phase} has '{prev_val}', phase {phase_idx} has '{value}'. "
+                            f"These defines must have identical values in all fused phases "
+                            f"because they are referenced by LLK headers at include time."
                         )
                 else:
-                    common_values[name] = (value, i)
-                if name not in seen_common:
-                    merged.append((name, value))
-                    seen_common.add(name)
-            elif name in cpp_parser.SOURCE_LEVEL_DEFINES:
-                continue
-            else:
-                if i == 0:
-                    merged.append((name, value))
-                else:
-                    merged.append((f"PHASE{i}_{name}", value))
+                    must_match_values[name] = (value, phase_idx)
+            # Treat as uniform
+            if occurrences and name not in seen_uniform:
+                uniform.append((name, occurrences[0][0]))
+                seen_uniform.add(name)
+            continue
 
-    return merged
+        # Check if uniform: present in ALL phases with same value
+        if len(occurrences) == len(per_phase_defs):
+            values = {v for v, _ in occurrences}
+            if len(values) == 1:
+                uniform.append((name, occurrences[0][0]))
+                seen_uniform.add(name)
+                continue
+
+        # Varying: present in only some phases, or different values
+        varying_names.add(name)
+
+    # Build per-phase varying define lists
+    per_phase: Dict[int, List[Tuple[str, str]]] = {}
+    for idx, defs in per_phase_defs.items():
+        phase_varying = [(name, defs[name]) for name in sorted(varying_names) if name in defs]
+        if phase_varying:
+            per_phase[idx] = phase_varying
+
+    return uniform, per_phase
+
+
+def _emit_define_lines(defines: List[Tuple[str, str]]) -> List[str]:
+    """Generate ``#define NAME VALUE`` lines from a list of (name, value) pairs."""
+    lines = []
+    for name, value in defines:
+        if value:
+            lines.append(f"#define {name} {value}")
+        else:
+            lines.append(f"#define {name}")
+    return lines
+
+
+def _emit_undef_lines(defines: List[Tuple[str, str]]) -> List[str]:
+    """Generate ``#undef NAME`` lines from a list of (name, value) pairs."""
+    return [f"#undef {name}" for name, _ in defines]
 
 
 # =============================================================================
@@ -2012,11 +2157,8 @@ def _validate_fp32_consistency(op_descriptors: List[OpDescriptor]) -> None:
         f"phases {phases_without} use fp32=False. "
         f"DST_ACCUM_MODE is a kernel-level hardware setting that cannot be "
         f"changed mid-kernel. All phases must use the same fp32_dest_acc_en "
-        f"setting. To fix: create all descriptors with the same "
-        f"compute_kernel_config. For example:\n"
-        f"  config = ttnn.layernorm_default_compute_config(device.arch())\n"
-        f"  rms = rms_norm.rms_norm(input, ..., compute_kernel_config=config)\n"
-        f"  ln  = layer_norm.layer_norm(input, ..., compute_kernel_config=config)"
+        f"setting. To fix: create all op descriptors with a consistent "
+        f"compute_kernel_config."
     )
 
 
@@ -2285,7 +2427,10 @@ def _build_fused_descriptor(
         desc.core_ranges = role_core_ranges
         desc.compile_time_args = ct_args
         desc.named_compile_time_args = named_ct_args
-        desc.defines = _merge_defines(phase_kernels, role_key)
+        # Only uniform defines go to the compiler as -D flags.
+        # Varying defines are handled by #define/#undef in the generated source.
+        uniform_defs, _ = _categorize_phase_defines(phase_kernels, role_key)
+        desc.defines = uniform_defs
         desc.runtime_args = rt_args
         desc.common_runtime_args = _concatenate_common_runtime_args(phase_kernels, role_key)
         desc.config = role_config
