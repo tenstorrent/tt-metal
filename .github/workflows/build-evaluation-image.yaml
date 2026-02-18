@@ -124,19 +124,10 @@ jobs:
       - name: Compute tool image tags
         id: tags
         run: |
-          # Extract versions from Dockerfile.tools
-          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
-          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
-
-          # Compute hashes for each tool (install script content)
-          CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
-          SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
-
-          # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
-          BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
-          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
-          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          echo "ccache-tag=$(echo "$TOOL_TAGS" | jq -r '."ccache-tag"')" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=$(echo "$TOOL_TAGS" | jq -r '."sfpi-tag"')" >> $GITHUB_OUTPUT
 
   build-evaluation-image:
     name: "Build and push"

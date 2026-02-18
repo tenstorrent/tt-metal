@@ -247,21 +247,25 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 
 ## Adding a New Tool
 
-1. **Add to `Dockerfile.tools`:**
-   - Add `ARG TOOL_VERSION=x.y.z` and `ARG TOOL_SHA256=...`
-   - Add build stage with install script
-   - Add `FROM scratch AS <tool>` final stage
+Use this checklist when adding a new tool. All listed files must be updated to avoid build failures or cache drift.
 
-2. **Create install script:** `scripts/install-tool.sh`
+| # | File | Change |
+|---|------|--------|
+| 1 | `dockerfile/Dockerfile.tools` | Add `ARG TOOL_VERSION=x.y.z` (or `ARG TOOL_TAG=...` for tag-style versions), `ARG TOOL_SHA256=...`, build stage with install script, and `FROM scratch AS <tool>` final stage |
+| 2 | `dockerfile/scripts/install-<tool>.sh` | Create install script if a ocker artifact (eg. uv) is unavailable |
+| 3 | `dockerfile/docker-bake.hcl` | Add `target "<tool>"` block, add to `tools` group, add to `contexts` in `_main-common`, `_basic-common`, and/or `manylinux` as appropriate |
+| 4 | Consuming Dockerfiles (e.g. `dockerfile/Dockerfile`) | Add `FROM scratch AS <tool>-layer` stub to each Dockerfile that uses the tool |
+| 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction (from Dockerfile.tools or version file), hash computation, and `--arg` + JSON key in `jq -n` output |
+| 6 | `.github/workflows/build-docker-tools.yaml` | Add `<tool>` to the `for key in` loop in "Check if tool images exist" step; add `add_if_missing <tool> ...` in "Prepare bake overrides" step |
+| 7 | `.github/workflows/build-docker-artifact.yaml` | Add to `ALL_TOOLS` (main images), `BASIC_TOOLS` (basic-dev, basic-ttnn-runtime), or manylinux `for tool in` list as appropriate |
 
-3. **Add to `docker-bake.hcl`:**
-   - Add a new tool target
-   - Add to the `tools` group
-   - Add to the relevant `contexts` in `_main-common`, `_basic-common`, or `manylinux`
+### AI agent prompt
 
-4. **Add `FROM scratch AS <tool>-layer`** stub to consuming Dockerfiles (Dockerfile, Dockerfile.basic-dev, etc.)
+Use this prompt when asking an AI to add a new tool:
 
-5. **Update JSON bundle generation** in `build-docker-tools.yaml` (tags job)
+```
+Add a new tool "<tool-name>" to the TT-Metalium Docker build system. Follow the "Adding a New Tool" checklist in dockerfile/README.md: update Dockerfile.tools, create install-<tool>.sh, update docker-bake.hcl, add FROM scratch stubs to consuming Dockerfiles (check which images use the tool—main, basic, manylinux, evaluation), update compute-tool-tags.sh, build-docker-tools.yaml, and build-docker-artifact.yaml. Match the patterns used by existing tools like ccache or sfpi.
+```
 
 ## Scripts
 
