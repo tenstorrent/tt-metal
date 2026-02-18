@@ -6,11 +6,11 @@
 |-------|-------------|--------|
 | 0 | moreh_sum_h (proof of concept) | Done |
 | 1 | Remaining moreh ops (3 kernels, 2 host files) | Done |
-| 2 | Generic reduce ops (3 kernels, 3 host factories) | Pending |
+| 2 | Generic reduce ops — `prepare_reduce_scaler` (3 kernels, 3 host factories) | Done |
 | 3 | SDPA + MOE + Sampling (7 files) | Done |
 | 4 | Softmax (5 files) | Done |
 | 5 | Layernorm (9 files) | Done |
-| 6 | GroupNorm + Experimental + Tests (10 files) | Pending |
+| 6 | GroupNorm + Experimental + Tests (10 files) | Done |
 | Post | Cleanup: remove legacy API + dead code | Pending |
 
 ## Context
@@ -143,78 +143,76 @@ pytest tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_sum.py -v
 
 ---
 
-## Phase 2: Generic reduce ops (3 kernels, 3 host factories) → `generate_reduce_scaler` Pattern C
+## Phase 2: Generic reduce ops (3 kernels, 3 host factories) → `prepare_reduce_scaler`
 
-`REDUCE_OP`/`REDUCE_DIM` from `get_defines()` (always SUM or MAX, never AVG).
-`reduce_factor` as CT arg (uint32_t, constexpr → template param). Currently always 1 for generic reduce.
-`input_scaler` as CT arg (uint32_t bits → `__builtin_bit_cast(float, ...)` in kernel). This is `operation_attributes.scaler` from the ttnn reduce API.
+These ops have a variable scaler (`operation_attributes.scaler`) passed from the ttnn API. Using `prepare_reduce_scaler<cb_id>(float scaler_f)` which takes a float directly — no need for `REDUCE_OP`/`REDUCE_DIM` defines on the reader, no `reduce_factor`. The host passes the float scaler as a CT/RT arg (bit_cast to uint32_t), the kernel reconstructs it and calls `prepare_reduce_scaler`.
 
 ### 2a. reader_unary_reduce_universal_start_id.cpp (W + HW factories)
 
 Used by both `reduce_op_multi_core_w_program_factory` and `reduce_op_single_core_hw_program_factory`.
 
 **Kernel changes:**
-- Change CT arg 0 from packed scaler to two args:
+- CT arg 0 stays as a single arg but now carries float bits instead of packed bf16:
   ```cpp
-  constexpr uint32_t reduce_factor = get_compile_time_arg_val(0);
-  constexpr uint32_t input_scaler_bits = get_compile_time_arg_val(1);
-  constexpr auto tensor_args = TensorAccessorArgs<2>();  // shifted from 1
+  constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
   ```
-- Replace `#ifndef REDUCE_ROW_SUM_VIA_MM` block (lines 21-22):
+- Replace `#ifndef REDUCE_ROW_SUM_VIA_MM` block with:
   ```cpp
-  float input_scaler = __builtin_bit_cast(float, input_scaler_bits);
-  dataflow_kernel_lib::generate_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM, reduce_factor>(input_scaler);
+  float scaler_f = __builtin_bit_cast(float, scaler_bits);
+  dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2>(scaler_f);
   ```
+- No CT arg index shift needed — still 1 arg, `TensorAccessorArgs<1>()` unchanged
 
 **Host W factory** (`reduce_op_multi_core_w_program_factory.cpp`):
-- Already passes `reduce_defines` to reader (line 96) — REDUCE_OP/REDUCE_DIM available
-- Remove packed bf16 computation (lines 80-81)
-- CT args (line 83): `{packed_scaler_value}` → `{1, std::bit_cast<uint32_t>(operation_attributes.scaler)}`
+- Remove packed bf16 computation (lines 80-81: `bfloat16::truncate` + `pack_two_bfloat16_into_uint32`)
+- CT args (line 83): `{packed_scaler_value}` → `{std::bit_cast<uint32_t>(operation_attributes.scaler)}`
 
 **Host HW factory** (`reduce_op_single_core_hw_program_factory.cpp`):
-- Currently passes NO defines to reader — add reduce_defines to `ReaderDataMovementConfig` (line 92)
 - Remove packed bf16 computation (lines 79-80), keep `sqrt()` (line 31)
-- CT args (line 81): `{packed_scaler_value}` → `{1, std::bit_cast<uint32_t>(scaler)}` (scaler already has sqrt applied)
+- CT args (line 81): `{packed_scaler_value}` → `{std::bit_cast<uint32_t>(scaler)}` (scaler already has sqrt applied)
 
 ### 2b. reader_unary_transpose_wh_universal_input_cols_partitioned.cpp (H factory non-sharded)
 
 **Kernel changes:**
-- Change CT arg 3 from packed scaler to two args:
+- CT arg 3 stays as a single arg but now carries float bits:
   ```cpp
-  constexpr uint32_t reduce_factor = get_compile_time_arg_val(3);
-  constexpr uint32_t input_scaler_bits = get_compile_time_arg_val(4);
-  constexpr auto tensor_args = TensorAccessorArgs<5>();  // shifted from 4
+  constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
   ```
-- Replace line 32: `generate_reduce_scaler_legacy(cb_id_in2, scalar)` →
+- Replace `generate_reduce_scaler_legacy(cb_id_in2, scalar)` with:
   ```cpp
-  float input_scaler = __builtin_bit_cast(float, input_scaler_bits);
-  dataflow_kernel_lib::generate_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM, reduce_factor>(input_scaler);
+  float scaler_f = __builtin_bit_cast(float, scaler_bits);
+  dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2>(scaler_f);
   ```
+- No CT arg index shift needed — `TensorAccessorArgs<4>()` unchanged
 
 **Host** (`reduce_op_multi_core_h_program_factory.cpp`, non-sharded path):
 - Remove packed bf16 computation (lines 125-126)
-- CT args (line 140): `{Ht, Wt, HtWt, packed_scaler_value}` → `{Ht, Wt, HtWt, 1, std::bit_cast<uint32_t>(operation_attributes.scaler)}`
-- Merge `reduce_defines` into `reader_defines` (around line 144)
+- CT args (line 140): `{Ht, Wt, HtWt, packed_scaler_value}` → `{Ht, Wt, HtWt, std::bit_cast<uint32_t>(operation_attributes.scaler)}`
+- No need to merge reduce_defines into reader_defines
 
 ### 2c. reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp (H factory sharded)
 
 **Kernel changes:**
-- Add new CT args and remove RT arg:
+- Replace RT arg with CT arg for the scaler:
   ```cpp
-  constexpr uint32_t reduce_factor = get_compile_time_arg_val(3);  // new CT arg after cb_id args
-  constexpr uint32_t input_scaler_bits = get_compile_time_arg_val(4);
+  constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);  // new CT arg after cb_id args
   ```
 - Remove `uint32_t scalar = get_arg_val<uint32_t>(6);` (line 22)
-- Replace line 23: `generate_reduce_scaler_legacy(cb_id_in2, scalar)` →
+- Replace `generate_reduce_scaler_legacy(cb_id_in2, scalar)` with:
   ```cpp
-  float input_scaler = __builtin_bit_cast(float, input_scaler_bits);
-  dataflow_kernel_lib::generate_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM, reduce_factor>(input_scaler);
+  float scaler_f = __builtin_bit_cast(float, scaler_bits);
+  dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2>(scaler_f);
   ```
 
 **Host** (`reduce_op_multi_core_h_program_factory.cpp`, sharded path):
 - Remove `packed_scaler_value` from RT args (line 233): remove last element
-- Add `1, std::bit_cast<uint32_t>(operation_attributes.scaler)` to sharded `reader_compile_time_args` (line 129)
-- Merge `reduce_defines` into `reader_defines` for sharded path (around line 130-131)
+- Add `std::bit_cast<uint32_t>(operation_attributes.scaler)` to sharded `reader_compile_time_args` (line 129)
+- No need to merge reduce_defines into reader_defines
+
+### Host cleanup (all factories)
+- Remove `#include <tt-metalium/bfloat16.hpp>` if no longer used
+- Remove `bfloat16::truncate` + `pack_two_bfloat16_into_uint32` scaler computation
+- Add `#include <bit>` for `std::bit_cast`
 
 ### Testing
 ```bash
