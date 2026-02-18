@@ -48,4 +48,28 @@ FORCE_INLINE void zero_faces(uint32_t write_addr) {
     noc_async_read_barrier();
 }
 
+/**
+ * @brief Format-aware zero out faces in a tile using NOC reads from the hardware zeros region
+ *
+ * @tparam data_format Data format (Float16_b or Float32) to determine face size
+ * @tparam half_tile If true, zero faces 0-1 only. If false, zero all 4 faces.
+ * @param write_addr L1 address where the zeroed data should be written
+ */
+template <DataFormat data_format, bool half_tile>
+FORCE_INLINE void zero_faces(uint32_t write_addr) {
+    constexpr uint32_t num_faces = half_tile ? 2 : 4;
+    constexpr uint32_t face_size_u32 = (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t bytes_to_zero = num_faces * face_size_u32 * sizeof(uint32_t);
+    constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
+
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+
+    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        write_addr += MEM_ZEROS_SIZE;
+    }
+    noc_async_read_barrier();
+}
+
 }  // namespace dataflow_kernel_lib

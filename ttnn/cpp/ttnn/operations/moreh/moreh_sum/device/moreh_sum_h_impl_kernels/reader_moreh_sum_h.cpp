@@ -4,6 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "llk_defs.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -26,8 +27,7 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;
     constexpr auto src_args = TensorAccessorArgs<3>();
-    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
 
     constexpr uint32_t cb_id_mask_h = 3;
