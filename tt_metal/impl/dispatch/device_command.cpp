@@ -296,6 +296,41 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_packed_h(
+    uint32_t noc_xy_addr,
+    uint32_t total_length,
+    const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+    uint16_t num_sub_cmds,
+    uint32_t offset_idx) {
+    static_assert(sizeof(CQPrefetchRelayLinearPackedSubCmd) % sizeof(uint32_t) == 0);
+
+    uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayLinearPackedSubCmd);
+    uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+    auto initialize_relay_linear_packed_h_cmd = [&](CQPrefetchCmd* relay_linear_packed_h_cmd) {
+        relay_linear_packed_h_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H;
+        relay_linear_packed_h_cmd->relay_linear_packed.noc_xy_addr = noc_xy_addr;
+        relay_linear_packed_h_cmd->relay_linear_packed.total_length = total_length;
+        relay_linear_packed_h_cmd->relay_linear_packed.stride = increment_sizeB;
+        relay_linear_packed_h_cmd->relay_linear_packed.count = num_sub_cmds;
+        relay_linear_packed_h_cmd->relay_linear_packed.pad = 0;
+    };
+    CQPrefetchCmd* relay_linear_packed_h_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_linear_packed_h_cmd{};
+        initialize_relay_linear_packed_h_cmd(&relay_linear_packed_h_cmd);
+        this->memcpy(relay_linear_packed_h_cmd_dst, &relay_linear_packed_h_cmd, sizeof(CQPrefetchCmd));
+    } else {
+        initialize_relay_linear_packed_h_cmd(relay_linear_packed_h_cmd_dst);
+    }
+
+    this->memcpy(
+        reinterpret_cast<char*>(relay_linear_packed_h_cmd_dst) + sizeof(CQPrefetchCmd),
+        &sub_cmds[offset_idx],
+        sub_cmds_sizeB);
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_paged_to_ringbuffer(
     const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
