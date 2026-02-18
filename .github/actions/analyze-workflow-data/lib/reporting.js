@@ -482,6 +482,20 @@ function deduplicateAndSortRuns(runs) {
 }
 
 /**
+ * Returns the latest non-cancelled/non-skipped run from a deduplicated, sorted
+ * list. This matches the fetch step's targetRun selection logic so that run IDs
+ * used for error-snippet lookups correspond to runs we actually downloaded data for.
+ * @param {Array} sortedRuns - Deduplicated and sorted runs (newest first)
+ * @returns {Object|null} The first run whose conclusion is not cancelled/skipped, or null
+ */
+function findLatestActionableRun(sortedRuns) {
+  return sortedRuns.find(r => {
+    const conc = r && r.conclusion;
+    return conc !== 'cancelled' && conc !== 'skipped';
+  }) || null;
+}
+
+/**
  * Computes the latest conclusion for a set of runs, skipping cancelled/skipped
  * runs. This matches the fetch step's targetRun selection logic: cancelled runs
  * don't produce useful failure data, so they shouldn't drive the success/failure
@@ -490,11 +504,7 @@ function deduplicateAndSortRuns(runs) {
  * @returns {string|null} 'success', 'failure', or null
  */
 function computeLatestConclusion(runs) {
-  const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns.find(r => {
-    const conc = r && r.conclusion;
-    return conc !== 'cancelled' && conc !== 'skipped';
-  });
+  const latest = findLatestActionableRun(deduplicateAndSortRuns(runs));
   if (!latest) return null;
   return latest.conclusion === 'success' ? 'success' : 'failure';
 }
@@ -508,11 +518,7 @@ function computeLatestConclusion(runs) {
  * @returns {Object|null} Run info object or null
  */
 function computeLatestRunInfo(runs) {
-  const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns.find(r => {
-    const conc = r && r.conclusion;
-    return conc !== 'cancelled' && conc !== 'skipped';
-  });
+  const latest = findLatestActionableRun(deduplicateAndSortRuns(runs));
   if (!latest) return null;
   return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
 }
@@ -1121,11 +1127,21 @@ function promoteStayedFailingToRegressed(forceRunName, stayedFailingDetails, reg
     regressedDetails.push(item);
     core.info(`[FORCE-REGRESSION] Promoted "${item.name}" to regression (${(item.failing_jobs || []).length} failing jobs, ${(item.error_snippets || []).length} error snippets)`);
 
-    // Update the change entry in the changes array
+    // Update the change entry in the changes array with regression-specific fields
+    // so workflow-status-changes.json is consistent with normal regressions
     const changeRef = changes.find(c => c.name === item.name);
     if (changeRef) {
       changeRef.change = 'success_to_fail';
       changeRef.previous = 'success';
+      changeRef.owners = item.owners;
+      changeRef.original_owner_names_for_generic_exit = item.original_owner_names_for_generic_exit || [];
+      changeRef.error_snippets = item.error_snippets;
+      changeRef.failing_jobs = item.failing_jobs;
+      changeRef.first_failed_run_id = item.first_failed_run_id;
+      changeRef.first_failed_run_url = item.first_failed_run_url;
+      changeRef.first_failed_created_at = item.first_failed_created_at;
+      changeRef.first_failed_head_sha = item.first_failed_head_sha;
+      changeRef.first_failed_head_short = item.first_failed_head_short;
     }
   }
 
