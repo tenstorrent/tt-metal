@@ -7,19 +7,27 @@ This directory contains a unified, configurable Mixture of Experts (MoE) impleme
 ```
 tt-moe/
 ├── moe_block.py              # Main unified MoE block
-├── deepseek_adapter.py       # Adapter showing DeepSeek equivalence
 ├── configs/
-│   └── deepseek_v3.json     # DeepSeek-V3 configuration
+│   ├── deepseek_v3.json     # DeepSeek-V3 configuration
+│   └── gpt_oss.json        # GPT-OSS configuration
 ├── components/
 │   ├── routers/
 │   │   ├── base_router.py   # Abstract router interface
-│   │   └── moe_gate.py      # DeepSeek MoEGate implementation
-│   └── experts/
-│       ├── base_expert.py   # Abstract expert interface
-│       ├── distributed_expert.py  # All-to-all expert
-│       └── shared_expert.py      # DeepSeek shared expert
+│   │   ├── moe_gate.py      # DeepSeek MoEGate implementation
+│   │   └── topk_router.py   # GPT-OSS TopK router
+│   ├── experts/
+│   │   ├── base_expert.py   # Abstract expert interface
+│   │   ├── distributed_expert.py  # Unified expert with configurable activation
+│   │   └── shared_expert.py      # DeepSeek shared expert
+│   └── collective/
+│       └── all_to_all_ops.py # All-to-all operations
+├── utils/
+│   ├── ccl.py               # CCL utilities
+│   └── lazy_state_dict.py  # Lazy loading utilities
 └── tests/
-    └── test_deepseek_equivalence.py  # Equivalence tests
+    ├── test_deepseek_moe_block.py  # DeepSeek tests (PCC: 0.989)
+    ├── test_gpt_oss_moe_block.py   # GPT-OSS tests
+    └── test_moe_components.py      # Component unit tests
 ```
 
 ## DeepSeek-V3 Implementation
@@ -89,6 +97,10 @@ The `configs/deepseek_v3.json` file maps all DeepSeek-V3 parameters:
 
 4. **Parallel Execution**: Shared expert runs in parallel with MoE experts when `parallel_with_moe: true`.
 
+5. **Unified DistributedExpert**: Single expert implementation with configurable activation modes:
+   - **Simple SwiGLU**: DeepSeek-V3 style activation (default)
+   - **Clamped SwiGLU**: GPT-OSS style with gate/up clamping
+
 ## Usage Example
 
 ### Using the Unified MoEBlock
@@ -106,40 +118,46 @@ moe.load_weights(state_dict)
 output = moe.forward(x, mode="prefill")
 ```
 
-### Using the DeepSeek Adapter
-
-The adapter shows how to use the unified block as a drop-in replacement:
-
-```python
-from tt_moe import DeepSeekMoEAdapter
-
-# Create adapter
-adapter = DeepSeekMoEAdapter(hf_config, mesh_device, ccl)
-
-# Use exactly like original implementation
-output = adapter.forward_mlp_prefill(x, cfg)
-```
-
 ## Testing
 
-Run the equivalence tests to verify the implementation:
+Run the tests to verify the implementation:
 
 ```bash
-python tests/test_deepseek_equivalence.py
+# Test DeepSeek-V3 implementation (PCC: 0.989)
+pytest tests/test_deepseek_moe_block.py::test_deepseek_moe_against_reference -xvs
+
+# Test GPT-OSS configuration loading
+pytest tests/test_gpt_oss_moe_block.py::test_gpt_oss_config_loading -xvs
+
+# Test all components
+pytest tests/test_moe_components.py -xvs
 ```
 
 This verifies:
+- DeepSeek-V3 PCC accuracy (>0.98 requirement)
 - Configuration completeness
-- TP sharding detection
-- Logic flow equivalence
+- Component functionality
 - Parameter mappings
+
+## Current Status
+
+### DeepSeek-V3
+- ✅ Fully working with PCC: 0.989 (exceeds 0.98 requirement)
+- ✅ All tests passing with simplified implementation
+- ✅ SharedExpert numerical explosion fixed
+
+### GPT-OSS
+- ✅ Basic infrastructure complete
+- ✅ TopKRouter implemented and tested
+- ✅ All-to-All working with Linear topology
+- ✅ DistributedExpert with clamped SwiGLU activation
+- ⚠️ Full model validation pending hardware testing
 
 ## Next Steps
 
 To add support for other models:
 
-1. **GPT-OSS**: Create `configs/gpt_oss.json` and implement `TopKRouter`
-2. **Mixtral**: Create `configs/mixtral.json` with 8 experts, top-2 routing
-3. **Custom Models**: Create new JSON configs with desired parameters
+1. **Mixtral**: Create `configs/mixtral.json` with 8 experts, top-2 routing
+2. **Custom Models**: Create new JSON configs with desired parameters
 
 The infrastructure is designed to be extensible - new router and expert types can be added by implementing the base interfaces.

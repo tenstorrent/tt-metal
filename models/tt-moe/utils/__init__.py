@@ -4,5 +4,6 @@
 """Utilities for tt-moe."""
 
 from .lazy_state_dict import LazyStateDict
+from . import ccl
 
-__all__ = ["LazyStateDict"]
+__all__ = ["LazyStateDict", "ccl"]

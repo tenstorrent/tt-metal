@@ -3,6 +3,6 @@
 
 """Collective operations components for MoE infrastructure."""
 
-from .all_to_all_ops import AllToAllDispatcher, AllToAllCombiner
+from .all_to_all_ops import AllToAllDispatcher, AllToAllCombiner, AllToAllConfig
 
-__all__ = ["AllToAllDispatcher", "AllToAllCombiner"]
+__all__ = ["AllToAllDispatcher", "AllToAllCombiner", "AllToAllConfig"]

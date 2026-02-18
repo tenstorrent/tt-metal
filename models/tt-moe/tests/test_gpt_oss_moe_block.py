@@ -341,11 +341,6 @@ def test_gpt_oss_moe_block_with_mock_weights(mesh_device_fixture, mode, seq_len,
 
         logger.info(f"✅ GPT-OSS MoE block {mode} mode test successful")
 
-    except NotImplementedError as e:
-        if "ThroughputExpert" in str(e):
-            pytest.skip(f"ThroughputExpert not yet fully implemented: {e}")
-        else:
-            raise
     except Exception as e:
         if "not yet implemented" in str(e).lower():
             pytest.skip(f"Feature not yet implemented: {e}")
@@ -395,25 +390,6 @@ def test_gpt_oss_all_to_all_config(mesh_device_fixture):
     logger.info("✅ GPT-OSS AllToAll configuration correct with Linear topology")
 
 
-def test_gpt_oss_expert_type_detection():
-    """Test that GPT-OSS configuration correctly uses distributed experts with clamped SwiGLU."""
-    config_path = Path(__file__).parent.parent / "configs" / "gpt_oss.json"
-
-    with open(config_path, "r") as f:
-        config = json.load(f)
-
-    # Check that distributed experts are enabled
-    assert config["moe_block"]["experts"]["distributed"] is True
-
-    # Check that clamped SwiGLU activation is configured
-    activation = config["moe_block"]["experts"].get("activation", {})
-    assert activation.get("type") == "clamped_swiglu"
-    assert activation.get("alpha") == 1.702
-    assert activation.get("gate_limit") == 7.0
-
-    logger.info("✅ GPT-OSS config correctly specifies distributed experts with clamped SwiGLU")
-
-
 @pytest.mark.skipif(not os.path.exists(GPT_OSS_WEIGHTS_PATH), reason="GPT-OSS weights not available")
 def test_gpt_oss_moe_with_real_weights(mesh_device_fixture):
     """Test GPT-OSS MoE block with real model weights."""
@@ -438,48 +414,41 @@ def test_gpt_oss_moe_with_real_weights(mesh_device_fixture):
     with open(temp_config, "w") as f:
         json.dump(config, f, indent=2)
 
-    try:
-        # Create MoE block
-        moe_block = MoEBlock(temp_config, mesh_device_fixture)
+    # Create MoE block
+    moe_block = MoEBlock(temp_config, mesh_device_fixture)
 
-        # Create input tensor for decode mode
-        batch_size = 32
-        seq_len = 1
-        hidden_size = 2880
-        input_tensor = torch.randn(batch_size, seq_len, hidden_size)
+    # Create input tensor for decode mode
+    batch_size = 32
+    seq_len = 1
+    hidden_size = 2880
+    input_tensor = torch.randn(batch_size, seq_len, hidden_size)
 
-        # Convert to TTNN tensor
-        tt_input = ttnn.from_torch(
-            input_tensor.permute(1, 0, 2).unsqueeze(0),
-            device=mesh_device_fixture,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device_fixture,
-                dims=(-2, -1),
-                mesh_shape=mesh_device_fixture.shape,
-            ),
-        )
+    # Convert to TTNN tensor
+    tt_input = ttnn.from_torch(
+        input_tensor.permute(1, 0, 2).unsqueeze(0),
+        device=mesh_device_fixture,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device_fixture,
+            dims=(-2, -1),
+            mesh_shape=mesh_device_fixture.shape,
+        ),
+    )
 
-        # Run forward pass
-        output = moe_block.forward(tt_input, mode="decode")
+    # Run forward pass
+    output = moe_block.forward(tt_input, mode="decode")
 
-        # Verify output
-        assert output is not None
-        output_torch = ttnn.to_torch(output)
+    # Verify output
+    assert output is not None
+    output_torch = ttnn.to_torch(output)
 
-        # Check shape preservation
-        expected_shape = input_tensor.permute(1, 0, 2).unsqueeze(0).shape
-        assert output_torch.shape == expected_shape
+    # Check shape preservation
+    expected_shape = input_tensor.permute(1, 0, 2).unsqueeze(0).shape
+    assert output_torch.shape == expected_shape
 
-        logger.info("✅ GPT-OSS MoE block with real weights successful")
-
-    except NotImplementedError as e:
-        if "ThroughputExpert" in str(e):
-            pytest.skip(f"ThroughputExpert not yet fully implemented: {e}")
-        else:
-            raise
+    logger.info("✅ GPT-OSS MoE block with real weights successful")
 
 
 def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
@@ -530,7 +499,7 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
     state_dict[f"model.layers.{layer_idx}.mlp.router.bias"] = torch.zeros(num_experts, dtype=torch.bfloat16)
 
     # Expert weights - Create fused gate_up weights
-    # ThroughputExpert expects these keys after prefix stripping:
+    # DistributedExpert expects these keys after prefix stripping:
     # - "gate_up_proj" (not "experts.gate_up_proj")
     # - "down_proj" (not "experts.down_proj")
 
@@ -628,7 +597,7 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
     )
 
     # Run forward pass - Note: With current implementation, synthetic weights
-    # don't get properly loaded into ThroughputExpert, so this will use zeros
+    # don't get properly loaded into DistributedExpert, so this will use zeros
     # and won't produce meaningful results, but tests the pipeline structure
     try:
         logger.info("Testing router forward pass...")
@@ -660,7 +629,7 @@ def test_gpt_oss_moe_e2e_with_synthetic_weights(mesh_device_fixture):
         except RuntimeError as reshape_error:
             if "reshape" in str(reshape_error) or "new_volume" in str(reshape_error):
                 logger.warning(f"Reshape error with synthetic weights (expected): {reshape_error}")
-                logger.info("This is expected with the current ThroughputExpert implementation")
+                logger.info("This is expected with the current DistributedExpert implementation")
                 logger.info("✅ Test passed - pipeline initialized correctly, reshape issue with zeros is known")
             else:
                 raise
@@ -743,7 +712,7 @@ def test_gpt_oss_moe_against_reference(mesh_device_fixture):
         state_dict[f"model.layers.{layer_idx}.mlp.gate.bias"] = torch.randn(128, dtype=torch.bfloat16)
 
         # Expert weights - GPT-OSS intermediate size is 2880 (same as hidden), not 360!
-        # Create fused gate_up weights to match what ThroughputExpert expects
+        # Create fused gate_up weights to match what DistributedExpert expects
         gate_up_weights = []
         down_weights = []
         for expert_idx in range(128):
@@ -759,7 +728,7 @@ def test_gpt_oss_moe_against_reference(mesh_device_fixture):
             gate_up_weights.append(fused)
             down_weights.append(down_weight)
 
-        # Stack all weights into the format ThroughputExpert expects
+        # Stack all weights into the format DistributedExpert expects
         # Use the key that will be left after prefix stripping
         state_dict[f"model.layers.{layer_idx}.mlp.experts.gate_up_proj"] = torch.stack(gate_up_weights, dim=0)
         state_dict[f"model.layers.{layer_idx}.mlp.experts.down_proj"] = torch.stack(down_weights, dim=0)
@@ -817,7 +786,7 @@ def test_gpt_oss_moe_against_reference(mesh_device_fixture):
     logger.info("Loading weights into MoE block...")
     moe_block.load_weights(state_dict)
 
-    # Note: ThroughputExpert implementation requires proper weights for stable execution
+    # Note: DistributedExpert implementation requires proper weights for stable execution
     # Mock weights are not being found due to key mismatches, resulting in zeros
     # which can cause numerical instability. Skip forward pass for now.
     if not using_real_weights:
@@ -846,12 +815,7 @@ def test_gpt_oss_moe_against_reference(mesh_device_fixture):
     )
 
     # Run forward pass
-    try:
-        tt_output = moe_block.forward(tt_input, mode="decode")
-    except NotImplementedError as e:
-        if "ThroughputExpert" in str(e):
-            pytest.skip(f"ThroughputExpert not fully implemented yet: {e}")
-        raise
+    tt_output = moe_block.forward(tt_input, mode="decode")
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(

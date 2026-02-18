@@ -5,8 +5,10 @@
 
 from .base_router import BaseRouter
 from .moe_gate import MoEGateRouter
+from .topk_router import TopKRouter
 
 __all__ = [
     "BaseRouter",
     "MoEGateRouter",
+    "TopKRouter",
 ]
