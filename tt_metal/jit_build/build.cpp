@@ -102,6 +102,26 @@ void JitBuildEnv::init(
     this->arch_ = arch;
     this->max_cbs_ = max_cbs;
 
+#ifndef GIT_COMMIT_HASH
+    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
+#else
+    std::string git_hash(GIT_COMMIT_HASH);
+
+    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
+    std::filesystem::path root_path(this->out_root_);
+    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            if (dir_entry.path().compare(git_hash_path) != 0) {
+                std::filesystem::remove_all(dir_entry.path());
+            }
+        });
+    } else {
+        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+    }
+
+    this->out_root_ = this->out_root_ + git_hash + "/";
+#endif
+
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
@@ -553,9 +573,9 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 }
 
 // Given this elf (A) and a later elf (B):
-// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
-// same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
-// strong so to propogate link addresses
+// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of
+// the same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to
+// remain strong so to propogate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
@@ -617,7 +637,8 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
             auto temp_obj = out_dir + this->temp_objs_[i];
             if (!fs::exists(temp_obj)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
-                // 1. There is no guarantee that another process will not rename its compiled object to this .o during
+                // 1. There is no guarantee that another process will not rename its compiled object to this .o
+                // during
                 //    our linking.
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
