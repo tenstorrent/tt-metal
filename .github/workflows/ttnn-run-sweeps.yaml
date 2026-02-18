@@ -729,7 +729,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam:5333267429815:role/github-actions-api-gateway-role
+          role-to-assume: arn:aws:iam::533267429815:role/github-actions-api-gateway-role
           aws-region: us-east-2
 
       - name: Print AWS Identity
