@@ -18,6 +18,7 @@ Responsibilities include:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -89,6 +90,28 @@ def download_reference_weights(config: WeightConversionConfig) -> ReferenceWeigh
         checkpoint_path=checkpoint_path,
         checkpoint_dir=checkpoint_dir,
     )
+
+
+def resolve_hf_token() -> Optional[str]:
+    """Resolve a Hugging Face token from common non-interactive env vars."""
+
+    for key in ("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN", "HUGGINGFACE_TOKEN"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
+def resolve_hf_cache_dir(explicit_cache_dir: Optional[Path]) -> Optional[Path]:
+    """Resolve HF cache dir honoring explicit config first, then env vars."""
+
+    if explicit_cache_dir is not None:
+        return explicit_cache_dir
+    for key in ("HF_HOME", "TRANSFORMERS_CACHE"):
+        value = os.environ.get(key)
+        if value:
+            return Path(value)
+    return None
 
 
 def convert_state_dict_to_tt(
@@ -260,12 +283,15 @@ def _download_checkpoint_from_hub(config: WeightConversionConfig) -> Path:
         )
 
     repo_id = config.pretrained_model_name
-    cache_dir = str(config.cache_dir) if config.cache_dir else None
+    cache_dir_path = resolve_hf_cache_dir(config.cache_dir)
+    cache_dir = str(cache_dir_path) if cache_dir_path is not None else None
+    token = resolve_hf_token()
 
     snapshot_path = Path(
         snapshot_download(
             repo_id=repo_id,
             cache_dir=cache_dir,
+            token=token,
             allow_patterns=["*.bin", "*.pt", "*.safetensors", "config.json"],
             local_dir=None,
             local_dir_use_symlinks=False,

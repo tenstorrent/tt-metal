@@ -21,10 +21,19 @@ def test_maskformer_swin_b_pcc(device, reset_seeds):
         MaskFormerTransformerDecoder,
         TransformerDecoderConfig,
     )
+    from models.experimental.maskformer_swin.tt.weights import resolve_hf_cache_dir, resolve_hf_token
     from tests.ttnn.utils_for_testing import assert_with_pcc
 
     model_id = "facebook/maskformer-swin-base-coco"
-    ref_model = MaskFormerForInstanceSegmentation.from_pretrained(model_id)
+    hf_kwargs = {}
+    token = resolve_hf_token()
+    if token:
+        hf_kwargs["token"] = token
+    cache_dir = resolve_hf_cache_dir(None)
+    if cache_dir is not None:
+        hf_kwargs["cache_dir"] = str(cache_dir)
+
+    ref_model = MaskFormerForInstanceSegmentation.from_pretrained(model_id, **hf_kwargs)
     ref_model.eval()
 
     # Use reference model's weights/config to avoid double downloads
@@ -62,6 +71,7 @@ def test_maskformer_swin_b_pcc(device, reset_seeds):
     heads = MaskFormerHeads(config=heads_cfg, device=device)
     heads.load_weights(state_dict)
 
+    torch.manual_seed(0)
     pixel_values = torch.randn(1, 3, 320, 320, dtype=torch.float32)
 
     with torch.no_grad():

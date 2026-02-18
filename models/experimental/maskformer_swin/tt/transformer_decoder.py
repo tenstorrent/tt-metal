@@ -88,13 +88,18 @@ class MaskFormerTransformerDecoder:
         # TTNN-prepared parameters per layer
         self._tt_params: Dict[str, Any] = {}
 
+        # Optional TT tensor caches for repeated shapes (amortize host precompute).
+        self._tt_query_cache: Dict[Tuple[int, str, str], Tuple[Any, Any]] = {}
+        self._tt_pos_cache: Dict[Tuple[int, int, int, str, str], Any] = {}
+
     def forward_tt(
         self,
         image_features: Any,
         *,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
-    ) -> Tuple["torch.Tensor", list, list]:
+        return_tt_tensor: bool = False,
+    ) -> Tuple[Any, list, list]:
         """Run a DETR-style decoder stack using TTNN ops."""
 
         _ = output_attentions  # attention tensors are not collected in this bring-up path
@@ -130,7 +135,7 @@ class MaskFormerTransformerDecoder:
         H = int(tt_in.shape[1])
         W = int(tt_in.shape[2])
 
-        tt_proj = ttnn.conv2d(
+        tt_proj, [_out_h, _out_w], [self._input_proj_w, self._input_proj_b] = ttnn.conv2d(
             input_tensor=tt_in,
             weight_tensor=self._input_proj_w,
             bias_tensor=self._input_proj_b,
@@ -146,41 +151,34 @@ class MaskFormerTransformerDecoder:
             groups=1,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         mem_seq = ttnn.reshape(tt_proj, (B, H * W, int(self.config.hidden_dim)))
         mem_seq = ttnn.to_layout(mem_seq, ttnn.TILE_LAYOUT)
-
-        # 2D sine positional embeddings for encoder tokens (torch -> TT)
-        pos_torch = self._build_sine_pos_embed(B, H, W, int(self.config.hidden_dim), dtype=torch.float32)
-        tt_mem_pos = ttnn.from_torch(
-            pos_torch,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
         # ------------------------------------------------------------------
         # 2) Queries (learned) + initial hidden state (zeros)
         # ------------------------------------------------------------------
         if self._queries_embed is None:
             raise RuntimeError("queries_embedder.weight missing (load_weights not called).")
-        q_embed = self._queries_embed.detach().contiguous()
-        q_embed = q_embed.unsqueeze(0).repeat(B, 1, 1).contiguous()  # [B, Q, C]
-        hidden = torch.zeros_like(q_embed)
 
         # Program/memory configs for attention + MLP
         num_heads = int(self.config.num_attention_heads)
         head_dim = int(self.config.hidden_dim // self.config.num_attention_heads)
         prog_cfg = build_decoder_program_configs(
-            seq_q=int(hidden.shape[1]),
+            seq_q=int(self._queries_embed.shape[0]),
             seq_k=int(mem_seq.shape[1]),
             hidden_dim=self.config.hidden_dim,
             num_heads=num_heads,
-            batch_size=int(hidden.shape[0]),
+            batch_size=B,
         )
         seq_memory_cfg = prog_cfg.sequence_memory or ttnn.DRAM_MEMORY_CONFIG
+
+        cache_disabled = os.environ.get("MASKFORMER_TT_DISABLE_DECODER_TT_CACHE", "0") == "1"
+        mem_key = self._memory_config_key(seq_memory_cfg)
+        dtype_key = str(dtype)
 
         def to_tt_sequence(x: "torch.Tensor"):
             return ttnn.from_torch(
@@ -191,10 +189,34 @@ class MaskFormerTransformerDecoder:
                 memory_config=seq_memory_cfg,
             )
 
-        tt_hidden = to_tt_sequence(hidden)
-        tt_qpos = to_tt_sequence(q_embed)
+        pos_cache_key = (B, H, W, mem_key, dtype_key)
+        if not cache_disabled and pos_cache_key in self._tt_pos_cache:
+            tt_mem_pos = self._tt_pos_cache[pos_cache_key]
+        else:
+            pos_torch = self._build_sine_pos_embed(B, H, W, int(self.config.hidden_dim), dtype=torch.float32)
+            tt_mem_pos = ttnn.from_torch(
+                pos_torch,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=seq_memory_cfg,
+            )
+            if not cache_disabled:
+                self._tt_pos_cache[pos_cache_key] = tt_mem_pos
+
+        query_cache_key = (B, mem_key, dtype_key)
+        if not cache_disabled and query_cache_key in self._tt_query_cache:
+            tt_hidden, tt_qpos = self._tt_query_cache[query_cache_key]
+        else:
+            q_embed = self._queries_embed.detach().contiguous()
+            q_embed = q_embed.unsqueeze(0).repeat(B, 1, 1).contiguous()  # [B, Q, C]
+            hidden = torch.zeros_like(q_embed)
+            tt_hidden = to_tt_sequence(hidden)
+            tt_qpos = to_tt_sequence(q_embed)
+            if not cache_disabled:
+                self._tt_query_cache[query_cache_key] = (tt_hidden, tt_qpos)
+
         tt_mem = ttnn.to_memory_config(mem_seq, seq_memory_cfg)
-        tt_mem_pos = ttnn.to_memory_config(tt_mem_pos, seq_memory_cfg)
 
         # ------------------------------------------------------------------
         # 3) Decoder stack
@@ -232,7 +254,8 @@ class MaskFormerTransformerDecoder:
                     return ttnn.linear(
                         tt_x,
                         w,
-                        b,
+                        bias=b,
+                        transpose_b=True,
                         activation=activation,
                         compute_kernel_config=compute_cfg,
                         dtype=dtype,
@@ -247,13 +270,12 @@ class MaskFormerTransformerDecoder:
                 act = activation.lower()
                 if act == "relu":
                     y = ttnn.relu(y)
-                elif act == "gelu" and hasattr(ttnn, "gelu"):
-                    try:
-                        y = ttnn.gelu(y)
-                    except Exception:
-                        y = ttnn.relu(y)
+                elif act == "gelu":
+                    if not hasattr(ttnn, "gelu"):
+                        raise RuntimeError("GELU activation requested but ttnn.gelu is unavailable.")
+                    y = ttnn.gelu(y)
                 else:
-                    y = ttnn.relu(y)
+                    raise RuntimeError(f"Unsupported activation in TT decoder: {activation}")
             return y
 
         def _project_qkv(tt_x, w, b):
@@ -266,7 +288,8 @@ class MaskFormerTransformerDecoder:
                 qkv = ttnn.linear(
                     tt_x,
                     w,
-                    b,
+                    bias=b,
+                    transpose_b=True,
                     compute_kernel_config=compute_cfg,
                     dtype=dtype,
                     **linear_kwargs,
@@ -319,9 +342,15 @@ class MaskFormerTransformerDecoder:
 
             # Self-attention: Q,K from (hidden + qpos), V from hidden
             qkv_in = ttnn.add(tt_hidden, tt_qpos)
-            use_sdpa = hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "scaled_dot_product_attention")
+            enable_sdpa = os.environ.get("MASKFORMER_TT_ENABLE_SDPA", "1") == "1"
+            enable_fused_qkv = os.environ.get("MASKFORMER_TT_ENABLE_FUSED_QKV", "1") == "1"
+            use_sdpa = (
+                enable_sdpa
+                and hasattr(ttnn, "transformer")
+                and hasattr(ttnn.transformer, "scaled_dot_product_attention")
+            )
             ctx = None
-            if use_sdpa and layer.get("self_qkv_w") is not None:
+            if use_sdpa and enable_fused_qkv and layer.get("self_qkv_w") is not None:
                 try:
                     q, k, v = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"))
                     if q is not None and k is not None and v is not None:
@@ -387,6 +416,8 @@ class MaskFormerTransformerDecoder:
 
         # Final LayerNorm
         tt_hidden = ttnn.layer_norm(tt_hidden, weight=self._final_ln_w, bias=self._final_ln_b, epsilon=1e-5)
+        if return_tt_tensor:
+            return tt_hidden, hidden_list, attn_list
         last_hidden = self._tt_to_torch(tt_hidden)
         return last_hidden, hidden_list, attn_list
 
@@ -398,7 +429,10 @@ class MaskFormerTransformerDecoder:
 
         state = extract_transformer_state(weights)
         dtype = self.dtype or DEFAULT_TT_DTYPE
-        mem_cfg = ttnn.L1_MEMORY_CONFIG
+        # Keep persistent decoder parameters in DRAM; reserve L1 for activation/work buffers.
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        self._tt_query_cache.clear()
+        self._tt_pos_cache.clear()
 
         # Input projection conv1x1
         w = state["input_projection.weight"]
@@ -560,7 +594,7 @@ class MaskFormerTransformerDecoder:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         bt = None
         if b is not None:
@@ -569,9 +603,9 @@ class MaskFormerTransformerDecoder:
                 dtype=dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT)
+            bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return wt, bt
 
     def _to_tt_norm(self, w: "torch.Tensor", b: "torch.Tensor"):
@@ -581,17 +615,17 @@ class MaskFormerTransformerDecoder:
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         bt = ttnn.from_torch(
             b.detach().contiguous().view(1, 1, -1),
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wt = ttnn.to_layout(wt, ttnn.TILE_LAYOUT)
-        bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT)
+        wt = ttnn.to_layout(wt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return wt, bt
 
     def _tt_to_torch(self, tensor: Any) -> "torch.Tensor":
@@ -600,6 +634,15 @@ class MaskFormerTransformerDecoder:
         if hasattr(tensor, "to_torch"):
             return tensor.to_torch()
         raise TypeError("Unsupported TTNN tensor conversion to torch.")
+
+    @staticmethod
+    def _memory_config_key(memory_config: Any) -> str:
+        if ttnn is not None:
+            if memory_config is getattr(ttnn, "L1_MEMORY_CONFIG", None):
+                return "l1"
+            if memory_config is getattr(ttnn, "DRAM_MEMORY_CONFIG", None):
+                return "dram"
+        return str(memory_config)
 
     def _make_compute_kernel_config(self):
         if ttnn is None:

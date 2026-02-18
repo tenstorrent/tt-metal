@@ -166,7 +166,8 @@ class MaskFormerHeads:
                         return ttnn.linear(
                             x,
                             w,
-                            b,
+                            bias=b,
+                            transpose_b=True,
                             activation=activation,
                             compute_kernel_config=matmul_cfg,
                             dtype=self.dtype or DEFAULT_TT_DTYPE,
@@ -246,12 +247,13 @@ class MaskFormerHeads:
         if self.device is not None and ttnn is not None:
 
             def _to_tt_linear(w: torch.Tensor, b: Optional[torch.Tensor]):
+                param_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
                 wt = ttnn.from_torch(
                     w.detach().contiguous(),
                     dtype=self.dtype or DEFAULT_TT_DTYPE,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=param_mem_cfg,
                 )
                 bt = None
                 if b is not None:
@@ -261,9 +263,9 @@ class MaskFormerHeads:
                         dtype=self.dtype or DEFAULT_TT_DTYPE,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                         device=self.device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        memory_config=param_mem_cfg,
                     )
-                    bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT)
+                    bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT, memory_config=param_mem_cfg)
                 return wt, bt
 
             # Class predictor
