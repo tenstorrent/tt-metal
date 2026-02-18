@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # DINO-5scale Swin-L 36e COCO — full config (as shared; test scale 1333x800)
 auto_scale_lr = dict(base_batch_size=16)
 backend_args = None
