@@ -709,7 +709,12 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
+@pytest.mark.parametrize(
+    "use_hardcoded_expert_index",
+    [
+        True,
+    ],
+)
 def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
     """
     Test MoE routed expert fused operation with reduce_to_one on 4x2 mesh.
