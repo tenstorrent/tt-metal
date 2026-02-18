@@ -2,15 +2,34 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import pytest
 from loguru import logger
 from pathlib import Path
 
+from tracy.process_model_log import run_device_profiler
 from models.perf.device_perf_utils import prep_device_perf_report, run_device_perf
+import models.perf.device_perf_utils
+
+
+def _run_device_profiler_op_support_count(*args, **kwargs):
+    # MaskFormer Swin-B generates a large number of ops; increase op support count to avoid truncated logs.
+    kwargs.setdefault("op_support_count", 20000)
+    return run_device_profiler(*args, **kwargs)
+
+
+models.perf.device_perf_utils.run_device_profiler = _run_device_profiler_op_support_count
 
 
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_maskformer_swin_b():
+    os.environ.setdefault("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT", "20000")
+    os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
+    # Ensure the profiler subprocess uses the repo build of TTNN (must be Tracy-enabled).
+    repo_root = Path(__file__).resolve().parents[5]
+    ttnn_py_path = str(repo_root / "ttnn")
+    os.environ["PYTHONPATH"] = ttnn_py_path + (":" + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
+
     batch_size = 1
     subdir = "maskformer_swin_base_coco"
     num_iterations = 1
@@ -22,7 +41,7 @@ def test_perf_device_bare_metal_maskformer_swin_b():
     demo_outputs = artifact_root / "demo_outputs"
 
     command = (
-        "python -m models.experimental.maskformer_swin.demo.runner "
+        "models.experimental.maskformer_swin.demo.runner "
         "--image models/sample_data/demo.jpeg "
         "--weights facebook/maskformer-swin-base-coco "
         "--height 320 --width 320 "
