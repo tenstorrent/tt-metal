@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_metadata_tensor, get_output_tensor
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U.py import (
     create_torch_w0,
     create_torch_w1,
@@ -293,17 +294,45 @@ def gen_torch_compute_matmul_weight_tensors(ring2cores, num_layers, experts_per_
     return torch_w0_w1_reordered, torch_w2_reordered
 
 
-def gen_dispatch_reference():
-    # TODO: (GR)
+def gen_dispatch_reference(
+    torch_expert_mapping,
+    torch_dispatch_input_tensor,
+    torch_dispatch_input_expert_indices,
+    mesh_shape,
+    devices,
+    experts,
+    seq,
+    tokens_dtype,
+):
+    # get_output_tensor and get_metadata_tensor expect old expert mapping version
+    torch_old_expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch_expert_mapping.dtype)
+    for e in range(experts):
+        device_id = torch_expert_mapping[0, e].item()
+        torch_old_expert_mapping[0, 0, e, device_id] = 1
 
-    # compute output generation needs expert_mapping (same for dispatch and compute), expert_indices (compute input / dispatch output), sparse_buffer (compute input / dispatch output), no expert_scores
-    torch_expert_mapping = ()
-    torch_dispatch_output_sparse_buffer = ()
-    torch_dispatch_output_expert_indices = ()
-    return (torch_expert_mapping, torch_dispatch_output_sparse_buffer, torch_dispatch_output_expert_indices)
+    torch_dispatch_output_sparse_buffer = get_output_tensor(
+        torch_dispatch_input_tensor,
+        torch_dispatch_input_expert_indices,
+        torch_old_expert_mapping,
+        seq,
+        mesh_shape,
+        tt_to_torch_dtype(tokens_dtype),
+    )
+    torch_dispatch_output_expert_indices = get_metadata_tensor(
+        torch_dispatch_input_expert_indices, torch_old_expert_mapping, mesh_shape
+    )
+
+    return (torch_dispatch_output_sparse_buffer, torch_dispatch_output_expert_indices)
 
 
-def gen_compute_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
+def gen_compute_reference(
+    torch_expert_mapping,
+    torch_dispatch_output_sparse_buffer,
+    torch_dispatch_output_expert_indices,
+    torch_w0,
+    torch_w1,
+    torch_w2,
+):
     # TODO: (GR) tilized output, which needs to use metadata and tokens from dispatch
     torch_input_ref = ()
 
@@ -412,13 +441,23 @@ def gen_combine_reference(
     return output_ref_tensor, output_data_map
 
 
-def gen_output_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
+def gen_output_reference(
+    torch_expert_mapping, torch_dispatch_input_tensor, torch_dispatch_input_expert_indices, torch_w0, torch_w1, torch_w2
+):
     # dispatch
     (
-        torch_expert_mapping,
         torch_dispatch_output_sparse_buffer,
         torch_dispatch_output_expert_indices,
-    ) = gen_dispatch_reference()
+    ) = gen_dispatch_reference(
+        torch_expert_mapping,
+        torch_dispatch_input_tensor,
+        torch_dispatch_input_expert_indices,
+        mesh_shape,
+        devices,
+        experts,
+        seq,
+        tokens_dtype=ttnn.bfloat16,
+    )
 
     # compute
     # don't need e_t tensor for combine reference generation
@@ -427,7 +466,7 @@ def gen_output_reference(devices, num_layers, experts, total_tokens, hidden_size
         torch_compute_output_dense_expert_activation,
         torch_compute_output,
     ) = gen_compute_reference(
-        torch_expert_mapping,  # global, reference generated in dispatch reference generation
+        torch_expert_mapping,  # global
         torch_dispatch_output_sparse_buffer,  # from dispatch
         torch_dispatch_output_expert_indices,  # from dispatch
         torch_w0,  # global
@@ -760,7 +799,9 @@ def test_optimized_moe_decode_block(
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
 
         # TODO: (GR)
-        output_reference_tensor, output_reference_data_map = gen_output_reference()
+        output_reference_tensor, output_reference_data_map = gen_output_reference(
+            torch_expert_mapping, torch_dispatch_input_tensor, torch_dispatch_input_expert_indices_tensor
+        )
         output_reference_tensors.append(output_reference_tensor)
         output_data_maps.append(output_reference_data_map)
 
