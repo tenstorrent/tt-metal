@@ -58,18 +58,27 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
 
     tensor_size_datums = tensor_size_bytes // 4
 
-    device_coord = ttnn.MeshCoordinate(0, 0)
+    start_device_coord = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_1 = ttnn.MeshCoordinate(0, 1)
+    intermed_device_coord_2 = ttnn.MeshCoordinate(0, 2)
+    end_device_coord = ttnn.MeshCoordinate(0, 3)
     core_coord = ttnn.CoreCoord(0, 0)
-    socket_core = ttnn.MeshCoreCoord(device_coord, core_coord)
 
-    fwd_core_coord_0 = ttnn.CoreCoord(1, 1)
-    fwd_core_coord_1 = ttnn.CoreCoord(2, 2)
-    fwd_core_0 = ttnn.MeshCoreCoord(device_coord, fwd_core_coord_0)
-    fwd_core_1 = ttnn.MeshCoreCoord(device_coord, fwd_core_coord_1)
+    h2d_core = ttnn.MeshCoreCoord(start_device_coord, core_coord)
+    fwd_core_0 = ttnn.MeshCoreCoord(intermed_device_coord_1, core_coord)
+    fwd_core_1 = ttnn.MeshCoreCoord(intermed_device_coord_2, core_coord)
+    d2h_core = ttnn.MeshCoreCoord(end_device_coord, core_coord)
 
+    print("Mesh Device Shape: ", mesh_device.shape)
     logger.info("Creating and Running Host Interface")
-    h2d_socket = ttnn.H2DSocket(mesh_device, socket_core, ttnn.BufferType.L1, fifo_size, h2d_mode)
-    d2h_socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size)
+
+    print("H2D Device ID: ", mesh_device.get_device_id(start_device_coord))
+    print("FWD Device ID: ", mesh_device.get_device_id(intermed_device_coord_1))
+    print("FWD Device ID: ", mesh_device.get_device_id(intermed_device_coord_2))
+    print("D2H Device ID: ", mesh_device.get_device_id(end_device_coord))
+
+    h2d_socket = ttnn.H2DSocket(mesh_device, h2d_core, ttnn.BufferType.L1, fifo_size, h2d_mode)
+    d2h_socket = ttnn.D2HSocket(mesh_device, d2h_core, fifo_size)
     host_io = HostInterface(
         h2d_socket,
         d2h_socket,
@@ -113,6 +122,7 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
         assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
 
     host_io.terminate()
+    socket_interface.terminate()
 
 
 @pytest.mark.parametrize(

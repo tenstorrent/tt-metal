@@ -16,6 +16,7 @@ constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_fabric_packets = get_compile_time_arg_val(4);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(5);
 constexpr uint32_t partial_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(7);
 
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
@@ -29,12 +30,37 @@ FORCE_INLINE bool socket_wait_for_pages_with_termination(
     return true;
 }
 
+FORCE_INLINE void write_data_to_remote_core_with_ack(
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
+    uint32_t l1_read_addr,
+    uint64_t dst_addr,
+    uint64_t downstream_bytes_sent_noc_addr,
+    uint32_t packet_size) {
+    packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size}, packet_size);
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 void kernel_main() {
+    // Build Fabric Connections
+    size_t rt_args_idx = 0;
+    tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(receiver_socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+
+    DPRINT << "Starting d2d exchange kernel" << ENDL();
+
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -46,13 +72,24 @@ void kernel_main() {
     uint64_t downstream_data_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
 
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_data_packet_header_addr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
+
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
-    DPRINT << "Whole Packet Size: " << whole_packet_size << ENDL();
-    DPRINT << "Partial Packet Size: " << partial_packet_size << ENDL();
-    DPRINT << "Num Whole Fabric Packets: " << num_whole_fabric_packets << ENDL();
-    DPRINT << "Page Size: " << page_size << ENDL();
+
+    // Open Fabric Connections
+    upstream_fabric_connection.open();
+    downstream_fabric_connection.open();
+
+    fabric_set_unicast_route(downstream_data_packet_header_addr, downstream_enc);
+    fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
+
     while (true) {
+        DPRINT << "Waiting for pages in D2D socket" << ENDL();
         socket_reserve_pages(sender_socket, 1);
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
@@ -62,20 +99,42 @@ void kernel_main() {
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
         for (uint32_t i = 0; i < num_whole_fabric_packets; ++i) {
-            noc_async_write(l1_read_addr, dst_addr, whole_packet_size);
+            write_data_to_remote_core_with_ack(
+                downstream_fabric_connection,
+                downstream_data_packet_header_addr,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                whole_packet_size);
             l1_read_addr += whole_packet_size;
             dst_addr += whole_packet_size;
         }
 
         if constexpr (partial_packet_size > 0) {
-            noc_async_write(l1_read_addr, dst_addr, partial_packet_size);
+            DPRINT << "D2D Write to core and fabric node: " << downstream_enc.d2d.downstream_noc_x << ","
+                   << downstream_enc.d2d.downstream_noc_y << "," << downstream_enc.d2d.downstream_chip_id << ","
+                   << downstream_enc.d2d.downstream_mesh_id << ENDL();
+            write_data_to_remote_core_with_ack(
+                downstream_fabric_connection,
+                downstream_data_packet_header_addr,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                partial_packet_size);
         }
 
         socket_push_pages(sender_socket, 1);
         socket_pop_pages(receiver_socket, 1);
 
-        socket_notify_receiver(sender_socket);
-        noc_async_writes_flushed();
-        socket_notify_sender(receiver_socket);
+        fabric_socket_notify_sender_stateful(
+            receiver_socket,
+            upstream_fabric_connection,
+            upstream_socket_packet_header_addr,
+            upstream_bytes_acked_noc_addr);
     }
+
+    update_socket_config(sender_socket);
+    update_socket_config(receiver_socket);
+    upstream_fabric_connection.close();
+    downstream_fabric_connection.close();
 }

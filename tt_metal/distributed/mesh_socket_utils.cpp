@@ -345,6 +345,8 @@ void write_socket_configs(
                     MeshCoordinate recv_device_coord = connection.receiver_core.device_coord;
                     auto recv_virtual_core =
                         mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
+                    std::cout << "Recv Virtual Core: " << recv_virtual_core.x << "," << recv_virtual_core.y
+                              << std::endl;
                     tt_fabric::FabricNodeId recv_fabric_node_id =
                         get_fabric_node_from_coord(recv_device_coord, peer_device, config.receiver_mesh_id.value());
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);

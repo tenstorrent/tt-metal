@@ -39,6 +39,12 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr bool loopback_mode = get_compile_time_arg_val(3);
     constexpr uint32_t upstream_interface_index = get_compile_time_arg_val(4);
+    constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(5);
+
+    size_t rt_args_idx = 0;
+
+    tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(send_socket_config_addr);
     SocketReceiverInterface receiver_socket = {};
@@ -49,13 +55,25 @@ void kernel_main() {
     }
     set_sender_socket_page_size(sender_socket, page_size);
 
+    uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
+        receiver_socket.d2d.upstream_noc_x,
+        receiver_socket.d2d.upstream_noc_y,
+        receiver_socket.d2d.upstream_bytes_acked_addr);
+
     uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
     uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_socket_packet_header_addr =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
+    upstream_fabric_connection.open();
+
+    fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
+
     while (true) {
         // Wait for space in D2H socket
         socket_reserve_pages(sender_socket, 1);
@@ -89,7 +107,12 @@ void kernel_main() {
                 page_size);
             socket_pop_pages(receiver_socket, 1);
             noc_async_writes_flushed();
-            socket_notify_sender(receiver_socket);
+
+            fabric_socket_notify_sender_stateful(
+                receiver_socket,
+                upstream_fabric_connection,
+                upstream_socket_packet_header_addr,
+                upstream_bytes_acked_noc_addr);
         }
 
         socket_push_pages(sender_socket, 1);
