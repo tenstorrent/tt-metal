@@ -61,9 +61,13 @@ jobs:
           persist-credentials: true
 
       - name: Configure Git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Reconfigure origin remote to use explicit token authentication
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
 
       - name: Add fork remote and fetch branch
         run: |
@@ -97,6 +101,7 @@ jobs:
       - name: Push branch to origin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_HTTP_TIMEOUT: 30
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "=== Push Information ==="
@@ -118,44 +123,29 @@ jobs:
           git diff --name-only origin/main...HEAD | grep ".github/workflows" || echo "No workflow files changed"
 
           echo ""
-          echo "=== Using GitHub API to push (bypasses workflow validation timeout) ==="
+          echo "=== Attempting git push (with configured credentials) ==="
 
-          # Try to create the branch first (for new branches)
-          echo "Attempting to create ref..."
-          CREATE_RESULT=$(curl -s -o /tmp/create_response.json -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
-            -d "{\"ref\":\"refs/heads/$TARGET_BRANCH\",\"sha\":\"$COMMIT_SHA\"}")
+          # Try pushing with a timeout - if it times out due to workflow validation,
+          # the branch may still be created/updated on GitHub's side
+          if timeout 60 git push origin "$TARGET_BRANCH" --force 2>&1; then
+            echo "✓ Push completed successfully"
+          else
+            EXIT_CODE=$?
+            echo "Push command exited with code: $EXIT_CODE"
 
-          if [ "$CREATE_RESULT" = "201" ]; then
-            echo "✓ Branch created successfully"
-            cat /tmp/create_response.json
-          elif [ "$CREATE_RESULT" = "422" ]; then
-            echo "Branch already exists, updating..."
-            # Update existing branch
-            UPDATE_RESULT=$(curl -s -o /tmp/update_response.json -w "%{http_code}" \
-              -X PATCH \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/$TARGET_BRANCH" \
-              -d "{\"sha\":\"$COMMIT_SHA\",\"force\":true}")
+            # Check if the branch was actually updated on GitHub despite the timeout
+            echo "Verifying if branch was updated on GitHub..."
+            sleep 5
+            REMOTE_SHA=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+            echo "Remote SHA: $REMOTE_SHA"
+            echo "Local SHA:  $COMMIT_SHA"
 
-            if [ "$UPDATE_RESULT" = "200" ]; then
-              echo "✓ Branch updated successfully"
-              cat /tmp/update_response.json
+            if [ "$REMOTE_SHA" = "$COMMIT_SHA" ]; then
+              echo "✓ Branch was successfully updated on GitHub (despite timeout/error)"
             else
-              echo "✗ Failed to update branch (HTTP $UPDATE_RESULT)"
-              cat /tmp/update_response.json
+              echo "✗ Failed to push branch"
               exit 1
             fi
-          else
-            echo "✗ Failed to create branch (HTTP $CREATE_RESULT)"
-            cat /tmp/create_response.json
-            exit 1
           fi
 
       - name: Find PR
