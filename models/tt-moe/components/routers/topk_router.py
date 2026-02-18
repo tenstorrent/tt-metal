@@ -173,9 +173,7 @@ class TopKRouter(BaseRouter):
             batch_seq_len = input_shape[0] * input_shape[1]
             # Reshape to [1, 1, batch*seq, hidden_dim] for linear projection
             hidden_states = ttnn.reshape(hidden_states, (1, 1, batch_seq_len, self.hidden_size))
-        else:
-            # Already in correct shape
-            batch_seq_len = input_shape[0]
+        # else: Already in correct shape
 
         # Linear projection to get router logits
         # Memory config based on decode mode (like GPT-OSS)
@@ -226,7 +224,6 @@ class TopKRouter(BaseRouter):
         # Clean up if we did typecast
         if typecast_needed:
             ttnn.deallocate(logits)
-            logits = logits_orig
 
         # Convert indices to uint16 (required for all-to-all dispatch)
         expert_indices = ttnn.typecast(expert_indices, dtype=ttnn.uint16)

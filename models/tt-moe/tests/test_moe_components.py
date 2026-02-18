@@ -549,8 +549,6 @@ def test_06_distributed_expert_with_reference_comparison(mesh_device):
 
     # Get memory config from JSON (default to L1 for distributed experts)
     # In the simplified config, distributed is just a boolean, not a dict with config details
-    memory_config_str = "L1_MEMORY_CONFIG"  # Default for DeepSeek distributed experts
-    initial_memory_config = getattr(ttnn, memory_config_str)
 
     # Create TTNN input (repeat for each expert on device)
     tt_input = ttnn.from_torch(
@@ -930,16 +928,6 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     assert mean_diff < 0.05, f"Mean difference {mean_diff} exceeds tolerance for bfloat16"
 
     logger.info("✅ GPT-OSS clamped SwiGLU activation test passed!")
-
-    # Create GPT-OSS config
-    config = {
-        "num_experts": 128,
-        "hidden_size": 2880,
-        "intermediate_size": 2880,  # FIXED: GPT-OSS has same intermediate as hidden!
-        "swiglu_alpha": 1.702,
-        "swiglu_limit": 7.0,
-        "sparsity_block_size": 32,
-    }
 
     # Create test input (batch=1, seq=32, hidden=2880)
     batch_size = 1

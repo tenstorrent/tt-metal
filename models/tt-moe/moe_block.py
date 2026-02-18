@@ -510,8 +510,6 @@ class MoEBlock:
         seq_len = 1  # For compatibility
         hidden_size = x.shape[-1]
 
-        # Check batch mode
-        use_replicated_batch = self.config.get("replicated_batch_mode", False)
         # Reshape inputs
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
