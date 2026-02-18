@@ -1,25 +1,35 @@
-# E09: Sharding
+# E07: Sharding
 
-Understand sharded vs interleaved memory layouts for multi-core operations.
+Understand sharded vs interleaved memory layouts.
 
 ## Goal
 
-Compare sharded and interleaved tensor memory layouts and their impact on multi-core performance.
-
-## Key Concepts
-
-- Interleaved: Tensor pages distributed round-robin across banks
-- Sharded: Tensor partitions stored locally in each core's L1
-- Height sharding, width sharding, block sharding
-- Trade-offs between data locality and flexibility
+Learn sharded memory layouts and when to use them:
+- Understand height, width, and block sharding
+- Compare sharded vs interleaved memory
+- Optimize data locality for multi-core operations
 
 ## Reference
 
-- `tt_metal/programming_examples/shard_data_rm/` - Sharding example
+- `tt_metal/programming_examples/shard_data_rm/`
 
-## Workflow
+## Key Concepts
 
-1. Implement the multi-core kernel with sharded inputs
-2. Compare against interleaved version
-3. Profile with Tracy
-4. Document when to use each approach
+### Sharding Types
+- **Height sharding**: Rows distributed across cores
+- **Width sharding**: Columns distributed across cores
+- **Block sharding**: 2D blocks across core grid
+
+### Interleaved vs Sharded
+- **Interleaved**: Pages round-robin across DRAM banks, any core can access
+- **Sharded**: Data in local L1, no remote reads needed
+
+### Memory Config
+- Use `ttnn.ShardSpec` to define shard shape and orientation
+- Use `ttnn.MemoryConfig` with appropriate `TensorMemoryLayout`
+
+## Common Pitfalls
+
+1. **Shard size mismatch** - Dimensions must evenly divide
+2. **L1 overflow** - Shards must fit in core's L1
+3. **Wrong sharding type** - Choose based on access pattern

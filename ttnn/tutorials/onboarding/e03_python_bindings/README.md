@@ -9,42 +9,37 @@ Learn the operation registration and Python binding pattern:
 - Register with `ttnn::register_operation`
 - Bind to Python with nanobind
 
-## Prerequisites
+## Reference
 
-Study:
 - `ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp`
 - `ttnn/cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp`
 
-## Structure
+## Key Concepts
 
-```
-e03_python_bindings/
-├── exercise.py              # Calls your operation
-├── solution.py              # Reference
-├── reference.py             # PyTorch reference
-├── test.py                  # Pytest
-├── exercise_cpp/            # Your implementation (stubs)
-│   ├── eltwise_add.hpp      # Operation struct
-│   ├── eltwise_add.cpp      # invoke() calls ttnn::add
-│   └── eltwise_add_nanobind.cpp
-└── solution_cpp/            # Complete implementation
-```
+### Operation Registration
+- Define a struct with a static `invoke()` method
+- Register using `ttnn::register_operation<"name", Struct>()`
+- Operation becomes callable from C++ and Python
 
-## Exercise
+### Python Bindings with Nanobind
+- Use `ttnn::bind_registered_operation` to expose to Python
+- Specify argument names with `nb::arg()`
+- Add docstring for documentation
 
-1. Implement `eltwise_add.hpp` - define struct with `invoke()`
-2. Implement `eltwise_add.cpp` - call `ttnn::add(a, b)`
-3. Implement `eltwise_add_nanobind.cpp` - bind to Python
+### Compile-time vs Runtime Arguments
+- **Compile-time**: Known when kernel is compiled (dimensions, types)
+- **Runtime**: Can change between invocations (buffer addresses)
+
+## Common Pitfalls
+
+1. **Forgetting to register** - Operation must be registered to be callable
+2. **Nanobind arg mismatch** - Args in binding must match invoke() signature
+3. **Module naming** - Module name must match CMake target name
 
 ## Build & Test
 
-From project root (`tt-metal/`):
-
 ```bash
-# Build onboarding module (after tt-metal is built)
 cmake --build build -- onboarding
-
-# Run tests
-ttnn/tutorials/onboarding/run.sh "e03 and solution"   # Should pass
-ttnn/tutorials/onboarding/run.sh "e03 and exercise"   # Your implementation
+ttnn/tutorials/onboarding/run.sh "e03 and solution"
+ttnn/tutorials/onboarding/run.sh "e03 and exercise"
 ```

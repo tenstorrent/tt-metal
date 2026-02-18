@@ -42,17 +42,41 @@ cmake --build build -- onboarding-clean
 
 ## Curriculum
 
+### Fundamentals (e01-e04)
+
 | # | Name | Goal |
 |---|------|------|
 | [e01](e01_build_run/) | build_run | Build tt-metal, verify setup |
-| [e02](e02_ttnn_basics/) | ttnn_basics | Get familiar with ttnn API |
+| [e02](e02_ttnn_basics/) | ttnn_basics | Get familiar with ttnn API, pytest |
 | [e03](e03_python_bindings/) | python_bindings | Operation registration + Python bindings |
 | [e04](e04_matmul_add/) | matmul_add | Write custom kernels (core exercise) |
-| [e05](e05_profiling/) | profiling | Debug with DPRINT + Tracy profiling |
-| [e06](e06_tile_layout/) | tile_layout | Data formats and tilization |
-| [e07](e07_l1_vs_dram/) | l1_vs_dram | Memory hierarchy and placement |
-| [e08](e08_multi_core/) | multi_core | Work splitting, multicast, semaphores |
-| [e09](e09_sharding/) | sharding | Sharded memory layouts |
-| [e10](e10_multi_chip/) | multi_chip | Multi-device programming |
-| [e11](e11_kernel_fusion/) | kernel_fusion | Fuse communication into compute |
-| [e12](e12_pipelining/) | pipelining | Double buffering, latency hiding |
+
+### Debugging & Profiling (e05-e06)
+
+| # | Name | Goal |
+|---|------|------|
+| [e05](e05_debugging/) | debugging | Debug kernels with DPRINT and tt-triage |
+| [e06](e06_profiling/) | profiling | Calculate theoretical peak, measure with Tracy |
+
+### Memory & Data Layout (e07-e09)
+
+| # | Name | Goal |
+|---|------|------|
+| [e07](e07_l1_vs_dram/) | l1_vs_dram | Memory hierarchy |
+| [e08](e08_tile_layout/) | tile_layout | Tiled vs row major |
+| [e09](e09_sharding/) | sharding | Sharded memory layout |
+
+### Scaling (e10-e11)
+
+| # | Name | Goal |
+|---|------|------|
+| [e10](e10_multi_core/) | multi_core | Work splitting, multicast, semaphores |
+| [e11](e11_multi_chip/) | multi_chip | Multi-device programming |
+
+### Advanced Optimization (e12-e14)
+
+| # | Name | Goal |
+|---|------|------|
+| [e12](e12_matmul/) | matmul | Deep dive into matmul variants |
+| [e13](e13_kernel_fusion/) | kernel_fusion | Fuse CCLs into matmul |
+| [e14](e14_pipelining/) | pipelining | Double buffering |
