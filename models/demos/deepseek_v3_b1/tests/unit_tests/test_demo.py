@@ -149,12 +149,7 @@ class _LoopbackTokenizer:
 @pytest.mark.timeout(3600)
 def test_demo_decode_stress_64k_tokens(mesh_device) -> None:
     from models.common.utility_functions import is_slow_dispatch
-    from models.demos.deepseek_v3_b1.demo.cli import (
-        create_deepseek_v3,
-        extract_token_id_from_output,
-        make_padded_input_tensor,
-    )
-    from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, page_size_bytes
+    from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 
     if not is_slow_dispatch():
         pytest.skip("Skipping stress test in fast dispatch mode")
@@ -162,20 +157,16 @@ def test_demo_decode_stress_64k_tokens(mesh_device) -> None:
     max_new_tokens = 65536
     batch_size = 1
     tokenizer = _LoopbackTokenizer()
-    page_size_datums = page_size_bytes(batch_size) // TOKEN_ID_BYTES
-    model = create_deepseek_v3(mesh_device=mesh_device, batch_size=batch_size, loopback_mode=True)
+    token_codec = TokenCodec(batch_size=batch_size)
+    model = create_model(mesh_device=mesh_device, batch_size=batch_size, loopback_mode=True)
 
     result = run_generation(
         model=model,
         tokenizer=tokenizer,
         prompt="",
         max_new_tokens=max_new_tokens,
-        make_input_tensor=lambda token_id: make_padded_input_tensor(
-            token_id,
-            batch_size=batch_size,
-            page_size_datums=page_size_datums,
-        ),
-        extract_token_id=extract_token_id_from_output,
+        make_input_tensor=token_codec.make_input,
+        extract_token_id=token_codec.extract_token_id,
         write_text=lambda _: None,
     )
 

@@ -8,13 +8,12 @@ import argparse
 import sys
 from typing import TextIO
 
-import torch
 from transformers import AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runner import GenerationResult, run_generation
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
+from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
 
@@ -44,48 +43,6 @@ def load_tokenizer(tokenizer_name_or_path: str):
     return AutoTokenizer.from_pretrained(tokenizer_name_or_path, trust_remote_code=True)
 
 
-def create_deepseek_v3(
-    mesh_device: ttnn.MeshDevice,
-    *,
-    batch_size: int = 1,
-    loopback_mode: bool = True,
-) -> DeepSeekV3:
-    fifo_size = page_size_bytes(batch_size)
-    socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
-    h2d_socket_prefill = ttnn.H2DSocket(
-        mesh_device,
-        socket_core,
-        ttnn.BufferType.L1,
-        fifo_size,
-        ttnn.H2DMode.DEVICE_PULL,
-    )
-    h2d_socket_decode = ttnn.H2DSocket(
-        mesh_device,
-        socket_core,
-        ttnn.BufferType.L1,
-        fifo_size,
-        ttnn.H2DMode.HOST_PUSH,
-    )
-    d2h_socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size)
-    return DeepSeekV3(
-        h2d_socket_prefill=h2d_socket_prefill,
-        h2d_socket_decode=h2d_socket_decode,
-        d2h_socket=d2h_socket,
-        batch_size=batch_size,
-        loopback_mode=loopback_mode,
-    )
-
-
-def make_padded_input_tensor(token_id: int, *, batch_size: int, page_size_datums: int) -> ttnn.Tensor:
-    torch_token = torch.full((batch_size, 1), int(token_id), dtype=torch.int32)
-    return to_padded_input(torch_token, batch_size=batch_size, page_size_datums=page_size_datums)
-
-
-def extract_token_id_from_output(output_tensor: ttnn.Tensor) -> int:
-    torch_output = ttnn.to_torch(output_tensor).reshape(-1)
-    return int(torch_output[0].item())
-
-
 def run_demo(
     *,
     prompt: str,
@@ -102,7 +59,7 @@ def run_demo(
         )
 
     tokenizer = load_tokenizer(tokenizer_name_or_path)
-    page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
+    token_codec = TokenCodec(batch_size=1)
     is_first_decode_chunk = True
 
     def write_text(text: str) -> None:
@@ -117,18 +74,14 @@ def run_demo(
     mesh_device: ttnn.MeshDevice | None = None
     try:
         mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_height, mesh_width))
-        model = create_deepseek_v3(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
+        model = create_model(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
         return run_generation(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
             max_new_tokens=max_new_tokens,
-            make_input_tensor=lambda token_id: make_padded_input_tensor(
-                token_id,
-                batch_size=1,
-                page_size_datums=page_size_datums,
-            ),
-            extract_token_id=extract_token_id_from_output,
+            make_input_tensor=token_codec.make_input,
+            extract_token_id=token_codec.extract_token_id,
             write_text=write_text,
         )
     finally:
