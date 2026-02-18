@@ -60,10 +60,6 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     uint32_t ncrisc_rt_arg_idx = 0;
-    DPRINT << "LMHS kernel NCRISC start"
-           << " in=" << (uint32_t)Core::is_input_core << " recv=" << (uint32_t)Core::is_mcast_receiver_core
-           << " mm=" << (uint32_t)Core::is_matmul_core << " final=" << (uint32_t)Core::is_argmax_final_core
-           << " mesh_sender=" << (uint32_t)Core::is_argmax_mesh_sender_core << ENDL();
     // --- NCRISC: CCL broadcast reader + mcast receiver + sharded buffer setup ---
 
     // CCL Broadcast CTArgs type alias
@@ -126,7 +122,6 @@ void kernel_main() {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
-        DPRINT << "LMHS kernel NCRISC setup mcast_src done" << ENDL();
     }
     // Matmul cores: register matmul_in1 CB (CB 2) backed by vocab weight shards
     if constexpr (Core::is_matmul_core) {
@@ -134,14 +129,9 @@ void kernel_main() {
         constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
-        DPRINT << "LMHS kernel NCRISC setup in1 done" << ENDL();
     }
 #elif defined(COMPILE_FOR_BRISC)
     uint32_t brisc_rt_arg_idx = 0;
-    DPRINT << "LMHS kernel BRISC start"
-           << " in=" << (uint32_t)Core::is_input_core << " recv=" << (uint32_t)Core::is_mcast_receiver_core
-           << " mm=" << (uint32_t)Core::is_matmul_core << " final=" << (uint32_t)Core::is_argmax_final_core
-           << " mesh_sender=" << (uint32_t)Core::is_argmax_mesh_sender_core << ENDL();
     // --- BRISC: CCL broadcast writer + mcast sender ---
 
     // CCL Broadcast CTArgs type alias
@@ -164,17 +154,6 @@ void kernel_main() {
     // CCL Broadcast writer runtime args (only populated when not skip_ccl)
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
-        DPRINT << "LMHS BRISC bcast cfg"
-               << " is_sender=" << get_named_compile_time_arg_val("bcast_is_sender")
-               << " is_secondary=" << get_named_compile_time_arg_val("bcast_is_secondary_sender")
-               << " fwd_targets=" << get_named_compile_time_arg_val("bcast_num_targets_forward_direction")
-               << " bwd_targets=" << get_named_compile_time_arg_val("bcast_num_targets_backward_direction") << ENDL();
-        DPRINT << "LMHS BRISC bcast rt"
-               << " wait_output=" << get_common_arg_val<uint32_t>(4)
-               << " reset_global=" << get_common_arg_val<uint32_t>(5)
-               << " out_wait_val=" << get_common_arg_val<uint32_t>(8)
-               << " ring_index=" << get_common_arg_val<uint32_t>(12) << " num_conn=" << get_common_arg_val<uint32_t>(14)
-               << ENDL();
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // tensor_address0
             get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // out_ready_sem_bank_addr
@@ -263,9 +242,10 @@ void kernel_main() {
     // ========================================================================
     if constexpr (!Core::skip_ccl) {
         deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
-        DPRINT << "LMHS kernel pre-bcast" << ENDL();
-        bcast(bcast_args);
-        DPRINT << "LMHS kernel post-bcast" << ENDL();
+        {
+            DeviceZoneScopedN("CCL_BROADCAST");
+            bcast(bcast_args);
+        }
     }
 
     // ========================================================================
@@ -279,15 +259,14 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_mcast_receiver_core, true>
             mcast;
-#if defined(COMPILE_FOR_NCRISC)
-    DPRINT << "LMHS kernel pre-mcast" << ENDL();
-#endif
+
     mcast.init(mcast_args);
-    mcast(mcast_args);
+    {
+        DeviceZoneScopedN("MCAST");
+        mcast(mcast_args);
+    }
+
     mcast.teardown();
-#if defined(COMPILE_FOR_NCRISC)
-    DPRINT << "LMHS kernel post-mcast" << ENDL();
-#endif
 
     // ========================================================================
     // Phase 2: Matmul — each matmul core computes local GEMM with its weight shard
@@ -298,22 +277,20 @@ void kernel_main() {
     //   PopIn1:   pop matmul_in1 CB (CB 2) after read (frees weight buffer)
     // ========================================================================
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, true> matmul;
-    DPRINT << "LMHS kernel pre-matmul" << ENDL();
-    matmul(matmul_args);
-    DPRINT << "LMHS kernel post-matmul" << ENDL();
+    {
+        DeviceZoneScopedN("MATMUL");
+        matmul(matmul_args);
+    }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #if defined(COMPILE_FOR_NCRISC)
         constexpr uint32_t gather_cb = get_named_compile_time_arg_val("argmax_gather_cb");
         uint32_t scores_addr = 0;
-        DPRINT << "LMHS kernel pre-argmax rt_idx=" << ncrisc_rt_arg_idx << ENDL();
         if constexpr (Core::is_matmul_core) {
             // Matmul (TRISC) pushes matmul_out CB; wait before NCRISC consumes scores.
             constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
             constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
-            DPRINT << "LMHS kernel wait matmul_out cb=" << matmul_out_cb << " out_w=" << out_w << ENDL();
             cb_wait_front(matmul_out_cb, out_w);
-            DPRINT << "LMHS kernel got matmul_out" << ENDL();
             scores_addr = get_read_ptr(matmul_out_cb);
         }
         deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
@@ -328,7 +305,6 @@ void kernel_main() {
             get_write_ptr(gather_cb),
         };
 #elif defined(COMPILE_FOR_BRISC)
-    DPRINT << "LMHS kernel pre-argmax rt_idx=" << brisc_rt_arg_idx << ENDL();
     deepseek_b1_ops::Sampling::WriterArgs sampling_args{
         get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
         get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -339,15 +315,15 @@ void kernel_main() {
         deepseek_b1_ops::Sampling::
             Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
                 sampling_op;
-        DPRINT << "LMHS kernel call sampling op" << ENDL();
-        sampling_op(sampling_args);
-        DPRINT << "LMHS kernel return sampling op" << ENDL();
+        {
+            DeviceZoneScopedN("ARGMAX");
+            sampling_op(sampling_args);
+        }
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_matmul_core) {
             constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
             constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
             cb_pop_front(matmul_out_cb, out_w);
-            DPRINT << "LMHS kernel popped matmul_out" << ENDL();
         }
 #endif
 #endif

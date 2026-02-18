@@ -138,19 +138,15 @@ struct Sampling {
             const uint64_t dst_data_noc_addr = final_noc_base | static_cast<uint64_t>(dst_slot_addr);
             const uint64_t dst_sem_noc_addr =
                 final_noc_base | static_cast<uint64_t>(get_semaphore(CTArgs::receiver_semaphore_id));
-            DPRINT << "Argmax phase1 send src=0x" << HEX() << src_slot_addr << " dst=0x" << dst_slot_addr << ENDL();
             noc_async_write_one_packet<true, true>(src_slot_addr, dst_data_noc_addr, CTArgs::winner_page_bytes);
             noc_semaphore_inc(dst_sem_noc_addr, 1);
             noc_async_posted_writes_flushed();
             noc_async_atomic_barrier();
-            DPRINT << "Argmax phase1 send done" << ENDL();
         }
 
         FORCE_INLINE void wait_and_reset_semaphore(volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t expected_count) {
-            DPRINT << "Argmax wait sem expected=" << expected_count << ENDL();
             noc_semaphore_wait(sem_ptr, expected_count);
             noc_semaphore_set(sem_ptr, 0);
-            DPRINT << "Argmax wait sem done" << ENDL();
         }
 
         FORCE_INLINE void phase2_reduce_intra_device_winners(
@@ -261,9 +257,6 @@ struct Sampling {
 #if defined(COMPILE_FOR_NCRISC)
             const uint32_t slot_offset = CTArgs::sender_idx * CTArgs::winner_page_bytes;
             const uint32_t gather_addr = args.gather_addr;
-            DPRINT << "Argmax NCRISC impl active=" << (uint32_t)IsActiveCore << " final=" << (uint32_t)IsFinalCore
-                   << " mesh_sender=" << (uint32_t)IsMeshSenderCore << " sender_idx=" << CTArgs::sender_idx
-                   << " slot_offset=" << slot_offset << " mesh_mode=" << (uint32_t)CTArgs::mesh_mode << ENDL();
 
             invalidate_l1_cache();
 
@@ -274,11 +267,9 @@ struct Sampling {
                 uint16_t best_score = NEG_INF_BFLOAT16;
                 uint32_t best_index = 0xFFFFFFFF;
                 phase1_reduce_local_values(scores_ptr, indices_ptr, best_score, best_index);
-                DPRINT << "Argmax phase1 local best score=" << BF16(best_score) << " index=" << best_index << ENDL();
 
                 if constexpr (IsFinalCore) {
                     write_winner_slot(gather_addr + slot_offset, best_score, best_index);
-                    DPRINT << "Argmax phase1 final wrote local slot" << ENDL();
                 } else {
                     const uint32_t local_slot_addr = gather_addr + slot_offset;
                     write_winner_slot(local_slot_addr, best_score, best_index);
@@ -291,20 +282,15 @@ struct Sampling {
             if constexpr (IsFinalCore) {
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
-                DPRINT << "Argmax phase2 final pre-wait recv_incs=" << CTArgs::expected_remote_incs << ENDL();
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs);
 
                 uint16_t global_best_score = NEG_INF_BFLOAT16;
                 uint32_t global_best_index = 0xFFFFFFFF;
                 phase2_reduce_intra_device_winners(gather_addr, global_best_score, global_best_index);
-                DPRINT << "Argmax phase2 final reduced score=" << BF16(global_best_score)
-                       << " index=" << global_best_index << ENDL();
 
                 // Phase 3: mesh-only inter-device reductions (stage-1 then stage-2).
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
-                        DPRINT << "Argmax stage1 receiver write+wait local_slot=0x" << HEX()
-                               << (args.scratch_addr + CTArgs::stage1_local_slot_offset) << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
@@ -319,8 +305,6 @@ struct Sampling {
                             stage1_best_index);
                         global_best_score = stage1_best_score;
                         global_best_index = stage1_best_index;
-                        DPRINT << "Argmax stage1 receiver reduced score=" << BF16(global_best_score)
-                               << " index=" << global_best_index << ENDL();
                     }
                 }
 
@@ -336,13 +320,9 @@ struct Sampling {
                         auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             get_semaphore(CTArgs::local_ready_semaphore_id));
                         noc_semaphore_set(local_ready_sem_ptr, 1);
-                        DPRINT << "Argmax mesh sender local_ready set slot=0x" << HEX()
-                               << (args.scratch_addr + CTArgs::mesh_local_send_slot_offset) << ENDL();
                     }
 
                     if constexpr (CTArgs::stage2_receiver) {
-                        DPRINT << "Argmax stage2 receiver write+wait local_slot=0x" << HEX()
-                               << (args.scratch_addr + CTArgs::stage2_local_slot_offset) << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage2_local_slot_offset, global_best_score, global_best_index);
                         auto global_stage2_sem_ptr =
@@ -358,7 +338,6 @@ struct Sampling {
                             stage2_best_index);
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
-                        DPRINT << "Argmax stage2 receiver output index=" << stage2_best_index << ENDL();
                     }
                 }
             }
@@ -367,19 +346,14 @@ struct Sampling {
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 auto local_ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
-                DPRINT << "Argmax BRISC mesh sender pre local_ready wait" << ENDL();
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
                 noc_semaphore_set(local_ready_sem_ptr, 0);
-                DPRINT << "Argmax BRISC mesh sender local_ready observed" << ENDL();
 
                 size_t arg_idx = 0;
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                 const uint32_t local_slot_addr = args.scratch_addr + metadata.local_slot_offset;
-                DPRINT << "Argmax BRISC mesh sender send slot=0x" << HEX() << local_slot_addr << " dst_l1=0x"
-                       << metadata.dst_l1_addr << ENDL();
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
-                DPRINT << "Argmax BRISC mesh sender send done" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // No-op for k=1 argmax fast path.
