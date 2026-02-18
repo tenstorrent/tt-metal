@@ -732,6 +732,15 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
     return {};
 }
 
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(const std::string& grouping_type) const {
+    auto it = resolved_groupings_cache_.find(grouping_type);
+    if (it != resolved_groupings_cache_.end()) {
+        return it->second;
+    }
+    // Fallback: return empty vector if not found in cache
+    return {};
+}
+
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const {
     std::vector<GroupingInfo> result;
     for (const auto& [name, groupings] : resolved_groupings_cache_) {
@@ -1444,7 +1453,16 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
     auto mesh_it = resolved_groupings_cache_.find("MESH");
     if (mesh_it != resolved_groupings_cache_.end()) {
         for (const auto& mesh_group_info : mesh_it->second) {
-            mesh_flat_adjacency_graphs[mesh_group_info.name] = build_flattened_adjacency_graph(mesh_group_info);
+            auto mesh = build_flattened_adjacency_mesh(mesh_group_info);
+            std::map<uint32_t, std::vector<uint32_t>> adj_map;
+            for (const auto& node : mesh.get_nodes()) {
+                std::vector<uint32_t> neighbor_ids;
+                for (const auto& n : mesh.get_neighbors(node)) {
+                    neighbor_ids.push_back(n.unique_id);
+                }
+                adj_map[node.unique_id] = std::move(neighbor_ids);
+            }
+            mesh_flat_adjacency_graphs[mesh_group_info.name] = AdjacencyGraph<uint32_t>(adj_map);
             mesh_grouping_lookup[mesh_group_info.name] = mesh_group_info;
         }
     } else {
@@ -1589,6 +1607,8 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
 // build_flattened_adjacency_mesh – flattened ASIC-level mesh from hierarchy
 // =============================================================================
 
+namespace {
+
 // Infer row_major_mesh dims [rows, cols] from items' corner orientations.
 // Returns empty if corners don't indicate a row_major layout (fallback to [1, n]).
 std::vector<int32_t> infer_dims_from_corners(const GroupingInfo& g) {
@@ -1651,238 +1671,593 @@ std::vector<int32_t> infer_dims_from_corners(const GroupingInfo& g) {
 enum class CardinalDirection { North, South, East, West };
 enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B };
 
+using FlattenedMeshNodeInfo = PhysicalGroupingDescriptor::FlattenedMeshNodeInfo;
+
 struct FlattenedMesh {
-    AdjacencyGraph<uint32_t> graph;
-    std::vector<int32_t> dims;  // Node-level [rows,cols] for leaf; item-level for compound
-    std::vector<uint32_t> nodes_row_major;
-    std::vector<FlattenedMesh> sub_meshes;  // For compound: items in row-major; empty for leaf
+    AdjacencyGraph<FlattenedMeshNodeInfo> graph;
+    std::vector<int32_t> dims;  // Always [rows, cols]
+    std::vector<FlattenedMeshNodeInfo> nodes_row_major;
+    std::vector<FlattenedMesh> sub_meshes;  // Empty for leaf meshes
 
-    std::vector<uint32_t> get_edge(CardinalDirection dir) const {
+    // Extract nodes along a cardinal edge (North/South/East/West)
+    // For leaf meshes: extracts from nodes_row_major based on 2D grid position
+    // For compound meshes: recursively extracts from sub-meshes on the corresponding edge
+    std::vector<FlattenedMeshNodeInfo> get_edge(CardinalDirection dir) const {
+        constexpr int32_t MIN_DIMS_FOR_2D = 2;
+        constexpr int32_t FIRST_ROW = 0;
+        constexpr int32_t FIRST_COL = 0;
+
         if (sub_meshes.empty()) {
-            return get_edge_leaf(dir);
-        }
-        return get_edge_compound(dir);
-    }
+            // Leaf mesh: extract nodes from nodes_row_major based on edge direction
+            const bool is_valid = !nodes_row_major.empty() && dims.size() >= MIN_DIMS_FOR_2D;
+            if (!is_valid) {
+                return {};
+            }
 
-    std::vector<uint32_t> get_edge_leaf(CardinalDirection dir) const {
-        if (nodes_row_major.empty() || dims.empty()) {
+            const int32_t rows = dims[0];
+            const int32_t cols = dims[1];
+            const int32_t num_nodes = static_cast<int32_t>(nodes_row_major.size());
+            std::vector<FlattenedMeshNodeInfo> edge_nodes;
+
+            // Helper to safely add node at index if within bounds
+            auto add_node_at_index = [&](int32_t idx) {
+                if (idx < num_nodes) {
+                    edge_nodes.push_back(nodes_row_major[idx]);
+                }
+            };
+
+            switch (dir) {
+                case CardinalDirection::North:
+                    // Top row: indices 0 to cols-1
+                    for (int32_t col = FIRST_COL; col < cols && col < num_nodes; ++col) {
+                        add_node_at_index(col);
+                    }
+                    break;
+                case CardinalDirection::South:
+                    // Bottom row: indices (rows-1)*cols to rows*cols-1
+                    {
+                        const int32_t bottom_row_start = (rows - 1) * cols;
+                        const int32_t bottom_row_end = rows * cols;
+                        for (int32_t col = bottom_row_start; col < bottom_row_end && col < num_nodes; ++col) {
+                            add_node_at_index(col);
+                        }
+                    }
+                    break;
+                case CardinalDirection::West:
+                    // Left column: indices 0, cols, 2*cols, ..., (rows-1)*cols
+                    for (int32_t row = FIRST_ROW; row < rows; ++row) {
+                        add_node_at_index(row * cols);
+                    }
+                    break;
+                case CardinalDirection::East:
+                    // Right column: indices cols-1, 2*cols-1, ..., rows*cols-1
+                    {
+                        const int32_t right_col_offset = cols - 1;
+                        for (int32_t row = FIRST_ROW; row < rows; ++row) {
+                            add_node_at_index(row * cols + right_col_offset);
+                        }
+                    }
+                    break;
+            }
+            return edge_nodes;
+        }
+
+        // Compound mesh: collect edges from sub-meshes that lie on the requested edge
+        if (dims.size() < MIN_DIMS_FOR_2D) {
             return {};
         }
-        int32_t rows = dims[0], cols = dims.size() >= 2 ? dims[1] : static_cast<int32_t>(nodes_row_major.size());
-        if (dims.size() == 1) {
-            rows = 1;
-            cols = dims[0];
-        }
-        int32_t n = static_cast<int32_t>(nodes_row_major.size());
-        std::vector<uint32_t> out;
-        switch (dir) {
-            case CardinalDirection::North:
-                for (int32_t c = 0; c < cols && c < n; ++c) {
-                    out.push_back(nodes_row_major[c]);
-                }
-                break;
-            case CardinalDirection::South:
-                for (int32_t c = (rows - 1) * cols; c < rows * cols && c < n; ++c) {
-                    out.push_back(nodes_row_major[c]);
-                }
-                break;
-            case CardinalDirection::West:
-                for (int32_t r = 0; r < rows; ++r) {
-                    int32_t idx = r * cols;
-                    if (idx < n) {
-                        out.push_back(nodes_row_major[idx]);
-                    }
-                }
-                break;
-            case CardinalDirection::East:
-                for (int32_t r = 0; r < rows; ++r) {
-                    int32_t idx = r * cols + (cols - 1);
-                    if (idx < n) {
-                        out.push_back(nodes_row_major[idx]);
-                    }
-                }
-                break;
-        }
-        return out;
-    }
 
-    std::vector<uint32_t> get_edge_compound(CardinalDirection dir) const {
-        if (sub_meshes.empty() || dims.size() < 2) {
-            return {};
+        const int32_t item_rows = dims[0];
+        const int32_t item_cols = dims[1];
+        const int32_t total_items = item_rows * item_cols;
+        const int32_t num_sub_meshes = static_cast<int32_t>(sub_meshes.size());
+        std::vector<FlattenedMeshNodeInfo> edge_nodes;
+
+        for (int32_t item_idx = 0; item_idx < total_items && item_idx < num_sub_meshes; ++item_idx) {
+            const int32_t row = item_idx / item_cols;
+            const int32_t col = item_idx % item_cols;
+
+            // Check if this sub-mesh is on the requested edge
+            const bool is_on_north_edge = (dir == CardinalDirection::North) && (row == FIRST_ROW);
+            const bool is_on_south_edge = (dir == CardinalDirection::South) && (row == item_rows - 1);
+            const bool is_on_west_edge = (dir == CardinalDirection::West) && (col == FIRST_COL);
+            const bool is_on_east_edge = (dir == CardinalDirection::East) && (col == item_cols - 1);
+            const bool is_on_requested_edge =
+                is_on_north_edge || is_on_south_edge || is_on_west_edge || is_on_east_edge;
+
+            if (is_on_requested_edge) {
+                // Recursively get edge from this sub-mesh and append
+                const auto sub_edge = sub_meshes[item_idx].get_edge(dir);
+                edge_nodes.insert(edge_nodes.end(), sub_edge.begin(), sub_edge.end());
+            }
         }
-        int32_t item_rows = dims[0], item_cols = dims[1];
-        std::vector<uint32_t> out;
-        switch (dir) {
-            case CardinalDirection::North:
-                for (int32_t c = 0; c < item_cols; ++c) {
-                    auto e = sub_meshes[c].get_edge(CardinalDirection::North);
-                    out.insert(out.end(), e.begin(), e.end());
-                }
-                break;
-            case CardinalDirection::South:
-                for (int32_t c = 0; c < item_cols; ++c) {
-                    size_t i = static_cast<size_t>((item_rows - 1) * item_cols + c);
-                    auto e = sub_meshes[i].get_edge(CardinalDirection::South);
-                    out.insert(out.end(), e.begin(), e.end());
-                }
-                break;
-            case CardinalDirection::West:
-                for (int32_t r = 0; r < item_rows; ++r) {
-                    size_t i = static_cast<size_t>(r * item_cols);
-                    auto e = sub_meshes[i].get_edge(CardinalDirection::West);
-                    out.insert(out.end(), e.begin(), e.end());
-                }
-                break;
-            case CardinalDirection::East:
-                for (int32_t r = 0; r < item_rows; ++r) {
-                    size_t i = static_cast<size_t>(r * item_cols + (item_cols - 1));
-                    auto e = sub_meshes[i].get_edge(CardinalDirection::East);
-                    out.insert(out.end(), e.begin(), e.end());
-                }
-                break;
-        }
-        return out;
+        return edge_nodes;
     }
 };
 
+// Join two adjacent meshes by connecting their corresponding boundary edges
+// Maps adjacency direction to the cardinal edges that should be connected
 void join_two_adjacent_meshes(
-    std::map<uint32_t, std::set<uint32_t>>& adj_set,
-    const FlattenedMesh& a,
-    const FlattenedMesh& b,
-    AdjacencyDirection dir) {
-    std::pair<CardinalDirection, CardinalDirection> edges;
-    switch (dir) {
-        case AdjacencyDirection::A_LEFT_OF_B: edges = {CardinalDirection::East, CardinalDirection::West}; break;
-        case AdjacencyDirection::A_ABOVE_B: edges = {CardinalDirection::South, CardinalDirection::North}; break;
-        case AdjacencyDirection::A_RIGHT_OF_B: edges = {CardinalDirection::West, CardinalDirection::East}; break;
-        case AdjacencyDirection::A_BELOW_B: edges = {CardinalDirection::North, CardinalDirection::South}; break;
-    }
-    auto edge_a = a.get_edge(edges.first);
-    auto edge_b = b.get_edge(edges.second);
-    TT_FATAL(edge_a.size() == edge_b.size(), "Mesh boundary size mismatch: {} vs {}", edge_a.size(), edge_b.size());
+    std::map<FlattenedMeshNodeInfo, std::set<FlattenedMeshNodeInfo>>& adj_set,
+    const FlattenedMesh& mesh_a,
+    const FlattenedMesh& mesh_b,
+    AdjacencyDirection adjacency_dir) {
+    // Map adjacency direction to the cardinal edges to connect:
+    // - A_LEFT_OF_B: connect A's East edge to B's West edge
+    // - A_ABOVE_B: connect A's South edge to B's North edge
+    // - A_RIGHT_OF_B: connect A's West edge to B's East edge
+    // - A_BELOW_B: connect A's North edge to B's South edge
+    static const std::pair<CardinalDirection, CardinalDirection> edge_mapping[] = {
+        {CardinalDirection::East, CardinalDirection::West},    // A_LEFT_OF_B
+        {CardinalDirection::South, CardinalDirection::North},  // A_ABOVE_B
+        {CardinalDirection::West, CardinalDirection::East},    // A_RIGHT_OF_B
+        {CardinalDirection::North, CardinalDirection::South}   // A_BELOW_B
+    };
 
-    for (size_t i = 0; i < edge_a.size(); ++i) {
-        adj_set[edge_a[i]].insert(edge_b[i]);
-        adj_set[edge_b[i]].insert(edge_a[i]);
+    const auto [edge_a_dir, edge_b_dir] = edge_mapping[static_cast<int>(adjacency_dir)];
+    const auto edge_a_nodes = mesh_a.get_edge(edge_a_dir);
+    const auto edge_b_nodes = mesh_b.get_edge(edge_b_dir);
+
+    TT_FATAL(
+        edge_a_nodes.size() == edge_b_nodes.size(),
+        "Mesh boundary size mismatch: {} vs {}",
+        edge_a_nodes.size(),
+        edge_b_nodes.size());
+
+    // Connect corresponding nodes on the two edges (1-to-1 mapping)
+    for (size_t i = 0; i < edge_a_nodes.size(); ++i) {
+        adj_set[edge_a_nodes[i]].insert(edge_b_nodes[i]);
+        adj_set[edge_b_nodes[i]].insert(edge_a_nodes[i]);
     }
 }
 
-AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& dims) {
+// Normalize dimensions to always be [rows, cols] format
+// - Empty dims: default to single row [1, total_items]
+// - Single dim: treat as column count [1, dims[0]]
+// - Two dims: already normalized [rows, cols]
+static std::vector<int32_t> normalize_dims(const std::vector<int32_t>& dims, size_t total_items) {
+    constexpr int32_t SINGLE_ROW = 1;
+    constexpr size_t SINGLE_DIM = 1;
+
+    if (dims.empty()) {
+        return {SINGLE_ROW, static_cast<int32_t>(total_items)};
+    }
+    if (dims.size() == SINGLE_DIM) {
+        return {SINGLE_ROW, dims[0]};
+    }
+    // Already in [rows, cols] format (size == 2)
+    return dims;
+}
+
+// Join multiple meshes arranged in a 2D grid into a single adjacency graph
+// Algorithm:
+//   1. Copy all internal edges from each mesh
+//   2. Connect adjacent meshes along their shared boundaries (horizontal and vertical)
+//   3. Convert from set-based to vector-based adjacency representation
+AdjacencyGraph<FlattenedMeshNodeInfo> join_mesh_level(
+    const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& dims) {
+    constexpr size_t SINGLE_MESH = 1;
+    constexpr int32_t ROW_INDEX = 0;
+    constexpr int32_t COL_INDEX = 1;
+
     if (meshes.empty()) {
-        return AdjacencyGraph<uint32_t>();
+        return AdjacencyGraph<FlattenedMeshNodeInfo>();
     }
-    if (dims.size() < 2) {
-        if (meshes.size() == 1) {
-            return meshes[0].graph;
-        }
-        int32_t n = static_cast<int32_t>(meshes.size());
-        return join_mesh_level(meshes, std::vector<int32_t>{1, n});
-    }
-    int32_t rows = dims[0], cols = dims[1];
-    std::map<uint32_t, std::set<uint32_t>> adj_set;
-
-    for (const auto& m : meshes) {
-        for (uint32_t n : m.nodes_row_major) {
-            for (uint32_t nb : m.graph.get_neighbors(n)) {
-                adj_set[n].insert(nb);
-            }
-        }
+    if (meshes.size() == SINGLE_MESH) {
+        return meshes[0].graph;
     }
 
-    for (int32_t r = 0; r < rows; ++r) {
-        for (int32_t c = 0; c < cols; ++c) {
-            size_t i = static_cast<size_t>(r * cols + c);
-            if (c + 1 < cols) {
-                size_t j = i + 1;
-                join_two_adjacent_meshes(adj_set, meshes[i], meshes[j], AdjacencyDirection::A_LEFT_OF_B);
-            }
-            if (r + 1 < rows) {
-                size_t j = static_cast<size_t>((r + 1) * cols + c);
-                join_two_adjacent_meshes(adj_set, meshes[i], meshes[j], AdjacencyDirection::A_ABOVE_B);
+    const std::vector<int32_t> normalized_dims = normalize_dims(dims, meshes.size());
+    const int32_t rows = normalized_dims[ROW_INDEX];
+    const int32_t cols = normalized_dims[COL_INDEX];
+    std::map<FlattenedMeshNodeInfo, std::set<FlattenedMeshNodeInfo>> adj_set;
+
+    // Step 1: Copy all existing internal edges from each mesh
+    for (const auto& mesh : meshes) {
+        for (const auto& node : mesh.nodes_row_major) {
+            for (const auto& neighbor : mesh.graph.get_neighbors(node)) {
+                adj_set[node].insert(neighbor);
             }
         }
     }
-    std::map<uint32_t, std::vector<uint32_t>> adj_map_final;
-    for (const auto& [n, neighbors] : adj_set) {
-        adj_map_final[n] = std::vector<uint32_t>(neighbors.begin(), neighbors.end());
+
+    // Step 2: Connect adjacent meshes along their boundaries
+    for (int32_t row = 0; row < rows; ++row) {
+        for (int32_t col = 0; col < cols; ++col) {
+            const size_t mesh_idx = static_cast<size_t>(row * cols + col);
+            const bool has_right_neighbor = (col + 1 < cols);
+            const bool has_bottom_neighbor = (row + 1 < rows);
+
+            // Connect to right neighbor (horizontal connection)
+            if (has_right_neighbor) {
+                const size_t right_mesh_idx = mesh_idx + 1;
+                join_two_adjacent_meshes(
+                    adj_set, meshes[mesh_idx], meshes[right_mesh_idx], AdjacencyDirection::A_LEFT_OF_B);
+            }
+
+            // Connect to bottom neighbor (vertical connection)
+            if (has_bottom_neighbor) {
+                const size_t bottom_mesh_idx = static_cast<size_t>((row + 1) * cols + col);
+                join_two_adjacent_meshes(
+                    adj_set, meshes[mesh_idx], meshes[bottom_mesh_idx], AdjacencyDirection::A_ABOVE_B);
+            }
+        }
     }
-    return AdjacencyGraph<uint32_t>(adj_map_final);
+
+    // Step 3: Convert from set-based to vector-based adjacency (required by AdjacencyGraph)
+    std::map<FlattenedMeshNodeInfo, std::vector<FlattenedMeshNodeInfo>> adj_map;
+    for (const auto& [node, neighbors] : adj_set) {
+        adj_map[node] = std::vector<FlattenedMeshNodeInfo>(neighbors.begin(), neighbors.end());
+    }
+    return AdjacencyGraph<FlattenedMeshNodeInfo>(adj_map);
 }
 
+// Helper to extract tray ID from grouping name (e.g., "tray_1" -> 1, "TRAY_2" -> 2)
+static uint32_t extract_tray_id(const std::string& grouping_name) {
+    const std::string lower_name = [&]() {
+        std::string result = grouping_name;
+        std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+        return result;
+    }();
+
+    if (lower_name.find("tray_") == 0) {
+        try {
+            return static_cast<uint32_t>(std::stoul(lower_name.substr(5)));
+        } catch (...) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// Recursively build a flattened mesh from a grouping item
+// Algorithm:
+//   - Leaf (ASIC_LOCATION): create single-node mesh
+//   - Single-item grouping: recurse directly (no layout needed)
+//   - Multi-item grouping: build sub-meshes, infer layout from corners, then join
 FlattenedMesh build_flattened_mesh_for_item(
     const GroupingItemInfo& item,
     uint32_t& next_global_id,
     const std::unordered_map<std::string, std::vector<GroupingInfo>>& cache,
-    const PhysicalGroupingDescriptor* desc) {
-    FlattenedMesh fm;
+    const PhysicalGroupingDescriptor* desc,
+    const std::vector<std::string>& grouping_path = {}) {
+    constexpr int32_t SINGLE_NODE_ROWS = 1;
+    constexpr int32_t SINGLE_NODE_COLS = 1;
+    constexpr size_t SINGLE_ITEM = 1;
 
     if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
-        // Leaf: single ASIC
-        fm.dims = {1, 1};
-        fm.nodes_row_major = {next_global_id};
-        fm.graph = AdjacencyGraph<uint32_t>({{next_global_id, {}}});
-        next_global_id++;
-        return fm;
+        // Leaf case: single ASIC node
+        FlattenedMesh mesh;
+        mesh.dims = {SINGLE_NODE_ROWS, SINGLE_NODE_COLS};
+        const uint32_t node_id = next_global_id++;
+
+        // Create node info with path including ASIC location
+        FlattenedMeshNodeInfo info;
+        info.unique_id = node_id;
+        info.asic_location = item.asic_location;
+
+        // Extract tray ID from grouping path
+        for (const auto& path_elem : grouping_path) {
+            uint32_t tray_id = extract_tray_id(path_elem);
+            if (tray_id > 0) {
+                info.tray_id = tray_id;
+                break;
+            }
+        }
+
+        // Build grouping path: copy existing path and add ASIC location
+        info.grouping_path = grouping_path;
+        info.grouping_path.push_back("ASIC_LOCATION_" + std::to_string(item.asic_location));
+
+        mesh.nodes_row_major = {info};
+        mesh.graph = AdjacencyGraph<FlattenedMeshNodeInfo>({{info, {}}});
+        return mesh;
     }
 
-    // GROUPING_REF: resolve and recurse
-    auto it = cache.find(item.grouping_name);
-    TT_FATAL(it != cache.end() && !it->second.empty(), "Unknown grouping: {}", item.grouping_name);
-    const GroupingInfo& sub = it->second[0];
+    // Compound case: resolve grouping reference and recurse
+    const auto cache_it = cache.find(item.grouping_name);
+    TT_FATAL(cache_it != cache.end() && !cache_it->second.empty(), "Unknown grouping: {}", item.grouping_name);
+    const GroupingInfo& sub_grouping = cache_it->second[0];
 
-    if (sub.items.size() == 1) {
-        FlattenedMesh sub_fm = build_flattened_mesh_for_item(sub.items[0], next_global_id, cache, desc);
-        return sub_fm;
+    // Build new grouping path using grouping name (not type)
+    std::vector<std::string> new_path = grouping_path;
+    new_path.push_back(sub_grouping.name);
+
+    // Optimization: single-item grouping doesn't need layout, just recurse
+    if (sub_grouping.items.size() == SINGLE_ITEM) {
+        return build_flattened_mesh_for_item(sub_grouping.items[0], next_global_id, cache, desc, new_path);
     }
 
+    // Multi-item grouping: build sub-meshes recursively
     std::vector<FlattenedMesh> sub_meshes;
-    for (const auto& sub_item : sub.items) {
-        sub_meshes.push_back(build_flattened_mesh_for_item(sub_item, next_global_id, cache, desc));
+    for (const auto& sub_item : sub_grouping.items) {
+        sub_meshes.push_back(build_flattened_mesh_for_item(sub_item, next_global_id, cache, desc, new_path));
     }
 
-    std::vector<int32_t> layout = infer_dims_from_corners(sub);
-    if (layout.empty()) {
-        int32_t nn = static_cast<int32_t>(sub_meshes.size());
-        layout = nn > 0 ? std::vector<int32_t>{1, nn} : std::vector<int32_t>{1, 1};
+    // Infer layout from corner orientations, then join sub-meshes
+    const std::vector<int32_t> layout = normalize_dims(infer_dims_from_corners(sub_grouping), sub_meshes.size());
+    FlattenedMesh mesh;
+    mesh.graph = join_mesh_level(sub_meshes, layout);
+    mesh.dims = layout;
+    mesh.sub_meshes = sub_meshes;
+
+    // Flatten all nodes from sub-meshes into row-major order
+    for (const auto& sub_mesh : sub_meshes) {
+        mesh.nodes_row_major.insert(
+            mesh.nodes_row_major.end(), sub_mesh.nodes_row_major.begin(), sub_mesh.nodes_row_major.end());
     }
-    fm.graph = join_mesh_level(sub_meshes, layout);
-    fm.dims = layout;
-    fm.sub_meshes = sub_meshes;
-    for (const auto& m : sub_meshes) {
-        fm.nodes_row_major.insert(fm.nodes_row_major.end(), m.nodes_row_major.begin(), m.nodes_row_major.end());
-    }
-    return fm;
+    return mesh;
 }
 
-AdjacencyGraph<uint32_t> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
+}  // unnamed namespace
+
+// Build a flattened ASIC-level adjacency graph from a hierarchical grouping
+// Top-level entry point: builds meshes for each item, then joins them based on inferred layout
+AdjacencyGraph<FlattenedMeshNodeInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
     if (grouping.items.empty()) {
-        return AdjacencyGraph<uint32_t>();
+        return AdjacencyGraph<FlattenedMeshNodeInfo>();
     }
 
-    uint32_t next_id = 0;
+    // Build flattened mesh for each item in the grouping
+    uint32_t next_node_id = 0;
     std::vector<FlattenedMesh> meshes;
+    std::vector<std::string> initial_path = {grouping.name};
     for (const auto& item : grouping.items) {
-        meshes.push_back(build_flattened_mesh_for_item(item, next_id, resolved_groupings_cache_, this));
+        meshes.push_back(
+            build_flattened_mesh_for_item(item, next_node_id, resolved_groupings_cache_, this, initial_path));
     }
 
-    if (meshes.size() == 1) {
-        return meshes[0].graph;
-    }
-
-    std::vector<int32_t> dims = infer_dims_from_corners(grouping);
-    if (dims.empty()) {
-        int32_t n = static_cast<int32_t>(meshes.size());
-        dims = n > 0 ? std::vector<int32_t>{1, n} : std::vector<int32_t>{1, 1};
-    }
-    return join_mesh_level(meshes, dims);
+    // Infer layout from corner orientations and join all meshes
+    const std::vector<int32_t> layout = normalize_dims(infer_dims_from_corners(grouping), meshes.size());
+    return join_mesh_level(meshes, layout);
 }
+
+// ================================
+// Validate current preformed mesh groups with the physical system descriptor
+// ================================
+
+std::ostream& operator<<(std::ostream& os, const PhysicalGroupingDescriptor::FlattenedMeshNodeInfo& info) {
+    os << "FlattenedMeshNodeInfo(unique_id=" << info.unique_id << ", tray=" << info.tray_id
+       << ", loc=" << info.asic_location << ")";
+    return os;
+}
+
+namespace {
+
+using tt::tt_metal::AsicID;
+using tt::tt_metal::ASICLocation;
+using tt::tt_metal::TrayID;
+using FlattenedMeshNodeInfo = PhysicalGroupingDescriptor::FlattenedMeshNodeInfo;
+
+AdjacencyGraph<AsicID> build_physical_adjacency_graph_for_host(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::string& hostname) {
+    std::map<AsicID, std::vector<AsicID>> adj_map;
+    const auto& asic_graph = psd.get_system_graph().asic_connectivity_graph.at(hostname);
+    for (const auto& [asic_id, edges] : asic_graph) {
+        std::vector<AsicID> neighbors;
+        for (const auto& [dst_asic, _] : edges) {
+            neighbors.push_back(dst_asic);
+        }
+        adj_map[asic_id] = std::move(neighbors);
+    }
+    return AdjacencyGraph<AsicID>(adj_map);
+}
+
+std::string build_tray_mapping_error_message(
+    const std::string& hostname,
+    const AdjacencyGraph<FlattenedMeshNodeInfo>& flat_mesh,
+    const std::map<AsicID, uint32_t>& global_tray_traits,
+    const MappingResult<FlattenedMeshNodeInfo, AsicID>& result) {
+    // Helper to format a vector as comma-separated list
+    auto format_list = [](const std::vector<uint32_t>& vec) {
+        std::string result;
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) {
+                result += ", ";
+            }
+            result += std::to_string(vec[i]);
+        }
+        return result;
+    };
+
+    // Helper to extract and sort locations from nodes
+    auto get_locations = [](const std::vector<FlattenedMeshNodeInfo>& nodes) {
+        std::vector<uint32_t> locations;
+        for (const auto& node : nodes) {
+            locations.push_back(node.asic_location);
+        }
+        std::sort(locations.begin(), locations.end());
+        return locations;
+    };
+
+    // Find unmapped nodes
+    std::set<FlattenedMeshNodeInfo> mapped_nodes;
+    for (const auto& [node, _] : result.target_to_global) {
+        mapped_nodes.insert(node);
+    }
+
+    std::map<uint32_t, std::vector<FlattenedMeshNodeInfo>> unmapped_by_tray;
+    for (const auto& node : flat_mesh.get_nodes()) {
+        if (node.tray_id != 0 && node.asic_location != 0 && mapped_nodes.find(node) == mapped_nodes.end()) {
+            unmapped_by_tray[node.tray_id].push_back(node);
+        }
+    }
+
+    if (unmapped_by_tray.empty()) {
+        return fmt::format(
+            "Host {}: Tray mapping validation failed\n  No unmapped nodes found (this should not happen)\n", hostname);
+    }
+
+    // Collect physical trays and mapped trays
+    std::set<uint32_t> physical_trays;
+    for (const auto& [_, tray_id] : global_tray_traits) {
+        physical_trays.insert(tray_id);
+    }
+
+    std::set<uint32_t> mapped_trays;
+    for (const auto& [node, _] : result.target_to_global) {
+        if (node.tray_id != 0) {
+            mapped_trays.insert(node.tray_id);
+        }
+    }
+
+    // Separate missing trays from mismatches
+    std::vector<uint32_t> missing_trays, mismatch_trays;
+    for (const auto& [tray_id, _] : unmapped_by_tray) {
+        (physical_trays.find(tray_id) != physical_trays.end() ? mismatch_trays : missing_trays).push_back(tray_id);
+    }
+    std::sort(missing_trays.begin(), missing_trays.end());
+    std::sort(mismatch_trays.begin(), mismatch_trays.end());
+
+    std::vector<uint32_t> physical_tray_list(physical_trays.begin(), physical_trays.end());
+    std::sort(physical_tray_list.begin(), physical_tray_list.end());
+    std::vector<uint32_t> mapped_tray_list(mapped_trays.begin(), mapped_trays.end());
+    std::sort(mapped_tray_list.begin(), mapped_tray_list.end());
+
+    // Build error message
+    std::string msg = fmt::format("Host {}: Tray mapping validation failed\n", hostname);
+
+    if (!missing_trays.empty()) {
+        msg += fmt::format(
+            "  PGD HOSTS grouping expects {} tray(s) that are not present in this host:\n", missing_trays.size());
+        for (uint32_t tray_id : missing_trays) {
+            auto locations = get_locations(unmapped_by_tray.at(tray_id));
+            msg += fmt::format(
+                "    - Tray {}: {} ASIC(s) at locations [{}]\n", tray_id, locations.size(), format_list(locations));
+        }
+    }
+
+    if (!mismatch_trays.empty()) {
+        msg += fmt::format(
+            "  PGD HOSTS grouping expects {} tray(s) that exist but have ASIC location/orientation mismatches:\n",
+            mismatch_trays.size());
+        for (uint32_t tray_id : mismatch_trays) {
+            auto locations = get_locations(unmapped_by_tray.at(tray_id));
+            msg += fmt::format(
+                "    - Tray {}: {} ASIC(s) at locations [{}] (check ASIC orientation/corner settings in PGD)\n",
+                tray_id,
+                locations.size(),
+                format_list(locations));
+        }
+    }
+
+    msg += fmt::format(
+        "  This host in PSD has {} tray(s): [{}]\n", physical_tray_list.size(), format_list(physical_tray_list));
+
+    if (!mapped_tray_list.empty()) {
+        msg += fmt::format(
+            "  Successfully mapped {} ASIC(s) from tray(s): [{}]\n",
+            result.target_to_global.size(),
+            format_list(mapped_tray_list));
+    }
+
+    msg += "  Suggested fixes:\n";
+    if (!missing_trays.empty()) {
+        msg += fmt::format(
+            "    - PGD HOSTS grouping expects tray(s) [{}] but this host only has tray(s) [{}]\n",
+            format_list(missing_trays),
+            format_list(physical_tray_list));
+        msg += fmt::format(
+            "    - Option 1: Update PGD HOSTS grouping to only include tray(s) [{}] (matching what this host has)\n",
+            format_list(physical_tray_list));
+        msg += fmt::format(
+            "    - Option 2: Update PSD/hardware configuration - add tray(s) [{}] to this host\n",
+            format_list(missing_trays));
+    }
+
+    if (!mismatch_trays.empty()) {
+        msg += fmt::format(
+            "    - Tray(s) [{}] exist but ASIC locations/orientations don't match\n", format_list(mismatch_trays));
+        msg += "    - Fix: Update PGD tray corner orientations to match PSD physical ASIC layout\n";
+        msg += "    - Check TRAY_1/TRAY_2/TRAY_3/TRAY_4 preset_type corner settings in PGD\n";
+    }
+
+    return msg;
+}
+
+bool validate_host(
+    const std::string& hostname,
+    const AdjacencyGraph<FlattenedMeshNodeInfo>& flat_mesh,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    std::vector<std::string>& errors) {
+    MappingConstraints<FlattenedMeshNodeInfo, AsicID> constraints;
+
+    // Build trait maps for target nodes (from flattened mesh)
+    std::map<FlattenedMeshNodeInfo, uint32_t> target_tray_traits;
+    std::map<FlattenedMeshNodeInfo, uint32_t> target_location_traits;
+
+    for (const auto& node : flat_mesh.get_nodes()) {
+        if (node.tray_id == 0 || node.asic_location == 0) {
+            continue;
+        }
+        target_tray_traits[node] = node.tray_id;
+        target_location_traits[node] = node.asic_location;
+    }
+
+    // Build trait maps for global nodes (from physical graph)
+    std::map<AsicID, uint32_t> global_tray_traits;
+    std::map<AsicID, uint32_t> global_location_traits;
+
+    for (const auto& asic_id : physical_graph.get_nodes()) {
+        try {
+            TrayID tray_id = psd.get_tray_id(asic_id);
+            ASICLocation asic_location = psd.get_asic_location(asic_id);
+            global_tray_traits[asic_id] = *tray_id;
+            global_location_traits[asic_id] = *asic_location;
+        } catch (...) {
+            errors.push_back(
+                fmt::format("Host {}: failed to get tray_id/asic_location for asic_id {}", hostname, *asic_id));
+            return false;
+        }
+    }
+
+    // Add trait constraints for tray_id and asic_location
+    // FIXME: Change this to use FATAL once intermesh mapping is in
+    constraints.add_required_trait_constraint<uint32_t>(target_tray_traits, global_tray_traits);
+    constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits);
+
+    auto result =
+        solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::STRICT, true);
+
+    if (!result.success) {
+        std::string detailed_error = build_tray_mapping_error_message(hostname, flat_mesh, global_tray_traits, result);
+        errors.push_back(detailed_error);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    (void)physical_system_descriptor;
-    TT_THROW("Not implemented");
-    return false;
+    auto host_groupings = get_groupings_by_type("HOSTS");
+    if (host_groupings.empty()) {
+        log_critical(
+            tt::LogFabric, "Internal error: validate_preformed_groups: no grouping with preset_type HOSTS found");
+        return false;
+    }
+
+    const GroupingInfo& host_grouping = host_groupings[0];
+    auto flat_mesh = build_flattened_adjacency_mesh(host_grouping);
+
+    if (flat_mesh.get_nodes().empty()) {
+        log_critical(tt::LogFabric, "Internal error: host grouping produced empty graph");
+        return false;
+    }
+
+    std::vector<std::string> errors;
+    for (const std::string& hostname : physical_system_descriptor.get_all_hostnames()) {
+        auto physical_graph = build_physical_adjacency_graph_for_host(physical_system_descriptor, hostname);
+
+        if (!validate_host(hostname, flat_mesh, physical_graph, physical_system_descriptor, errors)) {
+            continue;
+        }
+    }
+
+    return errors.empty();
 }
 
 }  // namespace tt::tt_fabric

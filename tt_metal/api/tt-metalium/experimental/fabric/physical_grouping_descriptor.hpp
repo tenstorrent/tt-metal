@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <ostream>
 #include <string>
 #include <filesystem>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -82,6 +84,10 @@ public:
     // Returns grouping information without exposing proto objects
     std::vector<GroupingInfo> get_groupings_by_name(const std::string& grouping_name) const;
 
+    // Get all groupings with a specific type (preset_type or custom_type)
+    // Returns grouping information without exposing proto objects
+    std::vector<GroupingInfo> get_groupings_by_type(const std::string& grouping_type) const;
+
     // Get all groupings
     std::vector<GroupingInfo> get_all_groupings() const;
 
@@ -93,12 +99,26 @@ public:
     bool validate_preformed_groups_from_physical_system_descriptor(
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 
-    // Build flattened adjacency graph by instantiating the grouping's adjacency graph and flattening it.
-    // TODO: This is not yet implemented this should use the cardinal adjacnecy graph
-    AdjacencyGraph<uint32_t> build_flattened_adjacency_graph(const GroupingInfo& grouping) const;
+    // Node metadata for flattened mesh nodes
+    // Generic enough to be used throughout the flattened mesh representation
+    struct FlattenedMeshNodeInfo {
+        uint32_t unique_id;                      // Sequential unique ID assigned during flattening
+        uint32_t asic_location = 0;              // ASIC location (1-8) if available, 0 otherwise
+        uint32_t tray_id = 0;                    // Tray ID (1-4) if available, 0 otherwise
+        std::vector<std::string> grouping_path;  // Path through grouping hierarchy using grouping names
+                                                 // Includes ASIC location at the end (e.g., ["MESH", "hosts_0",
+                                                 // "tray_1", "ASIC_LOCATION_1"])
+
+        // Comparison operators for use in maps/sets
+        bool operator==(const FlattenedMeshNodeInfo& other) const { return unique_id == other.unique_id; }
+        bool operator<(const FlattenedMeshNodeInfo& other) const { return unique_id < other.unique_id; }
+    };
+
+    friend std::ostream& operator<<(std::ostream& os, const FlattenedMeshNodeInfo& info);
 
     // Build flattened adjacency graph forming one uniform mesh
-    AdjacencyGraph<uint32_t> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
+    // Returns graph with FlattenedMeshNodeInfo as node type
+    AdjacencyGraph<FlattenedMeshNodeInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
 private:
     // Data members
