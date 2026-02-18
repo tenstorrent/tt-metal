@@ -1119,7 +1119,7 @@ and ``C0``, ..., ``C5`` as the "elements" of a ``3x2`` tile matrix.
 The computation of ``C`` from ``A`` and ``B`` then follows the standard non-tiled matrix multiplication algorithm,
 except that each "element" is itself a 2D tile, and each element-wise multiply is a smaller matrix multiplication.
 
-This view fits neatly into the Tenstorrent architecture, where each Tensix core can perform matrix multiplication on two tiles in a single instruction.
+This view fits neatly into the Tenstorrent architecture, with Tensix cores designed to perform matrix multiplication directly on two tiles.
 All that needs to be done is to present the tiles of ``A`` and ``B`` to the matrix engine in the correct order, and accumulate results into the correct output tile.
 
 Exercise 7: Implementing Matrix Multiplication in TT-Metalium
