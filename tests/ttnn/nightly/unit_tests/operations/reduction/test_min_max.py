@@ -6,12 +6,8 @@ import torch
 import pytest
 import ttnn
 from functools import partial
-from models.common.utility_functions import (
-    is_blackhole,
-)
 
 
-@pytest.mark.skipif(is_blackhole(), reason="BH hang, see issue #38028")
 @pytest.mark.parametrize(
     "shape_dim",
     (
