@@ -95,10 +95,43 @@ jobs:
           echo "target_branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Push branch to origin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TRACE: 1
+          GIT_CURL_VERBOSE: 1
         run: |
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
-          echo "Pushing branch '$TARGET_BRANCH' to origin"
-          git push origin "$TARGET_BRANCH" --force
+          echo "=== Push Information ==="
+          echo "Target branch: $TARGET_BRANCH"
+          echo "Repository: ${{ github.repository }}"
+
+          # Get the commit SHA
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "Commit SHA: $COMMIT_SHA"
+
+          # Show what files are in this branch vs main
+          echo ""
+          echo "=== Changed files vs main ==="
+          git diff --name-only origin/main...HEAD | head -20
+
+          # Check if any workflow files are present
+          echo ""
+          echo "=== Checking for workflow files ==="
+          git diff --name-only origin/main...HEAD | grep ".github/workflows" || echo "No workflow files changed"
+
+          # Show current git remote configuration
+          echo ""
+          echo "=== Git remote configuration ==="
+          git remote -v
+
+          # Show git config for push
+          echo ""
+          echo "=== Git push configuration ==="
+          git config --get-regexp 'remote\.origin\..*' || echo "No origin remote config"
+
+          echo ""
+          echo "=== Attempting to push with git CLI ==="
+          git push origin "$TARGET_BRANCH" --force --verbose
 
       - name: Find PR
         id: pr
