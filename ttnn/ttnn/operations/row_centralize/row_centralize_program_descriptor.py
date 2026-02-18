@@ -6,11 +6,13 @@ Row Centralize - Program Descriptor
 
 Single-core implementation:
   - Reader reads RM sticks from DRAM into CB c_0, also generates scaler and epsilon tiles once
-  - Compute: tilize -> reduce_mean -> sub -> square -> reduce_var -> add_eps -> rsqrt -> mul -> untilize
+  - If affine: reader reads gamma/beta sticks into c_0 at startup (before main loop)
+  - Compute: tilize -> reduce_mean -> sub -> square -> reduce_var -> add_eps -> rsqrt -> mul
+             -> [if affine: mul_gamma -> add_beta] -> untilize
   - Writer writes RM sticks from CB c_16 to DRAM
 
 CB layout:
-  c_0  (cb_rm_in)       - input RM sticks from reader
+  c_0  (cb_rm_in)       - input RM sticks from reader (reused for gamma/beta at startup)
   c_1  (cb_tilized)     - tilized input tiles
   c_2  (cb_mean)        - row mean tile
   c_3  (cb_centered)    - centered tiles (x - mean), persistent across square + mul
@@ -19,9 +21,12 @@ CB layout:
   c_6  (cb_result)      - standardized tiles (TILE fmt, untilize input)
   c_7  (cb_eps)         - epsilon scalar tile (program lifetime)
   c_8  (cb_scaler)      - reduce scaler tile 1/W (program lifetime)
+  c_9  (cb_gamma_tiled) - tilized gamma (program lifetime, only when has_affine)
+  c_10 (cb_beta_tiled)  - tilized beta (program lifetime, only when has_affine)
   c_16 (cb_rm_out)      - output RM sticks for writer
   c_24 (cb_squared)     - squared centered tiles
   c_25 (cb_var_plus_eps)- var + epsilon intermediate
+  c_26 (cb_after_gamma) - intermediate: standardized * gamma (only when has_affine)
 """
 
 import struct
@@ -46,8 +51,11 @@ CB_RESULT = 6
 CB_EPS = 7
 CB_SCALER = 8
 CB_RM_OUT = 16
+CB_GAMMA_TILED = 9
+CB_BETA_TILED = 10
 CB_SQUARED = 24
 CB_VAR_PLUS_EPS = 25
+CB_AFTER_GAMMA = 26
 
 
 def _float_to_packed_bf16(value: float) -> int:
@@ -71,6 +79,9 @@ def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     epsilon: float = 1e-5,
+    *,
+    gamma: ttnn.Tensor = None,
+    beta: ttnn.Tensor = None,
 ) -> ttnn.ProgramDescriptor:
     """
     Create the ProgramDescriptor for row_centralize.
@@ -79,10 +90,13 @@ def create_program_descriptor(
         input_tensor: Input tensor (RM, bf16, interleaved, on device)
         output_tensor: Pre-allocated output tensor (RM, bf16, interleaved, on device)
         epsilon: Numerical stability constant for rsqrt
+        gamma: Optional scale tensor (RM, bf16, interleaved, shape [1,...,1,W])
+        beta: Optional bias tensor (RM, bf16, interleaved, shape [1,...,1,W])
 
     Returns:
         ProgramDescriptor ready for execution via ttnn.generic_op
     """
+    has_affine = gamma is not None
     # ========== 1. EXTRACT TENSOR METADATA ==========
     shape = input_tensor.shape
     rank = len(shape)
@@ -307,22 +321,76 @@ def create_program_descriptor(
         cb_var_plus_eps_descriptor,
     ]
 
+    # Affine CBs (only allocated when has_affine)
+    if has_affine:
+        # c_9 (cb_gamma_tiled): Wt tiles, program lifetime — tilized gamma
+        cb_gamma_tiled_descriptor = ttnn.CBDescriptor(
+            total_size=Wt_total_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_GAMMA_TILED,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_size,
+                )
+            ],
+        )
+
+        # c_10 (cb_beta_tiled): Wt tiles, program lifetime — tilized beta
+        cb_beta_tiled_descriptor = ttnn.CBDescriptor(
+            total_size=Wt_total_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_BETA_TILED,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_size,
+                )
+            ],
+        )
+
+        # c_26 (cb_after_gamma): Wt tiles, per tile-row — intermediate: standardized * gamma
+        cb_after_gamma_descriptor = ttnn.CBDescriptor(
+            total_size=Wt_total_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_AFTER_GAMMA,
+                    data_format=ttnn.bfloat16,
+                    page_size=tile_size,
+                )
+            ],
+        )
+
+        all_cbs.extend([cb_gamma_tiled_descriptor, cb_beta_tiled_descriptor, cb_after_gamma_descriptor])
+
     # ========== 4. KERNEL DESCRIPTORS ==========
 
     # --- Reader Kernel ---
-    # Compile-time args per spec:
-    #   [0] stick_size, [1] cb_rm_in, [2] cb_scaler, [3] cb_eps, [4+] TensorAccessorArgs
+    # Compile-time args:
+    #   [0] stick_size, [1] cb_rm_in, [2] cb_scaler, [3] cb_eps,
+    #   [4] has_affine, [5+] TensorAccessorArgs(src),
+    #   [next+] TensorAccessorArgs(gamma), [next+] TensorAccessorArgs(beta)
     reader_ct_args = [
         stick_size,  # [0] stick_size: W * 2 bytes
         CB_RM_IN,  # [1] cb_rm_in = c_0
         CB_SCALER,  # [2] cb_scaler = c_8
         CB_EPS,  # [3] cb_eps = c_7
+        1 if has_affine else 0,  # [4] has_affine flag
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Always include gamma/beta TensorAccessorArgs (use input_tensor as dummy when no affine).
+    # This is required because TensorAccessorArgs template instantiation in the kernel happens
+    # at compile time even inside `if constexpr (false)` in non-template kernel_main().
+    gamma_tensor = gamma if has_affine else input_tensor
+    beta_tensor = beta if has_affine else input_tensor
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(beta_tensor).get_compile_time_args())
 
-    # Runtime args per spec:
+    # Runtime args:
     #   [0] src_addr, [1] num_sticks, [2] Wt, [3] start_stick_id,
-    #   [4] packed_reduce_scaler, [5] packed_eps
+    #   [4] packed_reduce_scaler, [5] packed_eps,
+    #   [6] gamma_addr (0 when no affine), [7] beta_addr (0 when no affine)
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
         input_tensor.buffer_address(),  # [0] src_addr
@@ -331,6 +399,8 @@ def create_program_descriptor(
         0,  # [3] start_stick_id (single-core, start at 0)
         packed_reduce_scaler,  # [4] 1/W as packed bf16
         packed_eps,  # [5] epsilon as packed bf16
+        gamma.buffer_address() if has_affine else 0,  # [6] gamma_addr
+        beta.buffer_address() if has_affine else 0,  # [7] beta_addr
     ]
 
     reader_kernel = ttnn.KernelDescriptor(
@@ -370,8 +440,9 @@ def create_program_descriptor(
     )
 
     # --- Compute Kernel ---
-    # Compile-time args per spec:
-    #   [0] Wt, [1] Ht_total, [2..13] CB IDs
+    # Compile-time args:
+    #   [0] Wt, [1] Ht_total, [2..13] CB IDs,
+    #   [14] cb_gamma_tiled, [15] cb_beta_tiled, [16] cb_after_gamma, [17] has_affine
     compute_ct_args = [
         Wt,  # [0] Wt
         Ht_total,  # [1] Ht_total
@@ -387,6 +458,10 @@ def create_program_descriptor(
         CB_RM_OUT,  # [11] cb_rm_out = c_16
         CB_EPS,  # [12] cb_eps = c_7
         CB_SCALER,  # [13] cb_scaler = c_8
+        CB_GAMMA_TILED if has_affine else 0,  # [14] cb_gamma_tiled
+        CB_BETA_TILED if has_affine else 0,  # [15] cb_beta_tiled
+        CB_AFTER_GAMMA if has_affine else 0,  # [16] cb_after_gamma
+        1 if has_affine else 0,  # [17] has_affine
     ]
 
     # Compute has no runtime args (all single-core, all parameters are compile-time)
