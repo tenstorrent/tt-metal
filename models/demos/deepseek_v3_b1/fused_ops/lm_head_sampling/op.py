@@ -34,6 +34,17 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
+    dims = tuple(int(d) for d in shape)
+    if not dims or dims[-1] != expected_last_dim:
+        return False
+    return all(d == 1 for d in dims[:-1])
+
+
 class LMHeadSampling:
     """
     LM head sampling vocab projection: CCL broadcast + mcast + matmul via ttnn.generic_op.
@@ -68,12 +79,16 @@ class LMHeadSampling:
         indices_tensor=None,
         output_index_tensor=None,
         argmax_final_core_coord=None,
+        argmax_final_mesh_coord=None,
+        global_semaphore=None,
+        global_stage2_semaphore=None,
+        fabric_scratch_tensor=None,
         semaphores=None,
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
         fp32_dest_acc_en=False,
-        skip_ccl=False,
+        skip_ccl=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -97,7 +112,7 @@ class LMHeadSampling:
             secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
             num_links: Number of fabric links for CCL
             fp32_dest_acc_en: Whether to enable FP32 accumulation
-            skip_ccl: Whether to skip CCL broadcast (single-device mode)
+            skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
         Returns:
             Output tensor with matmul result. If fused argmax is enabled, output_index_tensor is written in-place.
         """
@@ -106,16 +121,20 @@ class LMHeadSampling:
         if indices_tensor is None or output_index_tensor is None:
             raise ValueError("indices_tensor and output_index_tensor are required for fused LM-head + sampling")
 
-        sender_row = sender_coord[0]
-        sender_col = sender_coord[1]
-
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
-        if enable_argmax and (mesh_rows != 1 or mesh_cols != 1 or not skip_ccl):
-            raise NotImplementedError("Fused LM-head argmax currently supports only single-device skip_ccl=True mode")
+        if skip_ccl is None:
+            skip_ccl = mesh_rows * mesh_cols == 1
+        # In multi-column meshes, enable secondary-axis relay by default so broadcast reaches
+        # all clusters. Callers can still override explicitly if needed.
+        if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
+            secondary_cluster_axis = 1
+
+        sender_row = sender_coord[0]
+        sender_col = sender_coord[1]
 
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
@@ -124,6 +143,21 @@ class LMHeadSampling:
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
         output_index_tensors_per_device = ttnn.get_device_tensors(output_index_tensor) if enable_argmax else None
+        scratch_tensors_per_device = (
+            ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
+        )
+
+        if enable_argmax and not skip_ccl:
+            if global_semaphore is None or global_stage2_semaphore is None or fabric_scratch_tensor is None:
+                raise ValueError(
+                    "global_semaphore, global_stage2_semaphore, and fabric_scratch_tensor are required for mesh argmax"
+                )
+            if mesh_rows < 2 or mesh_cols != 2:
+                raise NotImplementedError(
+                    f"Fused LM-head mesh argmax currently supports only (R,2) with R>=2, got {mesh_shape}"
+                )
+            if argmax_final_mesh_coord is None:
+                raise ValueError("argmax_final_mesh_coord is required for mesh argmax")
 
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
@@ -136,6 +170,13 @@ class LMHeadSampling:
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
+
+        global_sem_addr = (
+            int(ttnn.get_global_semaphore_address(global_semaphore)) if (enable_argmax and not skip_ccl) else 0
+        )
+        global_stage2_sem_addr = (
+            int(ttnn.get_global_semaphore_address(global_stage2_semaphore)) if (enable_argmax and not skip_ccl) else 0
+        )
 
         # Calculate packet size and page info for CCL broadcast
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
@@ -300,8 +341,10 @@ class LMHeadSampling:
                         raise ValueError("indices_tensor must be uint32")
                     if output_index_tensor_device.memory_config().shard_spec.grid.num_cores() != 1:
                         raise ValueError("output_index_tensor must be sharded on a single final core")
-                    if tuple(output_index_tensor_device.shape) != (1, 1):
-                        raise ValueError("output_index_tensor must have shape (1, 1)")
+                    if not _is_singleton_prefix_shape(output_index_tensor_device.shape, 1):
+                        raise ValueError(
+                            "output_index_tensor must be singleton-prefix with last dim 1 (per-device logical shape (1,1))"
+                        )
 
                     output_index_core = output_index_tensor_device.memory_config().shard_spec.grid.ranges()[0].start
                     argmax_final_core = (
@@ -318,6 +361,90 @@ class LMHeadSampling:
                     argmax_expected_remote_incs = argmax_num_senders - 1
                     argmax_sender_idx_lookup = {(c.x, c.y): idx for idx, c in enumerate(argmax_cores_row_wise)}
                     argmax_winner_page_bytes = 16
+                    argmax_mesh_mode = 0
+                    argmax_stage1_sender = 0
+                    argmax_stage1_receiver = 0
+                    argmax_stage2_sender = 0
+                    argmax_stage2_receiver = 0
+                    argmax_stage1_slot_base_offset = 0
+                    argmax_stage1_num_slots = 0
+                    argmax_stage1_expected_remote_incs = 0
+                    argmax_stage1_local_slot_offset = 0
+                    argmax_stage2_slot_base_offset = 0
+                    argmax_stage2_num_slots = 0
+                    argmax_stage2_expected_remote_incs = 0
+                    argmax_stage2_local_slot_offset = 0
+                    argmax_mesh_local_send_slot_offset = 0
+                    is_argmax_mesh_sender_core = False
+                    sender_link_idx = 0
+                    dest_coord = ttnn.MeshCoordinate(row, col)
+                    per_core_brisc_runtime_args = []
+
+                    if not skip_ccl:
+                        target_row = int(argmax_final_mesh_coord[0])
+                        target_col = int(argmax_final_mesh_coord[1])
+                        if not (0 <= target_row < mesh_rows and 0 <= target_col < mesh_cols):
+                            raise ValueError(
+                                f"argmax_final_mesh_coord {argmax_final_mesh_coord} out of bounds for mesh shape {mesh_shape}"
+                            )
+
+                        def _x_axis_link_idx_for_stage1_sender(sender_row_local: int) -> int:
+                            linear_distance = abs(int(sender_row_local) - target_row)
+                            ring_distance = min(linear_distance, mesh_rows - linear_distance)
+                            max_ring_distance = mesh_rows // 2
+                            first_half_threshold = (max_ring_distance + 1) // 2
+                            return 0 if ring_distance <= first_half_threshold else 1
+
+                        argmax_mesh_mode = 1
+                        argmax_stage1_slot_base_offset = 0
+                        argmax_stage1_num_slots = mesh_rows
+                        argmax_stage2_slot_base_offset = (
+                            argmax_stage1_slot_base_offset + argmax_stage1_num_slots * argmax_winner_page_bytes
+                        )
+                        argmax_stage2_num_slots = mesh_cols
+                        argmax_stage1_expected_remote_incs = mesh_rows - 1
+                        argmax_stage2_expected_remote_incs = mesh_cols - 1
+                        argmax_stage1_sender = 1 if row != target_row else 0
+                        argmax_stage1_receiver = 1 if row == target_row else 0
+                        argmax_stage2_sender = 1 if (row == target_row and col != target_col) else 0
+                        argmax_stage2_receiver = 1 if (row == target_row and col == target_col) else 0
+                        argmax_stage1_local_slot_offset = (
+                            argmax_stage1_slot_base_offset + row * argmax_winner_page_bytes
+                        )
+                        argmax_stage2_local_slot_offset = (
+                            argmax_stage2_slot_base_offset + col * argmax_winner_page_bytes
+                        )
+                        is_argmax_mesh_sender_core = bool(argmax_stage1_sender or argmax_stage2_sender)
+                        argmax_mesh_local_send_slot_offset = (
+                            argmax_stage1_local_slot_offset if argmax_stage1_sender else argmax_stage2_local_slot_offset
+                        )
+
+                        if is_argmax_mesh_sender_core:
+                            if argmax_stage1_sender:
+                                dest_coord = ttnn.MeshCoordinate(target_row, col)
+                                send_slot_offset = argmax_stage1_slot_base_offset + row * argmax_winner_page_bytes
+                                sender_dst_sem_addr = global_sem_addr
+                                sender_link_idx = _x_axis_link_idx_for_stage1_sender(row)
+                            else:
+                                dest_coord = ttnn.MeshCoordinate(target_row, target_col)
+                                send_slot_offset = argmax_stage2_slot_base_offset + col * argmax_winner_page_bytes
+                                sender_dst_sem_addr = global_stage2_sem_addr
+                                sender_link_idx = 0
+
+                            dest_idx = int(dest_coord[0]) * mesh_cols + int(dest_coord[1])
+                            per_core_brisc_runtime_args.append(
+                                (
+                                    argmax_final_core,
+                                    [
+                                        int(argmax_mesh_local_send_slot_offset),
+                                        int(mesh_device.get_fabric_node_id(dest_coord).mesh_id),
+                                        int(mesh_device.get_fabric_node_id(dest_coord).chip_id),
+                                        int(scratch_tensors_per_device[dest_idx].buffer_address())
+                                        + int(send_slot_offset),
+                                        int(sender_dst_sem_addr),
+                                    ],
+                                )
+                            )
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
@@ -354,28 +481,28 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     # Argmax sampling
-                    ("argmax_num_values", argmax_num_values if enable_argmax else 0),
-                    ("argmax_winner_page_bytes", argmax_winner_page_bytes if enable_argmax else 0),
-                    ("argmax_num_senders", argmax_num_senders if enable_argmax else 0),
-                    ("argmax_expected_remote_incs", argmax_expected_remote_incs if enable_argmax else 0),
-                    ("argmax_receiver_semaphore_id", argmax_receiver_semaphore_id if enable_argmax else 0),
-                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id if enable_argmax else 0),
-                    ("argmax_mesh_mode", 0),
-                    ("argmax_stage1_sender", 0),
-                    ("argmax_stage1_receiver", 0),
-                    ("argmax_stage2_sender", 0),
-                    ("argmax_stage2_receiver", 0),
-                    ("argmax_stage1_slot_base_offset", 0),
-                    ("argmax_stage1_num_slots", 0),
-                    ("argmax_stage1_expected_remote_incs", 0),
-                    ("argmax_stage1_local_slot_offset", 0),
-                    ("argmax_stage2_slot_base_offset", 0),
-                    ("argmax_stage2_num_slots", 0),
-                    ("argmax_stage2_expected_remote_incs", 0),
-                    ("argmax_stage2_local_slot_offset", 0),
-                    ("argmax_mesh_local_send_slot_offset", 0),
-                    ("argmax_gather_cb", argmax_gather_cb if enable_argmax else 0),
-                    ("argmax_indices_cb", argmax_indices_cb if enable_argmax else 0),
+                    ("argmax_num_values", argmax_num_values),
+                    ("argmax_winner_page_bytes", argmax_winner_page_bytes),
+                    ("argmax_num_senders", argmax_num_senders),
+                    ("argmax_expected_remote_incs", argmax_expected_remote_incs),
+                    ("argmax_receiver_semaphore_id", argmax_receiver_semaphore_id),
+                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("argmax_mesh_mode", argmax_mesh_mode),
+                    ("argmax_stage1_sender", argmax_stage1_sender),
+                    ("argmax_stage1_receiver", argmax_stage1_receiver),
+                    ("argmax_stage2_sender", argmax_stage2_sender),
+                    ("argmax_stage2_receiver", argmax_stage2_receiver),
+                    ("argmax_stage1_slot_base_offset", argmax_stage1_slot_base_offset),
+                    ("argmax_stage1_num_slots", argmax_stage1_num_slots),
+                    ("argmax_stage1_expected_remote_incs", argmax_stage1_expected_remote_incs),
+                    ("argmax_stage1_local_slot_offset", argmax_stage1_local_slot_offset),
+                    ("argmax_stage2_slot_base_offset", argmax_stage2_slot_base_offset),
+                    ("argmax_stage2_num_slots", argmax_stage2_num_slots),
+                    ("argmax_stage2_expected_remote_incs", argmax_stage2_expected_remote_incs),
+                    ("argmax_stage2_local_slot_offset", argmax_stage2_local_slot_offset),
+                    ("argmax_mesh_local_send_slot_offset", argmax_mesh_local_send_slot_offset),
+                    ("argmax_gather_cb", argmax_gather_cb),
+                    ("argmax_indices_cb", argmax_indices_cb),
                 ]
 
                 # ================================================================
@@ -411,8 +538,8 @@ class LMHeadSampling:
                     ("mcast_src_num_pages", num_tiles_k),
                     ("mcast_dst_cb", mcast_dst_cb),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
-                    ("argmax_winner_page_bytes", argmax_winner_page_bytes if enable_argmax else 0),
-                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id if enable_argmax else 0),
+                    ("argmax_winner_page_bytes", argmax_winner_page_bytes),
+                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
                 ]
 
                 # ================================================================
@@ -432,25 +559,21 @@ class LMHeadSampling:
                 # CCL Broadcast common runtime args
                 # ================================================================
                 if skip_ccl:
-                    if enable_argmax:
-                        final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
-                        ncrisc_bcast_common_args = [
-                            int(indices_tensor_device.buffer_address()),
-                            int(output_index_tensor_device.buffer_address()),
-                            int(final_core_phys.x),
-                            int(final_core_phys.y),
-                            0,
-                            0,
-                            0,
-                        ]
-                        brisc_bcast_common_args = [
-                            int(final_core_phys.x),
-                            int(final_core_phys.y),
-                            0,
-                        ]
-                    else:
-                        ncrisc_bcast_common_args = []
-                        brisc_bcast_common_args = []
+                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
+                    ncrisc_bcast_common_args = [
+                        int(indices_tensor_device.buffer_address()),
+                        int(output_index_tensor_device.buffer_address()),
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        0,
+                        0,
+                        0,
+                    ]
+                    brisc_bcast_common_args = [
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        0,
+                    ]
                     dst_nodes = []
                     fabric_node_id = None
                 else:
@@ -478,13 +601,13 @@ class LMHeadSampling:
 
                     num_connections = len(dst_nodes)
 
-                    ncrisc_bcast_common_args = [
+                    ccl_reader_common_args = [
                         int(input_tensor_device.buffer_address()),  # tensor_address0
                         tile_id_start,  # tile_id_start
                         bcast_num_pages,  # tile_id_end
                     ]
 
-                    brisc_bcast_common_args = [
+                    ccl_writer_common_args = [
                         int(intermediate_tensor_device.buffer_address()),  # tensor_address0
                         int(out_ready_sem_addr),  # out_ready_sem_bank_addr
                         tile_id_start,  # tile_id_start
@@ -500,6 +623,22 @@ class LMHeadSampling:
                         ring_index,  # ring_index
                         int(secondary_sync_sem_addr),  # secondary_sync_sem
                         num_connections,  # num_connections
+                    ]
+
+                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
+                    ncrisc_bcast_common_args = ccl_reader_common_args + [
+                        int(indices_tensor_device.buffer_address()),
+                        int(output_index_tensor_device.buffer_address()),
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        int(scratch_tensors_per_device[device_idx].buffer_address()),
+                        global_sem_addr,
+                        global_stage2_sem_addr,
+                    ]
+                    brisc_bcast_common_args = ccl_writer_common_args + [
+                        int(final_core_phys.x),
+                        int(final_core_phys.y),
+                        int(scratch_tensors_per_device[device_idx].buffer_address()),
                     ]
 
                 # ================================================================
@@ -666,8 +805,14 @@ class LMHeadSampling:
                         ),
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_argmax_final_core",
-                            core_range=argmax_final_core if enable_argmax else mcast_sender_core,
-                            value=1 if enable_argmax else 0,
+                            core_range=argmax_final_core,
+                            value=1,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_argmax_mesh_sender_core",
+                            core_range=argmax_final_core,
+                            value=1 if is_argmax_mesh_sender_core else 0,
                             other_value=0,
                         ),
                     ],
@@ -684,9 +829,9 @@ class LMHeadSampling:
                             )
                         ]
                     ),
-                    # Per-core runtime args: empty for BRISC on worker_core (fabric args appended later)
+                    # Per-core runtime args: mesh argmax senders get BRISC sender metadata.
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
-                        brisc_args=[(worker_core, [])],
+                        brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
                     ),
                 )
 
@@ -759,23 +904,45 @@ class LMHeadSampling:
 
                 # Append fabric connection args to BRISC kernel if needed (CCL mode only)
                 if not skip_ccl and num_connections > 0:
-                    for idx, kernel in enumerate(program.kernels):
-                        if kernel.core_ranges.contains(worker_core) and isinstance(
-                            kernel.config, ttnn.WriterConfigDescriptor
+                    ccl_writer_group = None
+                    for group in kernel_result.groups:
+                        if group.compile_time_arg_values.get("is_input_core", 0) == 1 and group.core_range_set.contains(
+                            worker_core
                         ):
-                            writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
-                            fabric_args = ttnn.setup_routing_plane_connection(
-                                fabric_node_id, dst_nodes, [0], program, idx, worker_core
-                            )
-                            writer_rt_args_ref.extend(fabric_args)
+                            ccl_writer_group = group
                             break
+                    if ccl_writer_group is None:
+                        raise RuntimeError("Missing is_input_core kernel group for CCL writer fabric append")
+                    writer_kernel_idx = ccl_writer_group.brisc_kernel_index
+                    writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
+                    fabric_args = ttnn.setup_routing_plane_connection(
+                        fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
+                    )
+                    writer_rt_args_ref.extend(fabric_args)
+
+                if not skip_ccl and is_argmax_mesh_sender_core:
+                    sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)
+                    if sender_group is None:
+                        raise RuntimeError("Missing argmax mesh sender kernel group for BRISC fabric append")
+                    sender_kernel_idx = sender_group.brisc_kernel_index
+                    fabric_rt_args = ttnn.setup_fabric_connection(
+                        src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
+                        dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),
+                        link_idx=sender_link_idx,
+                        program_descriptor=program,
+                        worker_core=argmax_final_core,
+                    )
+                    program.kernels[sender_kernel_idx].runtime_args[argmax_final_core.x][argmax_final_core.y].extend(
+                        fabric_rt_args
+                    )
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute generic op
         io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, vocab_tensor, output_tensor]
-        if enable_argmax:
-            io_tensors.extend([indices_tensor, output_index_tensor])
+        io_tensors.extend([indices_tensor, output_index_tensor])
+        if not skip_ccl:
+            io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return result
