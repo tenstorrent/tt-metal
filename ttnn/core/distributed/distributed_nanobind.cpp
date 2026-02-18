@@ -373,6 +373,18 @@ void py_module(nb::module_& mod) {
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
         .def("get_view", &MeshDevice::get_view, nb::rv_policy::reference_internal)
+        .def(
+            "get_system_mesh_id",
+            &MeshDevice::get_system_mesh_id,
+            R"doc(
+               Get the system mesh ID assigned by the control plane.
+
+               This ID uniquely identifies the mesh in the system and is used for
+               inter-mesh communication and fabric routing.
+
+               Returns:
+                   int: The system mesh ID as an unsigned integer.
+           )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
