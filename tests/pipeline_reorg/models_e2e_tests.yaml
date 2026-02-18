@@ -38,3 +38,15 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+
+- name: Llama 3.3-70B Galaxy e2e tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
+  model: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
