@@ -220,9 +220,12 @@ def test_forward_pass(
         tt_output = MLPClass.forward_decode(tt_input_gathered, run_config)
 
     # Perform reduce_scatter after forward pass
+    pre_scatter_output = tt_output
     tt_output = ttnn.experimental.reduce_scatter_minimal_async(
-        tt_output, **ccl.populate_reduce_scatter_runtime_args(run_config["reduce_scatter_async"])
+        pre_scatter_output, **ccl.populate_reduce_scatter_runtime_args(run_config["reduce_scatter_async"])
     )
+    # Deallocate pre-scatter tensor to prevent memory leak
+    ttnn.deallocate(pre_scatter_output)
 
     # Cleanup gathered input
     ttnn.deallocate(tt_input_gathered)

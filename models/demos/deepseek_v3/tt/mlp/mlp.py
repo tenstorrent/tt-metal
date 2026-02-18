@@ -450,7 +450,7 @@ class MLP(AbstractModule):
         w3_out = ttnn.linear(
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w3"]
         )
-        ttnn.deallocate(x)
+        # Note: Input tensor x is owned by caller and should not be deallocated here
 
         # Apply silu
         # w1_out_activated = cls._silu_workaround(w1_out)
