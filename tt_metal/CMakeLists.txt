@@ -276,6 +276,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        tt_metal_scaleout
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
         TT::ScaleoutTools
@@ -328,6 +329,7 @@ add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
 add_subdirectory(impl/experimental/udm)
+add_subdirectory(experimental/scaleout)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
