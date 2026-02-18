@@ -352,6 +352,11 @@ void MetalContext::reinitialize_dispatch_managers() {
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
 }
 
+void MetalContext::set_fast_dispatch_mode(bool enable) {
+    rtoptions().set_fast_dispatch(enable);
+    reinitialize_dispatch_managers();
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 

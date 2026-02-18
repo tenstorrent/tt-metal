@@ -101,9 +101,9 @@ public:
     // Switch from mock mode to real hardware (requires all devices to be closed)
     void reinitialize_for_real_hardware();
 
-    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
-    // This updates cached dispatch/compute core allocations to match current dispatch mode
-    void reinitialize_dispatch_managers();
+    // Set fast dispatch mode and automatically reinitialize dispatch managers
+    // This ensures dispatch/compute core allocations stay in sync with the mode
+    void set_fast_dispatch_mode(bool enable);
 
     // Control plane accessors
     void initialize_control_plane();
@@ -162,6 +162,10 @@ private:
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
+
+    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
+    // This updates cached dispatch/compute core allocations to match current dispatch mode
+    void reinitialize_dispatch_managers();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
