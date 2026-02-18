@@ -111,7 +111,7 @@ void core_agnostic_main() {
 
 void kernel_main() {
 #ifdef COMPILE_FOR_TRISC
-#ifdef TRISC_UNPACK
+#ifdef TRISC_PACK
     core_agnostic_main();
 #endif
 #else
