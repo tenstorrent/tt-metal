@@ -461,7 +461,9 @@ void bind_sdpa(nb::module_& mod) {
     const auto* mla_doc_embedding_space =
         R"doc(
         Causal MLA attention variant with V in embedding space.
+        The input tensor v in embedding space is obtained by matrix multiplying the latent kv tensor to the embedding space.
         This is useful when the head dim in embedding space is smaller than the last dim of the latent kv tensor, as it can reduce amount of compute in large sequence length scenarios.
+        This is a kernel optimization, and not something inherently in nature of MLA.
         This is based on the following formulas:
         - attention = softmax(QK^T)V
         - K = kv_latent * W_k
@@ -470,9 +472,9 @@ void bind_sdpa(nb::module_& mod) {
         - we can precompute kv_latent * W_k and use it to compute attention (in Deepseek, last dim of latent kv tensor is 512, while head dim in embedding space is 128).
 
         Args:
-            input_tensor_q (ttnn.Tensor): the input tensor.                         [b x nqh  x s x dh]
-            input_tensor_k (ttnn.Tensor): the latent kv matrix.                     [b x 1    x s x dh]
-            input_tensor_v (ttnn.Tensor): the input tensor v in embedding space.    [b x nqh  x s x dv]
+            input_tensor_q (ttnn.Tensor): the input tensor.                                                                                             [b x nqh  x s x dh]
+            input_tensor_k (ttnn.Tensor): the latent kv matrix. Num heads is 1 as we only have one latent kv tensor for all heads.                      [b x 1    x s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor v in embedding space. Num heads is nqh as we have one input tensor v for each head.          [b x nqh  x s x dv]
 
         Keyword args:
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
