@@ -10,11 +10,9 @@ All submodule helpers return tensors in NHWC [B, H, W, C] format
 to match TTNN conventions (except where noted).
 """
 
-from pathlib import Path
 from typing import List, Tuple
 
 import torch
-import torch.nn.functional as F
 
 
 def _load_backbone(config_path: str, checkpoint_path: str):
@@ -81,9 +79,7 @@ class SwinLReference:
         return attn_out.view(B, H, W, C)
 
     @torch.no_grad()
-    def forward_ffn(
-        self, x_nhwc: torch.Tensor, hw: Tuple[int, int], stage_idx: int, block_idx: int
-    ) -> torch.Tensor:
+    def forward_ffn(self, x_nhwc: torch.Tensor, hw: Tuple[int, int], stage_idx: int, block_idx: int) -> torch.Tensor:
         """
         Run one FFN sublayer (norm2 → FFN layers only, no identity) on input.
         Note: mmdet FFN.forward() adds an internal residual (identity + layers(x)).
@@ -99,9 +95,7 @@ class SwinLReference:
         return ffn_out.view(B, H, W, C)
 
     @torch.no_grad()
-    def forward_block(
-        self, x_nhwc: torch.Tensor, hw: Tuple[int, int], stage_idx: int, block_idx: int
-    ) -> torch.Tensor:
+    def forward_block(self, x_nhwc: torch.Tensor, hw: Tuple[int, int], stage_idx: int, block_idx: int) -> torch.Tensor:
         """
         Run one full Swin block via the actual mmdet block forward.
         Input/output: [B, H, W, C] NHWC.

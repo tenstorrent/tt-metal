@@ -12,7 +12,11 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.dino_5scale_swin_l.common import (
-    DINO_INPUT_H, DINO_INPUT_W, SWIN_L_EMBED_DIM, SWIN_L_NUM_HEADS, SWIN_L_WINDOW_SIZE,
+    DINO_INPUT_H,
+    DINO_INPUT_W,
+    SWIN_L_EMBED_DIM,
+    SWIN_L_NUM_HEADS,
+    SWIN_L_WINDOW_SIZE,
 )
 from loguru import logger
 
@@ -27,7 +31,8 @@ def test_ttnn_swin_block_pcc(device, swin_l_ref, swin_l_ckpt_path, stage_idx, bl
     """Compare TTNN Swin block output vs PyTorch."""
     from models.experimental.swin_l.tt.tt_swin_block import TtSwinBlock
     from models.experimental.swin_l.tt.model_preprocessing import (
-        load_backbone_weights, compute_attn_masks,
+        load_backbone_weights,
+        compute_attn_masks,
     )
 
     ws = SWIN_L_WINDOW_SIZE
@@ -51,18 +56,22 @@ def test_ttnn_swin_block_pcc(device, swin_l_ref, swin_l_ckpt_path, stage_idx, bl
     # TTNN
     params = load_backbone_weights(swin_l_ckpt_path, device)
     attn_masks = compute_attn_masks(DINO_INPUT_H, DINO_INPUT_W, 4, ws, device)
-    dim = SWIN_L_EMBED_DIM * (2 ** stage_idx)
+    dim = SWIN_L_EMBED_DIM * (2**stage_idx)
     shift = [0, 0] if block_idx % 2 == 0 else [ws // 2, ws // 2]
 
     ttnn_block = TtSwinBlock(
-        device, params["stages"][stage_idx]["blocks"][block_idx],
-        dim=dim, num_heads=SWIN_L_NUM_HEADS[stage_idx],
-        window_size=[ws, ws], shift_size=shift,
+        device,
+        params["stages"][stage_idx]["blocks"][block_idx],
+        dim=dim,
+        num_heads=SWIN_L_NUM_HEADS[stage_idx],
+        window_size=[ws, ws],
+        shift_size=shift,
         attn_mask=attn_masks[stage_idx],
     )
 
-    ttnn_x = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-                              memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_x = ttnn.from_torch(
+        x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     ttnn_x = ttnn.to_layout(ttnn_x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn_out = ttnn_block(ttnn_x)
 
