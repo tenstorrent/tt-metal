@@ -134,7 +134,7 @@ class TtBarkFineModel:
 
         # Position embeddings
         seq_len = tt_hidden.shape[-2]
-        position_ids = torch.arange(0, seq_len, dtype=torch.long)
+        position_ids = torch.arange(0, seq_len, dtype=torch.int32)
         tt_position_ids = ttnn.from_torch(
             position_ids.unsqueeze(0).unsqueeze(0), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
