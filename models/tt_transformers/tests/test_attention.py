@@ -68,7 +68,7 @@ def test_attention_inference(
 ):
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
-    pcc = 0.986  # pcc reduced from .99 while investigating issue #36378
+    pcc = 0.99
     num_tensors = 2
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
