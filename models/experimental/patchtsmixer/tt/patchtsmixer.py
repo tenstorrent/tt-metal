@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 
 from .patchtsmixer_utils import apply_linear_height_sharded, make_1d_mcast_prog_config_for_height_sharded
