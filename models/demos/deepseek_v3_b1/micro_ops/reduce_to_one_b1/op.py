@@ -91,6 +91,7 @@ class ReduceToOneB1:
         semaphores: list,
         root_coord: ttnn.MeshCoordinate,
         exit_coord: Optional[ttnn.MeshCoordinate] = None,
+        num_iterations: int = 1,
     ) -> ttnn.Tensor:
         """
         Execute reduce-to-one operation using generic_op.
@@ -171,6 +172,7 @@ class ReduceToOneB1:
         received_cb_r1 = 1  # Round 1: LEAF → ROOT*
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
+        packet_header_cb = 4  # Packet header (persistent)
         received_cb_r2 = 5  # Round 2: ROOT3 → ROOT2/ROOT1
         received_cb_r3 = 6  # Round 3: ROOT2 → ROOT1
         scratch_cb = 7  # Scratch for compute
@@ -293,6 +295,7 @@ class ReduceToOneB1:
                     ("received_cb_r1", received_cb_r1),
                     ("received_cb_r2", received_cb_r2),
                     ("received_cb_r3", received_cb_r3),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # Writer (BRISC) compile-time args
@@ -303,6 +306,7 @@ class ReduceToOneB1:
                     ("local_cb", local_cb),
                     ("scratch_cb", scratch_cb),
                     ("packet_cb", packet_cb),
+                    ("packet_header_cb", packet_header_cb),
                     ("num_hops", 1),
                     ("dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
                     ("dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
@@ -310,6 +314,7 @@ class ReduceToOneB1:
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
                     ("slot_size_bytes", slot_size_bytes),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # Compute (TRISC) compile-time args
@@ -322,6 +327,7 @@ class ReduceToOneB1:
                     ("received_cb_r3", received_cb_r3),
                     ("output_cb", output_cb),
                     ("scratch_cb", scratch_cb),
+                    ("num_loop_iters", num_iterations),
                 ]
 
                 # === Common Runtime Args ===
@@ -351,6 +357,7 @@ class ReduceToOneB1:
                         output_tensor_device.buffer_address(),  # output_base_addr
                         shard_idx,  # shard_idx
                     ]
+
                     brisc_per_core_args.append((core, worker_args))
 
                 # Fabric cores BRISC args: worker semaphore IDs (fabric args appended later)
@@ -413,6 +420,19 @@ class ReduceToOneB1:
                     ],
                 )
 
+                # packet_header_cb: persistent packet header storage
+                cb4_desc = ttnn.CBDescriptor(
+                    total_size=packet_header_size_bytes,
+                    core_ranges=all_cores_set,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=packet_header_cb,
+                            data_format=dtype,
+                            page_size=packet_header_size_bytes,
+                        )
+                    ],
+                )
+
                 # received_cb_r2: backed by intermediate tensor r2
                 cb5_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r2, intermediate_r2_device)
                 cb5_desc.core_ranges = all_cores_set
@@ -454,7 +474,17 @@ class ReduceToOneB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc, cb6_desc, cb7_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc, cb6_desc, cb7_desc]
+
+                # Build unified compile-time core descriptors
+                unified_ct_core_descriptors = [
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_fabric_core",
+                        core_range=fabric_core_set,
+                        value=1,
+                        other_value=0,
+                    ),
+                ]
 
                 # === Unified Kernel Descriptor ===
                 unified_kernel = UnifiedKernelDescriptor(
@@ -469,14 +499,7 @@ class ReduceToOneB1:
                         fp32_dest_acc_en=False,
                         math_approx_mode=False,
                     ),
-                    unified_compile_time_core_descriptors=[
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_fabric_core",
-                            core_range=fabric_core_set,
-                            value=1,
-                            other_value=0,
-                        ),
-                    ],
+                    unified_compile_time_core_descriptors=unified_ct_core_descriptors,
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                     ),
