@@ -212,6 +212,12 @@ def get_mesh_device_logical_chip_combinations():
     return combinations
 
 
+@pytest.mark.parametrize(
+    "mesh_device, logical_chip_id",
+    get_mesh_device_logical_chip_combinations(),
+    indirect=["mesh_device"],
+)
+@skip_for_wormhole_b0("This test is for blackhole")
 def test_specific_chip_mla_sdpa(
     mesh_device,
     logical_chip_id,
