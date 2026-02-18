@@ -1190,7 +1190,6 @@ def test_09_routers_comparison(mesh_device, arch_config):
             "num_experts": num_experts,
             "num_experts_per_tok": experts_per_tok,
             "memory_config": memory_config_str,
-            "use_throughput_experts": True,  # Add this for GPT-OSS mode
         }
         router = TopKRouter(mesh_device, router_config)  # Fixed order: mesh_device first, then config
     else:

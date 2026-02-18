@@ -95,10 +95,10 @@ def test_gpt_oss_config_loading():
 
     # Validate router configuration
     assert moe_config["router"]["type"] == "topk"
-    assert moe_config["router"]["use_throughput_experts"] is True
 
     # Validate expert configuration
-    assert moe_config["experts"]["type"] == "throughput"
+    # GPT-OSS now uses distributed experts with clamped SwiGLU
+    assert moe_config["experts"]["distributed"] is True
     assert moe_config["experts"]["distributed"] is True
     assert moe_config["experts"]["shared"] is False
 
@@ -124,7 +124,6 @@ def test_topk_router_initialization(mesh_device_fixture):
         "num_experts": 128,
         "num_experts_per_tok": 4,
         "hidden_size": 2880,
-        "use_throughput_experts": True,
     }
 
     # Create router (without weights for now)
@@ -134,7 +133,6 @@ def test_topk_router_initialization(mesh_device_fixture):
     assert router.num_experts == 128
     assert router.num_experts_per_tok == 4
     assert router.hidden_size == 2880
-    assert router.use_throughput_experts is True
 
     logger.info("✅ TopKRouter initialized successfully")
 
@@ -152,7 +150,6 @@ def test_topk_router_weight_loading(mesh_device_fixture):
         "num_experts": 128,
         "num_experts_per_tok": 4,
         "hidden_size": 2880,
-        "use_throughput_experts": True,
     }
 
     # Create dummy weights
@@ -184,7 +181,6 @@ def test_topk_router_forward(mesh_device_fixture):
         "num_experts": 128,
         "num_experts_per_tok": 4,
         "hidden_size": 2880,
-        "use_throughput_experts": True,
     }
 
     # Create dummy weights
@@ -393,25 +389,29 @@ def test_gpt_oss_all_to_all_config(mesh_device_fixture):
     assert moe_block.all_to_all_config.cluster_axis == 0  # Expert parallel axis
 
     # Verify expert type is set correctly
-    assert moe_block.expert_type == "throughput"
+    # GPT-OSS now uses distributed experts
+    assert moe_block.expert_type == "distributed"
 
     logger.info("✅ GPT-OSS AllToAll configuration correct with Linear topology")
 
 
 def test_gpt_oss_expert_type_detection():
-    """Test that GPT-OSS configuration correctly sets expert_type to 'throughput'."""
+    """Test that GPT-OSS configuration correctly uses distributed experts with clamped SwiGLU."""
     config_path = Path(__file__).parent.parent / "configs" / "gpt_oss.json"
 
     with open(config_path, "r") as f:
         config = json.load(f)
 
-    # Check that expert type is explicitly set
-    assert config["moe_block"]["experts"]["type"] == "throughput"
+    # Check that distributed experts are enabled
+    assert config["moe_block"]["experts"]["distributed"] is True
 
-    # Check that router indicates throughput experts
-    assert config["moe_block"]["router"]["use_throughput_experts"] is True
+    # Check that clamped SwiGLU activation is configured
+    activation = config["moe_block"]["experts"].get("activation", {})
+    assert activation.get("type") == "clamped_swiglu"
+    assert activation.get("alpha") == 1.702
+    assert activation.get("gate_limit") == 7.0
 
-    logger.info("✅ GPT-OSS config correctly specifies throughput experts")
+    logger.info("✅ GPT-OSS config correctly specifies distributed experts with clamped SwiGLU")
 
 
 @pytest.mark.skipif(not os.path.exists(GPT_OSS_WEIGHTS_PATH), reason="GPT-OSS weights not available")

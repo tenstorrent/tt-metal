@@ -150,11 +150,6 @@ class MoEBlock:
 
         elif router_type == "topk":
             # GPT-OSS style router
-            router_params.update(
-                {
-                    "use_throughput_experts": router_config.get("use_throughput_experts", True),
-                }
-            )
             self.router = TopKRouter(self.mesh_device, router_params)
         else:
             raise ValueError(f"Unknown router type: {router_type}")

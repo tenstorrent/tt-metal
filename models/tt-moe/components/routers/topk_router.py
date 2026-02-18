@@ -46,7 +46,6 @@ class TopKRouter(BaseRouter):
                 - num_experts: Total number of experts
                 - num_experts_per_tok: Number of experts to select (k)
                 - hidden_size: Input hidden dimension
-                - use_throughput_experts: Whether to use dense weights for throughput mode
             state_dict: Router weights with keys 'weight' and 'bias'
             tensor_cache_path: Optional cache path
         """
@@ -62,7 +61,6 @@ class TopKRouter(BaseRouter):
         self.num_experts = config["num_experts"]
         self.num_experts_per_tok = config["num_experts_per_tok"]
         self.hidden_size = config["hidden_size"]
-        self.use_throughput_experts = config.get("use_throughput_experts", True)
 
         # Compute kernel configuration for numerical stability
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -157,7 +155,7 @@ class TopKRouter(BaseRouter):
         Returns:
             Tuple of:
                 - expert_indices: Selected expert indices [batch*seq_len, num_experts_per_tok]
-                - expert_weights: Normalized weights (sparse or dense based on use_throughput_experts)
+                - expert_weights: Normalized weights in dense format
         """
         if self.weight is None or self.bias is None:
             raise ValueError("Router weights not loaded. Call load_weights() first.")
@@ -238,15 +236,8 @@ class TopKRouter(BaseRouter):
             expert_weights, dim=-1, numeric_stable=True, compute_kernel_config=self.compute_config
         )
 
-        # Return format based on mode
-        if self.use_throughput_experts:
-            # Dense format for throughput experts (all-to-all dispatch)
-            return expert_indices, expert_weights
-        else:
-            # Sparse format for standard experts
-            # Scatter weights back to full expert dimension
-            sparse_weights = ttnn.scatter(ttnn.zeros_like(logits), dim=1, index=expert_indices, src=expert_weights)
-            return expert_indices, sparse_weights
+        # Return dense format for all experts (all-to-all dispatch)
+        return expert_indices, expert_weights
 
     def get_expert_capacity(self, seq_len: int, batch_size: int) -> int:
         """

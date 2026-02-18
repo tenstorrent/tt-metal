@@ -9,8 +9,7 @@
     },
 
     "router": {
-      "type": "topk",
-      "use_throughput_experts": true
+      "type": "topk"
     },
 
     "experts": {
