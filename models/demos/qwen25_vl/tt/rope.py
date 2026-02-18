@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat, precompute_freqs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 
 
@@ -29,6 +30,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling],
         use_qk_fused: bool = False,  # For Qwen2.5 VL, we do not use qk fused ops (rotary embedding + paged cache update)
         datatype=ttnn.bfloat16,
+        prefetcher: Optional[Prefetcher] = None,
     ):
         super().__init__()
 
@@ -39,7 +41,6 @@ class RotarySetup(LightweightModule):
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-
         # When fused QK ops are enabled, the transformation matrix and batch grid
         # must cover 2x the batch (one set for Q, one for K)
         doubled_batch_size = batch_size * 2 if use_qk_fused else batch_size
@@ -72,6 +73,7 @@ class RotarySetup(LightweightModule):
             1,
             self.batch_size_per_device_group,
             1,
+            # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
@@ -165,14 +167,14 @@ class RotarySetup(LightweightModule):
         pad_size = nearest_32(batch) - batch
         position_idxs_2d = torch.nn.functional.pad(position_idxs_2d, (0, pad_size), "constant", 0)
 
-        if on_host:
+        if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
                 position_idxs_2d,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
-        else:
+        else:  # On device
             rot_idxs = ttnn.as_tensor(
                 position_idxs_2d,
                 dtype=ttnn.uint32,
@@ -187,6 +189,7 @@ class RotarySetup(LightweightModule):
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         device = self.device
 
+        # If position_idxs is a torch tensor, get the TTNN version of it
         assert not isinstance(position_idxs, torch.Tensor), "position_idxs must be a ttnn tensor"
         assert position_idxs.device != device, "rot_idxs must be on device"
         assert len(position_idxs.shape) == 2 and position_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"

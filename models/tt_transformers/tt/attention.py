@@ -788,6 +788,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size: int = 1,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -827,8 +828,11 @@ class Attention(LightweightModule):
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
+        seq_len_per_user = seq_len // batch_size
 
-        # split qkv into heads
+        # For batched prefill: keep as [1, 1, batch*seq, qkv] through QKV split and RoPE
+        # (rotary_embedding_llama requires dim 0 == 1), then reshape to batched for SDPA.
+        # split qkv into heads: produces [1, n_heads, batch*seq, head_dim] (or [batch, ...] when batch_size==1)
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -874,6 +878,16 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
+        # For batched prefill: reshape Q/K/V from [1, heads, batch*seq, dim] to [batch, heads, seq_per_user, dim]
+        if batch_size > 1:
+            q_heads_1QSD = ttnn.reshape(q_heads_1QSD, [batch_size, self.n_local_heads, seq_len_per_user, self.head_dim])
+            k_heads_1KSD = ttnn.reshape(
+                k_heads_1KSD, [batch_size, self.n_local_kv_heads, seq_len_per_user, self.head_dim]
+            )
+            v_heads_1VSD = ttnn.reshape(
+                v_heads_1VSD, [batch_size, self.n_local_kv_heads, seq_len_per_user, self.head_dim]
+            )
+
         # Fill KV-Cache
         if kv_cache:
             keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
@@ -893,11 +907,32 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(v_heads_1VSD)
 
-        # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
+        if batch_size > 1:
+            # For batched prefill: K/V are [batch, kv_heads, seq_per_user, dim]
+            # Fill each user's KV cache separately using their page table
+            assert page_table is not None, "Batched prefill requires paged attention"
+            block_size = keys_BKSD.shape[2]
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+            for i in range(batch_size):
+                k_user = k_heads_1KSD_8b[i : i + 1]
+                v_user = v_heads_1VSD_8b[i : i + 1]
+                # Get per-user page table slice
+                pt_user = fill_page_table[i : i + 1]
+                page_len = pt_user.shape[1] * block_size
+                k_user_sliced = k_user[:, :, :page_len, :] if page_len < k_user.shape[2] else k_user
+                v_user_sliced = v_user[:, :, :page_len, :] if page_len < v_user.shape[2] else v_user
+                # user_id is a list of user IDs for batched prefill
+                ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, pt_user, batch_idx=user_id[i])
+                ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, pt_user, batch_idx=user_id[i])
         else:
+            k_fill = k_heads_1KSD_8b
             v_fill = v_heads_1VSD_8b
+
+            # sharding k_fill and v_fill to deal with update_cache memory limitation
+            if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+                k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+                v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
 
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
@@ -933,6 +968,10 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
+        # For batched prefill, SDPA operates on [batch, heads, seq_per_user, dim]
+        # is_causal=True handles per-batch-item causal masking
+        sdpa_seq_len = seq_len_per_user if batch_size > 1 else seq_len
+
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
@@ -954,7 +993,7 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
             )
 
         # deallocate keys and values
@@ -962,6 +1001,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
+        # Reshape back to full sequence for output matmul
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
         ###
@@ -1031,6 +1071,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1041,6 +1082,7 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

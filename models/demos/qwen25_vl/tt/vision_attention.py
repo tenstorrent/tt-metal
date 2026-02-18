@@ -26,6 +26,7 @@ class VisionAttention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        window_info=None,
     ):
         return self.forward_prefill(
             x,
@@ -36,6 +37,7 @@ class VisionAttention(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=None,
+            window_info=window_info,
         )
 
     def __init(
@@ -340,17 +342,22 @@ class VisionAttention(LightweightModule):
 
         dram_shard_grid_width = 8
         target_device_shape = (1, 1)  # each 1x1 device runs a vision model
+        per_core_N_qkv = math.ceil(configuration.vision_qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width)
+        # Compute optimal out_subblock_w: largest value in [1..4] that divides per_core_N and keeps product <= 4
+        out_subblock_w_qkv = 4
+        while out_subblock_w_qkv > 1:
+            if per_core_N_qkv % out_subblock_w_qkv == 0:
+                break
+            out_subblock_w_qkv -= 1
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            in0_block_w=4,  # Process 4 K-tiles per iteration (K=1280 → 10 iterations vs 40 with in0_block_w=1)
+            out_subblock_h=1,  # Must be divisible by per_core_M (which can be 1 for small seqlens)
+            out_subblock_w=out_subblock_w_qkv,  # Must be divisible by per_core_N, product with h <= 4
             per_core_M=max(
                 1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
             ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=math.ceil(
-                configuration.vision_qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width
-            ),  # N / TILE_WIDTH / grid width
+            per_core_N=per_core_N_qkv,  # N / TILE_WIDTH / grid width
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -366,6 +373,7 @@ class VisionAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        window_info=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -478,6 +486,44 @@ class VisionAttention(LightweightModule):
                     Mode.PREFILL, seq_len, chunk_start_idx, None
                 ),
             )
+        elif window_info is not None and window_info.get("uniform", False):
+            # Batched SDPA optimization: reshape per-window tokens into batch dimension
+            # and use regular SDPA instead of windowed SDPA. This converts O(S^2) to O(S*W)
+            # by eliminating cross-window compute that would be masked out anyway.
+            W = window_info["window_size"]
+            # Include tail-padding as extra "empty" windows — they process zeros and output zeros.
+            # This avoids slice/pad which is problematic for bfloat8_b tensors.
+            # seq_len is always a multiple of W (seq_len is multiple of 2048, W divides 2048).
+            assert seq_len % W == 0, f"seq_len ({seq_len}) must be divisible by window_size ({W})"
+            total_windows = seq_len // W
+
+            # Reshape: [1, NQH, seq_len, DH] -> [total_windows, NQH, W, DH]
+            q_batched = ttnn.reshape(q_heads_1QSD_8b, [total_windows, self.n_local_heads, W, self.padded_head_dim])
+            k_batched = ttnn.reshape(k_heads_1KSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
+            v_batched = ttnn.reshape(v_heads_1VSD_8b, [total_windows, self.n_local_kv_heads, W, self.padded_head_dim])
+
+            ttnn.deallocate(q_heads_1QSD_8b)
+            ttnn.deallocate(k_heads_1KSD_8b)
+            ttnn.deallocate(v_heads_1VSD_8b)
+
+            # Regular SDPA (no mask, is_causal=False) — each window is independent
+            attn_output_batched = ttnn.transformer.scaled_dot_product_attention(
+                q_batched,
+                k_batched,
+                v_batched,
+                is_causal=False,
+                scale=self.scale,
+                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                program_config=self.model_config["SDPA_PROGCFG"](W),
+            )
+
+            ttnn.deallocate(q_batched)
+            ttnn.deallocate(k_batched)
+            ttnn.deallocate(v_batched)
+
+            # Reshape back: [total_windows, NQH, W, DH] -> [1, NQH, seq_len, DH]
+            attn_output_84SD = ttnn.reshape(attn_output_batched, [1, self.n_local_heads, seq_len, self.padded_head_dim])
+            ttnn.deallocate(attn_output_batched)
         else:
             attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -489,10 +535,11 @@ class VisionAttention(LightweightModule):
                 program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
             )
 
-        # deallocate keys and values
-        ttnn.deallocate(q_heads_1QSD_8b)
-        ttnn.deallocate(k_heads_1KSD_8b)
-        ttnn.deallocate(v_heads_1VSD_8b)
+        # deallocate keys and values (skip if already deallocated by batched SDPA path)
+        if not (window_info is not None and window_info.get("uniform", False) and chunk_start_idx is None):
+            ttnn.deallocate(q_heads_1QSD_8b)
+            ttnn.deallocate(k_heads_1KSD_8b)
+            ttnn.deallocate(v_heads_1VSD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 

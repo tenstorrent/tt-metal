@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import time
 from types import SimpleNamespace
 from typing import Mapping, Optional
 
@@ -120,6 +120,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             self.reference_model is not None and self.visual_model is not None
         ), "Reference model and visual model must be provided for vLLM"
 
+        self._decode_iteration = 0
+
         super().__init__(*args, **kwargs)
 
     @classmethod
@@ -212,23 +214,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         for i, plen in enumerate(prompt_lens):
             inputs.attention_mask[i, :plen] = 1
 
-        if (
-            "pixel_values" in kwargs
-            and len(kwargs["pixel_values"]) > 0
-            and kwargs["pixel_values"][0] is not None
-            # kwargs["pixel_values"] is a list,
-            # each element is a list of images for one user
-            # We only check if the first user's pixel_values is not None
-            # as we currently do not support mixed inputs of text-only
-            # users and text-image users
-        ):
+        if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
             inputs.pixel_values = torch.concat(
                 [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
             )
             assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
             _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-            # vLLM Qwen2.5-VL provides per-image `image_grid_thw` as a length-3
-            # 1D tensor (t, h, w). Stack into (num_images, 3).
             assert _grid_items and all(
                 im is not None for im in _grid_items
             ), "Expected non-empty image_grid_thw for image inputs."
@@ -241,7 +232,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 dim=0,
             )
             # Vision prefill
+            vision_start = time.perf_counter()
             image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            vision_time = time.perf_counter() - vision_start
+            batch_size = tokens.shape[0]
+            logger.info(
+                f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
+            )
         else:
             # text-only users
             image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
@@ -266,6 +263,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
         rot_mats = (cos, sin)
 
+        prefill_start = time.perf_counter()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
@@ -273,6 +271,16 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
+        prefill_time = time.perf_counter() - prefill_start
+        batch_size = tokens.shape[0]
+        avg_ttft = prefill_time / batch_size
+        prefill_tok_s = _prefill_lens[0] / prefill_time * batch_size if prefill_time > 0 else 0
+        logger.info(
+            f"[PERF] Text prefill (TTFT): {prefill_time*1000:.2f}ms "
+            f"({avg_ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
+        )
+
+        self._decode_iteration = 0
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
@@ -282,4 +290,20 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
 
-        return super().decode_forward(*args, **kwargs)
+        decode_start = time.perf_counter()
+        result = super().decode_forward(*args, **kwargs)
+        decode_time = time.perf_counter() - decode_start
+
+        self._decode_iteration += 1
+        batch_size = 1
+        if len(args) > 0 and isinstance(args[0], torch.Tensor):
+            batch_size = args[0].shape[0] if len(args[0].shape) > 0 else 1
+
+        tok_s_per_user = 1.0 / decode_time if decode_time > 0 else 0
+        tok_s_throughput = tok_s_per_user * batch_size
+        logger.info(
+            f"[PERF] Decode iteration {self._decode_iteration}: {decode_time*1000:.0f}ms @ "
+            f"{tok_s_per_user:.1f} tok/s/user ({tok_s_throughput:.1f} tok/s throughput)"
+        )
+
+        return result
