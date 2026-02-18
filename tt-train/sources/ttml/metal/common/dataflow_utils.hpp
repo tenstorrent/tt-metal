@@ -6,15 +6,12 @@
 
 #include <cstdint>
 #include <cstring>
+#include <tt-metalium/constants.hpp>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 
-constexpr uint32_t TILE_WIDTH = 32U;
-constexpr uint32_t TILE_HEIGHT = 32U;
-constexpr uint32_t FACE_WIDTH = 16U;
-constexpr uint32_t FACE_HEIGHT = 16U;
 constexpr uint32_t onetile = 1U;
 
 // IEEE 754 bit representations for compile-time template parameters
@@ -25,6 +22,7 @@ constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
 constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
 
 inline uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
+    using namespace tt::constants;
     // Get local coordinates within the tile
     uint32_t local_row = h % TILE_HEIGHT;
     uint32_t local_col = w % TILE_WIDTH;
@@ -153,6 +151,7 @@ inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
 // This creates a triangular pattern within the 32x32 tile for causal attention.
 template <typename T, T one_value, T zero_value>
 inline void fill_causal_mask_tile(uint32_t cb_id) {
+    using namespace tt::constants;
     T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
