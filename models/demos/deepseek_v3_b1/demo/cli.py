@@ -8,6 +8,7 @@ import argparse
 import sys
 from typing import TextIO
 
+from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
@@ -53,11 +54,19 @@ def run_demo(
     mesh_width: int,
     output_stream: TextIO,
 ) -> GenerationResult:
+    logger.info(
+        "Starting DeepSeek V3 B1 demo (max_new_tokens={}, loopback_mode={}, mesh_shape={}x{})",
+        max_new_tokens,
+        loopback_mode,
+        mesh_height,
+        mesh_width,
+    )
     if not is_slow_dispatch():
         raise RuntimeError(
             "DeepSeek V3 B1 demo requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
         )
 
+    logger.info("Loading tokenizer: {}", tokenizer_name_or_path)
     tokenizer = load_tokenizer(tokenizer_name_or_path)
     token_codec = TokenCodec(batch_size=1)
     is_first_decode_chunk = True
@@ -73,9 +82,12 @@ def run_demo(
 
     mesh_device: ttnn.MeshDevice | None = None
     try:
+        logger.info("Opening mesh device")
         mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_height, mesh_width))
+        logger.info("Creating DeepSeekV3 model")
         model = create_model(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
-        return run_generation(
+        logger.info("Running prefill + decode")
+        result = run_generation(
             model=model,
             tokenizer=tokenizer,
             prompt=prompt,
@@ -84,8 +96,15 @@ def run_demo(
             extract_token_id=token_codec.extract_token_id,
             write_text=write_text,
         )
+        logger.info(
+            "Generation complete (prompt_tokens={}, generated_tokens={})",
+            len(result.prompt_token_ids),
+            len(result.generated_token_ids),
+        )
+        return result
     finally:
         if mesh_device is not None:
+            logger.info("Closing mesh device")
             ttnn.close_mesh_device(mesh_device)
 
 
