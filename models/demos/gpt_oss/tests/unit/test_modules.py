@@ -172,17 +172,17 @@ def run_topk_router_component(
 
     # Convert to TTNN tensors
     mesh_mapper = (
-        ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+        ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
         if is_row_sharded
         else None
     )
 
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.reshape(-1, 1, 2880),
+        hidden_states.reshape(1, 1, -1, 2880),
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
 
     # Extract TT TopK router from decoder layer

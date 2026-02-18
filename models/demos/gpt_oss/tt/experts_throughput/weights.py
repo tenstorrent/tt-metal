@@ -7,6 +7,7 @@ This module handles loading and sharding expert weights across devices for
 the all_to_all-based throughput experts implementation.
 """
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -204,15 +205,9 @@ def load_throughput_expert_weights(
         # w1: [1, num_experts, hidden_size, intermediate_size]
         # w3: [1, num_experts, hidden_size, intermediate_size]
         # -> w1_w3_fused: [1, num_experts, hidden_size, 2*intermediate_size]
+        weights_cache_suffix = "throughput_w1_w3_fused"
+        bias_cache_suffix = "throughput_w1_w3_bias_fused"
         w1_w3_fused = torch.cat([w1, w3], dim=-1)
-
-        w1_w3_fused_tt = _shard_experts_by_device(
-            w1_w3_fused,
-            num_devices,
-            mesh_device,
-            weight_dtype,
-            get_cache_file_name(tensor_cache_path, "throughput_w1_w3_fused"),
-        )
 
         # Fuse biases
         # w1_bias: [1, num_experts, 1, intermediate_size]
@@ -220,12 +215,33 @@ def load_throughput_expert_weights(
         # -> w1_w3_bias_fused: [1, num_experts, 1, 2*intermediate_size]
         w1_w3_bias_fused = torch.cat([w1_bias, w3_bias], dim=-1)
 
+        if config.pad_w1_w3:
+            ideal_core_grid_size = 64
+            fused_hidden_size = 2 * intermediate_size
+            fused_hidden_size_t = fused_hidden_size / ttnn.TILE_SIZE
+            required_fused_hidden_size = (
+                math.ceil(fused_hidden_size_t / ideal_core_grid_size) * ideal_core_grid_size * ttnn.TILE_SIZE
+            )
+            pad_size = int(required_fused_hidden_size - fused_hidden_size)
+            w1_w3_fused = torch.nn.functional.pad(w1_w3_fused, (0, pad_size))
+            w1_w3_bias_fused = torch.nn.functional.pad(w1_w3_bias_fused, (0, pad_size))
+            weights_cache_suffix += f"_padded{pad_size}"
+            bias_cache_suffix += f"_padded{pad_size}"
+
+        w1_w3_fused_tt = _shard_experts_by_device(
+            w1_w3_fused,
+            num_devices,
+            mesh_device,
+            weight_dtype,
+            get_cache_file_name(tensor_cache_path, weights_cache_suffix),
+        )
+
         w1_w3_bias_fused_tt = _shard_experts_by_device(
             w1_w3_bias_fused,
             num_devices,
             mesh_device,
             ttnn.bfloat16,
-            get_cache_file_name(tensor_cache_path, "throughput_w1_w3_bias_fused"),
+            get_cache_file_name(tensor_cache_path, bias_cache_suffix),
             shard_dim=-3,  # Expert dimension after reshape
         )
     else:

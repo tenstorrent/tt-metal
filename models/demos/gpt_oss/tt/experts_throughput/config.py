@@ -45,6 +45,7 @@ class ThroughputExpertConfig:
     swiglu_limit: float = 7.0
     alpha: float = 1.702
     use_fused_gate_up: bool = True  # If True, fuse w1 and w3 into single matmul
+    pad_w1_w3: bool = False
     pad_w2: bool = False
     use_experimental_all_reduce: bool = False
 
@@ -140,15 +141,21 @@ class ThroughputProgramConfig:
     """
 
     # Core grid sizes for unfused gate/up projections
-    gate_up_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
+    gate_up_cores: tuple[int, int] = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
     down_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
 
     # Core grid sizes for fused gate/up projection (when use_fused_gate_up=True)
     # If None, defaults to gate_up_cores
-    fused_gate_up_cores: tuple[int, int] | None = (5, 6)  # 30 cores - divides N=180 evenly (180/30=6)
+    fused_gate_up_cores: tuple[int, int] | None = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
 
     # Matmul parameters for unfused mode
-    in0_block_w: int = 15  # ⭐ CRITICAL: K=90 tiles, 90/15 = 6 iterations (was 2 → 45 iters!)
+    in0_block_w: int = 15
     ## K dimension = 2880 / 32 = 90 tiles. Factors: 10, 15, 18, 30, 45
     ## in0_block_w=15 gives 6 iterations - good balance of register usage and memory efficiency
     out_subblock_h: int = 1  # M is small (4 tiles)
@@ -156,9 +163,9 @@ class ThroughputProgramConfig:
 
     # Matmul parameters for fused mode (when use_fused_gate_up=True)
     # Fused output is 2x wider (N=180 vs 90), so may benefit from different config
-    fused_in0_block_w: int | None = 15  # Same K blocking as unfused
+    fused_in0_block_w: int | None = 30  # Same K blocking as unfused
     fused_out_subblock_h: int | None = 1  # M is small
-    fused_out_subblock_w: int | None = 2  # Wider output (N=180) benefits from larger subblock
+    fused_out_subblock_w: int | None = 3  # Wider output (N=180) benefits from larger subblock
 
     def __post_init__(self):
         """Validate configuration."""
