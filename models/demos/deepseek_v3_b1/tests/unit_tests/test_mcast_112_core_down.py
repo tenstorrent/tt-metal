@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
     "M, K, N_per_core, weights_dtype",
     [
         # (1, 256, 32, ttnn.bfloat8_b),  # Small: 112 * 32 = 3584
-        (1, 256, 64, ttnn.bfloat8_b),  # Target: 112 * 64 = 7168
+        pytest.param(1, 256, 64, ttnn.bfloat8_b, marks=pytest.mark.skip_post_commit),  # Target: 112 * 64 = 7168
         (1, 256, 64, ttnn.bfloat4_b),  # Target with bfloat4 weights
         # (1, 7168, 64, ttnn.bfloat8_b),  # Full K dimension
         # (1, 7168, 64, ttnn.bfloat4_b),  # bfloat4 weights

@@ -148,6 +148,7 @@ class UnifiedKernelDescriptor:
         per_core_compile_time_descriptors: List of PerCoreCompileTimeDescriptor for individual core values
         per_core_runtime_args_descriptor: PerCoreRuntimeArgsDescriptor for per-core runtime args
         defines: Preprocessor definitions as list of (name, value) tuples, e.g. [("SKIP_CCL", "1")]
+        noc_mode: NOC mode (DM_DEDICATED_NOC or DM_DYNAMIC_NOC)
     """
 
     kernel_source: str
@@ -168,6 +169,7 @@ class UnifiedKernelDescriptor:
         PerCoreRuntimeArgsDescriptor
     ] = None  # Per-core runtime args for all RISCs
     defines: list = field(default_factory=list)  # List of (name, value) tuples
+    noc_mode: ttnn.NOC_MODE = ttnn.NOC_MODE.DM_DEDICATED_NOC
 
     def _get_core_range_set(
         self, core_range: Union[ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet]
@@ -262,7 +264,11 @@ class UnifiedKernelDescriptor:
             defines=self.defines,
             common_runtime_args=self.ncrisc_common_runtime_args,
             runtime_args=ncrisc_runtime_args,
-            config=ttnn.ReaderConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1,
+                noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
+                noc_mode=self.noc_mode,
+            ),
         )
 
         # Writer kernel (BRISC)
@@ -275,7 +281,11 @@ class UnifiedKernelDescriptor:
             defines=self.defines,
             common_runtime_args=self.brisc_common_runtime_args,
             runtime_args=brisc_runtime_args,
-            config=ttnn.WriterConfigDescriptor(),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0,
+                noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
+                noc_mode=self.noc_mode,
+            ),
         )
 
         # Compute kernel (TRISC)
@@ -395,7 +405,11 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
                     runtime_args=ncrisc_runtime_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_1,
+                        noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
+                        noc_mode=self.noc_mode,
+                    ),
                 )
             )
 
@@ -410,7 +424,11 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
                     runtime_args=brisc_runtime_args,
-                    config=ttnn.WriterConfigDescriptor(),
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_0,
+                        noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
+                        noc_mode=self.noc_mode,
+                    ),
                 )
             )
 
