@@ -7,11 +7,6 @@
 
 namespace ttnn::operations::uniform {
 
-UniformDeviceOperation::program_factory_t UniformDeviceOperation::select_program_factory(
-    const operation_attributes_t&  /*operation_attributes*/, const tensor_args_t&  /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void UniformDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Uniform: Input tensor need to be on device");

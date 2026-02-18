@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.3.4"
+        default: "v1.3.5"
       job-timeout:
         required: false
         type: number
@@ -277,7 +277,7 @@ jobs:
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         run: |
           # Run pytest with parallel execution and skip list
-          ${{ matrix.test-group.cmd }} ${{ steps.skip-list.outputs.skip_args }}
+          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
