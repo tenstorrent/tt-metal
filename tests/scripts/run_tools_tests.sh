@@ -16,7 +16,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.
-    grep "brisc tripped an assert" tmp.log > /dev/null || { echo "Error: couldn't find expected string in command output:" ; cat tmp.log; exit 1; }
+    grep "BRISC tripped an assert" tmp.log > /dev/null || { echo "Error: couldn't find expected string in command output:" ; cat tmp.log; exit 1; }
     echo "Watcher dump all data test - Pass"
 
     # Check that stack dumping is working
