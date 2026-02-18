@@ -370,7 +370,7 @@ class Generator:
                 seq_len - num_cached_tokens
             )  # Without the cached tokens, then padded
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
-            local_kwargs["global_user_id"] = user_id
+            local_kwargs["global_user_id"] = user_id  # Pass global user_id for row-sharded page table targeting
             sampling_enabled = (
                 sampling_on_device_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
