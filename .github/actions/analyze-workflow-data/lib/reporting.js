@@ -1054,6 +1054,76 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
   return ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
 }
 
+/**
+ * Promotes stayed_failing workflows matching a workflow file name to regressions,
+ * so auto-triage picks them up. Used when a stayed_failing workflow was never
+ * properly triaged (e.g. error info was unavailable at the time of the original
+ * regression).
+ *
+ * @param {string} forceWorkflowName - Workflow file name without extension (e.g. "apc-nightly-debug")
+ * @param {Array} stayedFailingDetails - Array of stayed_failing detail objects (modified: matching items removed)
+ * @param {Array} regressedDetails - Array of regressed detail objects (modified: promoted items appended)
+ * @param {Array} changes - Array of change objects (modified: matching entries updated to success_to_fail)
+ * @returns {number} Number of workflows promoted
+ */
+function promoteStayedFailingToRegressed(forceWorkflowName, stayedFailingDetails, regressedDetails, changes) {
+  if (!forceWorkflowName) return 0;
+
+  const pattern = `.github/workflows/${forceWorkflowName}.y`;
+  const toPromote = [];
+  const toRemoveIndices = [];
+
+  for (let i = 0; i < stayedFailingDetails.length; i++) {
+    const item = stayedFailingDetails[i];
+    const wp = item.workflow_path || '';
+    if (wp.startsWith(pattern.slice(0, -1)) && (wp.endsWith('.yaml') || wp.endsWith('.yml'))) {
+      toPromote.push(item);
+      toRemoveIndices.push(i);
+    }
+  }
+
+  if (toPromote.length === 0) {
+    core.warning(`[FORCE-REGRESSION] No stayed_failing workflows matched "${forceWorkflowName}"`);
+    return 0;
+  }
+
+  // Remove from stayedFailingDetails (reverse order to preserve indices)
+  for (let i = toRemoveIndices.length - 1; i >= 0; i--) {
+    stayedFailingDetails.splice(toRemoveIndices[i], 1);
+  }
+
+  for (const item of toPromote) {
+    // Assign owners from error snippets (same logic as enrichFailingDetails for regressions)
+    const ownerSet = new Map();
+    for (const sn of (item.error_snippets || [])) {
+      if (Array.isArray(sn.owner)) {
+        for (const o of sn.owner) {
+          if (!o) continue;
+          const k = `${o.id || ''}|${o.name || ''}`;
+          ownerSet.set(k, o);
+        }
+      }
+    }
+    let owners = Array.from(ownerSet.values());
+    if (!owners.length) {
+      owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+    }
+    item.owners = owners;
+
+    regressedDetails.push(item);
+    core.info(`[FORCE-REGRESSION] Promoted "${item.name}" to regression (${(item.failing_jobs || []).length} failing jobs, ${(item.error_snippets || []).length} error snippets)`);
+
+    // Update the change entry in the changes array
+    const changeRef = changes.find(c => c.name === item.name);
+    if (changeRef) {
+      changeRef.change = 'success_to_fail';
+      changeRef.previous = 'success';
+    }
+  }
+
+  return toPromote.length;
+}
+
 module.exports = {
   getWorkflowLink,
   findGoodBadCommits,
@@ -1071,6 +1141,7 @@ module.exports = {
   enrichRegressions,
   enrichStayedFailing,
   detectJobLevelRegressions,
+  promoteStayedFailingToRegressed,
   buildRegressionsSection,
   buildStayedFailingSection,
 };
