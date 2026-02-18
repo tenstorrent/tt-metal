@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import math
+import os
 
 try:
     import torch
@@ -60,7 +61,14 @@ def _parse_backbone_config(config_dict: Dict[str, object]) -> SwinBackboneConfig
     )
 
 
-def _roll(x, shifts: Tuple[int, int], dims: Tuple[int, int]):
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _roll(x, shifts: Tuple[int, int], dims: Tuple[int, int], *, memory_config: Optional[Any] = None):
     """TTNN roll for NHWC tensors (dim indices are for H/W)."""
 
     if ttnn is None:
@@ -84,16 +92,16 @@ def _roll(x, shifts: Tuple[int, int], dims: Tuple[int, int]):
             slice_start=start_left,
             slice_end=end_left,
             slice_step=[1] * num_dims,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=memory_config,
         )
         right_part = ttnn.slice(
             out,
             slice_start=start_right,
             slice_end=end_right,
             slice_step=[1] * num_dims,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=memory_config,
         )
-        out = ttnn.concat([left_part, right_part], dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.concat([left_part, right_part], dim, memory_config=memory_config)
         ttnn.deallocate(left_part)
         ttnn.deallocate(right_part)
     return out
@@ -112,6 +120,7 @@ class MaskFormerSwinBackbone:
         self.config = _parse_backbone_config(config_dict)
         self.device = device
         self.dtype = dtype
+        self._prefer_l1_activations = _env_flag("MASKFORMER_TT_BACKBONE_L1_ACT", False)
         self._attn_mask_cache: Dict[Tuple[int, int, int], Any] = {}
 
         # Patch embed weights
@@ -125,6 +134,13 @@ class MaskFormerSwinBackbone:
 
         # Output norms (hidden_states_norms.{0..3})
         self._out_norms: List[Dict[str, Any]] = []
+
+    def _activation_memory_config(self):
+        if ttnn is None:
+            return None
+        if self._prefer_l1_activations:
+            return ttnn.L1_MEMORY_CONFIG
+        return ttnn.DRAM_MEMORY_CONFIG
 
     @classmethod
     def from_huggingface(
@@ -147,7 +163,9 @@ class MaskFormerSwinBackbone:
 
         cfg = self.config
         dtype = self.dtype or DEFAULT_TT_DTYPE
-        mem_cfg = ttnn.L1_MEMORY_CONFIG
+        # Keep persistent model parameters in DRAM to avoid L1/CB allocation clashes
+        # during large model initialization on N300.
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
         def _to_tt_linear(w: torch.Tensor, b: Optional[torch.Tensor]):
             wt = ttnn.from_torch(
@@ -166,7 +184,7 @@ class MaskFormerSwinBackbone:
                     device=self.device,
                     memory_config=mem_cfg,
                 )
-                bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT)
+                bt = ttnn.to_layout(bt, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
             return wt, bt
 
         def _to_tt_norm_param(param: torch.Tensor):
@@ -177,7 +195,7 @@ class MaskFormerSwinBackbone:
                 device=self.device,
                 memory_config=mem_cfg,
             )
-            return ttnn.to_layout(tt_param, ttnn.TILE_LAYOUT)
+            return ttnn.to_layout(tt_param, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
 
         def _to_tt_conv_weight_bias(w: torch.Tensor, b: Optional[torch.Tensor]):
             wt = ttnn.from_torch(
@@ -354,7 +372,7 @@ class MaskFormerSwinBackbone:
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self._activation_memory_config(),
         )
         self._attn_mask_cache[key] = tt_mask
         return tt_mask
@@ -376,6 +394,7 @@ class MaskFormerSwinBackbone:
         cfg = self.config
         dtype = self.dtype or DEFAULT_TT_DTYPE
         mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        act_mem_cfg = self._activation_memory_config()
 
         # Convert input to TT tensor (NHWC)
         if torch is not None and isinstance(images, torch.Tensor):
@@ -394,7 +413,7 @@ class MaskFormerSwinBackbone:
 
         # Patch embedding conv (stride=patch_size)
         patch = int(cfg.patch_size)
-        x = ttnn.conv2d(
+        x, [out_h, out_w], [self._patch_w, self._patch_b] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self._patch_w,
             bias_tensor=self._patch_b,
@@ -410,9 +429,14 @@ class MaskFormerSwinBackbone:
             groups=1,
             device=self.device,
             memory_config=mem_cfg,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
+        x = ttnn.reshape(x, (B, out_h, out_w, int(cfg.embed_dim)))
         # Patch norm
-        x = ttnn.layer_norm(x, weight=self._patch_norm_w, bias=self._patch_norm_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        x = ttnn.layer_norm(x, weight=self._patch_norm_w, bias=self._patch_norm_b, memory_config=act_mem_cfg)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
 
         feature_maps: List[Any] = []
         hidden_states: List[Any] = []
@@ -426,7 +450,10 @@ class MaskFormerSwinBackbone:
                 shift = 0 if (block_idx % 2 == 0) else window // 2
 
                 # LN before attention
-                xn = ttnn.layer_norm(x, weight=block["ln1_w"], bias=block["ln1_b"], memory_config=ttnn.L1_MEMORY_CONFIG)
+                x_ln = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+                xn = ttnn.layer_norm(x_ln, weight=block["ln1_w"], bias=block["ln1_b"], memory_config=act_mem_cfg)
+                ttnn.deallocate(x_ln)
+                xn = ttnn.to_layout(xn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
                 attn_out = self._window_attention(
                     xn,
                     block=block,
@@ -435,23 +462,27 @@ class MaskFormerSwinBackbone:
                     stage_idx=stage_idx,
                 )
                 ttnn.deallocate(xn)
-                x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+                x = ttnn.add(x, attn_out, memory_config=act_mem_cfg)
                 ttnn.deallocate(attn_out)
 
                 # LN + MLP
-                xn2 = ttnn.layer_norm(
-                    x, weight=block["ln2_w"], bias=block["ln2_b"], memory_config=ttnn.L1_MEMORY_CONFIG
-                )
+                x_ln2 = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+                xn2 = ttnn.layer_norm(x_ln2, weight=block["ln2_w"], bias=block["ln2_b"], memory_config=act_mem_cfg)
+                ttnn.deallocate(x_ln2)
+                xn2 = ttnn.to_layout(xn2, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
                 mlp_out = self._mlp(
                     xn2, fc1_w=block["fc1_w"], fc1_b=block["fc1_b"], fc2_w=block["fc2_w"], fc2_b=block["fc2_b"]
                 )
                 ttnn.deallocate(xn2)
-                x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+                x = ttnn.add(x, mlp_out, memory_config=act_mem_cfg)
                 ttnn.deallocate(mlp_out)
 
             # Per-stage output norm (used by FPN and transformer module)
             out_norm = self._out_norms[stage_idx]
-            x_out = ttnn.layer_norm(x, weight=out_norm["w"], bias=out_norm["b"], memory_config=ttnn.L1_MEMORY_CONFIG)
+            x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+            x_out = ttnn.layer_norm(x_tile, weight=out_norm["w"], bias=out_norm["b"], memory_config=act_mem_cfg)
+            ttnn.deallocate(x_tile)
+            x_out = ttnn.to_layout(x_out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
             feature_maps.append(x_out)
             hidden_states.append(x_out)
 
@@ -469,30 +500,29 @@ class MaskFormerSwinBackbone:
 
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin MLP.")
+        act_mem_cfg = self._activation_memory_config()
         B, H, W, C = x.shape
         seq = ttnn.reshape(x, (int(B), int(H) * int(W), int(C)))
-        seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         y = ttnn.linear(
             seq,
             fc1_w,
-            fc1_b,
+            bias=fc1_b,
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
-        # GELU (fallback to relu if gelu isn't available at runtime)
-        if hasattr(ttnn, "gelu"):
-            try:
-                y = ttnn.gelu(y)
-            except Exception:
-                y = ttnn.relu(y)
-        else:
-            y = ttnn.relu(y)
+        # Swin MLP uses GELU; fail fast instead of silently changing activation.
+        if not hasattr(ttnn, "gelu"):
+            raise RuntimeError("Swin MLP requires ttnn.gelu, but it is unavailable in this runtime.")
+        y = ttnn.gelu(y)
         y = ttnn.linear(
             y,
             fc2_w,
-            fc2_b,
+            bias=fc2_b,
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         y = ttnn.reshape(y, (int(B), int(H), int(W), int(C)))
         return y
 
@@ -501,6 +531,7 @@ class MaskFormerSwinBackbone:
 
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin patch merging.")
+        act_mem_cfg = self._activation_memory_config()
         B, H, W, C = x.shape
         H = int(H)
         W = int(W)
@@ -515,23 +546,26 @@ class MaskFormerSwinBackbone:
         x1 = x[:, 1::2, 0::2, :]
         x2 = x[:, 0::2, 1::2, :]
         x3 = x[:, 1::2, 1::2, :]
-        y = ttnn.concat([x0, x1, x2, x3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.concat([x0, x1, x2, x3], dim=-1, memory_config=act_mem_cfg)
         ttnn.deallocate(x0)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         ttnn.deallocate(x3)
 
-        y = ttnn.layer_norm(y, weight=norm_w, bias=norm_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        y = ttnn.layer_norm(y, weight=norm_w, bias=norm_b, memory_config=act_mem_cfg)
+        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         B2, H2, W2, C4 = y.shape
         seq = ttnn.reshape(y, (int(B2), int(H2) * int(W2), int(C4)))
-        seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.linear(
             seq,
             reduction_w,
-            None,
+            bias=None,
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.reshape(out, (int(B2), int(H2), int(W2), int(out.shape[-1])))
         ttnn.deallocate(y)
         return out
@@ -541,6 +575,7 @@ class MaskFormerSwinBackbone:
 
         if ttnn is None:
             raise RuntimeError("TTNN runtime is required for Swin window attention.")
+        act_mem_cfg = self._activation_memory_config()
 
         B, H, W, C = x.shape
         B = int(B)
@@ -559,7 +594,7 @@ class MaskFormerSwinBackbone:
         Wp = int(x.shape[2])
 
         if shift:
-            x = _roll(x, shifts=(-shift, -shift), dims=(1, 2))
+            x = _roll(x, shifts=(-shift, -shift), dims=(1, 2), memory_config=act_mem_cfg)
 
         num_windows_h = Hp // window
         num_windows_w = Wp // window
@@ -567,107 +602,111 @@ class MaskFormerSwinBackbone:
         xw = ttnn.reshape(
             x,
             (B, num_windows_h, window, num_windows_w, window, C),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mem_cfg,
         )
-        xw = ttnn.permute(xw, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
-        xw = ttnn.reshape(xw, (B * num_windows, window * window, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+        xw = ttnn.permute(xw, (0, 1, 3, 2, 4, 5), memory_config=act_mem_cfg)
+        xw = ttnn.reshape(xw, (B * num_windows, window * window, C), memory_config=act_mem_cfg)
 
         # Q, K, V projections
-        xw = ttnn.to_layout(xw, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xw = ttnn.to_layout(xw, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         q = ttnn.linear(
             xw,
             block["q_w"],
-            block["q_b"],
+            bias=block["q_b"],
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
         k = ttnn.linear(
             xw,
             block["k_w"],
-            block["k_b"],
+            bias=block["k_b"],
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
         v = ttnn.linear(
             xw,
             block["v_w"],
-            block["v_b"],
+            bias=block["v_b"],
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
         ttnn.deallocate(xw)
 
-        q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+        k = ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+        v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
 
         # [B*nW, N, C] -> [B*nW, H, N, Hd]
         N = window * window
-        q = ttnn.reshape(q, (B * num_windows, N, num_heads, head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.reshape(k, (B * num_windows, N, num_heads, head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.reshape(v, (B * num_windows, N, num_heads, head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
-        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.reshape(q, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+        k = ttnn.reshape(k, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+        v = ttnn.reshape(v, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
+        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=act_mem_cfg)
+        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=act_mem_cfg)
+        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=act_mem_cfg)
 
         q = q * (head_dim**-0.5)
-        k_t = ttnn.permute(k, (0, 1, 3, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+        k_t = ttnn.permute(k, (0, 1, 3, 2), memory_config=act_mem_cfg)
 
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        k_t = ttnn.to_layout(k_t, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         attn = ttnn.matmul(
             q,
             k_t,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mem_cfg,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_t)
         ttnn.deallocate(k)
 
         # Add relative position bias (broadcast on batch/windows)
-        attn = ttnn.add(attn, block["rel_bias"], memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.add(attn, block["rel_bias"], memory_config=act_mem_cfg)
 
         # Add attention mask for shifted blocks
         if shift:
             mask = self._get_attn_mask(stage_idx=stage_idx, height=Hp, width=Wp)  # [nW, N, N] row-major
-            attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-            attn_rm = ttnn.reshape(attn_rm, (B, num_windows, num_heads, N, N), memory_config=ttnn.L1_MEMORY_CONFIG)
-            mask_rm = ttnn.reshape(mask, (1, num_windows, 1, N, N), memory_config=ttnn.L1_MEMORY_CONFIG)
-            attn_rm = ttnn.add(attn_rm, mask_rm, memory_config=ttnn.L1_MEMORY_CONFIG, use_legacy=False)
-            attn = ttnn.reshape(attn_rm, (B * num_windows, num_heads, N, N), memory_config=ttnn.L1_MEMORY_CONFIG)
-            attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+            attn_rm = ttnn.reshape(attn_rm, (B, num_windows, num_heads, N, N), memory_config=act_mem_cfg)
+            mask_rm = ttnn.reshape(mask, (1, num_windows, 1, N, N), memory_config=act_mem_cfg)
+            attn_rm = ttnn.add(attn_rm, mask_rm, memory_config=act_mem_cfg, use_legacy=False)
+            attn = ttnn.reshape(attn_rm, (B * num_windows, num_heads, N, N), memory_config=act_mem_cfg)
+            attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
             ttnn.deallocate(attn_rm)
             ttnn.deallocate(mask_rm)
 
-        attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.softmax(attn, dim=-1, memory_config=act_mem_cfg)
+        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         ctx = ttnn.matmul(
             attn,
             v,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mem_cfg,
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(v)
 
-        ctx = ttnn.permute(ctx, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ctx = ttnn.reshape(ctx, (B * num_windows, N, C), memory_config=ttnn.L1_MEMORY_CONFIG)
-        ctx = ttnn.to_layout(ctx, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3), memory_config=act_mem_cfg)
+        ctx = ttnn.reshape(ctx, (B * num_windows, N, C), memory_config=act_mem_cfg)
+        ctx = ttnn.to_layout(ctx, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.linear(
             ctx,
             block["attn_out_w"],
-            block["attn_out_b"],
+            bias=block["attn_out_b"],
+            transpose_b=True,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
         )
         ttnn.deallocate(ctx)
 
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.reshape(
-            out, (B, num_windows_h, num_windows_w, window, window, C), memory_config=ttnn.L1_MEMORY_CONFIG
+            out, (B, num_windows_h, num_windows_w, window, window, C), memory_config=act_mem_cfg
         )
-        out = ttnn.permute(out, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.reshape(out, (B, Hp, Wp, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.permute(out, (0, 1, 3, 2, 4, 5), memory_config=act_mem_cfg)
+        out = ttnn.reshape(out, (B, Hp, Wp, C), memory_config=act_mem_cfg)
 
         if shift:
-            out = _roll(out, shifts=(shift, shift), dims=(1, 2))
+            out = _roll(out, shifts=(shift, shift), dims=(1, 2), memory_config=act_mem_cfg)
         if pad_h or pad_w:
             out = out[:, :H, :W, :]
         return out

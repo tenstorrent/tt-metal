@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 import inspect
+import os
 
 from .ttnn_compat import ttnn
 
@@ -66,6 +67,13 @@ def _grid_tuple() -> Tuple[int, int]:
     return (8, 7)
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _maybe_sdpa_program_config(seq_q: int, seq_k: int, grid: Tuple[int, int]) -> Optional[Any]:
     if ttnn is None or not hasattr(ttnn, "SDPAProgramConfig"):
         return None
@@ -114,17 +122,24 @@ def build_decoder_program_configs(
         return DecoderProgramConfigs()
 
     grid = _grid_tuple()
-    sdpa_pc = _maybe_sdpa_program_config(seq_q, seq_k, grid)
-    mm_pc = _maybe_matmul_program_config(grid)
+    enable_sdpa = _env_flag("MASKFORMER_TT_ENABLE_SDPA", True)
+    disable_matmul_pc = _env_flag("MASKFORMER_TT_DISABLE_MATMUL_PC", False)
+    disable_core_grid = _env_flag("MASKFORMER_TT_DISABLE_CORE_GRID", False)
+
+    sdpa_pc = _maybe_sdpa_program_config(seq_q, seq_k, grid) if enable_sdpa else None
+    mm_pc = None if disable_matmul_pc else _maybe_matmul_program_config(grid)
     core_grid = None
-    if hasattr(ttnn, "CoreGrid"):
+    if (not disable_core_grid) and hasattr(ttnn, "CoreGrid"):
         try:
             core_grid = ttnn.CoreGrid(y=grid[1], x=grid[0])  # type: ignore[attr-defined]
         except Exception:
             core_grid = None
 
-    # Prefer L1 when the activation payload is small enough (per batch)
-    prefer_l1 = seq_q * hidden_dim < 128 * 256 and seq_k * hidden_dim < 512 * 256
+    # Prefer L1 when the activation payload is small enough (per batch), unless overridden.
+    l1_default = seq_q * hidden_dim < 128 * 256 and seq_k * hidden_dim < 512 * 256
+    prefer_l1 = _env_flag("MASKFORMER_TT_ENABLE_L1_SEQ", l1_default)
+    if _env_flag("MASKFORMER_TT_FORCE_DRAM_SEQ", False):
+        prefer_l1 = False
     seq_mem_cfg = getattr(ttnn, "L1_MEMORY_CONFIG", None) if prefer_l1 else getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     if seq_mem_cfg is None and hasattr(ttnn, "DRAM_MEMORY_CONFIG"):
         seq_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -137,7 +152,16 @@ def build_decoder_program_configs(
         core_grid=core_grid,
         sequence_memory=seq_mem_cfg,
         prefer_l1=prefer_l1,
-        notes={"grid": grid, "batch": batch_size, "heads": num_heads, "q_chunk": seq_q, "k_chunk": seq_k},
+        notes={
+            "grid": grid,
+            "batch": batch_size,
+            "heads": num_heads,
+            "q_chunk": seq_q,
+            "k_chunk": seq_k,
+            "enable_sdpa": enable_sdpa,
+            "disable_matmul_pc": disable_matmul_pc,
+            "disable_core_grid": disable_core_grid,
+        },
     )
 
 
@@ -148,14 +172,22 @@ def build_heads_program_configs(num_queries: int, hidden_dim: int) -> HeadsProgr
         return HeadsProgramConfigs()
 
     grid = _grid_tuple()
+    disable_matmul_pc = _env_flag("MASKFORMER_TT_DISABLE_MATMUL_PC", False)
+    disable_core_grid = _env_flag("MASKFORMER_TT_DISABLE_CORE_GRID", False)
     core_grid = None
-    if hasattr(ttnn, "CoreGrid"):
+    if (not disable_core_grid) and hasattr(ttnn, "CoreGrid"):
         try:
             core_grid = ttnn.CoreGrid(y=grid[1], x=grid[0])  # type: ignore[attr-defined]
         except Exception:
             core_grid = None
-    mm_pc = _maybe_matmul_program_config(grid)
+    mm_pc = None if disable_matmul_pc else _maybe_matmul_program_config(grid)
     # Use DRAM for head activations to reduce L1 pressure on larger images.
-    act_mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    use_l1 = _env_flag("MASKFORMER_TT_HEADS_USE_L1_ACT", False)
+    act_mem = getattr(ttnn, "L1_MEMORY_CONFIG", None) if use_l1 else getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
-    return HeadsProgramConfigs(matmul=mm_pc, core_grid=core_grid, activation_memory=act_mem, notes={"grid": grid})
+    return HeadsProgramConfigs(
+        matmul=mm_pc,
+        core_grid=core_grid,
+        activation_memory=act_mem,
+        notes={"grid": grid, "disable_matmul_pc": disable_matmul_pc, "disable_core_grid": disable_core_grid},
+    )
