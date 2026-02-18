@@ -32,11 +32,13 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/llrt.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
+#include "context/context_descriptor.hpp"
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -138,13 +140,9 @@ void MetalContext::initialize_device_manager(
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_->initialize(
         device_ids,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        l1_bank_remap,
-        worker_l1_size,
         init_profiler,
-        initialize_fabric_and_dispatch_fw);
+        initialize_fabric_and_dispatch_fw,
+        create_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size));
 }
 
 void MetalContext::initialize(
@@ -273,19 +271,13 @@ void MetalContext::initialize(
                     BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                     // fw_build_key is a combination of build_key and fw_compile_hash
                     // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-                    // if it's not already in firmware_built_keys_
                     // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
                     // Uses full 64-bit fw_compile_hash for proper change detection
                     uint64_t fw_build_key =
                         BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
 
-                    {
-                        std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
-                        if (!firmware_built_keys_.contains(fw_build_key)) {
-                            BuildEnvManager::get_instance().build_firmware(device_id);
-                            firmware_built_keys_.insert(fw_build_key);
-                        }
-                    }
+                    jit_build_once(
+                        fw_build_key, [device_id] { BuildEnvManager::get_instance().build_firmware(device_id); });
 
                     // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                     // activated. This is required since ethernet cores context switch between application and routing
@@ -410,15 +402,7 @@ void MetalContext::teardown() {
         profiler_state_manager_.reset();
     }
 
-    for (auto& mem_map : dispatch_mem_map_) {
-        if (mem_map) {
-            mem_map.reset();
-        }
-    }
-
-    dispatch_query_manager_.reset();
-    dispatch_core_manager_.reset();
-    tt::tt_metal::reset_topology_state();
+    teardown_dispatch_state();
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     Inspector::clear_all_core_info();
@@ -459,7 +443,6 @@ void MetalContext::reinitialize_for_real_hardware() {
     TT_FATAL(device_manager_ != nullptr, "Cannot reinitialize MetalContext before it is fully initialized");
 
     // Check if any devices are actually active (not just if MetalContext was initialized)
-    // Note: initialized_ flag doesn't get reset until process exit, so we check active devices instead
     auto active_devices = device_manager_->get_all_active_devices();
     TT_FATAL(
         active_devices.empty(),
@@ -497,6 +480,9 @@ void MetalContext::reinitialize_for_real_hardware() {
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
+    teardown_dispatch_state();
+    initialized_ = false;
+
     log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
 }
 
@@ -508,6 +494,17 @@ void MetalContext::teardown_base_objects() {
     inspector_data_.reset();
     cluster_.reset();
     hal_.reset();
+}
+
+void MetalContext::teardown_dispatch_state() {
+    for (auto& mem_map : dispatch_mem_map_) {
+        if (mem_map) {
+            mem_map.reset();
+        }
+    }
+    dispatch_query_manager_.reset();
+    dispatch_core_manager_.reset();
+    tt::tt_metal::reset_topology_state();
 }
 
 void MetalContext::initialize_base_objects() {
@@ -895,6 +892,27 @@ tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { r
 tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
 
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
+
+std::shared_ptr<ContextDescriptor> MetalContext::create_context_descriptor(
+    int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) const {
+    return std::make_shared<ContextDescriptor>(
+        *hal_,
+        *cluster_,
+        rtoptions_,
+        fabric_config_,
+        fabric_reliability_mode_,
+        fabric_tensix_config_,
+        fabric_udm_mode_,
+        fabric_manager_,
+        fabric_router_config_,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        dispatch_core_config_,
+        l1_bank_remap_,
+        rtoptions_.get_mock_cluster_desc_path());
+}
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
