@@ -17,7 +17,7 @@ Key differences from the causal model:
 Reference: HuggingFace BarkFineModel
 """
 
-from typing import Optional
+from typing import List, Optional, Union
 
 import torch
 import ttnn
@@ -53,16 +53,14 @@ class TtBarkFineModel:
         self.n_codes_total = n_codes_total
         self.n_codes_given = n_codes_given
 
-        # One embedding layer per codebook (all 8)
+        # One embedding layer per codebook (all 8) in TTNN
         self.input_embeds_layers = []
         for i in range(n_codes_total):
-            emb = torch.nn.Embedding(config.input_vocab_size, config.hidden_size)
-            emb.weight = torch.nn.Parameter(parameters["input_embeds_layers"][str(i)]["weight"])
-            self.input_embeds_layers.append(emb)
+            weight = preprocess_linear_weight(parameters["input_embeds_layers"][str(i)]["weight"], device)
+            self.input_embeds_layers.append(weight)
 
-        # Position embedding (shared across codebooks)
-        self.position_embeds_layer = torch.nn.Embedding(config.block_size, config.hidden_size)
-        self.position_embeds_layer.weight = torch.nn.Parameter(parameters["position_embeds_layer"]["weight"])
+        # Position embedding (shared across codebooks) in TTNN
+        self.position_embeds_weight = preprocess_linear_weight(parameters["position_embeds_layer"]["weight"], device)
 
         # Transformer blocks (non-causal)
         self.blocks = []
@@ -87,52 +85,82 @@ class TtBarkFineModel:
     def __call__(
         self,
         codebook_idx: int,
-        input_ids: torch.Tensor,
+        input_ids: Union[ttnn.Tensor, List[ttnn.Tensor]],
+        memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
-        """Forward pass for a specific codebook prediction.
+        """Forward pass for a specific codebook prediction on device.
 
         Args:
-            codebook_idx: Which codebook to predict (2-7 for fine model)
-            input_ids: [batch, seq_len, n_codes_total] - all codebook tokens
+            codebook_idx: Which codebook to predict (2-7)
+            input_ids: Either a single [1, B, S, 8] tensor or a list of [1, B, S, 1] tensors
 
         Returns:
-            logits: [batch, seq_len, codebook_vocab_size]
+            logits: [1, B, S, vocab_size]
         """
         if codebook_idx < self.n_codes_given:
-            raise ValueError(
-                f"Cannot predict codebook {codebook_idx} - codebooks 0..{self.n_codes_given-1} "
-                f"should be predicted by the coarse model"
-            )
+            raise ValueError(f"Cannot predict codebook {codebook_idx}")
+
+        # Optimization kernel config (Stage 3)
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi if self.config.use_lofi else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=not self.config.use_lofi,
+            packer_l1_acc=True,
+        )
 
         # Sum embeddings of codebooks 0..codebook_idx
-        # input_ids shape: [batch, seq_len, n_codes_total]
-        inputs_embeds = sum(self.input_embeds_layers[i](input_ids[:, :, i]) for i in range(codebook_idx + 1))
+        tt_hidden = None
+        for i in range(codebook_idx + 1):
+            # Extract i-th codebook
+            if isinstance(input_ids, list):
+                tokens_i = input_ids[i]
+            else:
+                # Slice from full tensor: [1, batch, seq, n_codes] -> [1, batch, seq, 1]
+                tokens_i = ttnn.slice(input_ids, [0, 0, 0, i], [1, input_ids.shape[1], input_ids.shape[2], i + 1])
 
-        batch_size, seq_len = inputs_embeds.shape[0], inputs_embeds.shape[1]
+            # Ensure shape [1, batch, seq] for embedding op
+            if tokens_i.shape[-1] == 1:
+                tokens_i = ttnn.reshape(tokens_i, [1, tokens_i.shape[1], tokens_i.shape[2]])
+
+            emb_i = ttnn.embedding(tokens_i, self.input_embeds_layers[i], memory_config=memory_config)
+
+            if tt_hidden is None:
+                tt_hidden = emb_i
+            else:
+                prev_hidden = tt_hidden
+                tt_hidden = ttnn.add(tt_hidden, emb_i, memory_config=memory_config)
+                ttnn.deallocate(prev_hidden)
+                ttnn.deallocate(emb_i)
 
         # Position embeddings
+        seq_len = tt_hidden.shape[-2]
         position_ids = torch.arange(0, seq_len, dtype=torch.long)
-        position_embeds = self.position_embeds_layer(position_ids).unsqueeze(0)
+        tt_position_ids = ttnn.from_torch(
+            position_ids.unsqueeze(0).unsqueeze(0), device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        position_embeds = ttnn.embedding(tt_position_ids, self.position_embeds_weight, memory_config=memory_config)
+        ttnn.deallocate(tt_position_ids)
 
         # Combine
-        hidden = inputs_embeds + position_embeds
-
-        # Convert to TTNN [1, batch, seq, hidden]
-        if hidden.dim() == 3:
-            hidden = hidden.unsqueeze(0)
-
-        tt_hidden = ttnn.from_torch(hidden.float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        prev_hidden = tt_hidden
+        tt_hidden = ttnn.add(tt_hidden, position_embeds, memory_config=memory_config)
+        ttnn.deallocate(prev_hidden)
+        ttnn.deallocate(position_embeds)
 
         # Transformer blocks
         for block in self.blocks:
-            tt_hidden = block(tt_hidden)
+            tt_hidden, _ = block(tt_hidden, layer_past=None, use_cache=False, memory_config=memory_config)
 
         # Final layer norm
-        tt_hidden = ttnn.layer_norm(tt_hidden, epsilon=1e-5, weight=self.ln_f_weight, bias=self.ln_f_bias)
+        tt_hidden = ttnn.layer_norm(
+            tt_hidden, epsilon=1e-5, weight=self.ln_f_weight, bias=self.ln_f_bias, memory_config=memory_config
+        )
 
         # LM head for the specific codebook
         lm_head_idx = codebook_idx - self.n_codes_given
-        logits = ttnn.linear(tt_hidden, self.lm_heads[lm_head_idx])
+        logits = ttnn.linear(
+            tt_hidden, self.lm_heads[lm_head_idx], memory_config=memory_config, compute_kernel_config=compute_kernel_config
+        )
         ttnn.deallocate(tt_hidden)
 
         return logits
