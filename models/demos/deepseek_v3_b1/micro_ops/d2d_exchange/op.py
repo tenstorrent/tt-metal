@@ -20,6 +20,21 @@ and forwards it downstream, optionally using fabric connections for cross-device
 
 import ttnn
 
+class MeshWrapper:
+    def __init__(self, mesh_device=None, mesh_id=None):
+        self.mesh_device = mesh_device
+
+        if self.mesh_device is not None:
+            self.mesh_id = self.mesh_device.get_system_mesh_id()
+        else:
+            assert mesh_id is not None
+            self.mesh_id = mesh_id
+
+    def get_mesh_device(self):
+        return self.mesh_device
+
+    def get_mesh_id(self):
+        return self.mesh_id
 
 class MeshWrapper:
     def __init__(self, mesh_device=None, mesh_id=None):
