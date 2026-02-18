@@ -48,8 +48,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
         case DIV_FLOOR:
         case DIV_TRUNC:
-        case REMAINDER:
-        case FMOD: return (a == INT32 && b == INT32);
+        case REMAINDER: return (a == INT32 && b == INT32);
+        case FMOD:
         case QUANT:
         case REQUANT:
         case DEQUANT:
@@ -438,11 +438,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
 
     // If not sharded, use the memory config from input a that is interleaved
     return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
-}
-
-BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ProgramFactory{};
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
