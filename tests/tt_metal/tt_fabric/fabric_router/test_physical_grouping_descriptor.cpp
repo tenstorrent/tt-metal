@@ -279,15 +279,16 @@ TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWithAllRequiredGroupings
     // - Exactly one of each TRAY_1, TRAY_2, TRAY_3, TRAY_4
     // - Exactly one custom_type "hosts"
     // - At least one "meshes" grouping
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "meshes_1"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "hosts" }
-                                                                          }]
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "meshes_1"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "hosts" }
+          }]
+        }
     )proto");
     ;
 
@@ -296,15 +297,16 @@ TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWithAllRequiredGroupings
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentGrouping) {
     // Test that custom names must exist
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "meshes_20"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "nonexistent" }
-                                                                          }]
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "meshes_20"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "nonexistent" }
+          }]
+        }
     )proto");
     ;
 
@@ -314,9 +316,9 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentG
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingHasNoInstances) {
-    const std::string text_proto =
-        wrap_with_required_groupings(R"proto(groupings { name: "meshes_22" custom_type: "meshes" }
-        )proto");
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings { name: "meshes_22" custom_type: "meshes" }
+    )proto");
     ;
 
     EXPECT_THAT(
@@ -531,14 +533,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenDuplicateHosts) {
             ::testing::HasSubstr("Exactly one grouping with custom_type 'hosts' is required but 2 are defined")));
 }
 
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNoLeafGroupingUsesASICLocations) {
-    // This test is no longer valid because TRAY_1-4 are required and must use ASIC locations,
-    // making them leaf groupings. The validation "at least one leaf grouping must use ASIC locations"
-    // is always satisfied when TRAY_1-4 are present. This test is skipped.
-    GTEST_SKIP() << "Test invalidated: TRAY_1-4 are required and use ASIC locations, so leaf grouping requirement is "
-                    "always satisfied";
-}
-
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenNonLeafGroupingUsesASICLocations) {
     // Test that a non-leaf grouping (one with grouping references) cannot also use ASIC locations
     const std::string text_proto = get_required_groupings() + R"proto(
@@ -601,26 +595,27 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "duplicate_name"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                                                        }
-                                                                        groupings {
-                                                                          name: "duplicate_name"
-                                                                          custom_type: "pods"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "meshes" }
-                                                                          }
-                                                                            , {
-                                                                              id: 1
-                                                                              grouping_ref { custom_type: "meshes" }
-                                                                            }]
-                                                                          all_to_all {}
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "duplicate_name"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "duplicate_name"
+          custom_type: "pods"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "meshes" }
+          }
+            , {
+              id: 1
+              grouping_ref { custom_type: "meshes" }
+            }]
+          all_to_all {}
+        }
     )proto");
     ;
 
@@ -654,26 +649,27 @@ TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
 // ============================================================================
 
 TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "meshes_24"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
-                                                                        }
-                                                                        groupings {
-                                                                          name: "pods_5"
-                                                                          custom_type: "pods"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "meshes" }
-                                                                          }
-                                                                            , {
-                                                                              id: 1
-                                                                              grouping_ref { custom_type: "meshes" }
-                                                                            }]
-                                                                          all_to_all {}
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "meshes_24"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "pods_5"
+          custom_type: "pods"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "meshes" }
+          }
+            , {
+              id: 1
+              grouping_ref { custom_type: "meshes" }
+            }]
+          all_to_all {}
+        }
     )proto");
     ;
 
@@ -684,31 +680,32 @@ TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping)
 }
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "halftray_3"
-                                                                          custom_type: "halftray"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-                                                                            , { id: 1 asic_location: ASIC_LOCATION_2 }]
-                                                                          row_major_mesh { dims: [ 1, 2 ] }
-                                                                        }
-                                                                        groupings {
-                                                                          name: "halftray_4"
-                                                                          custom_type: "halftray"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_3 }
-                                                                            , { id: 1 asic_location: ASIC_LOCATION_4 }]
-                                                                          row_major_mesh { dims: [ 1, 2 ] }
-                                                                        }
-                                                                        groupings {
-                                                                          name: "meshes_25"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "halftray" }
-                                                                          }]
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "halftray_3"
+          custom_type: "halftray"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+        groupings {
+          name: "halftray_4"
+          custom_type: "halftray"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_3 }
+            , { id: 1 asic_location: ASIC_LOCATION_4 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+        groupings {
+          name: "meshes_25"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "halftray" }
+          }]
+        }
     )proto");
     ;
 
@@ -726,37 +723,38 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
 }
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "trays_2"
-                                                                          custom_type: "trays"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-                                                                            , { id: 1 asic_location: ASIC_LOCATION_2 }]
-                                                                          row_major_mesh { dims: [ 1, 2 ] }
-                                                                        }
-                                                                        groupings {
-                                                                          name: "meshes_26"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "trays" }
-                                                                          }]
-                                                                        }
-                                                                        groupings {
-                                                                          name: "pods_6"
-                                                                          custom_type: "pods"
-                                                                          instances:
-                                                                          [ {
-                                                                            id: 0
-                                                                            grouping_ref { custom_type: "meshes" }
-                                                                          }
-                                                                            , {
-                                                                              id: 1
-                                                                              grouping_ref { custom_type: "meshes" }
-                                                                            }]
-                                                                          all_to_all {}
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "trays_2"
+          custom_type: "trays"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+        groupings {
+          name: "meshes_26"
+          custom_type: "meshes"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "trays" }
+          }]
+        }
+        groupings {
+          name: "pods_6"
+          custom_type: "pods"
+          instances:
+          [ {
+            id: 0
+            grouping_ref { custom_type: "meshes" }
+          }
+            , {
+              id: 1
+              grouping_ref { custom_type: "meshes" }
+            }]
+          all_to_all {}
+        }
     )proto");
     ;
 
@@ -770,16 +768,17 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
 // ============================================================================
 
 TEST(PhysicalGroupingDescriptorTests, AsicCountCalculation_BaseGrouping) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(groupings {
-                                                                          name: "meshes_28"
-                                                                          custom_type: "meshes"
-                                                                          instances:
-                                                                          [ { id: 0 asic_location: ASIC_LOCATION_1 }
-                                                                            , { id: 1 asic_location: ASIC_LOCATION_2 }
-                                                                            , { id: 2 asic_location: ASIC_LOCATION_3 }
-                                                                            , { id: 3 asic_location: ASIC_LOCATION_4 }]
-                                                                          row_major_mesh { dims: [ 2, 2 ] }
-                                                                        }
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "meshes_28"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }
+            , { id: 2 asic_location: ASIC_LOCATION_3 }
+            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          row_major_mesh { dims: [ 2, 2 ] }
+        }
     )proto");
     ;
 
@@ -1178,5 +1177,239 @@ TEST(PhysicalGroupingDescriptorTests, CornerOrientation_RowMajorMesh) {
             mesh_1x1.items[0].corners.begin(),
             mesh_1x1.items[0].corners.end(),
             GroupingItemInfo::CornerOrientation::SE) != mesh_1x1.items[0].corners.end());
+}
+
+// ============================================================================
+// FLATTENED ADJACENCY MESH TESTS
+// ============================================================================
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_FromTriple16x8File) {
+    // Load the triple_16x8 groupings file
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    // Get one of the MESH grouping infos - "8x16_Mesh" which has 4 hosts in a 2x2 grid
+    auto mesh_groupings = desc.get_groupings_by_name("MESH");
+    ASSERT_GT(mesh_groupings.size(), 0u) << "Expected at least one MESH grouping";
+
+    // Find the "8x16_Mesh" grouping (has 4 hosts arranged in 2x2 grid)
+    GroupingInfo mesh_8x16;
+    bool found = false;
+    for (const auto& mesh : mesh_groupings) {
+        if (mesh.name == "8x16_Mesh") {
+            mesh_8x16 = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '8x16_Mesh' grouping";
+
+    // Verify the grouping has the expected structure
+    EXPECT_EQ(mesh_8x16.asic_count, 128u) << "8x16_Mesh should have 128 ASICs (4 hosts * 32 ASICs each)";
+    EXPECT_EQ(mesh_8x16.items.size(), 4u) << "8x16_Mesh should have 4 instances (hosts)";
+
+    // Build the flattened adjacency mesh
+    // Note: This function is currently not implemented, so the test will fail until it's implemented
+    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_8x16);
+
+    // Verify the result is a valid adjacency graph
+    // The flattened mesh should have 128 nodes (one per ASIC)
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 128u) << "Flattened mesh should have 128 nodes (one per ASIC)";
+
+    // Verify that nodes are connected (each node should have neighbors in a 2D mesh)
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_mesh.get_neighbors(node);
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x4Mesh) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    GroupingInfo mesh_4x4;
+    bool found = false;
+    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
+        if (mesh.name == "4x4_Mesh") {
+            mesh_4x4 = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '4x4_Mesh' grouping";
+
+    EXPECT_EQ(mesh_4x4.asic_count, 16u) << "4x4_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
+    EXPECT_EQ(mesh_4x4.items.size(), 2u) << "4x4_Mesh should have 2 instances (trays)";
+
+    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x4);
+
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
+
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_mesh.get_neighbors(node);
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x8Mesh) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    GroupingInfo mesh_2x8;
+    bool found = false;
+    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
+        if (mesh.name == "2x8_Mesh") {
+            mesh_2x8 = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '2x8_Mesh' grouping";
+
+    EXPECT_EQ(mesh_2x8.asic_count, 16u) << "2x8_Mesh should have 16 ASICs (2 trays * 8 ASICs each)";
+    EXPECT_EQ(mesh_2x8.items.size(), 2u) << "2x8_Mesh should have 2 instances (trays)";
+
+    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_2x8);
+
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 16u) << "Flattened mesh should have 16 nodes";
+
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_mesh.get_neighbors(node);
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 3u) << "Node " << node << " should have at most 4 neighbors";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_2x2Halftray) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    GroupingInfo mesh_halftray;
+    bool found = false;
+    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
+        if (mesh.name == "2x2_Mesh_Halftray") {
+            mesh_halftray = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '2x2_Mesh_Halftray' grouping";
+
+    EXPECT_EQ(mesh_halftray.asic_count, 4u) << "2x2_Mesh_Halftray should have 4 ASICs (1 halftray)";
+    EXPECT_EQ(mesh_halftray.items.size(), 1u) << "2x2_Mesh_Halftray should have 1 instance (halftray)";
+
+    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_halftray);
+
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 4u) << "Flattened mesh should have 4 nodes";
+
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_mesh.get_neighbors(node);
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors (2x2 mesh)";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_4x32Mesh) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+    PhysicalGroupingDescriptor desc(text_proto_file_path);
+
+    GroupingInfo mesh_4x32;
+    bool found = false;
+    for (const auto& mesh : desc.get_groupings_by_name("MESH")) {
+        if (mesh.name == "4x32_Mesh") {
+            mesh_4x32 = mesh;
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found) << "Expected to find '4x32_Mesh' grouping";
+
+    EXPECT_EQ(mesh_4x32.asic_count, 128u) << "4x32_Mesh should have 128 ASICs (4 hosts * 32 ASICs each)";
+    EXPECT_EQ(mesh_4x32.items.size(), 4u) << "4x32_Mesh should have 4 instances (hosts)";
+
+    AdjacencyGraph<uint32_t> flattened_mesh = desc.build_flattened_adjacency_mesh(mesh_4x32);
+
+    auto nodes = flattened_mesh.get_nodes();
+    EXPECT_EQ(nodes.size(), 128u) << "Flattened mesh should have 128 nodes";
+
+    for (uint32_t node : nodes) {
+        const auto& neighbors = flattened_mesh.get_neighbors(node);
+        EXPECT_GE(neighbors.size(), 2u) << "Node " << node << " should have at least 2 neighbors";
+        EXPECT_LE(neighbors.size(), 4u) << "Node " << node << " should have at most 4 neighbors";
+    }
+}
+
+// Corner-inferred dims: dims inferred from items' corners, not stored in GroupingInfo
+TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInference) {
+    const std::string text_proto = wrap_with_required_groupings(R"proto(
+        groupings {
+          name: "mesh_1x1"
+          preset_type: MESH
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "mesh_1x4"
+          preset_type: MESH
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }
+            , {
+              id: 1
+              grouping_ref { preset_type: TRAY_1 }
+            }
+            , {
+              id: 2
+              grouping_ref { preset_type: TRAY_1 }
+            }
+            , {
+              id: 3
+              grouping_ref { preset_type: TRAY_1 }
+            }]
+          row_major_mesh { dims: [ 1, 4 ] }
+        }
+    )proto");
+
+    PhysicalGroupingDescriptor desc(text_proto);
+    auto meshes = desc.get_groupings_by_name("MESH");
+    ASSERT_GE(meshes.size(), 2u);
+
+    GroupingInfo mesh_1x1, mesh_1x4;
+    for (const auto& m : meshes) {
+        if (m.name == "mesh_1x1") {
+            mesh_1x1 = m;
+        }
+        if (m.name == "mesh_1x4") {
+            mesh_1x4 = m;
+        }
+    }
+
+    auto flat_1x1 = desc.build_flattened_adjacency_mesh(mesh_1x1);
+    EXPECT_EQ(flat_1x1.get_nodes().size(), 1u);  // 1 tray with 1 ASIC (from required groupings)
+    expect_neighbors(flat_1x1, 0, {});           // Single node has no neighbors
+
+    auto flat_1x4 = desc.build_flattened_adjacency_mesh(mesh_1x4);
+    EXPECT_EQ(flat_1x4.get_nodes().size(), 4u);  // 4 trays x 1 ASIC each
+    // 1x4 chain: endpoints have 1 neighbor, interior nodes have 2 (row-major IDs 0..3)
+    expect_neighbors(flat_1x4, 0, {1});
+    expect_neighbors(flat_1x4, 1, {0, 2});
+    expect_neighbors(flat_1x4, 2, {1, 3});
+    expect_neighbors(flat_1x4, 3, {2});
 }
 }  // namespace tt::tt_fabric::fabric_router_tests
