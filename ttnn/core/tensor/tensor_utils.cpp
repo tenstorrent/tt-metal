@@ -23,6 +23,9 @@ bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == St
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index, const Tensor& tensor, uint32_t address_offset, uint32_t total_size) {
     TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");
+    TT_FATAL(
+        (address_offset + total_size) <= tensor.buffer()->aligned_size_per_bank(),
+        "Address offset + total size exceeds buffer size");
 
     uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 

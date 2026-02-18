@@ -1152,6 +1152,8 @@ class PreSDPA:
                     ("skip_ccl", 1 if skip_ccl else 0),
                 ]
 
+                sdpa_out_interm_running_offset = 0
+
                 # Create circular buffer descriptors
                 # CB: Input (created from sharded tensor)
                 cb0_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
@@ -1187,74 +1189,12 @@ class PreSDPA:
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
-                # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-                # at offset 64 B. This CB is consumed before SDPA runs.
-                rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    rmsnorm2_input_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=64,
-                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-                )
-                rmsnorm2_input_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=rmsnorm2_input_cb,
-                        data_format=data_format,
-                        page_size=rmsnorm2_page_size,
-                        tile=rmsnorm2_tile_descriptor,
-                    )
-                ]
-
-                # CB: RMSNorm2 output buffer (3 tiles)
-                rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
-                    buffer_index=rmsnorm2_output_cb,
-                    data_format=data_format,
-                    page_size=rmsnorm2_page_size,
-                    tile=rmsnorm2_tile_descriptor,
-                )
-                rmsnorm2_output_cb_core_ranges = rmsnorm_core_grid
-
-                rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    rmsnorm2_output_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=6208,
-                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-                )
-                rmsnorm2_output_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=rmsnorm2_output_cb,
-                        data_format=data_format,
-                        page_size=rmsnorm2_page_size,
-                        tile=rmsnorm2_tile_descriptor,
-                    )
-                ]
-
-                # CB9 lifecycle:
-                # 1) RMSNorm2 writes normalized output here
-                # 2) Mcast2 reads from CB9 and writes to matmul2 input CB
-
-                # CB 8: gather_reduce half1 scratch buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
-                # at offset 3136 B. This CB is consumed before SDPA runs.
-                gather_reduce_half1_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather_reduce_half1_scratch_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=3136,
-                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
-                )
-                gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=gather_reduce_half1_scratch_cb,
-                        data_format=data_format,
-                        page_size=rmsnorm2_page_size,
-                        tile=rmsnorm2_tile_descriptor,
-                    )
-                ]
-
                 # CB: RMSNorm output buffer — overlap with kv_cache L1 buffer
                 # at offset 0 B. This CB is consumed before SDPA runs.
                 rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm_output_cb,
                     sdpa_kv_cache_buffer_device,
-                    address_offset=0,
+                    address_offset=0,  # 0 B (only CB being overlapped with sdpa_kv_cache_buffer)
                     total_size=num_tiles * cb_page_size,
                 )
                 rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1275,14 +1215,12 @@ class PreSDPA:
                 # Senders will query the write pointer of this CB to get the receiver address.
                 # Tensor-backed on full device grid (superset of sender/receiver grids) so senders
                 # can use get_write_ptr to get receiver address. This CB is consumed before SDPA runs.
-                # Note: TILE_1x32, matmul_input_page_size, and matmul_input_total_size
-                # were already calculated above for mcast page count calculation
-                matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 # CB: Matmul input — overlap with kv_cache L1 buffer at offset 14336 B.
+                matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul_input_cb,
-                    sdpa_kv_cache_buffer_device,
-                    address_offset=14336,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=sdpa_out_interm_running_offset,  # 0 B
                     total_size=matmul_input_total_size,
                 )
                 matmul_input_cb_descriptor.format_descriptors = [
@@ -1293,6 +1231,7 @@ class PreSDPA:
                         tile=matmul_input_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
 
                 # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
                 # at offset 0 B. This CB is consumed before SDPA runs.
@@ -1301,7 +1240,7 @@ class PreSDPA:
                 matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=0,
+                    address_offset=sdpa_out_interm_running_offset,  # 14336 B
                     total_size=matmul_output_page_size,
                 )
                 matmul_output_cb_descriptor.format_descriptors = [
@@ -1312,6 +1251,72 @@ class PreSDPA:
                         tile=matmul_output_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size  # +64 B
+
+                # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
+                # at offset 64 B. This CB is consumed before SDPA runs.
+                rmsnorm2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm2_input_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=sdpa_out_interm_running_offset,  # 14400 B
+                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
+                )
+                rmsnorm2_input_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=rmsnorm2_input_cb,
+                        data_format=data_format,
+                        page_size=rmsnorm2_page_size,
+                        tile=rmsnorm2_tile_descriptor,
+                    )
+                ]
+                sdpa_out_interm_running_offset += rmsnorm2_input_cb_descriptor.total_size  # +3072 B
+
+                # CB9 lifecycle:
+                # 1) RMSNorm2 writes normalized output here
+                # 2) Mcast2 reads from CB9 and writes to matmul2 input CB
+
+                # CB 8: gather_reduce half1 scratch buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
+                # at offset 3136 B. This CB is consumed before SDPA runs.
+                gather_reduce_half1_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather_reduce_half1_scratch_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=sdpa_out_interm_running_offset,  # 17472 B
+                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
+                )
+                gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=gather_reduce_half1_scratch_cb,
+                        data_format=data_format,
+                        page_size=rmsnorm2_page_size,
+                        tile=rmsnorm2_tile_descriptor,
+                    )
+                ]
+                sdpa_out_interm_running_offset += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
+
+                # CB: RMSNorm2 output buffer (3 tiles)
+                rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=rmsnorm2_output_cb,
+                    data_format=data_format,
+                    page_size=rmsnorm2_page_size,
+                    tile=rmsnorm2_tile_descriptor,
+                )
+                rmsnorm2_output_cb_core_ranges = rmsnorm_core_grid
+
+                rmsnorm2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    rmsnorm2_output_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=sdpa_out_interm_running_offset,  # 20544 B
+                    total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
+                )
+                rmsnorm2_output_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=rmsnorm2_output_cb,
+                        data_format=data_format,
+                        page_size=rmsnorm2_page_size,
+                        tile=rmsnorm2_tile_descriptor,
+                    )
+                ]
+                sdpa_out_interm_running_offset += rmsnorm2_output_cb_descriptor.total_size  # +3072 B
 
                 # CB: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles) — overlap with
                 # sdpa_out_interm L1 buffer at offset 9280 B. This CB is consumed before SDPA runs.
@@ -1319,7 +1324,7 @@ class PreSDPA:
                 matmul2_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul2_input_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=9280,
+                    address_offset=sdpa_out_interm_running_offset,  # 23616 B
                     total_size=matmul2_input_total_size,
                 )
                 matmul2_input_cb_descriptor.format_descriptors = [
@@ -1330,6 +1335,7 @@ class PreSDPA:
                         tile=matmul_input_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += matmul2_input_cb_descriptor.total_size  # +3072 B
 
                 # CB: Matmul2 weights (created from sharded tensor, 4 tiles per core)
                 matmul2_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1342,7 +1348,7 @@ class PreSDPA:
                 matmul2_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul2_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=12352,
+                    address_offset=sdpa_out_interm_running_offset,  # 26688 B
                     total_size=matmul2_output_total_size,
                 )
                 matmul2_output_cb_descriptor.format_descriptors = [
@@ -1353,6 +1359,7 @@ class PreSDPA:
                         tile=matmul_output_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += matmul2_output_cb_descriptor.total_size  # +256 B
 
                 # CB 13: Matmul3 weights (created from sharded tensor on Qnope grid)
                 matmul3_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1367,7 +1374,7 @@ class PreSDPA:
                 matmul3_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul3_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=12608,
+                    address_offset=sdpa_out_interm_running_offset,  # 26944 B
                     total_size=matmul3_output_total_size,
                 )
                 matmul3_output_cb_descriptor.format_descriptors = [
@@ -1378,6 +1385,28 @@ class PreSDPA:
                         tile=matmul3_output_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += matmul3_output_cb_descriptor.total_size  # +1024 B
+
+                # CB 15: Qrope output buffer — overlap with sdpa_out_interm L1 buffer
+                # at offset 13632 B. This CB is consumed before SDPA runs.
+                qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
+                qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
+                qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
+                qrope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    qrope_output_cb,
+                    sdpa_out_interm_buffer_device,
+                    address_offset=sdpa_out_interm_running_offset,  # 27968 B
+                    total_size=qrope_output_total_size,
+                )
+                qrope_output_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=qrope_output_cb,
+                        data_format=data_format,
+                        page_size=qrope_output_page_size,
+                        tile=qrope_output_tile_descriptor,
+                    )
+                ]
+                sdpa_out_interm_running_offset += qrope_output_cb_descriptor.total_size  # +256 B
 
                 # CB 17: Cos (sharded tensor)
                 qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, qrope_cos_tensor_device)
@@ -1396,7 +1425,7 @@ class PreSDPA:
                 qrope_rotated_input_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_rotated_input_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=13888,
+                    address_offset=sdpa_out_interm_running_offset,  # 28224 B
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_rotated_input_interm_cb_descriptor.format_descriptors = [
@@ -1407,13 +1436,14 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
+                sdpa_out_interm_running_offset += qrope_rotated_input_interm_cb_descriptor.total_size  # +128 B
 
                 # CB 21: Cos intermediate CB — overlap with sdpa_out_interm L1 buffer
                 # at offset 14016 B. This CB is consumed before SDPA runs.
                 qrope_cos_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_cos_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=14016,
+                    address_offset=sdpa_out_interm_running_offset,  # 28352 B
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_cos_interm_cb_descriptor.format_descriptors = [
@@ -1424,13 +1454,14 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
+                sdpa_out_interm_running_offset += qrope_cos_interm_cb_descriptor.total_size  # +128 B
 
                 # CB 22: Sin intermediate CB — overlap with sdpa_out_interm L1 buffer
                 # at offset 14144 B. This CB is consumed before SDPA runs.
                 qrope_sin_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     qrope_sin_interm_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=14144,
+                    address_offset=sdpa_out_interm_running_offset,  # 28480 B
                     total_size=qrope_interm_tile_size,
                 )
                 qrope_sin_interm_cb_descriptor.format_descriptors = [
@@ -1441,26 +1472,7 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
-
-                # CB 15: Qrope output buffer — overlap with sdpa_out_interm L1 buffer
-                # at offset 13632 B. This CB is consumed before SDPA runs.
-                qrope_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-                qrope_output_page_size = TILE_1x32.get_tile_size(data_format)
-                qrope_output_total_size = matmul2_out_w * qrope_output_page_size  # 4 tiles
-                qrope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    qrope_output_cb,
-                    sdpa_out_interm_buffer_device,
-                    address_offset=13632,
-                    total_size=qrope_output_total_size,
-                )
-                qrope_output_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=qrope_output_cb,
-                        data_format=data_format,
-                        page_size=qrope_output_page_size,
-                        tile=qrope_output_tile_descriptor,
-                    )
-                ]
+                sdpa_out_interm_running_offset += qrope_sin_interm_cb_descriptor.total_size  # +128 B
 
                 # CB 31: CreateQHeads intermediate buffer (row-major data before tilization)
                 # Senders write row-major data here via NOC, receiver marks pages, TRISC tilizes to output
@@ -1475,7 +1487,7 @@ class PreSDPA:
                 create_q_heads_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     create_q_heads_receiver_in_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=16448,
+                    address_offset=sdpa_out_interm_running_offset,  # 28608 B
                     total_size=create_q_heads_interm_total_size,
                 )
                 create_q_heads_interm_cb_descriptor.format_descriptors = [
@@ -1486,6 +1498,7 @@ class PreSDPA:
                         tile=create_q_heads_interm_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += create_q_heads_interm_cb_descriptor.total_size  # +9216 B
 
                 # CB 16: CreateQHeads output buffer (tilized data, backed by output tensor)
                 # Only allocated on receiver cores (SDPA Input grid) - senders no longer write here
@@ -1505,7 +1518,7 @@ class PreSDPA:
                 dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     dkv_matmul_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=14272,
+                    address_offset=sdpa_out_interm_running_offset,  # 37824 B
                     total_size=dkv_matmul_output_page_size,
                 )
                 dkv_matmul_output_cb_descriptor.format_descriptors = [
@@ -1516,6 +1529,7 @@ class PreSDPA:
                         tile=dkv_matmul_output_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
 
                 # CB 25: KV RMSNorm input buffer — overlap with sdpa_out_interm L1 buffer
                 # at offset 14336 B. This CB is consumed before SDPA runs.
@@ -1524,7 +1538,7 @@ class PreSDPA:
                 kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     kv_rmsnorm_input_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=14336,
+                    address_offset=sdpa_out_interm_running_offset,  # 37888 B
                     total_size=1 * kv_rmsnorm_page_size,
                 )
                 kv_rmsnorm_input_cb_descriptor.format_descriptors = [
@@ -1535,6 +1549,7 @@ class PreSDPA:
                         tile=kv_rmsnorm_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
 
                 # CB: KV RMSNorm gamma buffer
                 kv_rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -1548,7 +1563,7 @@ class PreSDPA:
                 kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     kv_rmsnorm_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=15360,
+                    address_offset=sdpa_out_interm_running_offset,  # 38912 B
                     total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
                 )
                 kv_rmsnorm_output_cb_descriptor.format_descriptors = [
@@ -1559,6 +1574,7 @@ class PreSDPA:
                         tile=kv_rmsnorm_tile_descriptor,
                     )
                 ]
+                sdpa_out_interm_running_offset += kv_rmsnorm_output_cb_descriptor.total_size  # +1024 B
 
                 # CB: Cos (sharded tensor)
                 krope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(krope_cos_cb, krope_cos_tensor_device)
@@ -1571,7 +1587,7 @@ class PreSDPA:
                 krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     krope_output_cb,
                     sdpa_out_interm_buffer_device,
-                    address_offset=16384,
+                    address_offset=sdpa_out_interm_running_offset,  # 39936 B
                     total_size=1 * krope_tile_size,
                 )
                 krope_output_cb_descriptor.format_descriptors = [
@@ -1582,6 +1598,8 @@ class PreSDPA:
                         tile=ttnn.TileDescriptor(TILE_1x32),
                     )
                 ]
+                sdpa_out_interm_running_offset += krope_output_cb_descriptor.total_size  # +64 B
+
                 dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor_device.memory_config().shard_spec.grid
                 TILE_32x32 = ttnn.Tile((32, 32))
                 kv_cache_page_size = TILE_32x32.get_tile_size(ttnn.bfloat8_b)

@@ -141,7 +141,7 @@ def test_pre_sdpa(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sdpa_kv_cache_buffer = ttnn.from_torch(
-        torch.randn((1, 1, kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
+        torch.randn((kv_cache_total_height, kvpe_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
@@ -174,7 +174,7 @@ def test_pre_sdpa(
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sdpa_out_interm_buffer = ttnn.from_torch(
-        torch.zeros((1, 1, sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
