@@ -1081,7 +1081,7 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
         try:
             # Try direct conversion first
             output_torch = ttnn.to_torch(tt_output)
-        except:
+        except Exception:
             # If that fails, try getting from the first device
             logger.info("Direct conversion failed, trying to get from first device...")
             output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
