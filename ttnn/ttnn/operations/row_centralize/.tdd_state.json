@@ -1,0 +1,94 @@
+{
+  "op_name": "row_centralize",
+  "op_path": "ttnn/ttnn/operations/row_centralize",
+  "spec_path": "ttnn/ttnn/operations/row_centralize/row_centralize_spec.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 3,
+  "last_passing_commit": "17b5a9becb841496a78317adf9b98627e7d6bcbe",
+  "stages": [
+    {
+      "name": "tilize_untilize",
+      "description": "Base data pipeline: reader reads RM sticks from DRAM into c_0, compute tilizes c_0->c_1 then untilizes c_1->c_16, writer writes RM sticks from c_16 to DRAM. Identity roundtrip that verifies the full reader->compute->writer chain with tilize/untilize bookends.",
+      "kernel_files": [
+        "kernels/row_centralize_reader.cpp",
+        "kernels/row_centralize_compute.cpp",
+        "kernels/row_centralize_writer.cpp"
+      ],
+      "test_file": "test_stage_tilize_untilize.py",
+      "reference_body": "return input_tensor.clone()",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "status": "passed",
+      "commit": "475754f4fa92f324e5e77442865dd04dc86cb1f6",
+      "attempts": 0,
+      "max_attempts": 3,
+      "failure_history": []
+    },
+    {
+      "name": "centralize",
+      "description": "Add compute Phases 2+3: reduce_row mean (c_1->c_2 with 1/W scaler, WaitUpfrontNoPop) then sub_col (c_1,c_2->c_3, centralized=x-mean). Tilize and untilize still bracket the compute. Output is centralized values.",
+      "kernel_files": [
+        "kernels/row_centralize_compute.cpp"
+      ],
+      "test_file": "test_stage_centralize.py",
+      "reference_body": "return input_tensor - input_tensor.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "status": "passed",
+      "commit": "5cb1b41e00b4cb74fea29c66895bb0524cd8f239",
+      "attempts": 0,
+      "max_attempts": 3,
+      "failure_history": []
+    },
+    {
+      "name": "full_standardize",
+      "description": "Add compute Phases 4-8: square centered (c_3->c_24, WaitUpfrontNoPop), reduce_row variance (c_24->c_4), add_scalar epsilon (c_4+c_7->c_25), rsqrt (c_25->c_5), mul_col (c_3*c_5->c_6). Complete row-wise standardization.",
+      "kernel_files": [
+        "kernels/row_centralize_compute.cpp"
+      ],
+      "test_file": "test_stage_full_standardize.py",
+      "reference_body": "mean = input_tensor.mean(dim=-1, keepdim=True)\n    centered = input_tensor - mean\n    var = (centered ** 2).mean(dim=-1, keepdim=True)\n    return centered * (var + 1e-5).rsqrt()",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 64)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 32)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "status": "passed",
+      "commit": "17b5a9becb841496a78317adf9b98627e7d6bcbe",
+      "attempts": 0,
+      "max_attempts": 3,
+      "failure_history": []
+    }
+  ]
+}
