@@ -14,6 +14,7 @@ MaskFormer-Swin-B uses an FPN-style pixel decoder consisting of:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Iterable, List, Optional, Tuple, Any, Dict
 
 try:
@@ -54,6 +55,9 @@ class MaskFormerPixelDecoder:
         self.device = device
         self.dtype = dtype
         self._tt_weights: Dict[str, Any] = {}
+        self._prefer_native_group_norm = os.environ.get("MASKFORMER_TT_USE_NATIVE_GROUP_NORM", "0").strip() != "0"
+        self._prefer_moreh_group_norm = os.environ.get("MASKFORMER_TT_USE_MOREH_GROUP_NORM", "1").strip() != "0"
+        self._debug_group_norm = os.environ.get("MASKFORMER_TT_DEBUG_GROUP_NORM", "0").strip() == "1"
 
     def forward(
         self,
@@ -92,6 +96,10 @@ class MaskFormerPixelDecoder:
             weight=self._tt_weights["fpn_stem_gn_w"],
             bias=self._tt_weights["fpn_stem_gn_b"],
             mask=self._tt_weights["fpn_stem_gn_mask"],
+            moreh_weight=self._tt_weights["fpn_stem_gn_w_moreh"],
+            moreh_bias=self._tt_weights["fpn_stem_gn_b_moreh"],
+            manual_weight=self._tt_weights["fpn_stem_gn_w_manual"],
+            manual_bias=self._tt_weights["fpn_stem_gn_b_manual"],
         )
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -116,6 +124,10 @@ class MaskFormerPixelDecoder:
                 weight=self._tt_weights[f"fpn_l{i}_proj_gn_w"],
                 bias=self._tt_weights[f"fpn_l{i}_proj_gn_b"],
                 mask=self._tt_weights[f"fpn_l{i}_proj_gn_mask"],
+                moreh_weight=self._tt_weights[f"fpn_l{i}_proj_gn_w_moreh"],
+                moreh_bias=self._tt_weights[f"fpn_l{i}_proj_gn_b_moreh"],
+                manual_weight=self._tt_weights[f"fpn_l{i}_proj_gn_w_manual"],
+                manual_bias=self._tt_weights[f"fpn_l{i}_proj_gn_b_manual"],
             )
 
             if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
@@ -144,6 +156,10 @@ class MaskFormerPixelDecoder:
                 weight=self._tt_weights[f"fpn_l{i}_block_gn_w"],
                 bias=self._tt_weights[f"fpn_l{i}_block_gn_b"],
                 mask=self._tt_weights[f"fpn_l{i}_block_gn_mask"],
+                moreh_weight=self._tt_weights[f"fpn_l{i}_block_gn_w_moreh"],
+                moreh_bias=self._tt_weights[f"fpn_l{i}_block_gn_b_moreh"],
+                manual_weight=self._tt_weights[f"fpn_l{i}_block_gn_w_manual"],
+                manual_bias=self._tt_weights[f"fpn_l{i}_block_gn_b_manual"],
             )
             hidden.append(x)
 
@@ -204,21 +220,78 @@ class MaskFormerPixelDecoder:
             b = state[f"{prefix}.bias"]
             if not isinstance(w, torch.Tensor) or not isinstance(b, torch.Tensor):
                 raise TypeError(f"Expected torch.Tensor groupnorm params at {prefix}.*")
-            tt_w = ttnn.from_torch(
+            manual_w = ttnn.from_torch(
                 w.detach().contiguous().view(1, 1, 1, -1),
                 dtype=dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            tt_b = ttnn.from_torch(
+            manual_b = ttnn.from_torch(
                 b.detach().contiguous().view(1, 1, 1, -1),
                 dtype=dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            return {"w": tt_w, "b": tt_b, "mask": None}
+            moreh_w = ttnn.to_layout(manual_w, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            moreh_b = ttnn.to_layout(manual_b, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            gn_w = manual_w
+            gn_b = manual_b
+            gn_mask = None
+            if self._prefer_native_group_norm:
+                try:
+                    if hasattr(ttnn, "create_group_norm_input_mask") and hasattr(ttnn, "create_group_norm_weight_bias_rm"):
+                        # Conservative native GN setup: keep channel sharding width at 1 virtual column.
+                        cores_across_channel = 1
+                        gn_mask = ttnn.create_group_norm_input_mask(
+                            int(w.numel()),
+                            int(self.config.group_norm_groups),
+                            cores_across_channel,
+                            dtype,
+                        )
+                        gn_mask = ttnn.to_device(gn_mask, self.device)
+                        gn_w_rm = ttnn.create_group_norm_weight_bias_rm(
+                            w.detach().contiguous(),
+                            int(w.numel()),
+                            cores_across_channel,
+                        )
+                        gn_b_rm = ttnn.create_group_norm_weight_bias_rm(
+                            b.detach().contiguous(),
+                            int(b.numel()),
+                            cores_across_channel,
+                        )
+                        gn_w = ttnn.from_torch(
+                            gn_w_rm,
+                            dtype=dtype,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=self.device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        gn_b = ttnn.from_torch(
+                            gn_b_rm,
+                            dtype=dtype,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=self.device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    else:
+                        self._prefer_native_group_norm = False
+                except Exception:
+                    self._prefer_native_group_norm = False
+                    gn_w = manual_w
+                    gn_b = manual_b
+                    gn_mask = None
+            return {
+                "w": gn_w,
+                "b": gn_b,
+                "mask": gn_mask,
+                "w_moreh": moreh_w,
+                "b_moreh": moreh_b,
+                "w_manual": manual_w,
+                "b_manual": manual_b,
+            }
 
         # Stem: conv3x3 + GN
         stem_w, stem_b = _to_tt_conv_weight_bias("fpn.stem.0.weight", None)
@@ -228,6 +301,10 @@ class MaskFormerPixelDecoder:
         self._tt_weights["fpn_stem_gn_w"] = gn["w"]
         self._tt_weights["fpn_stem_gn_b"] = gn["b"]
         self._tt_weights["fpn_stem_gn_mask"] = gn["mask"]
+        self._tt_weights["fpn_stem_gn_w_moreh"] = gn["w_moreh"]
+        self._tt_weights["fpn_stem_gn_b_moreh"] = gn["b_moreh"]
+        self._tt_weights["fpn_stem_gn_w_manual"] = gn["w_manual"]
+        self._tt_weights["fpn_stem_gn_b_manual"] = gn["b_manual"]
 
         # Lateral layers: 0..2 each has proj (1x1) + GN and block (3x3) + GN
         for i in range(3):
@@ -240,11 +317,19 @@ class MaskFormerPixelDecoder:
             self._tt_weights[f"fpn_l{i}_proj_gn_w"] = proj_gn["w"]
             self._tt_weights[f"fpn_l{i}_proj_gn_b"] = proj_gn["b"]
             self._tt_weights[f"fpn_l{i}_proj_gn_mask"] = proj_gn["mask"]
+            self._tt_weights[f"fpn_l{i}_proj_gn_w_moreh"] = proj_gn["w_moreh"]
+            self._tt_weights[f"fpn_l{i}_proj_gn_b_moreh"] = proj_gn["b_moreh"]
+            self._tt_weights[f"fpn_l{i}_proj_gn_w_manual"] = proj_gn["w_manual"]
+            self._tt_weights[f"fpn_l{i}_proj_gn_b_manual"] = proj_gn["b_manual"]
             self._tt_weights[f"fpn_l{i}_block_w"] = block_w
             self._tt_weights[f"fpn_l{i}_block_b"] = block_b
             self._tt_weights[f"fpn_l{i}_block_gn_w"] = block_gn["w"]
             self._tt_weights[f"fpn_l{i}_block_gn_b"] = block_gn["b"]
             self._tt_weights[f"fpn_l{i}_block_gn_mask"] = block_gn["mask"]
+            self._tt_weights[f"fpn_l{i}_block_gn_w_moreh"] = block_gn["w_moreh"]
+            self._tt_weights[f"fpn_l{i}_block_gn_b_moreh"] = block_gn["b_moreh"]
+            self._tt_weights[f"fpn_l{i}_block_gn_w_manual"] = block_gn["w_manual"]
+            self._tt_weights[f"fpn_l{i}_block_gn_b_manual"] = block_gn["b_manual"]
 
         # Mask projection conv3x3
         mp_w, mp_b = _to_tt_conv_weight_bias("mask_projection.weight", "mask_projection.bias")
@@ -296,7 +381,6 @@ class MaskFormerPixelDecoder:
     ) -> Any:
         if self.device is None or ttnn is None:
             require_ttnn("run MaskFormer pixel decoder conv2d ops")
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         out, [out_h, out_w], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=weight,
@@ -312,7 +396,6 @@ class MaskFormerPixelDecoder:
             dilation=(1, 1),
             groups=1,
             device=self.device,
-            memory_config=mem_cfg,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -322,21 +405,102 @@ class MaskFormerPixelDecoder:
             self._tt_weights[bias_key] = prepared_bias
         return ttnn.reshape(out, (int(x.shape[0]), out_h, out_w, int(out_channels)))
 
-    def _group_norm(self, x: Any, *, weight: Any, bias: Any, mask: Optional[Any]) -> Any:
+    def _group_norm(
+        self,
+        x: Any,
+        *,
+        weight: Any,
+        bias: Any,
+        mask: Optional[Any],
+        moreh_weight: Optional[Any],
+        moreh_bias: Optional[Any],
+        manual_weight: Optional[Any],
+        manual_bias: Optional[Any],
+    ) -> Any:
         if self.device is None or ttnn is None:
             require_ttnn("run MaskFormer pixel decoder group norm")
         B, H, W, C = x.shape
         groups = int(self.config.group_norm_groups)
         if int(C) % groups != 0:
             raise ValueError(f"GroupNorm channels ({int(C)}) must be divisible by groups ({groups}).")
-        channels_per_group = int(C) // groups
 
-        # Manual GN avoids backend-specific group_norm kernel instability for this model path.
+        if self._prefer_native_group_norm and mask is not None:
+            try:
+                x_1 = ttnn.reshape(x, (int(B), 1, int(H) * int(W), int(C)))
+                core_grid = ttnn.CoreGrid(x=1, y=1) if hasattr(ttnn, "CoreGrid") else None
+                kwargs = {
+                    "num_groups": groups,
+                    "epsilon": float(self.config.group_norm_epsilon),
+                    "weight": weight,
+                    "bias": bias,
+                    "input_mask": mask,
+                    "inplace": False,
+                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+                }
+                if core_grid is not None:
+                    kwargs["core_grid"] = core_grid
+                x_1 = ttnn.group_norm(x_1, **kwargs)
+                return ttnn.reshape(x_1, (int(B), int(H), int(W), int(C)))
+            except Exception:
+                self._prefer_native_group_norm = False
+
+        if self._prefer_moreh_group_norm and moreh_weight is not None and moreh_bias is not None:
+            try:
+                x_tile = x
+                if hasattr(x_tile, "storage_type") and hasattr(ttnn, "StorageType"):
+                    if x_tile.storage_type() != ttnn.StorageType.DEVICE:
+                        x_tile = ttnn.to_device(x_tile, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if x_tile.get_layout() != ttnn.TILE_LAYOUT:
+                    x_tile = ttnn.to_layout(x_tile, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                w_moreh = moreh_weight
+                b_moreh = moreh_bias
+                if hasattr(w_moreh, "storage_type") and hasattr(ttnn, "StorageType"):
+                    if w_moreh.storage_type() != ttnn.StorageType.DEVICE:
+                        w_moreh = ttnn.to_device(w_moreh, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if hasattr(b_moreh, "storage_type") and hasattr(ttnn, "StorageType"):
+                    if b_moreh.storage_type() != ttnn.StorageType.DEVICE:
+                        b_moreh = ttnn.to_device(b_moreh, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x_nchw = ttnn.permute(x_tile, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x_nchw, _, _ = ttnn.operations.moreh.group_norm(
+                    x_nchw,
+                    groups,
+                    float(self.config.group_norm_epsilon),
+                    w_moreh,
+                    b_moreh,
+                    are_required_outputs=(True, False, False),
+                    mean=None,
+                    rstd=None,
+                )
+                x_out = ttnn.permute(x_nchw, (0, 2, 3, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if x_out.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                    x_out = ttnn.to_layout(x_out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                return x_out
+            except Exception:
+                if self._debug_group_norm:
+                    try:
+                        x_store = x_tile.storage_type() if hasattr(x_tile, "storage_type") else "n/a"
+                        x_layout = x_tile.get_layout() if hasattr(x_tile, "get_layout") else "n/a"
+                        w_store = w_moreh.storage_type() if hasattr(w_moreh, "storage_type") else "n/a"
+                        w_layout = w_moreh.get_layout() if hasattr(w_moreh, "get_layout") else "n/a"
+                        b_store = b_moreh.storage_type() if hasattr(b_moreh, "storage_type") else "n/a"
+                        b_layout = b_moreh.get_layout() if hasattr(b_moreh, "get_layout") else "n/a"
+                        print(
+                            "[maskformer][pixel_decoder] moreh_group_norm fallback "
+                            f"x=({x_store},{x_layout}) w=({w_store},{w_layout}) b=({b_store},{b_layout})"
+                        )
+                    except Exception:
+                        pass
+                self._prefer_moreh_group_norm = False
+
+        channels_per_group = int(C) // groups
+        w = manual_weight if manual_weight is not None else weight
+        b = manual_bias if manual_bias is not None else bias
+        # Fallback path for runtimes where fused group_norm is unavailable/unstable.
         xg = ttnn.reshape(x, (int(B), int(H), int(W), groups, channels_per_group))
         mean = ttnn.mean(xg, dim=[1, 2, 4], keepdim=True)
         var = ttnn.var(xg, dim=[1, 2, 4], keepdim=True)
         xg = (xg - mean) / ttnn.sqrt(var + float(self.config.group_norm_epsilon))
         x = ttnn.reshape(xg, (int(B), int(H), int(W), int(C)))
-        x = x * weight
-        x = x + bias
+        x = x * w
+        x = x + b
         return x
