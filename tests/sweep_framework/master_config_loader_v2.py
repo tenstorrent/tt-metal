@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from tests.sweep_framework.framework.constants import LEAD_MODELS
-import lead_models_filter
+from tests.sweep_framework import lead_models_filter
 
 # Set up logger
 logger = logging.getLogger(__name__)

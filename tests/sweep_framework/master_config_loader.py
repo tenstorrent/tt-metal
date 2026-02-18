@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
-import lead_models_filter
+from tests.sweep_framework import lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
