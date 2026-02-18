@@ -72,8 +72,9 @@ class TestBarkSemantic:
         params = preprocess_model_parameters(hf_model.semantic, device)
         tt_model = TtBarkGPT(device, params, config, is_causal=True)
 
-        tt_logits = tt_model(input_ids=input_ids)
+        tt_logits, _ = tt_model(input_ids=input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
 
         # Reference forward
         ref_logits = run_semantic_forward(hf_model, input_ids)
@@ -101,8 +102,9 @@ class TestBarkSemantic:
         params = preprocess_model_parameters(hf_model.semantic, device)
         tt_model = TtBarkGPT(device, params, config, is_causal=True)
 
-        tt_logits = tt_model(input_ids=input_ids)
+        tt_logits, _ = tt_model(input_ids=input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
 
         # Reference forward
         ref_logits = run_semantic_forward(hf_model, input_ids)
@@ -133,8 +135,9 @@ class TestBarkCoarse:
         params = preprocess_model_parameters(hf_model.coarse_acoustics, device)
         tt_model = TtBarkGPT(device, params, config, is_causal=True)
 
-        tt_logits = tt_model(input_ids=input_ids)
+        tt_logits, _ = tt_model(input_ids=input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
 
         assert tt_logits_torch is not None
         assert tt_logits_torch.numel() > 0
@@ -170,8 +173,13 @@ class TestBarkFine:
         )
 
         # Forward pass for codebook 2
-        tt_logits = tt_model(codebook_idx=2, input_ids=input_ids)
+        tt_input_ids = ttnn.from_torch(
+            input_ids.unsqueeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+        )
+        tt_logits = tt_model(codebook_idx=2, input_ids=tt_input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
+        ttnn.deallocate(tt_input_ids)
 
         assert tt_logits_torch is not None
         assert tt_logits_torch.numel() > 0
@@ -202,8 +210,13 @@ class TestBarkFine:
 
         # TTNN forward
         codebook_idx = 2
-        tt_logits = tt_model(codebook_idx=codebook_idx, input_ids=input_ids)
+        tt_input_ids = ttnn.from_torch(
+            input_ids.unsqueeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+        )
+        tt_logits = tt_model(codebook_idx=codebook_idx, input_ids=tt_input_ids)
         tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+        ttnn.deallocate(tt_input_ids)
 
         # Reference forward
         ref_logits = run_fine_forward(hf_model, codebook_idx, input_ids)
