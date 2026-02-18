@@ -204,7 +204,7 @@ def test_timestep_encoding(
     torch.manual_seed(0)
     scheduler = FlowMatchEulerDiscreteScheduler()
     scheduler.set_timesteps(num_inference_steps)
-    input_tensor = scheduler.timesteps  # Assume bathed based on num_inference_steps to test all.
+    input_tensor = scheduler.timesteps  # Assume batched based on num_inference_steps to test all.
 
     # Run torch model
     torch_output = torch_model(input_tensor)

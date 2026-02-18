@@ -236,8 +236,20 @@ def upsample(
     return x
 
 
-# Quick helper. Untested
 def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
+    """Expands a dimension of the input tensor over multiple dimensions.
+
+    Args:
+        x: ttnn.Tensor
+            The input tensor to unflatten
+        dim: int
+            Dimension to be unflattened, specified as an index into input.shape.
+        sizes: Sequence[int]
+            New shape of the unflattened dimension. One of its elements can be -1 in which case the corresponding output dimension is inferred. Otherwise, the product of sizes must equal
+    Returns:
+        ttnn.Tensor
+            The unflattened tensor.
+    """
     assert (
         x.shape[dim] % math.abs(math.prod(sizes)) == 0
     ), f"The total number of elements in the new shape {sizes} must be equal or a factor of the number of elements (when using infered dimensions) in the original shape {x.shape[dim]}"
