@@ -186,7 +186,6 @@ struct WorkerToFabricEdmSenderImpl {
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
                 : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
-        // ASSERT(is_l1_address(edm_connection_handshake_l1_addr));  // must be a L1 address
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         ASSERT(is_l1_address(edm_worker_location_info_addr));  // must be a L1 address
         this->edm_copy_of_wr_counter_addr =
