@@ -185,8 +185,7 @@ def test_full_model_accuracy(mesh_device, mesh_shape, device_params, reset_seeds
         logger.info("Generating reference tokens (this may take a while)...")
 
         # Create reference model for comparison (use full model like demo)
-        # Always use mock implementation since transformers doesn't have GPT-OSS yet
-        from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssForCausalLM
+        from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
         # Load the same weights that the TTNN model uses
         logger.info("Loading reference model weights...")

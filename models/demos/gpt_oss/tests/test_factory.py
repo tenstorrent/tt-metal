@@ -43,43 +43,7 @@ class TestFactory:
         # Setup CCL
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
-        # If using dummy weights, create a dummy config
-        if not use_real_weights:
-            # Create a dummy config with expected values
-            config = type(
-                "Config",
-                (),
-                {
-                    "model_type": "gpt_oss",
-                    "hidden_size": 2880,
-                    "intermediate_size": 2880,  # GPT-OSS uses same size as hidden
-                    "num_attention_heads": 32,
-                    "num_key_value_heads": 8,
-                    "head_dim": 90,  # 2880 / 32
-                    "num_hidden_layers": 32,
-                    "num_local_experts": 128,
-                    "num_experts_per_tok": 4,
-                    "sliding_window": 65536,
-                    "rope_theta": 1e6,
-                    "vocab_size": 102400,
-                    "max_position_embeddings": 200000,
-                    "attention_bias": True,
-                    "attention_dropout": 0.0,
-                    "_attn_implementation": "eager",
-                    "rms_norm_eps": 1e-5,
-                    "rope_scaling": {
-                        "beta_fast": 32.0,
-                        "beta_slow": 1.0,
-                        "factor": 32.0,
-                        "original_max_position_embeddings": 4096,
-                        "rope_type": "yarn",
-                        "truncate": False,
-                    },
-                    "layer_types": ["sliding_attention", "full_attention"] * 18,  # Alternating pattern for 36 layers
-                },
-            )()
-        else:
-            config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)
 
         return {

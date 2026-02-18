@@ -60,20 +60,24 @@ def get_rope_cos_sin_from_hf_reference(hf_config, seq_len, device=None):
     Returns:
         Tuple of (cos_ref, sin_ref) tensors in HF format
     """
-    # Always use mock implementation since transformers doesn't have GPT-OSS yet
-    from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssRotaryEmbedding
+    try:
+        # Try to use the HuggingFace transformers implementation
+        from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
-    rope_emb = GptOssRotaryEmbedding(hf_config)
+        rope_emb = GptOssRotaryEmbedding(hf_config)
 
-    # Create dummy input to get cos/sin embeddings
-    # HF expects input shape [batch, seq_len, hidden_size]
-    dummy_input = torch.randn(1, seq_len, hf_config.hidden_size)
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+        # Create dummy input to get cos/sin embeddings
+        # HF expects input shape [batch, seq_len, hidden_size]
+        dummy_input = torch.randn(1, seq_len, hf_config.hidden_size)
+        position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
-    # Get cos/sin from HF reference
-    cos_ref, sin_ref = rope_emb(dummy_input, position_ids)
+        # Get cos/sin from HF reference
+        cos_ref, sin_ref = rope_emb(dummy_input, position_ids)
 
-    return cos_ref, sin_ref
+        return cos_ref, sin_ref
+
+    except ImportError:
+        pytest.skip("HuggingFace transformers gpt_oss model not available")
 
 
 def get_rope_cos_sin_from_our_pytorch_impl(hf_config, seq_len):
@@ -885,8 +889,8 @@ def test_rope_yarn_values_match_hf(mesh_device, device_params, reset_seeds):
     if model_path is None:
         pytest.skip("HF_MODEL environment variable not set")
 
-    # Always use mock implementation since transformers doesn't have GPT-OSS yet
-    from models.demos.gpt_oss.tests.mock_gpt_oss import GptOssRotaryEmbedding
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
+
     from models.tt_transformers.tt.common import rope_scaling_model_factory
     from models.tt_transformers.tt.rope import rotary_embedding_factory
 
