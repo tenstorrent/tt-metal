@@ -136,9 +136,7 @@ class DeepseekGenerator:
         # Paged attention setup
         self.batch_size_per_row = USERS_PER_ROW
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
-        self.paged_config = MLA2D.get_valid_paged_config(
-            self.hf_config.max_seq_len, self.batch_size_per_row, self.dp_factor
-        )
+        self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
 
         self.random_weights = random_weights
         self.single_layer = single_layer
@@ -466,7 +464,7 @@ class DeepseekGenerator:
             MLA2D.create_page_table(
                 paged_config=self.paged_config,
                 mesh_device=self.mesh_device,
-                batch_size=self.batch_size_per_row,
+                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
@@ -1162,7 +1160,7 @@ class DeepseekGenerator:
             paged_config=self.paged_config,
             mesh_device=self.mesh_device,
             page_table=full_page_table,
-            batch_size=self.batch_size_per_row,
+            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
         )
 
         num_layers = self.hf_config.num_hidden_layers
