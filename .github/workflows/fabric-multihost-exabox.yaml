@@ -136,6 +136,12 @@ jobs:
         run: |
           tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
             /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+      - name: Run Pipeline Test
+        timeout-minutes: 15
+        run: |
+          tools/scaleout/exabox/recover_4x32.sh bh-glx-c09u08,bh-glx-c09u02,bh-glx-c10u02,bh-glx-c10u08
+          python models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+          tt-run --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host bh-glx-c09u08:4,bh-glx-c09u02:4,bh-glx-c10u02:4,bh-glx-c10u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml ./build_Release/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
 
   cleanup:
     name: Cleanup
