@@ -94,13 +94,14 @@ concept HasSelectProgramFactory = requires(
 };
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
-// ProgramFactoryConcept or MeshWorkloadFactoryConcept.
+// ProgramFactoryConcept, MeshWorkloadFactoryConcept, or ProgramDescriptorFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
     return (
-        (ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> !=
-         MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>>) &&
+        ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail
@@ -109,6 +110,13 @@ template <typename Variant>
 concept AllFactoriesValid =
     detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
 
+// All program factories in `program_factory_t` must implement exactly one of
+// `ProgramFactoryConcept`, `MeshWorkloadFactoryConcept`, or `ProgramDescriptorFactoryConcept`.
+// This is enforced at compile time by the `AllFactoriesValid` constraint below.
+//
+// Note: `select_program_factory` is NOT required here. For single-variant `program_factory_t`,
+// the `MeshDeviceOperationAdapter` auto-selects the sole factory. Multi-variant operations
+// must provide `select_program_factory` (enforced by `MeshDeviceOperationAdapter::static_assert`).
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     typename device_operation_t::program_factory_t;

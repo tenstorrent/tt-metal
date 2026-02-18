@@ -413,7 +413,7 @@ tt::tt_metal::ProgramDescriptor ReuseOptimizedDescriptorFactory::create_descript
             device->arch(),
             num_cores,
             stagger_defines,
-            ttnn::get_throttle_level(operation_attributes.compute_kernel_config.value()));
+            ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
         for (auto& [k, v] : stagger_defines) {
             compute_defines.emplace_back(k, v);
         }

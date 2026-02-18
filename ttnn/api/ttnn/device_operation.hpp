@@ -216,18 +216,13 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                     "(ProgramFactoryConcept). Migrate to ProgramDescriptorFactoryConcept "
                     "(create_descriptor). Support will be removed in a future release.",
                     tt::stl::get_type_name<T>());
-                // Adapt ProgramFactory to MeshWorkloadFactory concept.
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             } else if constexpr (ProgramDescriptorFactoryConcept<T>) {
-                // Adapt ProgramDescriptorFactory to MeshWorkloadFactory concept.
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             } else if constexpr (MeshWorkloadFactoryConcept<T>) {
-                // Check if this MeshWorkloadFactory uses descriptors internally.
-                // Factories that have create_descriptor are using the new pattern.
-                // Factories without it are likely building programs imperatively (deprecated).
                 if constexpr (!requires { &T::create_descriptor; }) {
                     log_warning(
                         tt::LogOp,
