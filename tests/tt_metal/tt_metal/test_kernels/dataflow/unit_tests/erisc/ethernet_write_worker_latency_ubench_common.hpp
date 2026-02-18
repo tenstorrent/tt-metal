@@ -165,7 +165,7 @@ FORCE_INLINE void write_worker(
 #endif
 }
 
-template <bool write_to_worker>
+template <bool write_to_worker, uint32_t txq_id = 0>
 FORCE_INLINE void update_receiver_state(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     uint64_t worker_noc_addr,
@@ -196,24 +196,24 @@ FORCE_INLINE void update_receiver_state(
     if (send_ack_condition) {
         if constexpr (measurement_type == MeasurementType::Latency) {
             // Send data back for symmetric round-trip measurement
-            while (eth_txq_is_busy()) {
+            while (internal_::eth_txq_is_busy(txq_id)) {
                 switch_context_if_debug();
             }
             internal_::eth_send_packet_bytes_unsafe(
-                0, buffer_slot_addrs[buffer_read_ptr], buffer_slot_addrs[buffer_read_ptr], message_size);
+                txq_id, buffer_slot_addrs[buffer_read_ptr], buffer_slot_addrs[buffer_read_ptr], message_size);
         }
         // Send ack via stream register
-        while (eth_txq_is_busy()) {
+        while (internal_::eth_txq_is_busy(txq_id)) {
             switch_context_if_debug();
         }
-        remote_update_ptr_val<STREAM_ID_ACKS_FROM_REMOTE, 0>(1);
+        remote_update_ptr_val<STREAM_ID_ACKS_FROM_REMOTE, txq_id>(1);
 
         buffer_read_ptr = advance_buffer_slot_ptr<NUM_BUFFER_SLOTS>(buffer_read_ptr);
         num_messages_ack++;
     }
 }
 
-template <bool write_to_worker>
+template <bool write_to_worker, uint32_t txq_id = 0>
 FORCE_INLINE void receiver_uni_dir(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
     uint32_t message_size,
@@ -237,7 +237,7 @@ FORCE_INLINE void receiver_uni_dir(
     }
 
     while (receiver_num_messages_ack < total_msgs) {
-        update_receiver_state<write_to_worker>(
+        update_receiver_state<write_to_worker, txq_id>(
             receiver_buffer_slot_addrs,
             worker_noc_addr,
             message_size,
@@ -246,6 +246,149 @@ FORCE_INLINE void receiver_uni_dir(
             receiver_buffer_write_ptr);
 
         // not called in normal execution mode
+        switch_context_if_debug();
+    }
+}
+
+// ******************************* Dual-ERISC Sender/Receiver APIs *********************************
+// For DualEriscBiDir mode: ERISC_0 (sender) uses TXQ0 for data + notifications (stream reg writes).
+// ERISC_1 (receiver) uses TXQ1 for acks as DATA packets (register writes via TXQ1 don't work).
+// Sender polls an L1 ack counter instead of stream registers for acks.
+
+// Sender loop for DualEriscBiDir: uses L1 ack counter instead of stream register acks
+FORCE_INLINE void dual_erisc_send_uni_dir(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
+    uint32_t message_size,
+    uint32_t num_messages,
+    volatile tt_l1_ptr uint32_t* ack_counter) {
+    uint32_t total_msgs;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        total_msgs = num_messages;
+    } else {
+        total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    }
+
+    uint32_t sender_buffer_read_ptr = 0;
+    uint32_t sender_buffer_write_ptr = 0;
+    uint32_t sender_num_messages_ack = 0;
+    uint32_t sender_num_messages_send = total_msgs;
+    uint32_t last_seen_ack = 0;
+
+    while (sender_num_messages_ack < total_msgs) {
+        // Try to send a packet if buffer has space and we have messages to send
+        uint32_t next_write_ptr = advance_buffer_slot_ptr<NUM_BUFFER_SLOTS>(sender_buffer_write_ptr);
+        bool buffer_not_full = next_write_ptr != sender_buffer_read_ptr;
+
+        if (buffer_not_full && sender_num_messages_send != 0 && !eth_txq_is_busy()) {
+            internal_::eth_send_packet_bytes_unsafe(
+                0,
+                buffer_slot_addrs[sender_buffer_write_ptr],
+                buffer_slot_addrs[sender_buffer_write_ptr],
+                message_size);
+            while (eth_txq_is_busy()) {
+                switch_context_if_debug();
+            }
+            remote_update_ptr_val<STREAM_ID_PACKETS_FROM_REMOTE, 0>(1);
+            sender_buffer_write_ptr = next_write_ptr;
+            sender_num_messages_send--;
+        }
+
+        // Check for acks via L1 counter (written by remote ERISC_1 via TXQ1 data packet)
+        invalidate_l1_cache();
+        uint32_t current_ack = *ack_counter;
+        if (current_ack > last_seen_ack) {
+            uint32_t new_acks = current_ack - last_seen_ack;
+            last_seen_ack = current_ack;
+            for (uint32_t i = 0; i < new_acks; i++) {
+                sender_buffer_read_ptr = advance_buffer_slot_ptr<NUM_BUFFER_SLOTS>(sender_buffer_read_ptr);
+            }
+            sender_num_messages_ack += new_acks;
+        }
+
+        switch_context_if_debug();
+    }
+}
+
+// Receiver loop for DualEriscBiDir: sends acks as data packets via TXQ1
+// ack_counter_addr: the REMOTE sender's L1 address where it polls for acks (destination of TXQ1 data send)
+// outgoing_ack_addr: LOCAL L1 address used as source for TXQ1 data send (must not conflict with sender's ack poll)
+template <bool write_to_worker>
+FORCE_INLINE void dual_erisc_receiver_uni_dir(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
+    uint32_t message_size,
+    uint32_t num_messages,
+    uint64_t worker_noc_addr,
+    uint32_t remote_ack_dest_addr,
+    uint32_t local_ack_src_addr) {
+    uint32_t total_msgs;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        total_msgs = num_messages;
+    } else {
+        total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    }
+
+    uint32_t receiver_buffer_read_ptr = 0;
+    uint32_t receiver_buffer_write_ptr = 0;
+    uint32_t receiver_num_messages_ack = 0;
+
+    // Local ack counter: incremented each time we ack, then sent to remote sender via TXQ1.
+    // Uses a SEPARATE L1 address from the incoming ack counter to avoid conflicting with
+    // the local sender (ERISC_0) which polls ack_counter_addr for ITS incoming acks.
+    volatile tt_l1_ptr uint32_t* local_ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_ack_src_addr);
+    *local_ack = 0;
+
+    if constexpr (write_to_worker) {
+        noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
+    }
+
+    while (receiver_num_messages_ack < total_msgs) {
+        // Check for incoming packets via stream register
+        uint32_t next_write_ptr = advance_buffer_slot_ptr<NUM_BUFFER_SLOTS>(receiver_buffer_write_ptr);
+        bool buffer_not_full = next_write_ptr != receiver_buffer_read_ptr;
+
+        if (buffer_not_full && get_ptr_val<STREAM_ID_PACKETS_FROM_REMOTE>() > 0) {
+            increment_local_update_ptr_val<STREAM_ID_PACKETS_FROM_REMOTE>(-1);
+            if constexpr (write_to_worker) {
+                uint32_t curr_trid = get_buffer_slot_trid<MAX_NUM_TRANSACTION_ID>(receiver_buffer_write_ptr);
+                write_worker(
+                    receiver_buffer_slot_addrs[receiver_buffer_write_ptr], worker_noc_addr, message_size, curr_trid);
+            }
+            receiver_buffer_write_ptr = next_write_ptr;
+        }
+
+        // Send ack when processing is complete
+        bool buffer_not_empty = receiver_buffer_read_ptr != receiver_buffer_write_ptr;
+        bool send_ack_condition = buffer_not_empty;
+        if constexpr (write_to_worker and !disable_trid) {
+            uint32_t curr_trid = get_buffer_slot_trid<MAX_NUM_TRANSACTION_ID>(receiver_buffer_read_ptr);
+            send_ack_condition = send_ack_condition && write_worker_done(curr_trid);
+        }
+        if (send_ack_condition) {
+            if constexpr (measurement_type == MeasurementType::Latency) {
+                // Send data back for symmetric round-trip measurement
+                while (internal_::eth_txq_is_busy(1)) {
+                    switch_context_if_debug();
+                }
+                internal_::eth_send_packet_bytes_unsafe(
+                    1,
+                    receiver_buffer_slot_addrs[receiver_buffer_read_ptr],
+                    receiver_buffer_slot_addrs[receiver_buffer_read_ptr],
+                    message_size);
+            }
+            // Increment local ack counter and send to remote sender via TXQ1 data packet.
+            // IMPORTANT: Wait for TXQ1 to finish previous DMA BEFORE writing new ack value to L1,
+            // otherwise we corrupt in-flight DMA source data.
+            receiver_num_messages_ack++;
+            while (internal_::eth_txq_is_busy(1)) {
+                switch_context_if_debug();
+            }
+            *local_ack = receiver_num_messages_ack;
+            // Send from local_ack_src_addr to remote's ack_counter_addr (incoming ack location)
+            internal_::eth_send_packet_bytes_unsafe(1, local_ack_src_addr, remote_ack_dest_addr, 16);
+
+            receiver_buffer_read_ptr = advance_buffer_slot_ptr<NUM_BUFFER_SLOTS>(receiver_buffer_read_ptr);
+        }
+
         switch_context_if_debug();
     }
 }

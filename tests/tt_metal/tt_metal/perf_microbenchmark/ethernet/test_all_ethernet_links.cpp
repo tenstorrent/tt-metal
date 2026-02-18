@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cmath>
 #include <tuple>
 #include <map>
 #include <set>
@@ -53,6 +54,9 @@ struct TestParams {
     bool test_latency;
     bool disable_trid;
     uint32_t num_iterations;
+    uint32_t sweep_cores = 0;         // 0 = no sweep, 1 = sweep sender only, 2 = sweep both
+    uint32_t noc_index = 0;           // sender tensix NOC: 0 = NOC_0, 1 = NOC_1
+    uint32_t receiver_noc_index = 0;  // receiver tensix NOC: 0 = NOC_0, 1 = NOC_1
 };
 
 struct LinkStats {
@@ -172,7 +176,43 @@ public:
     size_t num_devices;
     std::set<SenderReceiverPair> unique_links;
 
+    void reassign_sender_tensix(CoreCoord logical_core) {
+        for (auto& link : unique_links) {
+            const_cast<SenderReceiverPair&>(link).sender_tensix = logical_core;
+        }
+    }
+
+    void reassign_receiver_tensix(CoreCoord logical_core) {
+        for (auto& link : unique_links) {
+            const_cast<SenderReceiverPair&>(link).receiver_tensix = logical_core;
+        }
+    }
+
+    // Reduce to a single representative link for core sweep mode.
+    // Multiple links on the same chip can't share a tensix core (CreateKernel overlap).
+    void select_single_link() {
+        if (unique_links.size() > 1) {
+            auto first = *unique_links.begin();
+            unique_links.clear();
+            unique_links.insert(first);
+            log_info(
+                tt::LogTest,
+                "Core sweep: using single link — sender chip {} eth ({},{}), receiver chip {} eth ({},{})",
+                first.sender.chip,
+                first.sender.x,
+                first.sender.y,
+                first.receiver.chip,
+                first.receiver.x,
+                first.receiver.y);
+        }
+    }
+
     void allocate_buffers(const TestParams& params) {
+        // For TensixEthEthTensixUniDir sender, allocate extra space for per-iteration timestamps
+        uint32_t sender_extra = 0;
+        if (params.benchmark_type == BenchmarkType::TensixEthEthTensixUniDir && params.num_packets > 1) {
+            sender_extra = (params.num_packets - 1) * sizeof(uint32_t);
+        }
         for (const auto& link : unique_links) {
             if (!link.sender_tensix.has_value()) {
                 continue;
@@ -181,7 +221,8 @@ public:
                 find_device_with_id(devices, link.sender.chip),
                 link.sender_tensix.value(),
                 params.packet_size,
-                params.benchmark_type);
+                params.benchmark_type,
+                sender_extra);
             link.receiver_buffer = create_tensix_buffer(
                 find_device_with_id(devices, link.receiver.chip),
                 link.receiver_tensix.value(),
@@ -239,11 +280,12 @@ private:
         tt_metal::distributed::MeshDevice* device,
         CoreCoord logical_tensix,
         uint32_t packet_size,
-        BenchmarkType benchmark_type) {
+        BenchmarkType benchmark_type,
+        uint32_t extra_bytes = 0) {
         // TensixEthEthTensixUniDir needs: landing_buffer(msg_size) + sem(4B) + pad(12B) + test_data(msg_size)
         uint32_t buffer_size = packet_size;
         if (benchmark_type == BenchmarkType::TensixEthEthTensixUniDir) {
-            buffer_size = 2 * packet_size + 16;
+            buffer_size = 2 * packet_size + 16 + extra_bytes;
         }
 
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
@@ -370,6 +412,9 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
     uint32_t benchmark_type_val = enchantum::to_underlying(params.benchmark_type);
 
+    auto sender_noc_select = params.noc_index == 0 ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
+    auto receiver_noc_select = params.receiver_noc_index == 0 ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
+
     // eth core ct args
     const std::vector<uint32_t>& eth_ct_args = {
         benchmark_type_val, measurement_type, params.num_buffer_slots, uint32_t(params.disable_trid)};
@@ -439,6 +484,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
             // --- Sender chip: ERISC_0 = forward sender (region A), ERISC_1 = reverse receiver (region B) ---
             auto sender_fwd_rt_args = eth_sender_rt_args;
             sender_fwd_rt_args.push_back(0);  // buffer_offset = 0 (region A)
+            sender_fwd_rt_args.push_back(1);  // is_handshake_sender = true
             auto sender_fwd_kernel = tt_metal::CreateKernel(
                 sender_program,
                 sender_kernel_path,
@@ -469,6 +515,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
             sender_rev_rt_args[sender_rev_rt_args.size() - 2] = receiver_encoding;
             sender_rev_rt_args[sender_rev_rt_args.size() - 1] = sender_encoding;
             sender_rev_rt_args.push_back(buf_region_size);  // buffer_offset (region B)
+            sender_rev_rt_args.push_back(0);                // is_handshake_sender = false (receiver side of handshake)
             auto sender_rev_kernel = tt_metal::CreateKernel(
                 receiver_program,
                 sender_kernel_path,
@@ -536,11 +583,12 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
                 link.sender_tensix.value(),
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .noc = sender_noc_select,
                     .compile_args = {1}});
             // RT args: eth_noc_x, eth_noc_y, eth_slot_addr, eth_push_counter_addr,
             //          local_sem_addr, local_data_addr, num_messages, message_size,
-            //          sender_encoding, receiver_encoding
+            //          sender_encoding, receiver_encoding, timestamp_buf_addr
+            uint32_t timestamp_buf_addr = link.sender_buffer->address() + 2 * params.packet_size + 16;
             tt_metal::SetRuntimeArgs(
                 sender_program,
                 sender_tensix_kernel,
@@ -554,7 +602,8 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
                  params.num_packets,
                  params.packet_size,
                  sender_encoding,
-                 receiver_encoding});
+                 receiver_encoding,
+                 timestamp_buf_addr});
 
             // Receiver tensix kernel (echo): is_initiator = 0
             auto receiver_tensix_kernel = tt_metal::CreateKernel(
@@ -564,7 +613,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
                 link.receiver_tensix.value(),
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .noc = receiver_noc_select,
                     .compile_args = {0}});
             tt_metal::SetRuntimeArgs(
                 receiver_program,
@@ -864,6 +913,67 @@ void run(
                     link.sender_buffer->address());
                 bool pass = golden_vec == result_vec;
                 TT_FATAL(pass, "TensixEthEthTensixUniDir validation failed on sender tensix landing buffer");
+
+                // Read per-iteration timestamps from sender tensix L1
+                if (params.num_packets > 1) {
+                    uint32_t num_timed = params.num_packets - 1;  // warmup excluded
+                    uint32_t ts_buf_addr = link.sender_buffer->address() + 2 * params.packet_size + 16;
+                    std::vector<uint32_t> timestamps(num_timed, 0);
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        timestamps.data(),
+                        num_timed * sizeof(uint32_t),
+                        tt_cxy_pair(link.sender.chip, virtual_tensix),
+                        ts_buf_addr);
+
+                    // Compute stats
+                    uint64_t sum = 0;
+                    uint32_t min_val = UINT32_MAX;
+                    uint32_t max_val = 0;
+                    for (uint32_t i = 0; i < num_timed; i++) {
+                        sum += timestamps[i];
+                        min_val = std::min(min_val, timestamps[i]);
+                        max_val = std::max(max_val, timestamps[i]);
+                    }
+                    double mean = static_cast<double>(sum) / num_timed;
+                    double var = 0;
+                    for (uint32_t i = 0; i < num_timed; i++) {
+                        double diff = timestamps[i] - mean;
+                        var += diff * diff;
+                    }
+                    double stddev = std::sqrt(var / num_timed);
+
+                    // BH clock is 1350 MHz -> 1 cycle = 1/1.35 ns ≈ 0.7407 ns
+                    double cycles_to_ns = 1000.0 / 1350.0;
+                    log_info(
+                        tt::LogTest,
+                        "Timestamps: sender_tensix=({},{}), num_iters={}, "
+                        "mean={:.1f} cycles ({:.1f} ns), min={} cycles ({:.1f} ns), "
+                        "max={} cycles ({:.1f} ns), stddev={:.1f} cycles",
+                        link.sender_tensix.value().x,
+                        link.sender_tensix.value().y,
+                        num_timed,
+                        mean,
+                        mean * cycles_to_ns,
+                        min_val,
+                        min_val * cycles_to_ns,
+                        max_val,
+                        max_val * cycles_to_ns,
+                        stddev);
+
+                    // Print first few individual timestamps for inspection
+                    uint32_t print_count = std::min(num_timed, 10u);
+                    std::string ts_str;
+                    for (uint32_t i = 0; i < print_count; i++) {
+                        if (i > 0) {
+                            ts_str += ", ";
+                        }
+                        ts_str += std::to_string(timestamps[i]);
+                    }
+                    if (num_timed > print_count) {
+                        ts_str += ", ...";
+                    }
+                    log_info(tt::LogTest, "  Per-iteration cycles: [{}]", ts_str);
+                }
             } break;
             case BenchmarkType::DualEriscBiDir: {
                 validation(device_helper, link, params.packet_size, true);
@@ -883,7 +993,7 @@ std::vector<uint32_t> parse_csv_u32(const char* s) {
     return result;
 }
 
-int main(int /*argc*/, char** argv) {
+int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
     uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
 
@@ -901,6 +1011,12 @@ int main(int /*argc*/, char** argv) {
     bool disable_trid = std::stoi(argv[arg_idx++]);
     uint32_t num_iterations = std::stoi(argv[arg_idx++]);
 
+    // Optional trailing args: sweep_cores, noc_index, receiver_noc_index
+    // sweep_cores: 0=no sweep, 1=sweep sender (receiver fixed closest), 2=sweep both
+    uint32_t sweep_cores = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
+    uint32_t noc_index = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
+    uint32_t receiver_noc_index = (arg_idx < (std::size_t)argc) ? std::stoi(argv[arg_idx++]) : 0;
+
     if (benchmark_type_enum.value() == BenchmarkType::DualEriscBiDir) {
         auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "DualEriscBiDir mode requires Blackhole (2 ERISCs per eth core)");
@@ -914,48 +1030,135 @@ int main(int /*argc*/, char** argv) {
         return 0;
     }
 
+    // Build core lists for sweep modes:
+    //   sweep_cores=0: no sweep, single run with assign_tensix defaults
+    //   sweep_cores=1: sweep sender_tensix only, receiver_tensix fixed at closest-to-eth
+    //   sweep_cores=2: sweep sender_tensix × receiver_tensix (N^2)
+    std::vector<CoreCoord> all_cores;
+    std::vector<CoreCoord> sender_cores_to_test;
+    std::vector<CoreCoord> receiver_cores_to_test;
+    CoreCoord fixed_receiver_core(0, 0);
+
+    if (sweep_cores > 0) {
+        device_helper.select_single_link();
+
+        auto& link = *device_helper.unique_links.begin();
+        TT_FATAL(link.receiver_tensix.has_value(), "Expected receiver_tensix to be assigned for sweep mode");
+        fixed_receiver_core = link.receiver_tensix.value();
+
+        auto grid_size = device_helper.devices[0]->compute_with_storage_grid_size();
+        for (uint32_t y = 0; y < grid_size.y; y++) {
+            for (uint32_t x = 0; x < grid_size.x; x++) {
+                all_cores.push_back(CoreCoord(x, y));
+            }
+        }
+
+        sender_cores_to_test = all_cores;
+        if (sweep_cores == 1) {
+            // Receiver fixed at closest core to eth
+            receiver_cores_to_test.push_back(fixed_receiver_core);
+            log_info(
+                tt::LogTest,
+                "Sender sweep: grid {}x{}, sender_noc={}, receiver_noc={}, "
+                "fixed receiver_tensix=({},{}), {} iterations",
+                grid_size.x,
+                grid_size.y,
+                noc_index,
+                receiver_noc_index,
+                fixed_receiver_core.x,
+                fixed_receiver_core.y,
+                sender_cores_to_test.size());
+        } else {
+            // Extended: sweep both
+            receiver_cores_to_test = all_cores;
+            log_info(
+                tt::LogTest,
+                "Extended sweep: grid {}x{}, sender_noc={}, receiver_noc={}, {} iterations",
+                grid_size.x,
+                grid_size.y,
+                noc_index,
+                receiver_noc_index,
+                sender_cores_to_test.size() * receiver_cores_to_test.size());
+        }
+    } else {
+        sender_cores_to_test.push_back(CoreCoord(0, 0));
+        receiver_cores_to_test.push_back(CoreCoord(0, 0));
+    }
+
     std::filesystem::path profiler_dir = std::filesystem::path(tt::tt_metal::get_profiler_logs_dir());
     std::filesystem::path profiler_log = profiler_dir / DEVICE_SIDE_LOG;
+
+    // Clear persistent zone source location logs to prevent 16-bit hash collisions
+    // from entries accumulated across previous runs
+    std::filesystem::remove(profiler_dir / "zone_src_locations.log");
+    std::filesystem::remove(profiler_dir / "new_zone_src_locations.log");
 
     bool success = true;
     log_info(tt::LogTest, "STARTING");
     try {
         for (auto packet_size : packet_sizes) {
             for (auto num_buffer_slots : channel_counts) {
-                TestParams params{
-                    .benchmark_type = benchmark_type_enum.value(),
-                    .num_packets = num_packets,
-                    .packet_size = packet_size,
-                    .num_buffer_slots = num_buffer_slots,
-                    .test_latency = test_latency,
-                    .disable_trid = disable_trid,
-                    .num_iterations = num_iterations};
+                size_t total_iterations = sender_cores_to_test.size() * receiver_cores_to_test.size();
+                size_t iteration = 0;
+                for (auto& sender_core : sender_cores_to_test) {
+                    for (auto& receiver_core : receiver_cores_to_test) {
+                        iteration++;
 
-                log_info(
-                    tt::LogTest,
-                    "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: "
-                    "{}",
-                    enchantum::to_string(benchmark_type_enum.value()),
-                    enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
-                    num_packets,
-                    packet_size,
-                    num_buffer_slots);
+                        if (sweep_cores > 0) {
+                            device_helper.reassign_sender_tensix(sender_core);
+                            device_helper.reassign_receiver_tensix(receiver_core);
+                            log_info(
+                                tt::LogTest,
+                                "Core sweep: sender_tensix=({}, {}), receiver_tensix=({}, {}), {}/{}",
+                                sender_core.x,
+                                sender_core.y,
+                                receiver_core.x,
+                                receiver_core.y,
+                                iteration,
+                                total_iterations);
+                        }
 
-                // Clear profiler CSV before this sub-run (it appends)
-                std::filesystem::remove(profiler_log);
+                        TestParams params{
+                            .benchmark_type = benchmark_type_enum.value(),
+                            .num_packets = num_packets,
+                            .packet_size = packet_size,
+                            .num_buffer_slots = num_buffer_slots,
+                            .test_latency = test_latency,
+                            .disable_trid = disable_trid,
+                            .num_iterations = num_iterations,
+                            .sweep_cores = sweep_cores,
+                            .noc_index = noc_index,
+                            .receiver_noc_index = receiver_noc_index};
 
-                device_helper.allocate_buffers(params);
-                auto programs = build(device_helper, params);
-                run(device_helper, programs, params);
+                        // Clear profiler CSV before this sub-run (it appends)
+                        std::filesystem::remove(profiler_log);
 
-                // Rename profiler CSV to config-specific name
-                auto config_log =
-                    profiler_dir / fmt::format("profile_log_device_ps{}_ch{}.csv", packet_size, num_buffer_slots);
-                if (std::filesystem::exists(profiler_log)) {
-                    std::filesystem::rename(profiler_log, config_log);
+                        device_helper.allocate_buffers(params);
+                        auto programs = build(device_helper, params);
+                        run(device_helper, programs, params);
+
+                        // Rename profiler CSV: include sender and receiver coords when sweeping
+                        std::filesystem::path config_log;
+                        if (sweep_cores > 0) {
+                            config_log = profiler_dir / fmt::format(
+                                                            "profile_log_device_ps{}_ch{}_s{}_{}_r{}_{}.csv",
+                                                            packet_size,
+                                                            num_buffer_slots,
+                                                            sender_core.x,
+                                                            sender_core.y,
+                                                            receiver_core.x,
+                                                            receiver_core.y);
+                        } else {
+                            config_log = profiler_dir /
+                                         fmt::format("profile_log_device_ps{}_ch{}.csv", packet_size, num_buffer_slots);
+                        }
+                        if (std::filesystem::exists(profiler_log)) {
+                            std::filesystem::rename(profiler_log, config_log);
+                        }
+
+                        device_helper.clear_buffers();
+                    }
                 }
-
-                device_helper.clear_buffers();
             }
         }
     } catch (std::exception& e) {

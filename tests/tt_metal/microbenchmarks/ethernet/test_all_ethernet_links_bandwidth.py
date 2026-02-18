@@ -81,8 +81,9 @@ def run_erisc_write_worker_bw_batch(
     ps_csv = ",".join(str(p) for p in packet_sizes)
     cc_csv = ",".join(str(c) for c in channel_counts)
 
+    profiler_env = "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1"
     cmd = (
-        f"TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1"
+        f"{profiler_env}"
         f" {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_all_ethernet_links"
         f" {benchmark_type}"
         f" {num_packets}"

@@ -39,13 +39,14 @@ void kernel_main() {
     }
 
     // Initialize overlay registers BEFORE handshake
-    init_flow_control_registers();
-
-    uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
-
+    // For DualEriscBiDir, ERISC_0 (sender kernel) initializes registers and does handshake.
+    // ERISC_1 (this kernel) skips both to avoid register reset races.
     if constexpr (benchmark_type != BenchmarkType::DualEriscBiDir) {
+        init_flow_control_registers();
         eth_setup_handshake(handshake_addr, false);
     }
+
+    uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
 
     switch (benchmark_type) {
         case EthOnlyUniDir: {
@@ -82,7 +83,20 @@ void kernel_main() {
                 num_messages);
         } break;
         case DualEriscBiDir: {
-            receiver_uni_dir<false>(receiver_buffer_slot_addrs, message_size, num_messages, worker_noc_addr);
+            // Memory layout after buffers: [incoming_ack(16B)][outgoing_ack(16B)]
+            // incoming_ack_addr: polled by ERISC_0 sender for acks (written by REMOTE ERISC_1 via TXQ1)
+            // outgoing_ack_addr: written by THIS ERISC_1, sent to REMOTE's incoming_ack_addr via TXQ1
+            uint32_t remote_ack_dest_addr = handshake_addr + sizeof(eth_buffer_slot_sync_t) +
+                                            2 * NUM_BUFFER_SLOTS * message_size;  // remote sender's incoming ack addr
+            uint32_t local_ack_src_addr = remote_ack_dest_addr + 16;              // our outgoing ack source
+
+            dual_erisc_receiver_uni_dir<false>(
+                receiver_buffer_slot_addrs,
+                message_size,
+                num_messages,
+                worker_noc_addr,
+                remote_ack_dest_addr,
+                local_ack_src_addr);
         } break;
         case TensixPushEth: {
             ASSERT(0);

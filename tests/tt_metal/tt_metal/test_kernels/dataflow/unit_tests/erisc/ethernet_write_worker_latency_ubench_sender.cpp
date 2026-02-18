@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ethernet_write_worker_latency_ubench_common.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 
 FORCE_INLINE void send_uni_dir(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs, uint32_t message_size, uint32_t num_messages) {
@@ -48,8 +49,10 @@ void kernel_main() {
     const uint64_t sender_receiver_encoding = ((uint64_t)sender_encoding << 32) | receiver_encoding;
 
     uint32_t buffer_offset = 0;
+    uint32_t is_handshake_sender = 1;
     if constexpr (benchmark_type == BenchmarkType::DualEriscBiDir) {
         buffer_offset = get_arg_val<uint32_t>(arg_idx++);
+        is_handshake_sender = get_arg_val<uint32_t>(arg_idx++);
     }
 
     ASSERT(is_power_of_two(NUM_BUFFER_SLOTS));
@@ -75,7 +78,14 @@ void kernel_main() {
     // Initialize overlay registers BEFORE handshake
     init_flow_control_registers();
 
-    eth_setup_handshake(handshake_addr, true);
+    eth_setup_handshake(handshake_addr, is_handshake_sender != 0);
+
+    // Enable dual TX queue mode for DualEriscBiDir AFTER handshake:
+    // eth_enable_packet_mode changes TXQ0 behavior (enables packet resend mode)
+    // which may interfere with the legacy eth_send_bytes used by the handshake.
+    if constexpr (benchmark_type == BenchmarkType::DualEriscBiDir) {
+        eth_enable_packet_mode(1);
+    }
 
     uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
 
@@ -117,8 +127,14 @@ void kernel_main() {
                 num_messages);
         } break;
         case DualEriscBiDir: {
+            // Ack counter lives after both buffer regions in L1
+            uint32_t ack_counter_addr =
+                handshake_addr + sizeof(eth_buffer_slot_sync_t) + 2 * NUM_BUFFER_SLOTS * message_size;
+            volatile tt_l1_ptr uint32_t* ack_counter = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ack_counter_addr);
+            *ack_counter = 0;
+
             DeviceZoneScopedN("MAIN-TEST-BODY");
-            send_uni_dir(sender_buffer_slot_addrs, message_size, num_messages);
+            dual_erisc_send_uni_dir(sender_buffer_slot_addrs, message_size, num_messages, ack_counter);
         } break;
         case TensixPushEth: {
             ASSERT(0);
