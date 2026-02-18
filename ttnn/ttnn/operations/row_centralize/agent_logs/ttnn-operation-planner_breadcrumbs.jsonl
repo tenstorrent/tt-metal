@@ -8,3 +8,6 @@
 {"event":"component_mapping","component":"compute_kernel","source_ref":"batch_norm_analysis.md + tilize_analysis.md + untilize_analysis.md","modifications":"Tilize -> reduce(SUM,ROW) -> sub(COL) -> square -> reduce(SUM,ROW) -> add(SCALAR,eps) -> rsqrt -> mul(COL) -> untilize","ts":"2026-02-18T12:42:41+00:00"}
 {"event":"component_mapping","component":"writer_kernel","source_ref":"untilize_analysis.md","modifications":"Adapt RM stick writer pattern from untilize","ts":"2026-02-18T12:42:42+00:00"}
 {"event":"action","type":"write_spec","file":"row_centralize_spec.md","sections":["Overview","MathDef","API","ComponentSources","InterfaceCompat","CBResolution","DesignDecisions","WorkDistrib","DataFlow","CBRequirements","MemoryAccess","CompileTimeArgs","RuntimeArgs","EdgeCases","AgentHandoff","TestCriteria","OpenQuestions","References"],"ts":"2026-02-18T12:45:59+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-planner] spec: row_centralize","ts":"2026-02-18T12:46:17+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"0b77588371","ts":"2026-02-18T12:46:18+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":["spec_written","committed"],"final_commit":"0b77588371","ts":"2026-02-18T12:46:19+00:00"}
