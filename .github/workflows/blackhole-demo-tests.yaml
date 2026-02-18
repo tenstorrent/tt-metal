@@ -91,6 +91,8 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 4 * * *"  # Every day at 4:00 UTC
 
 jobs:
   generate-card-matrix:
