@@ -430,10 +430,8 @@ struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::LogicalExitNode> {
                 "LogicalExitNode(mesh_id={}, fabric_node_id={})",
                 exit_node.mesh_id.get(),
                 *exit_node.fabric_node_id);
-        } else {
-            return fmt::format_to(
-                ctx.out(), "LogicalExitNode(mesh_id={}, fabric_node_id=None)", exit_node.mesh_id.get());
         }
+        return fmt::format_to(ctx.out(), "LogicalExitNode(mesh_id={}, fabric_node_id=None)", exit_node.mesh_id.get());
     }
 };
 

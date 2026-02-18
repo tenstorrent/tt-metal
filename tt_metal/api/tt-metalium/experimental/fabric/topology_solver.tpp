@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <sstream>
 #include <chrono>
+#include <set>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -551,7 +552,9 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
                     std::string valid_list;
                     bool first = true;
                     for (const auto& valid_global : valid_it->second) {
-                        if (!first) valid_list += ", ";
+                        if (!first) {
+                            valid_list += ", ";
+                        }
                         first = false;
                         valid_list += fmt::format("{}", valid_global);
                     }

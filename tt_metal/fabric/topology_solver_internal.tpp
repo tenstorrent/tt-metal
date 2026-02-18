@@ -1187,7 +1187,9 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
             // Check if any target edge requires more channels than any physical edge can provide
             for (size_t i = 0; i < graph_data.n_target; ++i) {
                 for (size_t neighbor : graph_data.target_adj_idx[i]) {
-                    if (neighbor <= i) continue;  // Check each edge once
+                    if (neighbor <= i) {
+                        continue;  // Check each edge once
+                    }
                     size_t required = graph_data.target_conn_count[i].at(neighbor);
                     // Find maximum available channels in physical graph
                     size_t max_available = 0;
