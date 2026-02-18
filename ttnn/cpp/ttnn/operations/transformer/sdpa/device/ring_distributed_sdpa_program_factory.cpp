@@ -204,6 +204,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         B,
         NQH,
         NKH,
+        NKH,
         Sqt,
         Skt,
         valid_Sqt * 2 * ring_size,
@@ -223,7 +224,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         (uint32_t)is_chunked,  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0  // use_attention_sink
+        0,  // use_attention_sink
+        0,  // use_mla
+        0   // mla_kv_overlap
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 23-25)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
