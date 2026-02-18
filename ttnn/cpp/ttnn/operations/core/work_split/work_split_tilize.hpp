@@ -136,7 +136,7 @@ inline NcoresWHsb compute_ncores_wh_sb(
     uint32_t opt_ncores_sb = 0;
     for (uint32_t candidate_sblock_size = single_block_size_limit - 1; candidate_sblock_size >= 1;
          --candidate_sblock_size) {
-        uint32_t max_n = (width_tiles + candidate_sblock_size - 1) / candidate_sblock_size;
+        uint32_t max_n = tt::div_up(width_tiles, candidate_sblock_size);
         for (uint32_t n = 2; n <= max_n; ++n) {
             uint32_t tmp_single_block_size = n * candidate_sblock_size;
             uint32_t total_blocks_width_sb = tt::div_up(width_tiles, tmp_single_block_size);
