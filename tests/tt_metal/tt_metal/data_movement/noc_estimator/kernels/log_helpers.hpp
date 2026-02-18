@@ -22,6 +22,10 @@ constexpr uint32_t PATTERN_ONE_TO_ALL = 2;
 constexpr uint32_t PATTERN_ONE_FROM_ALL = 3;
 constexpr uint32_t PATTERN_ALL_TO_ALL = 4;
 constexpr uint32_t PATTERN_ALL_FROM_ALL = 5;
+constexpr uint32_t PATTERN_ONE_TO_ROW = 6;
+constexpr uint32_t PATTERN_ROW_TO_ROW = 7;
+constexpr uint32_t PATTERN_ONE_TO_COLUMN = 8;
+constexpr uint32_t PATTERN_COLUMN_TO_COLUMN = 9;
 
 // Writer kernel modes
 constexpr uint32_t WRITER_MODE_UNICAST_SINGLE = 0;

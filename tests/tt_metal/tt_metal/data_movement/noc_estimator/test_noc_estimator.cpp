@@ -29,6 +29,10 @@ enum class NocPattern : uint32_t {
     ONE_FROM_ALL = 3,
     ALL_TO_ALL = 4,
     ALL_FROM_ALL = 5,
+    ONE_TO_ROW = 6,
+    ROW_TO_ROW = 7,
+    ONE_TO_COLUMN = 8,
+    COLUMN_TO_COLUMN = 9,
 };
 
 enum class NocMechanism : uint32_t {
@@ -89,7 +93,9 @@ struct NocEstimatorConfig {
 // ============ HELPERS ============
 
 static bool is_write_pattern(NocPattern p) {
-    return p == NocPattern::ONE_TO_ONE || p == NocPattern::ONE_TO_ALL || p == NocPattern::ALL_TO_ALL;
+    return p == NocPattern::ONE_TO_ONE || p == NocPattern::ONE_TO_ALL || p == NocPattern::ALL_TO_ALL ||
+           p == NocPattern::ONE_TO_ROW || p == NocPattern::ROW_TO_ROW || p == NocPattern::ONE_TO_COLUMN ||
+           p == NocPattern::COLUMN_TO_COLUMN;
 }
 
 static const std::string KERNELS_DIR = "tests/tt_metal/tt_metal/data_movement/noc_estimator/kernels/";
@@ -508,6 +514,91 @@ static bool run_all_pattern(const shared_ptr<distributed::MeshDevice>& mesh_devi
     return true;
 }
 
+// Handles ROW_TO_ROW / COLUMN_TO_COLUMN with multicast:
+// All masters in the row/column multicast to the same rectangle (the row/column).
+// Masters and subordinates overlap; loopback should be true (INCLUDE_SRC).
+static bool run_many_to_many_multicast(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    Program program = CreateProgram();
+
+    const size_t bytes_per_txn = cfg.pages_per_transaction * cfg.bytes_per_page;
+
+    // Master grid
+    CoreCoord mst_start = cfg.master_start_coord;
+    CoreCoord mst_end = CoreCoord(mst_start.x + cfg.master_grid_size.x - 1, mst_start.y + cfg.master_grid_size.y - 1);
+    CoreRangeSet mst_set({CoreRange(mst_start, mst_end)});
+    auto mst_core_list = corerange_to_cores(mst_set);
+
+    // Subordinate grid (same as master for row_to_row / column_to_column)
+    CoreCoord sub_start = cfg.sub_start_coord;
+    CoreCoord sub_end = CoreCoord(sub_start.x + cfg.sub_grid_size.x - 1, sub_start.y + cfg.sub_grid_size.y - 1);
+    CoreRangeSet sub_set({CoreRange(sub_start, sub_end)});
+    uint32_t num_subs = sub_set.num_cores();
+    auto sub_core_list = corerange_to_cores(sub_set);
+
+    // L1 addresses
+    L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, mst_start);
+    if (l1_info.size < 2 * bytes_per_txn) {
+        log_error(LogTest, "Insufficient L1 size");
+        return false;
+    }
+    uint32_t mst_l1_addr = l1_info.base_address;
+    uint32_t sub_l1_addr = cfg.loopback ? mst_l1_addr : mst_l1_addr + (uint32_t)bytes_per_txn;
+
+    // All masters multicast to the same sub rectangle
+    uint32_t writer_mode =
+        (cfg.mechanism == NocMechanism::MULTICAST_LINKED) ? WRITER_MODE_MULTICAST_LINKED : WRITER_MODE_MULTICAST;
+
+    CoreCoord sub_phys_start = device->worker_core_from_logical_core(sub_start);
+    CoreCoord sub_phys_end = device->worker_core_from_logical_core(sub_end);
+
+    auto compile_args = make_writer_compile_args(
+        cfg,
+        mst_l1_addr,
+        sub_l1_addr,
+        (uint32_t)bytes_per_txn,
+        writer_mode,
+        num_subs,
+        0,
+        sub_phys_start.x,
+        sub_phys_start.y,
+        sub_phys_end.x,
+        sub_phys_end.y);
+
+    CreateKernel(
+        program,
+        KERNELS_DIR + "writer.cpp",
+        mst_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = cfg.noc_id, .compile_args = compile_args});
+
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", cfg.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    auto packed_input = make_test_data(bytes_per_txn);
+    auto packed_golden = packed_input;
+
+    // Write source data to all master cores
+    for (auto& core : mst_core_list) {
+        detail::WriteToDeviceL1(device, core, mst_l1_addr, packed_input);
+    }
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    execute_program(mesh_device, std::move(program));
+
+    // Verify all subordinate cores
+    for (auto& core : sub_core_list) {
+        vector<uint32_t> packed_output;
+        detail::ReadFromDeviceL1(device, core, sub_l1_addr, bytes_per_txn, packed_output);
+        if (packed_output != packed_golden) {
+            log_error(LogTest, "Equality Check failed for test_id {}", cfg.test_id);
+            return false;
+        }
+    }
+    return true;
+}
+
 // Handles DRAM read+write (reader on RISCV_1, writer on RISCV_0, synchronized by semaphore)
 static bool run_dram(const shared_ptr<distributed::MeshDevice>& mesh_device, const NocEstimatorConfig& cfg) {
     IDevice* device = mesh_device->impl().get_device(0);
@@ -604,9 +695,20 @@ static bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const
         case NocPattern::ONE_TO_ONE:
         case NocPattern::ONE_FROM_ONE: return run_single_core(mesh_device, cfg);
         case NocPattern::ONE_TO_ALL:
-        case NocPattern::ONE_FROM_ALL: return run_one_to_many(mesh_device, cfg);
+        case NocPattern::ONE_FROM_ALL:
+        case NocPattern::ONE_TO_ROW:
+        case NocPattern::ONE_TO_COLUMN: return run_one_to_many(mesh_device, cfg);
         case NocPattern::ALL_TO_ALL:
         case NocPattern::ALL_FROM_ALL: return run_all_pattern(mesh_device, cfg);
+        case NocPattern::ROW_TO_ROW:
+        case NocPattern::COLUMN_TO_COLUMN: {
+            bool is_multicast =
+                (cfg.mechanism == NocMechanism::MULTICAST || cfg.mechanism == NocMechanism::MULTICAST_LINKED);
+            if (is_multicast) {
+                return run_many_to_many_multicast(mesh_device, cfg);
+            }
+            return run_all_pattern(mesh_device, cfg);
+        }
         default: log_error(LogTest, "Unknown pattern"); return false;
     }
 }
@@ -809,6 +911,156 @@ static void sweep_dram(const shared_ptr<distributed::MeshDevice>& mesh_device, u
     }
 }
 
+// ============ ROW / COLUMN SWEEP FUNCTIONS ============
+
+static void sweep_one_to_row(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    CoreCoord device_grid = device->compute_with_storage_grid_size();
+
+    for (uint32_t row = 0; row < device_grid.y; row++) {
+        // Unicast: master at (0, row), sends individually to each core in the row
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ONE_TO_ROW,
+                .mechanism = NocMechanism::UNICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {0, row},
+                .sub_start_coord = {0, row},
+                .sub_grid_size = {device_grid.x, 1},
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+
+        // Multicast: master inside the row (INCLUDE_SRC)
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ONE_TO_ROW,
+                .mechanism = NocMechanism::MULTICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {0, row},
+                .sub_start_coord = {0, row},
+                .sub_grid_size = {device_grid.x, 1},
+                .loopback = true,
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+    }
+}
+
+static void sweep_row_to_row(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    CoreCoord device_grid = device->compute_with_storage_grid_size();
+
+    for (uint32_t row = 0; row < device_grid.y; row++) {
+        // Unicast: every core in the row sends individually to every core in the row
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ROW_TO_ROW,
+                .mechanism = NocMechanism::UNICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {0, row},
+                .master_grid_size = {device_grid.x, 1},
+                .sub_start_coord = {0, row},
+                .sub_grid_size = {device_grid.x, 1},
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+
+        // Multicast: every core in the row multicasts to the row (INCLUDE_SRC)
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ROW_TO_ROW,
+                .mechanism = NocMechanism::MULTICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {0, row},
+                .master_grid_size = {device_grid.x, 1},
+                .sub_start_coord = {0, row},
+                .sub_grid_size = {device_grid.x, 1},
+                .loopback = true,
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+    }
+}
+
+static void sweep_one_to_column(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    CoreCoord device_grid = device->compute_with_storage_grid_size();
+
+    for (uint32_t col = 0; col < device_grid.x; col++) {
+        // Unicast: master at (col, 0), sends individually to each core in the column
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ONE_TO_COLUMN,
+                .mechanism = NocMechanism::UNICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {col, 0},
+                .sub_start_coord = {col, 0},
+                .sub_grid_size = {1, device_grid.y},
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+
+        // Multicast: master inside the column (INCLUDE_SRC)
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::ONE_TO_COLUMN,
+                .mechanism = NocMechanism::MULTICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {col, 0},
+                .sub_start_coord = {col, 0},
+                .sub_grid_size = {1, device_grid.y},
+                .loopback = true,
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+    }
+}
+
+static void sweep_column_to_column(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    CoreCoord device_grid = device->compute_with_storage_grid_size();
+
+    for (uint32_t col = 0; col < device_grid.x; col++) {
+        // Unicast: every core in the column sends individually to every core in the column
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::COLUMN_TO_COLUMN,
+                .mechanism = NocMechanism::UNICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {col, 0},
+                .master_grid_size = {1, device_grid.y},
+                .sub_start_coord = {col, 0},
+                .sub_grid_size = {1, device_grid.y},
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+
+        // Multicast: every core in the column multicasts to the column (INCLUDE_SRC)
+        {
+            NocEstimatorConfig cfg = {
+                .test_id = test_id,
+                .pattern = NocPattern::COLUMN_TO_COLUMN,
+                .mechanism = NocMechanism::MULTICAST,
+                .memory_type = MemoryType::L1,
+                .master_start_coord = {col, 0},
+                .master_grid_size = {1, device_grid.y},
+                .sub_start_coord = {col, 0},
+                .sub_grid_size = {1, device_grid.y},
+                .loopback = true,
+            };
+            packet_sizes_sweep(mesh_device, cfg);
+        }
+    }
+}
+
 }  // namespace unit_tests::dm::noc_estimator
 
 // ============ TEST CASES ============
@@ -839,6 +1091,24 @@ TEST_F(GenericMeshDeviceFixture, NocEstimatorL1AllFromAll) {
 
 TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAM) {
     unit_tests::dm::noc_estimator::sweep_dram(get_mesh_device(), 806);
+}
+
+// ============ ROW / COLUMN TESTS ============
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToRow) {
+    unit_tests::dm::noc_estimator::sweep_one_to_row(get_mesh_device(), 807);
+}
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1RowToRow) {
+    unit_tests::dm::noc_estimator::sweep_row_to_row(get_mesh_device(), 808);
+}
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToColumn) {
+    unit_tests::dm::noc_estimator::sweep_one_to_column(get_mesh_device(), 809);
+}
+
+TEST_F(GenericMeshDeviceFixture, NocEstimatorL1ColumnToColumn) {
+    unit_tests::dm::noc_estimator::sweep_column_to_column(get_mesh_device(), 810);
 }
 
 }  // namespace tt::tt_metal

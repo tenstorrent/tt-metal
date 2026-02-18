@@ -118,14 +118,14 @@ void kernel_main() {
                     }
                 } else {
                     for (uint32_t i = 0; i < num_of_transactions; i++) {
-                        uint32_t vc = i % num_virtual_channels;
+                        // uint32_t vc = i % num_virtual_channels;
                         noc.async_write(
                             unicast_ep,
                             unicast_ep,
                             bytes_per_transaction,
                             {.addr = src_addr},
                             {.noc_x = dest_x, .noc_y = dest_y, .addr = dst_addr},
-                            vc);
+                            0);
                     }
                 }
             }

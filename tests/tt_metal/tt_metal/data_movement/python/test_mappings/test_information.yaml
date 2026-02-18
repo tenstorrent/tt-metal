@@ -752,3 +752,11 @@ tests:
     name: "Noc Estimator - L1 All from All"
   806:
     name: "Noc Estimator - DRAM"
+  807:
+    name: "Noc Estimator - L1 One to Row"
+  808:
+    name: "Noc Estimator - L1 Row to Row"
+  809:
+    name: "Noc Estimator - L1 One to Column"
+  810:
+    name: "Noc Estimator - L1 Column to Column"
