@@ -553,8 +553,12 @@ def vit_block_config_perf(config: DPTLargeConfig = DEFAULT_CONFIG) -> TTLayerCon
         softmax_program_config=softmax_pc,
         av_program_config=av_pc,
         proj_program_config=proj_program_config,
-        ff1_program_config=(mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config")),
-        ff2_program_config=(mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")),
+        ff1_program_config=(
+            mlp_prog_cfgs.get("ff1_matmul_program_config") or prog_cfgs.get("ff1_matmul_program_config")
+        ),
+        ff2_program_config=(
+            mlp_prog_cfgs.get("ff2_matmul_program_config") or prog_cfgs.get("ff2_matmul_program_config")
+        ),
         ln_program_config=ln_pc,
         # Keep compute kernel config optional; follow vit.md defaults unless explicitly needed.
         ln_compute_config=None,

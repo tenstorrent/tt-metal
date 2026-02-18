@@ -119,11 +119,7 @@ class DPTPreActResidualLayerTT(nn.Module):
         except Exception:
             ttnn = None
 
-        if (
-            ttnn is not None
-            and self.tt_device is not None
-            and isinstance(hidden_state, ttnn.Tensor)
-        ):
+        if ttnn is not None and self.tt_device is not None and isinstance(hidden_state, ttnn.Tensor):
             residual = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             # Device ReLU with fallback to host
             hidden_state = _tt_relu_with_fallback(residual, self.tt_device, ttnn)
@@ -200,11 +196,7 @@ class DPTFeatureFusionLayerTT(nn.Module):
         except Exception:
             ttnn = None
 
-        if (
-            ttnn is not None
-            and isinstance(hidden_state, ttnn.Tensor)
-            and self.tt_device is not None
-        ):
+        if ttnn is not None and isinstance(hidden_state, ttnn.Tensor) and self.tt_device is not None:
             hidden_state = _ensure_tt_device_tensor(hidden_state, self.tt_device, ttnn)
             hidden_state = tt_canonicalize_nchw_spatial(
                 hidden_state,

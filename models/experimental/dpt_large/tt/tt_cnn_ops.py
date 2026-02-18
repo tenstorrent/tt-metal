@@ -113,9 +113,7 @@ def _nhwc_to_nchw(x_nhwc, b: int, h: int, w: int, c: int):
             if (s1, s2, s3) == (1, int(b) * flat_hw, exp_c) or (s1, s2, s3) == (int(b) * flat_hw, 1, exp_c):
                 x_nhwc = ttnn.reshape(x_nhwc, (int(b), exp_h, exp_w, exp_c))
                 return ttnn.permute(x_nhwc, (0, 3, 1, 2))
-        raise RuntimeError(
-            f"Unexpected TT NHWC batch dimension: got {tuple(x_nhwc.shape)} expected batch={int(b)}"
-        )
+        raise RuntimeError(f"Unexpected TT NHWC batch dimension: got {tuple(x_nhwc.shape)} expected batch={int(b)}")
 
     exp_h, exp_w, exp_c = int(h), int(w), int(c)
     if (s1, s2, s3) == (exp_h, exp_w, exp_c):
@@ -156,9 +154,7 @@ def tt_canonicalize_nchw_spatial(
     if w == 1 and h == flat_hw:
         return ttnn.reshape(x, (b, c, exp_h, exp_w))
 
-    raise RuntimeError(
-        f"{op_name}: unexpected spatial shape={tuple(x.shape)} expected HxW={exp_h}x{exp_w}"
-    )
+    raise RuntimeError(f"{op_name}: unexpected spatial shape={tuple(x.shape)} expected HxW={exp_h}x{exp_w}")
 
 
 def tt_upsample_nchw(
@@ -238,8 +234,8 @@ def tt_upsample_nchw(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-        # Bilinear upsample can require large L1 halo buffers on N300.
-        # Fall back to nearest on TT to keep the practical hot path alive.
+            # Bilinear upsample can require large L1 halo buffers on N300.
+            # Fall back to nearest on TT to keep the practical hot path alive.
             if mode == "bilinear" and "Out of Memory" in str(exc):
                 y_nhwc = ttnn.upsample(
                     input_tensor=x_nhwc,
@@ -315,9 +311,7 @@ def tt_depth_to_space_nchw(
     if expected_output_hw is not None:
         exp_h, exp_w = int(expected_output_hw[0]), int(expected_output_hw[1])
         if exp_h % scale != 0 or exp_w % scale != 0:
-            raise RuntimeError(
-                f"{op_name}: expected output HxW={exp_h}x{exp_w} not divisible by block_size={scale}"
-            )
+            raise RuntimeError(f"{op_name}: expected output HxW={exp_h}x{exp_w} not divisible by block_size={scale}")
         x = tt_canonicalize_nchw_spatial(
             x,
             expected_hw=(exp_h // scale, exp_w // scale),

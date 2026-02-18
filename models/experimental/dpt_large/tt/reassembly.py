@@ -477,10 +477,7 @@ class DPTReassembly(nn.Module):
             if (
                 ttnn is not None
                 and self.tt_device is not None
-                and (
-                    getattr(self.config, "tt_device_reassembly", False)
-                    or getattr(self.config, "tt_perf_neck", False)
-                )
+                and (getattr(self.config, "tt_device_reassembly", False) or getattr(self.config, "tt_perf_neck", False))
                 and self.reassemble_layers[stage_idx].prefers_device_path()
                 and not isinstance(hidden_state, ttnn.Tensor)
             ):
@@ -505,11 +502,7 @@ class DPTReassembly(nn.Module):
             except Exception:
                 ttnn = None
 
-            if (
-                ttnn is not None
-                and isinstance(x, ttnn.Tensor)
-                and self.tt_device is not None
-            ):
+            if ttnn is not None and isinstance(x, ttnn.Tensor) and self.tt_device is not None:
                 # Lazily materialize TT conv for this stage.
                 if self._tt_convs[stage_idx] is None:
                     self._tt_convs[stage_idx] = TTConv2dCached.from_conv(conv)

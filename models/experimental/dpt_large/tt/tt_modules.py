@@ -169,7 +169,9 @@ def _apply_attn_mask(attn_logits: torch.Tensor, attn_mask) -> torch.Tensor:
     return attn_logits + mask_torch
 
 
-def _ttnn_linear_with_optional_program_config(*, x, w, bias, dtype, memory_config, program_config, op_name: str = "unknown"):
+def _ttnn_linear_with_optional_program_config(
+    *, x, w, bias, dtype, memory_config, program_config, op_name: str = "unknown"
+):
     """Call ttnn.linear with best-effort program_config plumbing across runtime versions.
 
     In perf runs we want to surface when a program_config cannot be used, since
@@ -344,7 +346,11 @@ class TTLinear:
 
         prog = None
         if pc_obj is not None:
-            prog = getattr(pc_obj, "ff1_program_config", None) if self.activation else getattr(pc_obj, "ff2_program_config", None)
+            prog = (
+                getattr(pc_obj, "ff1_program_config", None)
+                if self.activation
+                else getattr(pc_obj, "ff2_program_config", None)
+            )
 
         out4 = _ttnn_linear_with_optional_program_config(
             x=x4,
@@ -692,12 +698,13 @@ class TTLayerNorm:
                 return ttnn.layer_norm(x, **kwargs)
             except TypeError:
                 # Backward compat for older runtimes without program_config / compute_kernel_config kwargs.
-                if (
-                    ("program_config" in kwargs or "compute_kernel_config" in kwargs)
-                    and callable(inc_program_config_fallback)
+                if ("program_config" in kwargs or "compute_kernel_config" in kwargs) and callable(
+                    inc_program_config_fallback
                 ):
                     inc_program_config_fallback(op="layer_norm", reason="kwarg_unsupported")
-                if strict_program_config_enabled() and ("program_config" in kwargs or "compute_kernel_config" in kwargs):
+                if strict_program_config_enabled() and (
+                    "program_config" in kwargs or "compute_kernel_config" in kwargs
+                ):
                     raise
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
@@ -705,12 +712,13 @@ class TTLayerNorm:
             except Exception:
                 # Some runtimes accept these kwargs but can fail for particular inputs/configs.
                 # Retry once without the perf configs to avoid hard-failing the entire pipeline.
-                if (
-                    ("program_config" in kwargs or "compute_kernel_config" in kwargs)
-                    and callable(inc_program_config_fallback)
+                if ("program_config" in kwargs or "compute_kernel_config" in kwargs) and callable(
+                    inc_program_config_fallback
                 ):
                     inc_program_config_fallback(op="layer_norm", reason="runtime_rejected")
-                if strict_program_config_enabled() and ("program_config" in kwargs or "compute_kernel_config" in kwargs):
+                if strict_program_config_enabled() and (
+                    "program_config" in kwargs or "compute_kernel_config" in kwargs
+                ):
                     raise
                 kwargs.pop("program_config", None)
                 kwargs.pop("compute_kernel_config", None)
@@ -878,7 +886,9 @@ class TTAttention:
         tokens_shard_mc = mm_opts.get("tokens_shard_mc", None)
         cfg = getattr(self, "program_config", None)
         input_is_sharded = tokens_shard_mc is not None and (_ttnn_is_sharded(x) or _ttnn_is_sharded(x3))
-        use_default_attn_programs = bool(getattr(cfg, "use_default_attention_programs", False)) if cfg is not None else False
+        use_default_attn_programs = (
+            bool(getattr(cfg, "use_default_attention_programs", False)) if cfg is not None else False
+        )
         # Prefer explicit attention on sharded operands; fall back to the SDPA island
         # only when not sharded.
         explicit_sharded_attn = input_is_sharded
@@ -1006,14 +1016,32 @@ class TTAttention:
                 self, "_debug_qkv_shapes_printed", False
             ):
                 try:
+
                     def _sh(x):
                         return tuple(getattr(x, "shape", ())) if hasattr(x, "shape") else None
+
                     def _ps(x):
                         return tuple(getattr(x, "padded_shape", ())) if hasattr(x, "padded_shape") else None
+
                     print(
-                        "[debug][attn] q_shape=", _sh(q_tt), "q_padded_shape=", _ps(q_tt), "q_is_sharded=", _ttnn_is_sharded(q_tt),
-                        "k_shape=", _sh(k_tt), "k_padded_shape=", _ps(k_tt), "k_is_sharded=", _ttnn_is_sharded(k_tt),
-                        "v_shape=", _sh(v_tt), "v_padded_shape=", _ps(v_tt), "v_is_sharded=", _ttnn_is_sharded(v_tt),
+                        "[debug][attn] q_shape=",
+                        _sh(q_tt),
+                        "q_padded_shape=",
+                        _ps(q_tt),
+                        "q_is_sharded=",
+                        _ttnn_is_sharded(q_tt),
+                        "k_shape=",
+                        _sh(k_tt),
+                        "k_padded_shape=",
+                        _ps(k_tt),
+                        "k_is_sharded=",
+                        _ttnn_is_sharded(k_tt),
+                        "v_shape=",
+                        _sh(v_tt),
+                        "v_padded_shape=",
+                        _ps(v_tt),
+                        "v_is_sharded=",
+                        _ttnn_is_sharded(v_tt),
                         flush=True,
                     )
                 except Exception:
@@ -1068,7 +1096,11 @@ class TTAttention:
                     # Only reshard when split-heads returned interleaved Q/K/V. When split-heads
                     # already emits sharded tensors, keep their layout to preserve compatibility
                     # with concatenate_heads and the ViT reference flow.
-                    if attn_grid is not None and hasattr(ttnn, "create_sharded_memory_config") and not _ttnn_is_sharded(q_tt):
+                    if (
+                        attn_grid is not None
+                        and hasattr(ttnn, "create_sharded_memory_config")
+                        and not _ttnn_is_sharded(q_tt)
+                    ):
                         attn_grid_x, attn_grid_y = int(attn_grid[0]), int(attn_grid[1])
                         if attn_grid_x > 0 and attn_grid_y > 0:
                             attn_core_grid = ttnn.CoreGrid(y=int(attn_grid_y), x=int(attn_grid_x))
@@ -1160,11 +1192,15 @@ class TTAttention:
                         "[debug][attn] scores_shape=",
                         tuple(getattr(attn_scores, "shape", ())),
                         "scores_padded_shape=",
-                        tuple(getattr(attn_scores, "padded_shape", ())) if hasattr(attn_scores, "padded_shape") else None,
+                        tuple(getattr(attn_scores, "padded_shape", ()))
+                        if hasattr(attn_scores, "padded_shape")
+                        else None,
                         "mask_shape=",
                         tuple(getattr(attn_mask, "shape", ())) if attn_mask is not None else None,
                         "mask_padded_shape=",
-                        tuple(getattr(attn_mask, "padded_shape", ())) if (attn_mask is not None and hasattr(attn_mask, "padded_shape")) else None,
+                        tuple(getattr(attn_mask, "padded_shape", ()))
+                        if (attn_mask is not None and hasattr(attn_mask, "padded_shape"))
+                        else None,
                         flush=True,
                     )
                     setattr(self, "_debug_mask_printed", True)
@@ -1330,11 +1366,7 @@ class TTAttention:
                 program_config=proj_pc,
                 op_name="attn_proj",
             )
-            if (
-                (reshard_after_proj or input_is_sharded)
-                and tokens_shard_mc is not None
-                and not _ttnn_is_sharded(out3)
-            ):
+            if (reshard_after_proj or input_is_sharded) and tokens_shard_mc is not None and not _ttnn_is_sharded(out3):
                 shard_dtype = mm_opts.get("tokens_shard_dtype", ttnn.bfloat16)
                 try:
                     from .perf_counters import inc_attn_island_reshard
@@ -1520,9 +1552,7 @@ class TTMLP:
                         and hasattr(ttnn, "sharded_to_interleaved")
                         and hasattr(ttnn, "interleaved_to_sharded")
                     ):
-                        x3_int = ttnn.sharded_to_interleaved(
-                            x3, ttnn.DRAM_MEMORY_CONFIG, output_dtype=mlp_dtype
-                        )
+                        x3_int = ttnn.sharded_to_interleaved(x3, ttnn.DRAM_MEMORY_CONFIG, output_dtype=mlp_dtype)
                         x3 = ttnn.interleaved_to_sharded(x3_int, mlp_shard_mc, output_dtype=mlp_dtype)
                         try:
                             if hasattr(ttnn, "deallocate"):
