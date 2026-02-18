@@ -17,7 +17,7 @@
 - **Math Fidelity**: `MathFidelity.LoFi`
 - **Memory Config**: L1/DRAM Interleaved
 - **KV Caching**: Enabled (Stages 1 & 2)
-- **Autoregressive Loop**: 100% On-Device (TTNN)
+- **Autoregressive Loop**: Mostly On-Device (Argmax on Host)
 - **Operator Fusion**: Linear + GELU Fused
 
 ## Summary of Optimization Impact
@@ -25,8 +25,8 @@
 ### 1. Unified TTNN Transformer Flows
 By replacing the hybrid PyTorch-TTNN attention with a native `ttnn.transformer.scaled_dot_product_attention` call, we eliminated block-level data transfers. All attention masking and scaling are now handled by the device.
 
-### 2. Persistent KV Caching & On-Device Loops
-The generation loops for Semantic and Coarse stages now remain on the device. The KV cache is maintained in L1 memory between iterations, reducing the compute per token by orders of magnitude and eliminating host-device synchronization latency.
+### 2. Persistent KV Caching & Mostly On-Device Loops
+The generation loops for Semantic and Coarse stages now remain mostly on the device. The KV cache is maintained in L1 memory between iterations, reducing the compute per token by orders of magnitude and minimizing host-device synchronization to only the final argmax.
 
 ### 3. Stage 3 (Fine) Parallelization
 The Fine model predicts 8 codebooks. By migrating the embedding summing and codebook management to the device as a list of TTNN tensors, we achieved seamless autoregressive prediction without pulling intermediate logits to the CPU.

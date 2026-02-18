@@ -154,7 +154,8 @@ class TtBarkModel:
 
         # Autoregressive loop
         max_new_tokens = getattr(self.semantic_generation_config, "max_new_tokens", 256)
-        for _ in range(max_new_tokens):
+        remaining_tokens = max_new_tokens - 1
+        for _ in range(max(remaining_tokens, 0)):
             # Process only the last token with KV cache
             logits, layer_past = self.semantic_model(
                 input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
@@ -196,7 +197,8 @@ class TtBarkModel:
 
         # Autoregressive loop
         max_new_tokens = getattr(self.coarse_generation_config, "max_new_tokens", 512)
-        for _ in range(max_new_tokens):
+        remaining_tokens = max_new_tokens - 1
+        for _ in range(max(remaining_tokens, 0)):
             logits, layer_past = self.coarse_model(
                 input_ids=next_token.unsqueeze(-1), layer_past=layer_past, use_cache=True
             )
