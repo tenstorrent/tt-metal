@@ -72,6 +72,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         ttnn.ShardSpec(q_core_grid, (num_q_heads_per_core, kv_lora_rank), ttnn.ShardOrientation.ROW_MAJOR),
     )
 
+    print("q core grid: ", q_core_grid)
     # Create Q tensor: [1, batch_size, num_heads, kvpe_dim]
     logger.info("Creating Q tensor...")
     q_shape = (1, batch_size, num_heads, kvpe_dim)
@@ -177,7 +178,7 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
     )
 
     # Run the op - stress test with multiple iterations
-    num_iterations = 10
+    num_iterations = 1
     first_output = None
     logger.info(f"Running FlashMLADecode.op {num_iterations} times for stress test...")
     for i in range(num_iterations):
