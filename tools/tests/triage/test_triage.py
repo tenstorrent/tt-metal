@@ -369,6 +369,44 @@ class TestTriage:
     def test_dump_risc_debug_signals(self):
         self.run_triage_script("dump_risc_debug_signals.py")
 
+    def test_dump_aggregated_callstacks(self):
+        os.environ["TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS"] = "1"
+        try:
+            result = self.run_triage_script("dump_aggregated_callstacks.py")
+            assert result is not None, "Expected non-None result from dump_aggregated_callstacks.py"
+
+            # If we have valid kernel names, validate against expected results
+            valid_rows = [row for row in result if row.kernel_name is not None]
+            if len(valid_rows) > 0:
+                expected = self.expected_results.get("lightweight_asserts")
+                if expected and expected.get("kernel_name"):
+                    expected_kernel_name = expected["kernel_name"]
+                    expected_risc_names = expected.get("risc_names")
+                    expected_file = expected.get("first_callstack_file")
+
+                    # Find aggregated row(s) with the expected kernel
+                    matching_rows = [row for row in valid_rows if row.kernel_name == expected_kernel_name]
+                    if len(matching_rows) > 0:
+                        row = matching_rows[0]
+
+                        # Validate expected RISC names if present
+                        if expected_risc_names:
+                            assert (
+                                row.risc_name in expected_risc_names
+                            ), f"Expected RISC '{row.risc_name}' not found in {expected_risc_names}"
+
+                        # Validate callstack if expected
+                        if expected_file and row.callstack:
+                            callstack = row.callstack.callstack
+                            assert len(callstack) > 0, "Expected non-empty callstack in aggregated row"
+                            matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
+                            assert (
+                                len(matching_entries) > 0
+                            ), f"Expected file '{expected_file}' not found in aggregated callstack. Callstack files: {[e.file for e in callstack]}"
+
+        finally:
+            os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)
+
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
