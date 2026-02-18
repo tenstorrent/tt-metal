@@ -7,3 +7,5 @@
 {"event":"files_read","details":"Read all kernel files, helper libraries, types, work_split_tilize. DeepWiki partially available - got TensorAccessorArgs info, other queries returned 500 errors.","ts":"2026-02-18T12:37:24+00:00"}
 {"event":"deepwiki_success","details":"Got split_work_to_cores and SFPU vs FPU explanations from DeepWiki","ts":"2026-02-18T12:38:05+00:00"}
 {"event":"analysis_complete","details":"Wrote tilize_analysis.md covering all 12 analysis sections: work unit, tensor format, data flow, CBs, pipeline, index calc, memory access, core distribution, arguments, kernel implementations, notes, external sources.","ts":"2026-02-18T12:38:59+00:00"}
+{"event":"analysis_complete","details":"Wrote untilize_analysis.md to ttnn/ttnn/operations/row_centralize/agent_logs/. Covered all sections: work unit, tensor format, data flow, CB config, pipeline, index calc, memory access, core distribution, arguments, kernel implementations, and implementation notes.","ts":"2026-02-18T12:40:12+00:00"}
+{"event":"analysis_complete","details":"Wrote batch_norm_analysis.md (compute reference for row_centralize)","ts":"2026-02-18T12:40:51+00:00"}
