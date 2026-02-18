@@ -53,36 +53,15 @@ class SocketInterface:
         self.send_core_coord = send_core_coord
         self.recv_core_coord = recv_core_coord
 
-        assert self.upstream_socket.get_active_cores()[0] == send_core_coord
-        assert self.downstream_socket.get_active_cores()[0] == recv_core_coord
-
         # Create a socket between the sender and receiver cores
         socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
 
-        self.socket_pair = ttnn.create_socket_pair(
+        self.intermed_socket_pair = ttnn.create_socket_pair(
             self.upstream_socket.get_mesh_device(), self.downstream_socket.get_mesh_device(), socket_config
         )
-
-    def run(self):
-        dummy_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.upstream_socket.get_mesh_device()
-        )
-
-        # Upstream sender connects to this socket
-        upstream_socket_config_addr = (
-            self.upstream_socket.get_config_buffer_address()
-        )  # self.socket_pair[0].get_config_buffer_address()
-        # Downstream receiver connects to this socket
-        downstream_socket_config_addr = (
-            self.downstream_socket.get_config_buffer_address()
-        )  # self.socket_pair[1].get_config_buffer_address()
-        # Intermed socket sender uses this socket to forward data to receiver
-        intermed_send_socket_config_addr = self.socket_pair[0].get_config_buffer_address()
-        # Intermed socket receiver uses this socket to handshake with sender
-        intermed_recv_socket_config_addr = self.socket_pair[1].get_config_buffer_address()
 
         self.termination_semaphore = ttnn.create_global_semaphore(
             self.upstream_socket.get_mesh_device(),
@@ -95,59 +74,128 @@ class SocketInterface:
             0,
             ttnn.BufferType.L1,
         )
+
+    def _create_program(
+        self,
+        my_mesh_device,
+        my_core_coord,
+        my_device_coord,
+        my_upstream_socket,
+        my_downstream_socket,
+    ):
+        assert self.upstream_socket.get_active_cores()[0] == send_core_coord
+        assert self.downstream_socket.get_active_cores()[0] == recv_core_coord
+
+        upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
+        downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
+
         fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
         num_whole_fabric_packets = self.page_size // fabric_max_payload_size
         partial_packet_size = self.page_size % fabric_max_payload_size
 
-        sender_kernel_ct_args = [
-            intermed_send_socket_config_addr,
+        num_fwd_links = 1
+        num_bwd_links = 1
+
+        packet_header_cb_num_pages = num_fwd_links + num_bwd_links
+        packet_header_cb_page_size = ttnn.get_tt_fabric_packet_header_size_bytes()
+        packet_header_cb_index = 0
+
+        packet_header_cb_desc = ttnn.CBDescriptor(
+            total_size=packet_header_cb_num_pages * packet_header_cb_page_size,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord, my_core_coord)]),
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=packet_header_cb_index,
+                    data_format=ttnn.uint32,
+                    page_size=packet_header_cb_page_size,
+                )
+            ],
+        )
+
+        kernel_ct_args = [
+            downstream_socket_config_addr,
             upstream_socket_config_addr,
             ttnn.get_global_semaphore_address(self.termination_semaphore),
             self.page_size,
             num_whole_fabric_packets,
             fabric_max_payload_size,
             partial_packet_size,
+            packet_header_cb_index,
         ]
 
-        receiver_kernel_ct_args = [
-            downstream_socket_config_addr,
-            intermed_recv_socket_config_addr,
-            ttnn.get_global_semaphore_address(self.termination_semaphore),
-            self.page_size,
-            num_whole_fabric_packets,
-            fabric_max_payload_size,
-            partial_packet_size,
-        ]
-
-        sender_kernel = ttnn.KernelDescriptor(
+        exchange_kernel = ttnn.KernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2d_exchange.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(self.send_core_coord.core_coord, self.send_core_coord.core_coord)]
-            ),
-            compile_time_args=sender_kernel_ct_args,
+            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord, my_core_coord)]),
+            compile_time_args=kernel_ct_args,
             config=ttnn.WriterConfigDescriptor(),
         )
 
-        receiver_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/d2d_exchange.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(self.recv_core_coord.core_coord, self.recv_core_coord.core_coord)]
-            ),
-            compile_time_args=receiver_kernel_ct_args,
-            config=ttnn.ReaderConfigDescriptor(),
+        program = ttnn.ProgramDescriptor(
+            kernels=[exchange_kernel],
+            semaphores=[],
+            cbs=[packet_header_cb_desc],
         )
 
-        program = ttnn.ProgramDescriptor(
-            kernels=[sender_kernel, receiver_kernel],
-            semaphores=[],
-            cbs=[],
+        my_upstream_sender_device_coord = my_upstream_socket.get_connection_config()[0].sender_core.device_coord
+        my_downstream_recv_device_coord = my_downstream_socket.get_connection_config()[0].receiver_core.device_coord
+
+        my_fabric_node_id = my_mesh_device.get_fabric_node_id(my_device_coord)
+        my_upstream_fabric_node_id = my_upstream_socket.get_fabric_node_id(
+            ttnn.SocketEndpoint.SENDER, my_upstream_sender_device_coord
         )
-        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+        my_downstream_fabric_node_id = my_downstream_socket.get_fabric_node_id(
+            ttnn.SocketEndpoint.RECEIVER, my_downstream_recv_device_coord
+        )
+
+        rt_args_ref = program.kernels[0].runtime_args[my_core_coord.x][my_core_coord.y]
+
+        for idx in range(num_fwd_links):
+            fwd_fabric_args = ttnn.setup_routing_plane_connection(
+                my_fabric_node_id,
+                [my_downstream_fabric_node_id],
+                [idx],
+                program,
+                0,
+                my_core_coord,
+            )
+            rt_args_ref.extend(send_fabric_args)
+
+        for idx in range(num_bwd_links):
+            bwd_fabric_args = ttnn.setup_routing_plane_connection(
+                my_fabric_node_id,
+                [my_upstream_fabric_node_id],
+                [idx],
+                program,
+                0,
+                my_core_coord,
+            )
+            rt_args_ref.extend(bwd_fabric_args)
+        return program
+
+    def run(self):
+        sender_program = self._create_program(
+            self.upstream_socket.get_mesh_device(),
+            self.send_core_coord,
+            self.send_device_coord,
+            self.upstream_socket,
+            self.socket_pair[0],
+        )
+
+        receiver_program = self._create_program(
+            self.downstream_socket.get_mesh_device(),
+            self.recv_core_coord,
+            self.recv_device_coord,
+            self.socket_pair[1],
+            self.downstream_socket,
+        )
+
         mesh_program_descriptor[
             ttnn.MeshCoordinateRange(self.send_core_coord.device_coord, self.send_core_coord.device_coord)
-        ] = program
+        ] = sender_program
+        mesh_program_descriptor[
+            ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
+        ] = receiver_program
 
         io_tensors = [
             dummy_tensor,
