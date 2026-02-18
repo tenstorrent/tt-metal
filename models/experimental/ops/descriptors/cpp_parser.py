@@ -10,7 +10,6 @@ sequential kernel chaining infrastructure.  Uses tree-sitter for:
   - Kernel body extraction (finding kernel_main and its body)
   - Pre-main code categorization (functions, variables, namespaces, etc.)
   - Code-aware text replacement (skipping strings, comments, literals)
-  - Selective ifdef resolution (AST-based condition evaluation)
 
 Also contains utilities for:
   - Local include inlining
@@ -82,14 +81,18 @@ class PreMainBlock:
     Attributes:
         text: Original source text of the block.
         kind: One of "function", "variable", "namespace", "using",
-              "namespace_alias", "struct", "template", "other".
+              "namespace_alias", "struct", "template", "other",
+              "preproc_block".
         name: Extracted name (function or variable name), or None for
               blocks where no phase-specific prefixing is needed.
+        inner_names: For ``preproc_block`` kind only — function and
+              variable names found inside the preprocessor block.
     """
 
     text: str
     kind: str
     name: Optional[str] = None
+    inner_names: Optional[List[str]] = None
 
 
 # =============================================================================
@@ -149,19 +152,66 @@ def extract_kernel_body(source: str) -> str:
 # =============================================================================
 
 # Node types that are skipped during pre-main categorization
-# (collected separately by collect_includes/collect_defines or not needed)
+# (collected separately by collect_includes/collect_defines or not needed).
+# Note: preproc_ifdef/preproc_if/preproc_ifndef are NOT skipped — they are
+# returned as "preproc_block" PreMainBlocks so their inner function/variable
+# names can be extracted and prefixed per-phase.
 _SKIP_NODE_TYPES = frozenset(
     {
         "preproc_include",
         "preproc_def",
-        "preproc_ifdef",
-        "preproc_if",
-        "preproc_ifndef",
         "preproc_call",
         "preproc_function_def",
         "comment",
     }
 )
+
+# Node types that represent preprocessor conditional blocks at the top level
+_PREPROC_BLOCK_TYPES = frozenset({"preproc_ifdef", "preproc_if", "preproc_ifndef"})
+
+
+def _extract_names_from_preproc(node, src_bytes: bytes) -> List[str]:
+    """Recursively extract function and variable names from a preprocessor block.
+
+    Walks all descendants of a ``preproc_ifdef``/``preproc_if`` node (including
+    ``preproc_else`` branches and nested preproc blocks) and collects function
+    definition names and variable declaration names.
+    """
+    names: List[str] = []
+    _walk_for_names(node, src_bytes, names)
+    # Deduplicate while preserving order
+    seen: Set[str] = set()
+    result: List[str] = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            result.append(n)
+    return result
+
+
+def _walk_for_names(node, src_bytes: bytes, names: List[str]) -> None:
+    """Walk AST nodes to find function/variable names."""
+    if node.type == "function_definition":
+        name = _find_function_name(node, src_bytes)
+        if name:
+            names.append(name)
+        return  # Don't recurse into function bodies
+
+    if node.type == "declaration":
+        if not _is_function_declaration(node):
+            var_name = _extract_variable_name_from_declaration(node, src_bytes)
+            if var_name:
+                names.append(var_name)
+        return
+
+    if node.type == "template_declaration":
+        func_name = _extract_template_function_name(node, src_bytes)
+        if func_name:
+            names.append(func_name)
+        return
+
+    for child in node.children:
+        _walk_for_names(child, src_bytes, names)
 
 
 def _extract_variable_name_from_declaration(node, src_bytes: bytes) -> Optional[str]:
@@ -239,8 +289,11 @@ def categorize_pre_main(source: str) -> List[PreMainBlock]:
     stopping at kernel_main.  Each node is classified by type and returned
     as a PreMainBlock with extracted name where applicable.
 
-    Skips preprocessor directives (#include, #define, #ifdef) and comments,
-    which are collected separately.
+    Preprocessor conditional blocks (``#ifdef``, ``#if``, ``#ifndef``) are
+    returned as ``preproc_block`` blocks with ``inner_names`` listing any
+    function or variable names inside.  Other preprocessor directives
+    (``#include``, ``#define``) and comments are skipped (collected
+    separately).
     """
     tree, src = _parse(source)
     blocks: List[PreMainBlock] = []
@@ -250,11 +303,17 @@ def categorize_pre_main(source: str) -> List[PreMainBlock]:
         if child.type == "function_definition" and _is_kernel_main_func(child, src):
             break
 
-        # Skip preprocessor and comments
+        # Skip non-conditional preprocessor and comments
         if child.type in _SKIP_NODE_TYPES:
             continue
 
         text = _get_text(child, src)
+
+        # Preprocessor conditional blocks — preserve structure, extract inner names
+        if child.type in _PREPROC_BLOCK_TYPES:
+            inner = _extract_names_from_preproc(child, src)
+            blocks.append(PreMainBlock(text=text, kind="preproc_block", inner_names=inner))
+            continue
 
         if child.type == "function_definition":
             name = _find_function_name(child, src)
@@ -375,316 +434,6 @@ def replace_in_code_only(source: str, old_name: str, new_name: str) -> str:
 
 
 # =============================================================================
-# Ifdef Resolution (tree-sitter AST-based)
-# =============================================================================
-
-# Defines that are resolved per-phase in source code (not passed to compiler)
-SOURCE_LEVEL_DEFINES = {"RMSNORM", "FUSE_PRE_ADD", "FUSED_PRE_ADD", "FUSE_GAMMA", "FUSE_BETA"}
-
-
-def _collect_referenced_defines(node, src_bytes: bytes) -> Set[str]:
-    """Collect all define names referenced in a preprocessor condition AST."""
-    refs: Set[str] = set()
-    if node.type == "preproc_defined":
-        for child in node.children:
-            if child.type == "identifier":
-                refs.add(_get_text(child, src_bytes))
-    elif node.type == "identifier":
-        refs.add(_get_text(node, src_bytes))
-    elif node.type in ("binary_expression", "unary_expression", "parenthesized_expression"):
-        for child in node.children:
-            refs.update(_collect_referenced_defines(child, src_bytes))
-    return refs
-
-
-def _is_resolvable(referenced_defines: Set[str]) -> bool:
-    """Check if all referenced defines are known source-level defines."""
-    if not referenced_defines:
-        return True  # No defines (e.g. #if 0)
-    return all(d in SOURCE_LEVEL_DEFINES for d in referenced_defines)
-
-
-def _eval_condition_node(node, src_bytes: bytes, active_defines: set) -> bool:
-    """Recursively evaluate a preprocessor condition expression AST."""
-    if node.type == "preproc_defined":
-        for child in node.children:
-            if child.type == "identifier":
-                return _get_text(child, src_bytes) in active_defines
-        return False
-    elif node.type == "identifier":
-        return _get_text(node, src_bytes) in active_defines
-    elif node.type == "number_literal":
-        return int(_get_text(node, src_bytes)) != 0
-    elif node.type == "unary_expression":
-        operand = node.children[-1]
-        return not _eval_condition_node(operand, src_bytes, active_defines)
-    elif node.type == "binary_expression":
-        left = node.children[0]
-        op = _get_text(node.children[1], src_bytes)
-        right = node.children[2]
-        if op == "&&":
-            return _eval_condition_node(left, src_bytes, active_defines) and _eval_condition_node(
-                right, src_bytes, active_defines
-            )
-        elif op == "||":
-            return _eval_condition_node(left, src_bytes, active_defines) or _eval_condition_node(
-                right, src_bytes, active_defines
-            )
-    elif node.type == "parenthesized_expression":
-        for child in node.children:
-            if child.type not in ("(", ")"):
-                return _eval_condition_node(child, src_bytes, active_defines)
-    return False
-
-
-def _get_if_body_range(node, src_bytes: bytes) -> Tuple[int, int]:
-    """Get byte range of the if-branch body in a preproc node.
-
-    Returns (start_byte, end_byte) spanning from after the directive line
-    (after the ``\\n``) to the start of the first alternative or ``#endif``.
-    Includes leading whitespace/indentation on the first body line.
-    """
-    children = node.children
-    if node.type == "preproc_ifdef":
-        # Children: #ifdef/#ifndef, identifier, body..., [preproc_else], #endif
-        # No \n child — skip newline manually after identifier
-        header_end = children[1].end_byte
-        if header_end < len(src_bytes) and src_bytes[header_end : header_end + 1] == b"\n":
-            header_end += 1
-    else:
-        # preproc_if/preproc_elif: children[2] is '\n', end_byte is after the \n
-        header_end = children[2].end_byte if len(children) > 2 else children[1].end_byte
-
-    # Find where body ends (before next structural element)
-    body_end = node.end_byte
-    for child in children:
-        if child.type in ("preproc_else", "preproc_elif", "#endif"):
-            body_end = child.start_byte
-            break
-
-    return header_end, body_end
-
-
-def _get_else_body_range(else_node, src_bytes: bytes, body_end: int) -> Tuple[int, int]:
-    """Get byte range of the else-branch body.
-
-    Returns (start_byte, end_byte) spanning from after ``#else\\n`` to
-    *body_end* (typically ``#endif.start_byte`` in the parent node).
-    The caller provides *body_end* because tree-sitter's ``preproc_else``
-    node may not include trailing comments on the last body line.
-    """
-    else_token = else_node.children[0]  # #else
-    body_start = else_token.end_byte
-    nl_pos = src_bytes.find(b"\n", body_start)
-    if nl_pos >= 0 and nl_pos < body_end:
-        body_start = nl_pos + 1
-    return body_start, body_end
-
-
-def _get_body_children(node, body_start: int, body_end: int, *extra_nodes) -> list:
-    """Get child nodes that fall within a byte range (for nested resolution).
-
-    Checks direct children of *node* plus children of any *extra_nodes*.
-    This is needed for else-branch processing: the body content lives as
-    children of ``preproc_else``, but trailing siblings (comments) are
-    children of the parent.
-    """
-    candidates = list(node.children)
-    for extra in extra_nodes:
-        candidates.extend(extra.children)
-    return [child for child in candidates if child.start_byte >= body_start and child.end_byte <= body_end]
-
-
-def _resolve_body(body_start: int, body_end: int, body_children: list, src_bytes: bytes, active_defines: set) -> str:
-    """Extract body text from a byte range and resolve nested preproc nodes within it.
-
-    Recursively walks ALL descendants of body_children (not just direct children)
-    to find preproc nodes at any nesting depth — e.g. ``#ifdef`` inside a for loop
-    inside the body of an outer ``#if``.
-    """
-    text = src_bytes[body_start:body_end]
-
-    # Recursively collect all preproc node replacements within the body range
-    replacements: List[Tuple[int, int, bytes]] = []
-    _collect_preproc_replacements(body_children, src_bytes, active_defines, replacements, body_start)
-
-    replacements.sort(key=lambda r: r[0], reverse=True)
-    for s, e, r in replacements:
-        text = text[:s] + r + text[e:]
-    return text.decode("utf8")
-
-
-def _collect_preproc_replacements(
-    children: list, src_bytes: bytes, active_defines: set, replacements: List[Tuple[int, int, bytes]], offset: int = 0
-) -> None:
-    """Recursively walk children to find and resolve preproc nodes at any depth.
-
-    Used both at the top-level (``resolve_ifdef_directives``, offset=0) and
-    inside resolved body ranges (``_resolve_body``, offset=body_start).
-    Recurses into all non-preproc children (for loops, compound statements,
-    etc.) to find deeply nested directives.
-    """
-    for child in children:
-        if child.type in ("preproc_ifdef", "preproc_if"):
-            resolved = _resolve_preproc_node(child, src_bytes, active_defines)
-            if resolved is not None:
-                replacements.append((child.start_byte - offset, child.end_byte - offset, resolved.encode("utf8")))
-            else:
-                # Not resolvable — recurse into preproc branches only
-                _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
-        else:
-            # Recurse into non-preproc nodes (for loops, if statements, etc.)
-            if child.children:
-                _collect_preproc_replacements(child.children, src_bytes, active_defines, replacements, offset)
-
-
-def _collect_preproc_in_branches(node, src_bytes: bytes, active_defines: set, replacements: list, offset: int) -> None:
-    """Recurse into branches of a non-resolvable preproc node to find nested resolvable ones."""
-    for child in node.children:
-        if child.type in ("preproc_ifdef", "preproc_if"):
-            resolved = _resolve_preproc_node(child, src_bytes, active_defines)
-            if resolved is not None:
-                replacements.append((child.start_byte - offset, child.end_byte - offset, resolved.encode("utf8")))
-            else:
-                _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
-        elif child.type in ("preproc_else", "preproc_elif"):
-            _collect_preproc_in_branches(child, src_bytes, active_defines, replacements, offset)
-
-
-def _resolve_preproc_node(node, src_bytes: bytes, active_defines: set) -> Optional[str]:
-    """Try to resolve a preproc_ifdef or preproc_if node.
-
-    Returns the replacement text if resolvable, None otherwise.
-    """
-    if node.type == "preproc_ifdef":
-        return _resolve_ifdef_node(node, src_bytes, active_defines)
-    elif node.type == "preproc_if":
-        return _resolve_if_node(node, src_bytes, active_defines)
-    return None
-
-
-def _find_endif_start(node) -> int:
-    """Find the start_byte of the ``#endif`` child in a preproc node."""
-    for child in node.children:
-        if child.type == "#endif":
-            return child.start_byte
-    return node.end_byte
-
-
-def _resolve_ifdef_node(node, src_bytes: bytes, active_defines: set) -> Optional[str]:
-    """Resolve a ``preproc_ifdef`` node (covers both ``#ifdef`` and ``#ifndef``)."""
-    is_ifndef = False
-    name = None
-    for child in node.children:
-        if child.type == "#ifndef":
-            is_ifndef = True
-        elif child.type == "identifier" and name is None:
-            name = _get_text(child, src_bytes)
-
-    if name is None or name not in SOURCE_LEVEL_DEFINES:
-        return None
-
-    is_defined = name in active_defines
-    take_if = (is_defined and not is_ifndef) or (not is_defined and is_ifndef)
-
-    if take_if:
-        start, end = _get_if_body_range(node, src_bytes)
-        children = _get_body_children(node, start, end)
-        return _resolve_body(start, end, children, src_bytes, active_defines)
-    else:
-        endif_start = _find_endif_start(node)
-        for child in node.children:
-            if child.type == "preproc_else":
-                start, end = _get_else_body_range(child, src_bytes, endif_start)
-                children = _get_body_children(node, start, end, child)
-                return _resolve_body(start, end, children, src_bytes, active_defines)
-        return ""  # No else branch, condition was false
-
-
-def _resolve_if_node(node, src_bytes: bytes, active_defines: set) -> Optional[str]:
-    """Resolve a ``preproc_if`` node."""
-    if len(node.children) < 2:
-        return None
-    condition_node = node.children[1]
-
-    refs = _collect_referenced_defines(condition_node, src_bytes)
-    if not _is_resolvable(refs):
-        return None
-
-    if _eval_condition_node(condition_node, src_bytes, active_defines):
-        start, end = _get_if_body_range(node, src_bytes)
-        children = _get_body_children(node, start, end)
-        return _resolve_body(start, end, children, src_bytes, active_defines)
-
-    # Condition false — check #elif / #else alternatives
-    endif_start = _find_endif_start(node)
-    for child in node.children:
-        if child.type == "preproc_elif":
-            return _resolve_elif_chain(child, src_bytes, active_defines, endif_start)
-        elif child.type == "preproc_else":
-            start, end = _get_else_body_range(child, src_bytes, endif_start)
-            children = _get_body_children(node, start, end, child)
-            return _resolve_body(start, end, children, src_bytes, active_defines)
-    return ""  # No alternative, condition was false
-
-
-def _resolve_elif_chain(node, src_bytes: bytes, active_defines: set, endif_start: int) -> str:
-    """Resolve an ``#elif`` chain by walking until a branch matches or falls through."""
-    if len(node.children) < 2:
-        return ""
-    condition_node = node.children[1]
-
-    refs = _collect_referenced_defines(condition_node, src_bytes)
-    if _is_resolvable(refs) and _eval_condition_node(condition_node, src_bytes, active_defines):
-        start, end = _get_if_body_range(node, src_bytes)
-        children = _get_body_children(node, start, end)
-        return _resolve_body(start, end, children, src_bytes, active_defines)
-
-    # This elif didn't match — check further alternatives
-    for child in node.children:
-        if child.type == "preproc_elif":
-            return _resolve_elif_chain(child, src_bytes, active_defines, endif_start)
-        elif child.type == "preproc_else":
-            start, end = _get_else_body_range(child, src_bytes, endif_start)
-            children = _get_body_children(node, start, end, child)
-            return _resolve_body(start, end, children, src_bytes, active_defines)
-    return ""
-
-
-def resolve_ifdef_directives(source: str, active_defines: set) -> str:
-    """Resolve preprocessor #ifdef/#ifndef/#if defined/#elif directives in source code.
-
-    Uses tree-sitter to parse the preprocessor structure into an AST, then
-    recursively resolves directives involving known source-level defines
-    (RMSNORM, FUSE_PRE_ADD, FUSED_PRE_ADD, FUSE_GAMMA, FUSE_BETA).
-    Other directives are left untouched.
-
-    Supports:
-      - ``#ifdef NAME``, ``#ifndef NAME``
-      - ``#if defined(NAME)`` / ``#if defined NAME``
-      - ``#if !defined(NAME)`` / ``#if !defined NAME``
-      - ``#if defined A || defined B``, ``#if defined A && !defined B``
-      - ``#if 0``, ``#if 1`` (unconditional)
-      - ``#elif`` with any of the above
-      - Line continuation with backslash (``\\``)
-      - ``#else``, ``#endif``
-    """
-    normalized = _normalize_alt_tokens_in_preprocessor(source)
-    src = normalized.encode("utf8")
-    tree = _parser.parse(src)
-
-    replacements: List[Tuple[int, int, bytes]] = []
-    _collect_preproc_replacements(tree.root_node.children, src, active_defines, replacements)
-
-    # Apply replacements in reverse byte order to preserve offsets
-    replacements.sort(key=lambda r: r[0], reverse=True)
-    result = src
-    for start, end, repl in replacements:
-        result = result[:start] + repl + result[end:]
-    return result.decode("utf8")
-
-
-# =============================================================================
 # Include Inlining (moved from sequential.py)
 # =============================================================================
 
@@ -797,7 +546,6 @@ def normalize_block(block: str) -> str:
 
 __all__ = [
     "PreMainBlock",
-    "SOURCE_LEVEL_DEFINES",
     "categorize_pre_main",
     "collect_defines",
     "collect_includes",
@@ -805,5 +553,4 @@ __all__ = [
     "inline_local_includes",
     "normalize_block",
     "replace_in_code_only",
-    "resolve_ifdef_directives",
 ]

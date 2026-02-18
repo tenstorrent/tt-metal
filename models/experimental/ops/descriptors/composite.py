@@ -32,8 +32,8 @@ def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
         RuntimeError: If any op descriptors have overlapping core ranges.
 
     Example:
-        >>> left = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
-        >>> right = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
+        >>> left = create_op_descriptor(input1, cores=cores1)
+        >>> right = create_op_descriptor(input2, cores=cores2)
         >>> left_out, right_out = launch([left, right])
     """
     if not op_descriptors:
