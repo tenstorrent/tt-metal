@@ -230,21 +230,32 @@ static ReaderKernelSimResult simulate_reader_kernel(
             std::cout << "]\n";
         }
 
+        if (src_tile_id == 8) {
+                std::cout << "  [ERROR] Iteration " << i << ": src_tile_id=" << src_tile_id << ", tile_coord=[";
+                for (size_t j = 0; j < tile_coord.size(); j++) {
+                    std::cout << tile_coord[j];
+                    if (j < tile_coord.size() - 1) {
+                        std::cout << ", ";
+                    }
+                }
+                std::cout << "]\n";
+        }
+
         if (1) {
-            uint32_t manual_src_tile_id = tile_coord[2];
-            manual_src_tile_id += tile_coord[1] * 5;
-            manual_src_tile_id += tile_coord[0] * 120;
+            uint32_t manual_src_tile_id = 0;
+	    for (int i=0; i< num_dims; i++) manual_src_tile_id += tile_coord[i]*tile_id_acc[i];
             if (manual_src_tile_id != src_tile_id or input_tile_access[src_tile_id] > 1) {
                 std::cout << "  src_tile_id_start: " << rt_args.core_tile_id << "\n";
-                std::cout << "        -- id error(" << input_tile_access[src_tile_id] << ") : " << src_tile_id << ", "
+                std::cout << "        -- id error(" << input_tile_access[src_tile_id] << ") : " << manual_src_tile_id << ", "
                           << manual_src_tile_id << "\n";
+                std::cout << "        -- input_tile_access[" << src_tile_id << "] = " << input_tile_access[src_tile_id] << "\n";
             }
         }
 
-        for (int32_t j = static_cast<int32_t>(num_dims) - 1; j >= 1; j--) {
+        for (int32_t j = static_cast<int32_t>(num_dims) - 1; j >= 0; j--) {
             tile_coord[j] += coord_inc[j];
             src_tile_id += coord_inc[j] * tile_id_acc[j];
-            if (tile_coord[j] >= shape_tiles[j]) {
+            if (j>0 && tile_coord[j] >= shape_tiles[j]) {
                 tile_coord[j] -= shape_tiles[j];
                 tile_coord[j - 1] += 1;
                 src_tile_id += tile_id_acc[j - 1] - shape_tiles[j] * tile_id_acc[j];
