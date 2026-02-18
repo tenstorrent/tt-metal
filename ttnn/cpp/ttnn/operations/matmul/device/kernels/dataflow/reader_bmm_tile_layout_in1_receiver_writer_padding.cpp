@@ -73,7 +73,7 @@ void kernel_main() {
     // in3 block args
     constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
 
-    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
 
@@ -84,10 +84,10 @@ void kernel_main() {
     }
     // WRITER
 
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     // WRITER
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     // WRITER
     // single-tile

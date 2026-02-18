@@ -619,6 +619,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
+        .named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
@@ -647,10 +648,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         num_output_tiles_per_core_group_2  // Nt
     };
     log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}, {"cb_out", output_cb_index}};
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -660,6 +664,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
