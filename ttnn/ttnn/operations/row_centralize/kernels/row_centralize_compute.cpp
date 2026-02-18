@@ -1,20 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 // Row Centralize - Compute Kernel
 //
-// Runs on math RISC-V core (TRISC), performs all compute stages.
+// TDD Stage: tilize_untilize
+// Only Phase 1 (tilize) and Phase 9 (untilize) are active.
+// For this stage, untilize reads from c_1 (cb_tilized) instead of c_6 (cb_result).
 //
-// Per tile-row (Ht_total iterations), processes 9 sequential phases:
-//   Phase 1: tilize(c_0 -> c_1)                 - RM sticks to tiles
-//   Phase 2: reduce_row(c_1 -> c_2)              - row mean with scaler 1/W (WaitUpfrontNoPop)
-//   Phase 3: sub_col(c_1, c_2 -> c_3)            - x - mean (centered), c_1 popped after
-//   Phase 4: square(c_3 -> c_24)                 - c^2 (WaitUpfrontNoPop, c_3 kept)
-//   Phase 5: reduce_row(c_24 -> c_4)             - row variance
-//   Phase 6: add_scalar(c_4, c_7 -> c_25)        - var + epsilon (c_7 not popped)
-//   Phase 7: rsqrt(c_25 -> c_5)                  - 1/sqrt(var + eps)
-//   Phase 8: mul_col(c_3, c_5 -> c_6)            - centered * inv_std (c_3 popped)
-//   Phase 9: untilize(c_6 -> c_16)               - tiles to RM sticks
+// Per tile-row (Ht_total iterations):
+//   Phase 1: tilize(c_0 -> c_1)   - RM sticks to tiles
+//   Phase 9: untilize(c_1 -> c_16) - tiles back to RM sticks (identity roundtrip)
 //
 // Compile-time args:
 //   [0]  Wt              - tiles per tile-row
@@ -31,20 +26,40 @@
 //   [11] cb_rm_out       - c_16
 //   [12] cb_eps          - c_7
 //   [13] cb_scaler       - c_8
-//
-// Runtime args: (none - all parameters are compile-time for single-core)
 
 #include "compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
-    // TODO: Implement compute kernel
-    // Kernel writer agent will implement all 9 phases per tile-row using:
-    //   - compute_kernel_lib::tilize (tilize_helpers.hpp)
-    //   - compute_kernel_lib::reduce<SUM, REDUCE_ROW> (reduce_helpers_compute.hpp)
-    //   - compute_kernel_lib::sub<COL> (binary_op_helpers.hpp)
-    //   - compute_kernel_lib::square (binary_op_helpers.hpp)
-    //   - compute_kernel_lib::add<SCALAR> (binary_op_helpers.hpp)
-    //   - rsqrt_tile (eltwise_unary/rsqrt.h)
-    //   - compute_kernel_lib::mul<COL> (binary_op_helpers.hpp)
-    //   - compute_kernel_lib::untilize (untilize_helpers.hpp)
+    // ========== Compile-time args ==========
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t Ht_total = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_rm_in = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_tilized = get_compile_time_arg_val(3);
+    // [4]-[10] unused in this stage
+    constexpr uint32_t cb_rm_out = get_compile_time_arg_val(11);
+    // [12]-[13] unused in this stage
+
+    // ========== Hardware startup ==========
+    // Span all CB IDs used: c_0 (0) through c_25 (25)
+    // Even though this stage only uses c_0, c_1, c_16, we must cover the range
+    // for CBs that are allocated (the hw_startup just initializes pack/unpack config)
+    constexpr uint32_t cb_min = cb_rm_in;  // c_0
+    constexpr uint32_t cb_max = 25;        // c_25 is the highest CB allocated
+    compute_kernel_hw_startup(cb_min, cb_max);
+
+    // ========== Main loop: per tile-row ==========
+    for (uint32_t tr = 0; tr < Ht_total; ++tr) {
+        // Phase 1: Tilize (c_0 -> c_1)
+        // Helper handles: cb_wait_front(c_0, Wt), tilize_block, cb_pop_front(c_0, Wt),
+        //                 cb_reserve_back(c_1, Wt), cb_push_back(c_1, Wt)
+        compute_kernel_lib::tilize<cb_rm_in, cb_tilized>(Wt, 1);
+
+        // Phase 9: Untilize (c_1 -> c_16)
+        // For this TDD stage, untilize reads from c_1 (cb_tilized) instead of c_6 (cb_result)
+        // Helper handles: cb_wait_front(c_1, Wt), untilize, cb_pop_front(c_1, Wt),
+        //                 cb_reserve_back(c_16, Wt), cb_push_back(c_16, Wt)
+        compute_kernel_lib::untilize<Wt, cb_tilized, cb_rm_out>(1);
+    }
 }
