@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import random
+
 import pytest
 import torch
 from loguru import logger
@@ -27,7 +29,7 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
-def gen_torch_expert_mapping(scheme, devices, experts, experts_per_device, dtype):
+def gen_torch_expert_mapping_tensor(scheme, devices, experts, experts_per_device, dtype):
     if scheme == "random":
         perm = torch.randperm(experts)
         assignment = torch.empty(experts, dtype=tt_to_torch_dtype(dtype))
@@ -39,10 +41,214 @@ def gen_torch_expert_mapping(scheme, devices, experts, experts_per_device, dtype
     return assignment.unsqueeze(0).repeat(devices, 1)
 
 
-def gen_torch_dispatch_input_tensors():
-    pass
+def gen_torch_dispatch_input_tensor(scheme, batch, seq, hidden_size, dtype):
+    tokens = []
+    factor = 1
+    for _ in range(batch):
+        for _ in range(seq):
+            if scheme == "sequential":
+                tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
+                factor += 1
+            else:
+                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
+    res = torch.cat(tokens, dim=0)
+    return res.reshape(batch, 1, seq, hidden_size)
 
-    # return (torch_dispatch_input_tensor, torch_dispatch_input_expert_indices_tensor, torch_dispatch_input_expert_scores_tensor)
+
+def gen_torch_dispatch_input_expert_indices_tensor(
+    scheme,
+    devices,
+    experts,
+    total_tokens,
+    experts_per_device,
+    batches_per_device,
+    batch,
+    seq,
+    selected_experts_k,
+    dtype,
+):
+    expert_indices = torch.ones(batch, 1, seq, selected_experts_k, dtype=tt_to_torch_dtype(dtype)) * -1
+    current_expert = 0
+
+    # For avg_perf scheme, track how many tokens are assigned to each expert
+    if scheme == "avg_perf":
+        # Use ceiling division to ensure we have enough capacity, with minimum of 1
+        max_tokens_per_expert = max(1, (total_tokens * selected_experts_k + experts - 1) // experts)
+        expert_token_count = {e: 0 for e in range(experts)}
+
+    token = 0
+    for b in range(batch):
+        for s in range(seq):
+            token += 1
+            for k in range(selected_experts_k):
+                if scheme == "sequential":
+                    expert_indices[b, 0, s, k] = current_expert % experts
+                    current_expert += 1 + (k % 2)
+                elif scheme == "random" or scheme == "random_sequential_experts":
+                    # need to ensure a set of unique indices
+                    current_indices = expert_indices[b, 0, s, :].tolist()
+                    expert_indices[b, 0, s, k] = random.choice(
+                        list(filter(lambda e: e not in current_indices, range(experts)))
+                    )
+                elif scheme == "avg_perf":
+                    # Random selection but each expert is capped at max_tokens_per_expert
+                    # to simulate average performance case
+                    current_indices = expert_indices[b, 0, s, :].tolist()
+                    # First, try to find experts under the cap
+                    available_experts = [
+                        e
+                        for e in range(experts)
+                        if e not in current_indices and expert_token_count[e] < max_tokens_per_expert
+                    ]
+                    # Fallback: if all capped experts are used, pick any expert not in current token
+                    if not available_experts:
+                        available_experts = [e for e in range(experts) if e not in current_indices]
+                    chosen_expert = random.choice(available_experts)
+                    expert_indices[b, 0, s, k] = chosen_expert
+                    expert_token_count[chosen_expert] += 1
+                elif scheme == "worst_perf":  # worst perf is when the expert index is always on the last device
+                    expert_indices[b, 0, s, k] = (
+                        experts - 1
+                    )  # technically each expert index should be different, but we're sending to the same device regardless
+                elif scheme == "worst_congestion":
+                    # Worst case link congestion: each token selects experts on consecutive
+                    # devices in one direction, maximizing traffic through intermediate links.
+                    # From device D, select experts on devices D+1, D+2, ..., D+k
+                    # This creates a cascade where link i→i+1 carries traffic from all
+                    # devices 0..i to all devices i+1..n, maximizing link utilization.
+
+                    # Determine source device for this token (batch is sharded in chunks across devices)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    src_device = b // batches_per_device
+
+                    # Target device is src_device + k + 1 (wrapping around)
+                    target_device = (src_device + 1 + k) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
+                elif scheme == "best_congestion":
+                    # Best case for congestion: tokens prefer local experts first, then nearest
+                    # neighbors, minimizing average hop distance and spreading traffic.
+                    # Algorithm:
+                    # 1. Fill local device first (up to experts_per_device)
+                    # 2. Alternate between CCW and CW neighbors, picking 1 expert at a time
+                    # 3. When a device is full, move to the next device in that direction
+                    #
+                    # Example with k=8, experts_per_device=2:
+                    # - 2 local
+                    # - 2 from CCW neighbor (1-hop)
+                    # - 2 from CW neighbor (1-hop)
+                    # - 1 from CW 2-hop neighbor
+                    # - 1 from CCW 2-hop neighbor
+                    # Batch is sharded in chunks across devices (not round-robin)
+                    # Device 0 gets batch 0 to batch/devices-1, device 1 gets next chunk, etc.
+                    src_device = b // batches_per_device
+
+                    # Build list of (device, local_expert_idx) for all k experts
+                    if k == 0:
+                        # First expert slot - start building the selection list
+                        # We need to compute all k experts at once for this token
+                        picked = []
+                        remaining = selected_experts_k
+
+                        # Step 1: Fill local device
+                        local_count = min(remaining, experts_per_device)
+                        for i in range(local_count):
+                            picked.append((src_device, i))
+                        remaining -= local_count
+
+                        # Step 2: Alternate CCW and CW
+                        ccw_hop = 1
+                        cw_hop = 1
+                        ccw_count = 0  # experts picked from current CCW device
+                        cw_count = 0  # experts picked from current CW device
+                        use_ccw = True  # alternate starting with CCW
+
+                        while remaining > 0:
+                            if use_ccw:
+                                ccw_device = (src_device - ccw_hop) % devices
+                                if ccw_count < experts_per_device:
+                                    picked.append((ccw_device, ccw_count))
+                                    ccw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CCW device
+                                    ccw_hop += 1
+                                    ccw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            else:
+                                cw_device = (src_device + cw_hop) % devices
+                                if cw_count < experts_per_device:
+                                    picked.append((cw_device, cw_count))
+                                    cw_count += 1
+                                    remaining -= 1
+                                else:
+                                    # Move to next CW device
+                                    cw_hop += 1
+                                    cw_count = 0
+                                    continue  # Don't switch direction yet, retry with new device
+                            use_ccw = not use_ccw  # Alternate direction
+
+                        # Store the selection in a way we can access for subsequent k values
+                        # We use a simple approach: just compute all k at once and store in tensor
+                        for idx, (device, local_idx) in enumerate(picked):
+                            expert_id = device * experts_per_device + local_idx
+                            expert_indices[b, 0, s, idx] = expert_id
+                    # For k > 0, the values were already set when k == 0
+                elif scheme == "worst_congestion_descending":
+                    # Worst case for sparse multicast: send to furthest device first (antipode),
+                    # then progressively closer devices. This maximizes the hop distance for
+                    # each packet, as opposed to worst_congestion (ascending) which starts
+                    # from the nearest neighbor.
+                    #
+                    # For a 16-device ring from src_device:
+                    # - k=0: hop 8 (antipode, maximum distance)
+                    # - k=1: hop 7
+                    # - k=2: hop 6
+                    # - ...
+                    # - k=7: hop 1 (nearest neighbor)
+                    # - k=8: hop 0 (local, if k > devices/2)
+                    #
+                    # This is the worst case for sparse multicast because:
+                    # 1. Each packet travels maximum distance before hitting any destination
+                    # 2. No benefit from early delivery along the path
+                    # 3. Maximum total hop-distance across all packets
+
+                    # Batch is sharded in chunks across devices
+                    src_device = b // batches_per_device
+
+                    # Start from antipode (devices // 2 hops away) and decrement
+                    antipode_hop = devices // 2
+                    hop_distance = max(0, antipode_hop - k)  # Clamp to 0 for local when k > antipode
+                    target_device = (src_device + hop_distance) % devices
+
+                    # Expert offset: if we wrap around and visit a device multiple times,
+                    # pick a different expert on that device each time
+                    expert_offset = k // devices
+                    expert_id = target_device * experts_per_device + (expert_offset % experts_per_device)
+
+                    expert_indices[b, 0, s, k] = expert_id
+                else:
+                    raise ValueError(f"Invalid scheme: {scheme}")
+
+    return expert_indices
+
+
+def gen_torch_dispatch_input_export_scores_tensor(dispatch_input_expert_indices_shape, dtype):
+    # Generate expert scores (same shape as expert_indices)
+    # Normalize scores so they sum to 1 per token (softmax-like)
+    torch_dispatch_input_expert_scores_tensor = torch.rand(dispatch_input_expert_indices_shape, dtype=torch.float32).to(
+        tt_to_torch_dtype(dtype)
+    )
+    torch_dispatch_input_expert_scores_tensor = (
+        torch_dispatch_input_expert_scores_tensor / torch_dispatch_input_expert_scores_tensor.sum(dim=-1, keepdim=True)
+    )
+
+    return torch_dispatch_input_expert_scores_tensor
 
 
 def gen_compute_matmul_cores(mesh_device):
@@ -71,7 +277,7 @@ def gen_compute_matmul_cores(mesh_device):
     return ring2cores, dram_core_range_set
 
 
-def gen_torch_compute_matmul_weights(ring2cores, num_layers, experts_per_device, hidden_size, N):
+def gen_torch_compute_matmul_weight_tensors(ring2cores, num_layers, experts_per_device, hidden_size, N):
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
@@ -85,6 +291,151 @@ def gen_torch_compute_matmul_weights(ring2cores, num_layers, experts_per_device,
     torch_w2_reordered = prepare_w2_tensor(torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores)
 
     return torch_w0_w1_reordered, torch_w2_reordered
+
+
+def gen_dispatch_reference():
+    # TODO: (GR)
+    pass
+
+
+def gen_compute_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
+    # TODO: (GR) tilized output, which needs to use metadata and tokens from dispatch
+    torch_input_ref = ()
+
+    # (L, D, E/D, T, H) -> (L, E, T, H)
+    torch_input_ref = torch_input_ref.reshape(num_layers, experts, total_tokens, hidden_size)
+
+    # in the test setup the expert weights are duplicated over devices, do so here
+    # (L, E/D, K, N) -> (L, E, K, N)
+    torch_w0 = torch_w0.repeat([1, devices, 1, 1])
+    # (L, E/D, K, N) -> (L, E, K, N)
+    torch_w1 = torch_w1.repeat([1, devices, 1, 1])
+    # (L, E/D, N, K) -> (L, E, N, K)
+    torch_w2 = torch_w2.repeat([1, devices, 1, 1])
+
+    # Compute gate activations for each expert
+    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
+    torch_w0_output_ref = torch_input_ref @ torch_w0
+    torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
+    # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
+    torch_w1_output_ref = torch_input_ref @ torch_w1
+    torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+
+    # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
+    torch_output_ref = torch_intermediate_ref @ torch_w2
+
+    # pull device dim back out for comparison
+    # (L, E, T, H) -> (L, D, E/D, T, H)
+    # TODO: (GR) possibly remove this, output needs to be applied to combine
+    return torch_output_ref.reshape(num_layers, devices, experts // devices, total_tokens, hidden_size)
+
+
+def gen_combine_reference():
+    # TODO: (GR)
+    # - run this block on the matmul output
+    # - make sure the shapes match up
+    # - use golden metadata output from compute
+
+    cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
+
+    num_local_experts = experts // devices
+    hidden_size = dense_input_contribs_tensor.shape[-1]
+    output_ref_tensor = torch.zeros(batch * seq * cluster_factor, experts, hidden_size).bfloat16()
+    output_data_map = torch.zeros(output_ref_tensor.shape[:-1])
+
+    token_parallel_block_size = batch // token_parallel_core_dim
+    block_counts = _active_token_core_split_counts(
+        token_parallel_block_size, active_token_counts, token_parallel_core_dim
+    )
+
+    batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
+
+    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+        device_dense_idxs = [0] * num_local_experts
+        device_blocked_dense_counts = [0] * num_local_experts
+        for dt in range(dense_metadata_len[rec_d]):
+            dense_metadata_entry = dense_metadata_tensor[rec_d, dt]
+            k_entries, b, s = _unpack_dense_metadata_entry(dense_metadata_entry, num_local_experts, seq)
+            global_batch = batch_rep_idxr(m0, m1, b)
+
+            reduction_buffer = torch.zeros([hidden_size]).bfloat16() if local_reduce else None
+            for local_e_idx, k in enumerate(k_entries):
+                if k == select_experts_k + 1:
+                    continue
+
+                global_e_idx = rec_d * num_local_experts + local_e_idx
+
+                if local_reduce:
+                    reduction_buffer += dense_input_contribs_tensor[global_e_idx, device_dense_idxs[local_e_idx]]
+                else:
+                    output_ref_tensor[global_batch * seq + s, global_e_idx] = dense_input_contribs_tensor[
+                        global_e_idx, device_dense_idxs[local_e_idx]
+                    ]
+                    output_data_map[global_batch * seq + s, global_e_idx] = 1
+
+                if device_blocked_dense_counts[local_e_idx] == block_counts[global_e_idx][-1] - 1:
+                    use_idx = device_dense_idxs[local_e_idx] or 1
+                    device_dense_idxs[local_e_idx] = (
+                        math.ceil(use_idx / token_parallel_block_size) * token_parallel_block_size
+                    )
+                    device_blocked_dense_counts[local_e_idx] = 0
+                    if len(block_counts[global_e_idx]) > 1:
+                        block_counts[global_e_idx].pop()
+                else:
+                    device_dense_idxs[local_e_idx] += 1
+                    device_blocked_dense_counts[local_e_idx] += 1
+
+            if local_reduce:
+                local_reduction_k = next(
+                    filter(lambda x: x != select_experts_k + 1, k_entries)
+                )  # somewhat arbitrary placement
+                output_ref_tensor[global_batch * seq + s, 0] = reduction_buffer
+                output_data_map[global_batch * seq + s, 0] = 1
+
+    return output_ref_tensor, output_data_map
+
+
+def gen_output_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
+    torch_dispatch_output_reference_tensor = gen_dispatch_reference()
+    torch_compute_output_reference_tensor = gen_compute_reference()
+    torch_output_reference_tensor, output_reference_data_map = gen_combine_reference()
+    return torch_output_reference_tensor, output_reference_data_map
+
+
+def verify_output(mesh_device, mesh_shape, cluster_axis, tt_output_tensor, output_reference_tensor, output_data_map):
+    if cluster_axis == 0:
+        # need to roll my own mesh composer here for the transposed ordering
+        device_shards = [
+            ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_output_tensor)
+        ]
+        ordered_shards = []
+        for ir in range(mesh_shape[1]):
+            for ic in range(mesh_shape[0]):
+                ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+        tt_output_tensor_agg = torch.cat(ordered_shards, dim=0)
+
+    else:
+        tt_output_tensor_agg = ttnn.to_torch(
+            tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        )
+
+    if tt_output_tensor_agg.shape != output_reference_tensor.shape:
+        logger.warning(
+            f"Output tensor shape mismatch - Expected: {output_reference_tensor.shape}, Got: {tt_output_tensor_agg.shape}"
+        )
+        return False
+
+    iteration_passed = True
+    for t in range(tt_output_tensor_agg.shape[0]):
+        for k in range(tt_output_tensor_agg.shape[1]):
+            if output_data_map[t, k].item() == 1:
+                if not torch.equal(tt_output_tensor_agg[t, k, :], output_reference_tensor[t, k, :]):
+                    iteration_passed = False
+                    logger.warning(
+                        f"Equal check failed for {t=}, {k=} with {tt_output_tensor_agg[t,k, :]=} and {output_reference_tensor[t,k, :]=}"
+                    )
+
+    return iteration_passed
 
 
 @pytest.mark.parametrize(
@@ -186,7 +537,9 @@ def test_optimized_moe_decode_block(
     logger.info(f"Begin creating constant input tensors")
 
     expert_mapping_dtype = ttnn.uint16
-    torch_expert_mapping = gen_torch_expert_mapping(scheme, devices, experts, experts_per_device, expert_mapping_dtype)
+    torch_expert_mapping = gen_torch_expert_mapping_tensor(
+        scheme, devices, experts, experts_per_device, expert_mapping_dtype
+    )
     tt_expert_mapping = ttnn.from_torch(
         torch_expert_mapping,
         device=mesh_device,
@@ -201,7 +554,7 @@ def test_optimized_moe_decode_block(
     # ------------------------------------------------------------------------
     num_layers = layer_id + 1  # test only handles a single layer at a time, simulate all other layers being present
     ring2cores, compute_matmul_dram_core_range_set = gen_compute_matmul_cores(mesh_device)
-    torch_w0_w1_reordered, torch_w2_reordered = gen_torch_compute_matmul_weights(
+    torch_w0_w1_reordered, torch_w2_reordered = gen_torch_compute_matmul_weight_tensors(
         ring2cores, num_layers, experts_per_device, hidden_size, matmul_N
     )
 
@@ -303,15 +656,33 @@ def test_optimized_moe_decode_block(
     tt_dispatch_input_tensors = []
     tt_dispatch_input_expert_indices_tensors = []
     tt_dispatch_input_expert_scores_tensors = []
-    torch_goldens = []
-    for iteration in range(num_input_sets):
-        (
-            torch_dispatch_input_tensor,
-            torch_dispatch_input_expert_indices_tensor,
-            torch_dispatch_input_expert_scores_tensor,
-        ) = gen_torch_dispatch_input_tensors()
 
+    output_reference_tensors = []
+    output_data_maps = []
+    for iteration in range(num_input_sets):
         dispatch_input_dtype = ttnn.bfloat16
+        dispatch_input_expert_indices_dtype = ttnn.uint16
+        dispatch_input_expert_scores_dtype = ttnn.bfloat16
+
+        torch_dispatch_input_tensor = gen_torch_dispatch_input_tensor(
+            scheme, batch, seq, hidden_size, dispatch_input_dtype
+        )
+        torch_dispatch_input_expert_indices_tensor = gen_torch_dispatch_input_expert_indices_tensor(
+            scheme,
+            devices,
+            experts,
+            total_tokens,
+            experts_per_device,
+            batches_per_device,
+            batch,
+            seq,
+            select_experts_k,
+            dispatch_input_expert_indices_dtype,
+        )
+        torch_dispatch_input_expert_scores_tensor = gen_torch_dispatch_input_export_scores_tensor(
+            torch_dispatch_input_expert_indices_tensor.shape, dispatch_input_expert_scores_dtype
+        )
+
         tt_dispatch_input_tensor = ttnn.from_torch(
             torch_dispatch_input_tensor,
             device=mesh_device,
@@ -322,7 +693,6 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_tensors.append(tt_dispatch_input_tensor)
 
-        dispatch_input_expert_indices_dtype = ttnn.uint16
         tt_dispatch_input_expert_indices_tensor = ttnn.from_torch(
             torch_dispatch_input_expert_indices_tensor,
             device=mesh_device,
@@ -335,7 +705,6 @@ def test_optimized_moe_decode_block(
         )
         tt_dispatch_input_expert_indices_tensors.append(tt_dispatch_input_expert_indices_tensor)
 
-        dispatch_input_expert_scores_dtype = ttnn.bfloat16
         tt_dispatch_input_expert_scores_tensor = ttnn.from_torch(
             torch_dispatch_input_expert_scores_tensor,
             device=mesh_device,
@@ -345,6 +714,11 @@ def test_optimized_moe_decode_block(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
         tt_dispatch_input_expert_scores_tensors.append(tt_dispatch_input_expert_scores_tensor)
+
+        # TODO: (GR)
+        output_reference_tensor, output_reference_data_map = gen_output_reference()
+        output_reference_tensors.append(output_reference_tensor)
+        output_data_maps.append(output_reference_data_map)
 
     logger.info(f"Done creating dynamic input tensors and goldens")
 
@@ -525,7 +899,7 @@ def test_optimized_moe_decode_block(
 
         return tt_combine_output
 
-    tt_outputs = []
+    tt_output_tensors = []
     if enable_trace:
         logger.info(f"Begin compiling op")
         # when running multiple iterations, we have to deallocate dispatch input tensors
@@ -537,7 +911,7 @@ def test_optimized_moe_decode_block(
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for iteration in range(num_iterations):
             tt_output = run_op(iteration)
-            tt_outputs.append(tt_output)
+            tt_output_tensors.append(tt_output)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
@@ -547,7 +921,7 @@ def test_optimized_moe_decode_block(
     else:
         for iteration in range(num_iterations):
             tt_output = run_op(iteration)
-            tt_outputs.append(tt_output)
+            tt_output_tensors.append(tt_output)
 
     logger.info(f"Begin synchronizing devices")
     ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
@@ -560,8 +934,21 @@ def test_optimized_moe_decode_block(
     ############################################
     if not enable_performance:
         logger.info(f"Begin validating output")
+
+        all_iterations_passed = True
         for iteration in range(num_iterations):
-            # TODO: (GR)
-            pass
+            logger.info(f"Validating iteration: {iteration}")
+            if not verify_output(
+                mesh_device,
+                mesh_shape,
+                cluster_axis,
+                tt_output_tensors[iteration],
+                output_reference_tensors[iteration],
+                output_data_maps[iteration],
+            ):
+                all_iterations_passed = False
+
+        logger.info(f"\nMoE Verification: {'PASSED' if all_iterations_passed else 'FAILED'}")
+        assert all_iterations_passed, "MoE Verification Failed!"
 
         logger.info(f"Done validating output")
