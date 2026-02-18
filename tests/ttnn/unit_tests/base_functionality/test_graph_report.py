@@ -13,7 +13,6 @@ This tests the decoupled workflow:
 import json
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -79,7 +78,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         # Check output_tensors was populated
@@ -135,7 +134,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT tensor_id FROM output_tensors ORDER BY output_index")
@@ -257,7 +256,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute("SELECT name, value FROM operation_arguments ORDER BY name")
@@ -405,7 +404,7 @@ class TestImportGraphUnit:
         cursor = conn.cursor()
         graph_report.create_database_schema(cursor)
 
-        stats = graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
+        graph_report.import_graph(cursor, mock_graph, base_operation_id=0)
         conn.commit()
 
         cursor.execute(
@@ -580,7 +579,7 @@ class TestImportGraphUnit:
 
         # Import
         output_dir = tmp_path / "output"
-        db_path = graph_report.import_report(report_path, output_dir)
+        graph_report.import_report(report_path, output_dir)
 
         # Check cluster descriptor was saved
         cluster_path = output_dir / "cluster_descriptor.yaml"
