@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,11 +27,18 @@ struct InputConfig {
 InputConfig parse_arguments(int argc, char** argv) {
     cxxopts::Options options("2d_big_mesh_cabling_gen", "Generate 2D big mesh cabling configuration");
 
-    options.add_options()
-        ("g,galaxy-structure", "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 8, M must be divisible by 4", cxxopts::value<std::string>())
-        ("t,topology", "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both dimensions), '00' (mesh topology)", cxxopts::value<std::string>())
-        ("y,galaxy-type", "Galaxy type: 'WH_GALAXY' or 'BH_GALAXY'", cxxopts::value<std::string>()->default_value("WH_GALAXY"))
-        ("h,help", "Print usage information");
+    options.add_options()(
+        "g,galaxy-structure",
+        "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 8, M must be "
+        "divisible by 4",
+        cxxopts::value<std::string>())(
+        "t,topology",
+        "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both "
+        "dimensions), '00' (mesh topology)",
+        cxxopts::value<std::string>())(
+        "y,galaxy-type",
+        "Galaxy type: 'WH_GALAXY' or 'BH_GALAXY_REV_AB' or 'BH_GALAXY_REV_C'",
+        cxxopts::value<std::string>()->default_value("WH_GALAXY"))("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -105,9 +112,11 @@ InputConfig parse_arguments(int argc, char** argv) {
         }
 
         // Validate galaxy type
-        if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY") {
+        if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY_REV_AB" &&
+            config.galaxy_type != "BH_GALAXY_REV_C") {
             throw std::invalid_argument(
-                "Invalid galaxy type '" + config.galaxy_type + "'. Must be 'WH_GALAXY' or 'BH_GALAXY'");
+                "Invalid galaxy type '" + config.galaxy_type +
+                "'. Must be 'WH_GALAXY' or 'BH_GALAXY_REV_AB' or 'BH_GALAXY_REV_C'");
         }
 
         return config;
@@ -162,10 +171,10 @@ int main(int argc, char** argv) {
 
                     for (int port_id = 3; port_id <= 6; port_id++) {
                         int tray_a = 0, tray_b = 0;
-                        if (config.galaxy_type == "WH_GALAXY") {
+                        if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                             tray_a = 2;
                             tray_b = 1;
-                        } else if (config.galaxy_type == "BH_GALAXY") {
+                        } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
                             tray_a = 3;
                             tray_b = 1;
                         }
@@ -176,10 +185,10 @@ int main(int argc, char** argv) {
                         auto* new_conn = internal_connection.add_connections();
                         new_conn->CopyFrom(connection);
 
-                        if (config.galaxy_type == "WH_GALAXY") {
+                        if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                             tray_a = 4;
                             tray_b = 3;
-                        } else if (config.galaxy_type == "BH_GALAXY") {
+                        } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
                             tray_a = 4;
                             tray_b = 2;
                         }
@@ -213,10 +222,10 @@ int main(int argc, char** argv) {
 
                         for (int port_id = 1; port_id <= 2; port_id++) {
                             int tray_a = 0, tray_b = 0;
-                            if (config.galaxy_type == "WH_GALAXY") {
+                            if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                                 tray_a = 3;
                                 tray_b = 1;
-                            } else if (config.galaxy_type == "BH_GALAXY") {
+                            } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
                                 tray_a = 2;
                                 tray_b = 1;
                             }
@@ -227,10 +236,10 @@ int main(int argc, char** argv) {
                             auto* new_conn = internal_connection.add_connections();
                             new_conn->CopyFrom(connection);
 
-                            if (config.galaxy_type == "WH_GALAXY") {
+                            if (config.galaxy_type == "WH_GALAXY" || config.galaxy_type == "BH_GALAXY_REV_C") {
                                 tray_a = 4;
                                 tray_b = 2;
-                            } else if (config.galaxy_type == "BH_GALAXY") {
+                            } else if (config.galaxy_type == "BH_GALAXY_REV_AB") {
                                 tray_a = 4;
                                 tray_b = 3;
                             }

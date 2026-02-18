@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -547,10 +547,15 @@ std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
         case NodeType::P150_QB_AE: return std::make_unique<P150QBAENode>();
         case NodeType::P150_QB_AE_DEFAULT: return std::make_unique<P150QBAEDefaultNode>();
         case NodeType::P300_QB_GE: return std::make_unique<P300QBGENode>();
-        // case NodeType::BH_GALAXY: return std::make_unique<BHGalaxyNode>();
+
+        // Functionally alias BH_GALAXY to rev_AB to ensure back-compat for existing descriptors
+        case NodeType::BH_GALAXY:
         case NodeType::BH_GALAXY_REV_AB: return std::make_unique<BHGalaxyRevABNode>();
+        case NodeType::BH_GALAXY_X_TORUS:
         case NodeType::BH_GALAXY_REV_AB_X_TORUS: return std::make_unique<BHGalaxyRevABXTorusNode>();
+        case NodeType::BH_GALAXY_Y_TORUS:
         case NodeType::BH_GALAXY_REV_AB_Y_TORUS: return std::make_unique<BHGalaxyRevABYTorusNode>();
+        case NodeType::BH_GALAXY_XY_TORUS:
         case NodeType::BH_GALAXY_REV_AB_XY_TORUS: return std::make_unique<BHGalaxyRevABXYTorusNode>();
 
         case NodeType::BH_GALAXY_REV_C: return std::make_unique<BHGalaxyRevCNode>();
