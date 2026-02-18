@@ -5,14 +5,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-
-// BF16(1.0) packed twice into u32 for matmul-based reduction
-constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;
-
-// BF16(0.0) for masking
-constexpr uint16_t BF16_ZERO = 0x0000;
 
 void kernel_main() {
     // Compile time args
@@ -82,10 +77,10 @@ void kernel_main() {
                         // Zero-fill padding in last tile (width-only; full tile height 32)
                         fill_pad_tile<uint16_t, mask_w, 32>(
                             l1_write_addr_src0 + last_tile_idx_in_block * src0_tile_size,
-                            static_cast<uint16_t>(BF16_ZERO));
+                            static_cast<uint16_t>(BF16_ZERO_BITS));
                         fill_pad_tile<uint16_t, mask_w, 32>(
                             l1_write_addr_src1 + last_tile_idx_in_block * src1_tile_size,
-                            static_cast<uint16_t>(BF16_ZERO));
+                            static_cast<uint16_t>(BF16_ZERO_BITS));
                     }
                 }
 

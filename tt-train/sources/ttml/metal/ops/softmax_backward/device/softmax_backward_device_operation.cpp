@@ -13,11 +13,6 @@ using namespace tt::tt_metal;
 
 namespace ttml::metal::ops::softmax_backward::device {
 
-SoftmaxBackwardDeviceOperation::program_factory_t SoftmaxBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return SoftmaxBackwardFactory{};
-}
-
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& softmax_output = tensor_args.softmax_output;
