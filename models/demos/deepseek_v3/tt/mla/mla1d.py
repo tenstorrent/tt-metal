@@ -1062,8 +1062,6 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=2,
             out_dim=1,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
@@ -1103,8 +1101,6 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
         )
 
         # WO
@@ -1684,7 +1680,7 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # TODO: remoe the to memory config after illia's pr is merged
+        # TODO: remove the to memory config after illia's pr is merged
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
@@ -1776,6 +1772,7 @@ class MLA1D(AbstractModule):
 
         # Pad batch (num_heads_local) from 16 to 24 for DRAM bank alignment
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)  # 16 -> 24
+        # TODO remove padding, we don't care about the extra shape
         if num_heads_local_padded != num_heads_local:
             pad_heads = num_heads_local_padded - num_heads_local
             tt_q_nope = ttnn.pad(tt_q_nope, padding=((0, 0), (0, pad_heads), (0, 0), (0, 0)), value=0.0)
@@ -1855,7 +1852,7 @@ class MLA1D(AbstractModule):
         bsz = attn_out.shape[2]
         kv_lora_rank = cfg["kv_lora_rank"]
         v_head_dim = cfg["v_head_dim"]
-
+        # TODO: remove padding, we don't care about the extra shape data content
         # Pad batch (num_heads) from 128 to 132 for DRAM bank alignment
         num_heads_padded = pad_batch_to_dram_banks(num_heads)  # 128 -> 132
         if num_heads_padded != num_heads:
@@ -1890,6 +1887,7 @@ class MLA1D(AbstractModule):
         num_heads: int,
         v_head_dim: int,
     ) -> ttnn.Tensor:
+        mesh_shape = cfg["mesh_shape"]
         # 1,4,128,128 L1 interleaved
         # Reshape
         v_out = ttnn.to_memory_config(
@@ -1905,12 +1903,10 @@ class MLA1D(AbstractModule):
             ),
         )
         v_out = ttnn.untilize(v_out)
-        v_out = ttnn.experimental.view(v_out, (1, 1, bsz // 8, num_heads * v_head_dim))
+        v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(
-            v_out, num_links=4, cluster_axis=1, topology=ttnn.Topology.Linear, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
         v_out = ttnn.concat(v_out, dim=2)
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
@@ -1925,6 +1921,7 @@ class MLA1D(AbstractModule):
             **cfg["wo_in0_memory_config"],
         )
         v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
+        breakpoint()
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
