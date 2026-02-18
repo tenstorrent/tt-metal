@@ -548,7 +548,7 @@ def test_lm_head_sampling_fused_argmax_mesh_4x2_axis_x_forced_winner_device(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 1048576,
+            "trace_region_size": 1163264,
         }
     ],
     indirect=True,
