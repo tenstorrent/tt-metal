@@ -417,7 +417,7 @@ class Prefetcher(LightweightModule):
         logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
         logger.info(f"  Number of layers: {self.num_layers}")
         logger.warning(
-            "Prefetcher has only been thoroughly tested on Llama3.1-8B BH QB 2 and BH LB 1. If using for other models and other device types, expect potential errors."
+            f"DRAM Prefetcher has only been tested on these models: {list(VERIFIED_MODEL_CONFIGS.keys())} on BH DB, QB, LB. If using other models and other device types, expect potential errors. To check if the model is supported on the current device type, run is_prefetcher_supported(model_name, num_devices, ring_size)."
         )
         logger.info("=" * 50)
         self.init_decode_done = True if mode == Mode.DECODE else False
