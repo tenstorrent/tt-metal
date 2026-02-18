@@ -21,16 +21,7 @@ from pathlib import Path
 from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
 
-_current_file = os.path.abspath(__file__)
-_current_dir = os.path.dirname(_current_file)
-
-# repo root = two levels up from tests/sweep_framework
-_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
-
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
-
-from tests.sweep_framework import lead_models_filter
+import tests.sweep_framework.lead_models_filter as lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
