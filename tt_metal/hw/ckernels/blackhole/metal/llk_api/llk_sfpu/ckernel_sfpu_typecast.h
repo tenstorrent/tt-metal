@@ -19,17 +19,20 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint16() {
     _calculate_typecast_fp32_to_uint16_<APPROXIMATION_MODE, ITERATIONS>();
 }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vInt mantissa = sfpi::exman8(in);
+        sfpi::vUInt mantissa = reinterpret<sfpi::vUInt>(sfpi::exman8(in));
         sfpi::vInt exponent = sfpi::exexp(in);
-        mantissa = sfpi::shft(mantissa, -(23 - exponent - 1));
-        mantissa = sfpi::shft(mantissa + 1, -1);
-        mantissa += 256;
+        mantissa = sfpi::shft(mantissa, -(23 - exponent));
+        v_if(in < sfpi::vConst0) {
+            mantissa = ~mantissa + 1;
+            mantissa &= 0x8000FFFF;  // To prevent overflow
+            mantissa += 256;
+        };
+        v_endif;
         mantissa &= 0xFF;
         sfpi::dst_reg[0] = mantissa;
         sfpi::dst_reg++;
