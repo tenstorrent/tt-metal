@@ -280,6 +280,23 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tile=tile,
     )
 
+    position_replicated = torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32)
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        position_replicated,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=pos_mem_config,
+    )
+
     logger.info(f"Created KV cache tensor in DRAM with shape {kv_cache_shape}")
 
     logger.info(f"Created tensors sharded on single core with shard shape {output_shard_shape}")
@@ -294,7 +311,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
         tt_trans_replicated,
         ttnn_output,
         ttnn_kv_cache,
-        kv_cache_write_index=position_id,  # Which sequence position to write to
+        position_ids_tensor=ttnn_position_ids,  # Current decode position, used as DRAM page ID for KV cache write
     )
 
     logger.info("Running KV cache branch golden reference...")

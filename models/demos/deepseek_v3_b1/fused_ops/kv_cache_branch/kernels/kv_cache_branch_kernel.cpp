@@ -240,7 +240,10 @@ void kernel_main() {
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
-    uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
+    uint32_t position_ids_addr = get_common_arg_val<uint32_t>(1);
+
+    volatile tt_l1_ptr uint32_t* position_ids_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_ids_addr);
+    uint32_t kv_cache_start_tile_id = position_ids_ptr[0];
 
     // Create TensorAccessor for DRAM interleaved tensor
     auto kv_cache_addr_gen = TensorAccessor(

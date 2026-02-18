@@ -68,7 +68,7 @@ class KVCacheBranch:
         trans_mat_tensor,
         output_tensor,
         kv_cache_tensor,
-        kv_cache_write_index,
+        position_ids_tensor,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
     ):
@@ -82,7 +82,7 @@ class KVCacheBranch:
             cos_tensor: Cos tensor (must be sharded)
             sin_tensor: Sin tensor (must be sharded)
             kv_cache_tensor: Optional KV cache tensor in DRAM (interleaved) to write results to
-            kv_cache_write_index: Sequence position index to write to in KV cache
+            position_ids_tensor: Sequence position index to write to in KV cache
             epsilon: Epsilon for RMSNorm
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
@@ -125,6 +125,7 @@ class KVCacheBranch:
         # KV Cache tensor setup
         # Tile size is now derived from output CB in kernel using get_tile_size()
         kv_cache_buffer_addr = kv_cache_tensor.buffer_address()
+        position_ids_tensor_addr = position_ids_tensor.buffer_address()
         kv_cache_tile = kv_cache_tensor.get_tile()
         # Calculate starting tile ID based on write index
         # KV cache shape is [1, 1, seq_len, kv_dim], tiles are [32, 32]
@@ -439,7 +440,7 @@ class KVCacheBranch:
             # BRISC common runtime args: KV cache buffer address and write position
             brisc_common_runtime_args=[
                 kv_cache_buffer_addr,
-                kv_cache_write_index,
+                position_ids_tensor_addr,
             ],
             # TRISC named compile-time args
             trisc_named_compile_time_args=kv_rmsnorm_trisc_named_compile_time_args
