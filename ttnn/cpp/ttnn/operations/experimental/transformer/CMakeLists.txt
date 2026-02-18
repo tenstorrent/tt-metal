@@ -29,6 +29,7 @@ file(
     nlp_create_qkv_heads_vit/device/kernels/*
     nlp_kv_cache_load_slice/device/kernels/*
     rotary_embedding/device/kernels/*
+    rotary_embedding_hf/device/kernels/*
     rotary_embedding_llama/device/kernels/*
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*
@@ -112,6 +113,10 @@ target_sources(
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp
+        rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp
+        rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
+        rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
+        rotary_embedding_hf/rotary_embedding_hf.cpp
         rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp
         rotary_embedding_llama/device/rotary_embedding_llama_multi_core_program_factory.cpp
         rotary_embedding_llama/device/rotary_embedding_llama_sharded_program_factory.cpp
