@@ -19,7 +19,17 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 from tests.sweep_framework.framework.constants import LEAD_MODELS
-from tests.sweep_framework import lead_models_filter
+
+# Import lead_models_filter - handle both direct run and module import
+try:
+    from tests.sweep_framework import lead_models_filter
+except ImportError:
+    # Fallback for direct script execution
+    import sys
+    import os
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import lead_models_filter
 
 # Set up logger
 logger = logging.getLogger(__name__)

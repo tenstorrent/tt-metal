@@ -20,7 +20,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from operation_parameter_extractors import OperationParameterExtractors
 from framework.constants import LEAD_MODELS
-from tests.sweep_framework import lead_models_filter
+
+# Import lead_models_filter - handle both direct run and module import
+try:
+    from tests.sweep_framework import lead_models_filter
+except ImportError:
+    # Fallback for direct script execution
+    import sys
+    import os
+
+    sys.path.insert(0, os.path.dirname(__file__))
+    import lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
