@@ -29,6 +29,7 @@
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -56,6 +57,8 @@ void py_module(nb::module_& mod) {
     ccl::bind_deepseek_moe_reduce_scatter(mod);
     ccl::bind_all_to_all_dispatch_metadata(mod);
     ccl::moe::bind_selective_reduce_combine(mod);
+    ccl::bind_moe_compute(mod);
+    ccl::bind_get_moe_combine_cores(mod);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
