@@ -15,8 +15,6 @@
 
 namespace ttnn::experimental::prim {
 
-using Tensors = std::vector<Tensor>;
-
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)

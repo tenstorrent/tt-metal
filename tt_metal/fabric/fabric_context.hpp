@@ -37,8 +37,14 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z};
 
+    // control_plane and hal references are not held
     explicit FabricContext(
-        tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config = FabricRouterConfig{});
+        const ControlPlane& control_plane,
+        const tt_metal::Hal& hal,
+        tt::ARCH arch,
+        bool is_ubb_galaxy,
+        tt::tt_fabric::FabricConfig fabric_config,
+        const FabricRouterConfig& router_config = FabricRouterConfig{});
     ~FabricContext();
 
     // Non-copyable, non-movable
@@ -53,6 +59,7 @@ public:
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
     bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
+    bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
 
     // ============ Mesh Type Queries ============
     // Stub: returns false for now (all meshes are compute meshes)
@@ -62,7 +69,7 @@ public:
     // ============ Z Router Queries ============
     // Check if a fabric node has Z router channels
     // Queries control plane to see if any ethernet channels are assigned Z direction
-    bool has_z_router_on_device(const FabricNodeId& fabric_node_id) const;
+    bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
@@ -85,7 +92,7 @@ public:
     }
 
     // Returns empty map if routing mode is undefined
-    std::map<std::string, std::string> get_fabric_kernel_defines() const;
+    std::map<std::string, std::string> get_fabric_kernel_defines(const ControlPlane& control_plane) const;
 
     // ============ Builder Context Access ============
     // For build-time operations (config selection, per-device state, router addresses)
@@ -135,20 +142,20 @@ private:
     };
 
     // ============ Private Implementation ============
-    std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
-    size_t compute_packet_header_size_bytes() const;
-    size_t compute_max_payload_size_bytes() const;
-    size_t validate_and_apply_packet_size(size_t requested_size) const;
+    std::unordered_map<MeshId, bool> check_for_wrap_around_mesh(const ControlPlane& control_plane) const;
+    size_t compute_packet_header_size_bytes(const ControlPlane& control_plane) const;
+    size_t compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const;
+    size_t validate_and_apply_packet_size(const tt_metal::Hal& hal, tt::ARCH arch, size_t requested_size) const;
 
     // Compute and validate routing mode from topology
     void compute_routing_mode();
 
     // Topology-based sizing
-    uint32_t get_max_1d_hops_from_topology() const;
-    uint32_t get_max_2d_hops_from_topology() const;
+    uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
+    uint32_t get_max_2d_hops_from_topology(const ControlPlane& control_plane) const;
     uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
     uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const;
-    void compute_packet_specifications();
+    void compute_packet_specifications(const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch);
 
     // Header size helpers (use explicit template instantiation for type safety)
     size_t get_1d_header_size(uint32_t extension_words) const;
@@ -162,6 +169,7 @@ private:
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
+    bool is_ubb_galaxy_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 

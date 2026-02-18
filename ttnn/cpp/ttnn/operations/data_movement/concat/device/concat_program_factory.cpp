@@ -10,6 +10,7 @@
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
@@ -21,6 +22,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     const auto& input_tensors = tensor_args.input_tensors;
     const uint32_t dim = operation_attributes.dim;
     const Tensor& output = tensor_return_value;
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     Program program = CreateProgram();
     KernelHandle reader_kernel_id = 0;
@@ -46,11 +48,66 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         single_page_size = tt::tile_size(cb_data_format);
     }
 
-    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_cores;
+    uint32_t num_tiles_per_core_group_1;
+    uint32_t num_tiles_per_core_group_2;
+    uint32_t num_cores_x = 0;
+    uint32_t num_cores_y = 0;
+    std::vector<CoreCoord> cores_list;
+
+    if (sub_core_grids.has_value() && !output.is_sharded()) {
+        // Use sub_core_grids for interleaved output
+        uint32_t ncores = sub_core_grids->num_cores();
+        TT_FATAL(ncores != 0, "number of cores cannot be 0");
+
+        // Find the maximum number of cores that evenly divides num_output_pages
+        for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
+            if (num_output_pages % core_id == 0) {
+                ncores = core_id;
+                break;
+            }
+            ncores--;
+        }
+        TT_FATAL(
+            (num_output_pages % ncores == 0),
+            "{} num of pages are not split uniformly across {} num of cores",
+            num_output_pages,
+            ncores);
+
+        cores_list = corerange_to_cores(sub_core_grids.value(), ncores, rm_orientation);
+        all_cores =
+            num_cores_to_corerangeset_in_subcoregrids(cores_list[0], ncores, sub_core_grids.value(), rm_orientation);
+        if (ncores == 1) {
+            all_cores = ttnn::CoreRangeSet(ttnn::CoreRange(cores_list[0]));
+        }
+        num_cores = ncores;
+        num_tiles_per_core_group_1 = num_output_pages / ncores;
+        num_tiles_per_core_group_2 = 0;
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+    } else {
+        // Use full compute grid
+        const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        num_cores_x = compute_with_storage_grid_size.x;
+        num_cores_y = compute_with_storage_grid_size.y;
+        auto
+            [num_cores_result,
+             all_cores_result,
+             core_group_1_result,
+             core_group_2_result,
+             num_tiles_per_core_group_1_result,
+             num_tiles_per_core_group_2_result] =
+                split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
+        num_cores = num_cores_result;
+        all_cores = all_cores_result;
+        core_group_1 = core_group_1_result;
+        core_group_2 = core_group_2_result;
+        num_tiles_per_core_group_1 = num_tiles_per_core_group_1_result;
+        num_tiles_per_core_group_2 = num_tiles_per_core_group_2_result;
+    }
 
     const uint32_t num_input_tensors = input_tensors.size();
 
@@ -172,7 +229,13 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
-    cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    if (sub_core_grids.has_value() && !output.is_sharded()) {
+        // Use the cores list we already computed from sub_core_grids
+        cores = cores_list;
+    } else {
+        // Use grid_to_cores for full compute grid
+        cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    }
     const uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];

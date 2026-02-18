@@ -16,12 +16,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-void TilizeDeviceOperation::validate_on_program_cache_hit(
-    const TilizeDeviceOperation::operation_attributes_t& args,
-    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {

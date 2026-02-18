@@ -196,11 +196,6 @@ static ShardSpec compute_output_shard_spec(
 
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
-TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return TernaryProgramFactory{};
-}
-
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
         ternary_op_type,
@@ -210,11 +205,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() 
         get_dtype(),
         compute_kernel_config,
         sub_core_grids);
-}
-
-void TernaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_miss(
@@ -235,6 +225,19 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
         input_a.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input_a.storage_type()));
+
+    if (input_b.has_value()) {
+        TT_FATAL(
+            input_b->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_b->storage_type()));
+    }
+    if (input_c.has_value()) {
+        TT_FATAL(
+            input_c->storage_type() == StorageType::DEVICE,
+            "Ternary operation requires input to be on Device. Input storage type: {}",
+            static_cast<int>(input_c->storage_type()));
+    }
 
     TT_FATAL(
         input_a.buffer() != nullptr,
@@ -418,11 +421,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         std::holds_alternative<DeviceStorage>(input_a.storage()),
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input_a.storage()));
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
-        args, program_factory.index(), input_a.dtype(), input_a.memory_config(), a_shape.volume());
+        args, input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
         TT_ASSERT(
@@ -442,7 +442,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -463,7 +462,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
             input_a.dtype(),
             input_a.memory_config(),
             input_b.value().dtype(),
@@ -481,7 +479,6 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
 
         hash = tt::tt_metal::operation::hash_operation<TernaryDeviceOperation>(
             args,
-            program_factory.index(),
             input_a.dtype(),
             input_a.memory_config(),
             input_c.value().dtype(),
@@ -557,8 +554,9 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
 
     // This variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
-        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL,
-        "This variant with scalar parameter is only supported for ADDCMUL operation");
+        op_type == ttnn::operations::ternary::TernaryOpType::ADDCMUL ||
+            op_type == ttnn::operations::ternary::TernaryOpType::ADDCDIV,
+        "This variant with scalar parameter is only supported for ADDCMUL and ADDCDIV operations");
 
     // Detect broadcast type for TTT variant
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(
@@ -575,7 +573,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
-        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
+        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL/ADDCDIV scalar value
         .scalar_input_b = std::nullopt,
     };
 

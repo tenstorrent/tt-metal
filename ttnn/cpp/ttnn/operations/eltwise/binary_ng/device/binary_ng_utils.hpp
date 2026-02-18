@@ -121,6 +121,8 @@ std::optional<AllShardVolumes> get_shard_volumes(
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
 
+bool is_uneven(const TensorSpec& t);
+
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);

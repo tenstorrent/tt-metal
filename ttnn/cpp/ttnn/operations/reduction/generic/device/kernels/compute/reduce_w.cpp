@@ -5,9 +5,9 @@
 #include <cstdint>
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/reduce.h"
 #else
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 #endif
 
 void kernel_main() {

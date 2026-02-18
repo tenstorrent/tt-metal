@@ -176,7 +176,11 @@ std::vector<Tensor> post_topk_transform_tensor(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::vector<Tensor> ExecuteTopK::invoke(
+}  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn {
+
+std::vector<Tensor> topk(
     const Tensor& input_tensor,
     const uint32_t k,
     const int8_t dim,
@@ -185,7 +189,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -214,13 +218,13 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
     // OP constraint: K must be tile-aligned (multiple of 32 elements)
     // Round up to nearest supported value for OP execution
-    const uint32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
+    const uint32_t adjusted_k = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
 
     // Dimension reordering - move target dimension to last position
-    Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = ::reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
 
     // Rank normalization - convert to 4D tensor format
-    Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Dimension size padding - ensure minimum dimension size for efficient processing
     auto padded_tensor = transformed_tensor;
@@ -256,9 +260,9 @@ std::vector<Tensor> ExecuteTopK::invoke(
             "Preallocated indices tensor has incorrect shape! Got : {}, expected: {}",
             std::get<1>(preallocated_output_tensors.value()).logical_shape(),
             desired_final_shape);
-        const auto values_tensor = CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+        const auto values_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
             std::get<0>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
-        const auto indices_tensor = CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
+        const auto indices_tensor = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::pre_topk_transform_tensor(
             std::get<1>(preallocated_output_tensors.value()), dim, is_dim_last_idx, is_rank_le_4d);
         output_tensors = {values_tensor, indices_tensor};
     } else {
@@ -283,16 +287,34 @@ std::vector<Tensor> ExecuteTopK::invoke(
     output_tensor_vec.push_back(std::move(output_value_tensor));
     output_tensor_vec.push_back(std::move(output_index_tensor));
 
+    // Save pre-transformed tensor buffers for comparison (needed to check if device op changed buffers)
+    auto* pre_transform_buffer_0 =
+        preallocated_output_tensors.has_value() ? std::get<0>(output_tensors.value()).buffer() : nullptr;
+    auto* pre_transform_buffer_1 =
+        preallocated_output_tensors.has_value() ? std::get<1>(output_tensors.value()).buffer() : nullptr;
+
     // Apply post-processing transformations to restore original format
-    return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
-        transposed_tensor,
-        output_tensor_vec,
-        dim,
-        is_dim_last_idx,
-        k,
-        adjusted_k,
-        original_lshape,
-        input_memory_config);
+    auto post_transform_output_tensors =
+        operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
+            transposed_tensor,
+            output_tensor_vec,
+            dim,
+            is_dim_last_idx,
+            k,
+            adjusted_k,
+            original_lshape,
+            input_memory_config);
+
+    // Check if padding or dtype conversion changed buffer address
+    if (preallocated_output_tensors.has_value()) {
+        if (std::get<0>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_0) {
+            std::get<0>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(0);
+        }
+        if (std::get<1>(preallocated_output_tensors.value()).buffer() != pre_transform_buffer_1) {
+            std::get<1>(preallocated_output_tensors.value()) = post_transform_output_tensors.at(1);
+        }
+    }
+    return post_transform_output_tensors;
 }
 
-}  // namespace ttnn::operations::reduction::topk
+}  // namespace ttnn

@@ -400,7 +400,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER: return {"remainder_int32_tile_init();", "remainder_int32_tile"};
-        case FMOD: return {"fmod_int32_tile_init();", "fmod_int32_tile"};
+        case FMOD:
+            if (dtype == DataType::INT32) {
+                return {"fmod_int32_tile_init();", "fmod_int32_tile"};
+            } else {
+                return {"fmod_binary_tile_init();", "fmod_binary_tile"};
+            }
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (int_data_format) {
@@ -435,13 +440,17 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case MAXIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_max_tile_init();", "binary_max_int32_tile"};
+                return {"binary_max_int32_tile_init();", "binary_max_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_max_uint32_tile_init();", "binary_max_uint32_tile"};
             } else {
                 return {"binary_max_tile_init();", "binary_max_tile"};
             }
         case MINIMUM:
             if (dtype == DataType::INT32) {
-                return {"binary_min_tile_init();", "binary_min_int32_tile"};
+                return {"binary_min_int32_tile_init();", "binary_min_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_min_uint32_tile_init();", "binary_min_uint32_tile"};
             } else {
                 return {"binary_min_tile_init();", "binary_min_tile"};
             }
@@ -618,7 +627,7 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& t
     return tensor_spec.memory_config().shard_spec();
 }
 
-inline auto is_uneven(const TensorSpec& t) {
+bool is_uneven(const TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -627,6 +636,7 @@ inline auto is_uneven(const TensorSpec& t) {
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
 
+    TT_FATAL(rank >= 2, "Rank must be at least 2");
     // Compute product of all dimensions except the last
     uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
@@ -636,6 +646,9 @@ inline auto is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+// the check is based on user facing information, input tensors and output memory config
+// more info may be checked in other places, such as actual output is uneven or not
+// this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;

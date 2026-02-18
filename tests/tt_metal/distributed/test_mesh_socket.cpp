@@ -91,12 +91,11 @@ void verify_socket_configs(
     uint32_t socket_fifo_size) {
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // Sender md checks
-    EXPECT_EQ(sender_page.md.write_ptr, recv_socket.get_data_buffer()->address());
+    EXPECT_EQ(sender_page.md.write_ptr, 0);
     EXPECT_EQ(sender_page.md.bytes_sent, 0);
     EXPECT_EQ(sender_page.md.downstream_bytes_sent_addr, recv_socket.get_config_buffer()->address());
     EXPECT_EQ(sender_page.md.downstream_fifo_addr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(sender_page.md.downstream_fifo_total_size, socket_fifo_size);
-    EXPECT_EQ(sender_page.md.is_sender, 1);
     EXPECT_EQ(sender_page.md.downstream_bytes_sent_addr % l1_alignment, 0);
     // Bytes acks are zero-initialized
     for (auto v : sender_page.bytes_acked) {
@@ -105,8 +104,8 @@ void verify_socket_configs(
     // At least one downstream encoding matches the expected recv info
     bool found_match = false;
     for (const auto& enc : sender_page.encodings) {
-        if (enc.downstream_chip_id == downstream_device_id && enc.downstream_noc_y == recv_virtual_coord.y &&
-            enc.downstream_noc_x == recv_virtual_coord.x) {
+        if (enc.d2d.downstream_chip_id == downstream_device_id && enc.d2d.downstream_noc_y == recv_virtual_coord.y &&
+            enc.d2d.downstream_noc_x == recv_virtual_coord.x) {
             found_match = true;
             break;
         }
@@ -1640,7 +1639,7 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
                     reducer_fabric_node_id, forwarding_direction);
 
                 auto forwarding_links = get_forwarding_link_indices_in_direction(
-                    reducer_fabric_node_id, dst_fabric_node_id, forwarding_direction);
+                    control_plane, reducer_fabric_node_id, dst_fabric_node_id, forwarding_direction);
                 // Cannot use the last link which might already have a fabric router on it or used by dispatch
                 // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
                 if (!forwarding_links.empty()) {

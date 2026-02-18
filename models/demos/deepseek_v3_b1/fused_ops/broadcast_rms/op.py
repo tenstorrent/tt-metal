@@ -6,7 +6,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -47,7 +47,6 @@ class BroadcastRMSNorm:
         cluster_axis=0,
         secondary_cluster_axis=None,
         num_links=1,
-        using_persistent_buffers=True,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         rsqrt_fast_approx=False,
@@ -185,7 +184,6 @@ class BroadcastRMSNorm:
 
                 # Determine if this device has secondary axis connections
                 has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-                has_reverse_secondary_connection = is_secondary_sender
 
                 # Calculate mcast distances
                 start_distance_forward = 1 if num_targets_forward > 0 else 0
@@ -205,7 +203,6 @@ class BroadcastRMSNorm:
                     ("core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("is_active_broadcaster", int(is_sender or is_secondary_sender) if not skip_ccl else 0),
                     ("rmsnorm_input_cb", rmsnorm_input_source_cb),
                     ("rmsnorm_num_tiles", num_tiles),
                 ]
@@ -223,12 +220,10 @@ class BroadcastRMSNorm:
                     ("core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
                     ("has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("has_reverse_secondary_connection", int(has_reverse_secondary_connection) if not skip_ccl else 0),
                     ("start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
                     ("range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("range_hops_backward", range_hops_backward if not skip_ccl else 0),
-                    ("using_persistent_buffers", (1 if using_persistent_buffers else 0) if not skip_ccl else 0),
                     # RMSNorm/common args (always valid)
                     # In multi-device mode, intermediate_cb = input_cb (CB 0) because broadcast
                     # writes to CB 0 which is backed by intermediate_tensor_mesh
@@ -248,45 +243,6 @@ class BroadcastRMSNorm:
                     ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
                 ]
 
-                # Reader runtime args
-                reader_rt_args = ttnn.RuntimeArgs()
-
-                reader_rt_args[worker_core.x][worker_core.y] = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
-
-                # Writer runtime args
-                writer_rt_args = ttnn.RuntimeArgs()
-                if skip_ccl:
-                    # Single-device mode: no writer args needed
-                    writer_rt_args[worker_core.x][worker_core.y] = []
-                else:
-                    # Multi-device mode: CCL writer args
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    writer_rt_args[worker_core.x][worker_core.y] = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        input_num_pages,  # tile_id_end
-                        int(wait_output_semaphore),  # wait_output_semaphore
-                        int(reset_global_semaphore),  # reset_global_semaphore
-                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                        int(barrier_sem_addr),  # barrier_sem
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),  # secondary_sync_sem
-                    ]
-
-                # Determine fabric connections and append num_connections BEFORE creating program
-                # (must match order in original op.py)
                 fabric_node_id = None
                 dst_nodes = []
                 num_connections = 0
@@ -306,14 +262,40 @@ class BroadcastRMSNorm:
                     if has_secondary_target:
                         secondary_coord = ttnn.MeshCoordinate(row, 1)  # Other column
                         dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    # Reverse secondary connection (for secondary sender back to sender when we need to sync)
-                    if has_reverse_secondary_connection and not using_persistent_buffers:
-                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
-
                     num_connections = len(dst_nodes)
-                    writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
+
+                # Common runtime args for reader (broadcast args shared across cores)
+                reader_common_rt_args = [
+                    int(input_tensor_device.buffer_address()),  # tensor_address0
+                    tile_id_start,  # tile_id_start
+                    input_num_pages,  # tile_id_end
+                ]
+
+                # Common runtime args for writer (broadcast args shared across cores)
+                writer_common_rt_args = []
+                if not skip_ccl:
+                    # Multi-device mode: CCL writer args
+                    wait_output_semaphore = is_secondary_sender or is_receiver
+                    reset_global_semaphore = is_secondary_sender or is_receiver
+                    out_ready_sem_wait_value = 1 * num_links
+
+                    writer_common_rt_args = [
+                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
+                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
+                        tile_id_start,  # tile_id_start
+                        input_num_pages,  # tile_id_end
+                        int(wait_output_semaphore),  # wait_output_semaphore
+                        int(reset_global_semaphore),  # reset_global_semaphore
+                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
+                        core_noc_y,  # out_ready_sem_noc0_y
+                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
+                        int(barrier_sem_addr),  # barrier_sem
+                        core_noc_x,  # barrier_sem_noc0_x
+                        core_noc_y,  # barrier_sem_noc0_y
+                        ring_index,
+                        int(secondary_sync_sem_addr),  # secondary_sync_sem
+                        int(num_connections),  # num_connections
+                    ]
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -357,6 +339,9 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
+                    ncrisc_common_runtime_args=reader_common_rt_args,
+                    brisc_common_runtime_args=writer_common_rt_args,
+                    trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
@@ -364,6 +349,10 @@ class BroadcastRMSNorm:
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
                     defines=kernel_defines,
+                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                    ),
                 )
 
                 # Program descriptor
@@ -378,19 +367,8 @@ class BroadcastRMSNorm:
                     semaphores=[],
                 )
 
-                # Ensure per-kernel runtime args are set for reader/writer kernels before any append operations
-                # kernels ordering: [ncrisc_reader, brisc_writer, trisc_compute]
-                if len(program.kernels) >= 1:
-                    program.kernels[0].runtime_args = reader_rt_args
-                if len(program.kernels) >= 2:
-                    program.kernels[1].runtime_args = writer_rt_args
-
-                if len(program.kernels) >= 3:
-                    compute_rt_args = ttnn.RuntimeArgs()
-                    compute_rt_args[worker_core.x][worker_core.y] = [epsilon_packed, scalar_packed]
-                    program.kernels[2].runtime_args = compute_rt_args
-
-                # Append fabric connection args to writer kernel if there are connections (CCL mode only)
+                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if not skip_ccl and num_connections > 0:
                     # writer kernel is index 1 in the unified kernel descriptor list
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]

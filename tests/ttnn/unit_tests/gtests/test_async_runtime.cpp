@@ -8,7 +8,6 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <cmath>
 #include <memory>
 #include <optional>

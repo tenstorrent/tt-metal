@@ -5,14 +5,14 @@
 #include "elemwise_where_kernel_args.hpp"
 #include "ttnn/kernel/kernel_utils.hpp"
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/tile_move_copy.h"
 
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_binary.h"
 
 constexpr auto cb_condition = tt::CBIndex::c_0;
 constexpr auto cb_true_values = tt::CBIndex::c_1;

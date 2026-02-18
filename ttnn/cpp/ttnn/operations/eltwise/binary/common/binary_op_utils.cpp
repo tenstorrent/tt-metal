@@ -332,18 +332,26 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         }
         case BinaryOpType::MAXIMUM:
-            new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_max_int32_tile_init();")});
                 op_name = "binary_max_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_max_uint32_tile_init();")});
+                op_name = "binary_max_uint32_tile";
             } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});
                 op_name = "binary_max_tile";
             }
             break;
         case BinaryOpType::MINIMUM:
-            new_defines.insert({"BINOP_INIT", fmt::format("binary_min_tile_init();")});
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_min_int32_tile_init();")});
                 op_name = "binary_min_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_min_uint32_tile_init();")});
+                op_name = "binary_min_uint32_tile";
             } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("binary_min_tile_init();")});
                 op_name = "binary_min_tile";
             }
             break;
@@ -506,6 +514,10 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::XLOGY:
             new_defines.insert({"BINOP_INIT", fmt::format("xlogy_binary_tile_init();")});
             op_name = "xlogy_binary_tile";
+            break;
+        case BinaryOpType::FMOD:
+            new_defines.insert({"BINOP_INIT", fmt::format("fmod_binary_tile_init();")});
+            op_name = "fmod_binary_tile";
             break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
