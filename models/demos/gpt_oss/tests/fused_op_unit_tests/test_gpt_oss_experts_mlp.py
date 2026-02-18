@@ -4,14 +4,11 @@
 """
 Fused op unit test for gpt_oss_experts_mlp.
 
-This fused op tests the expert MLP computation with sparse matmul:
-1. Reshape to sparse block format
-2. Gate projection (w1) with sparse_matmul + bias
-3. Up projection (w3) with sparse_matmul + bias
-4. SwiGLU activation: (up_clamped + 1) * (gate_clamped * sigmoid(gate_clamped * alpha))
-5. Squeeze operations
-6. Down projection (w2) with sparse_matmul
-7. Permute and reshape for output
+This fused op tests the expert MLP computation with batched matmul:
+1. Gate/Up projection (w1/w3) with batched matmul + bias (or fused w1_w3 single matmul)
+2. SwiGLU activation: (up_clamped + 1) * (gate_clamped * sigmoid(gate_clamped * alpha))
+3. Down projection (w2) with batched matmul + bias
+4. Reshape and layout conversion for output
 
 This is a decode and prefill fused op (same code path for both modes).
 Does not contain CCL ops, so single device test is applicable.
@@ -67,12 +64,6 @@ DEVICE_PERF_TARGETS_US = {}
 #   - Waits for all device operations to complete
 #   - Returns control to the host
 #   - Adds significant latency between iterations
-#
-# Additionally, this test CANNOT use trace mode because the sparsity tensor must
-# be dynamically reallocated each iteration. This means each iteration involves:
-#   - Creating a new tensor on device (host→device transfer)
-#   - Submitting all ops individually (not traced)
-#   - Synchronizing
 #
 # In production inference with proper tracing, traces are pipelined without
 # per-iteration sync, so the device executes back-to-back with near-zero op-to-op
@@ -191,44 +182,34 @@ def gpt_oss_experts_mlp_reference(
 # ==============================================================================
 def gpt_oss_experts_mlp_ttnn(
     post_dispatch: ttnn.Tensor,
-    sparsity: ttnn.Tensor,
     weights,
     config: ThroughputExpertConfig,
     program_config: ThroughputProgramConfig,
     memory_config: ttnn.MemoryConfig,
     total_tokens: int,
-    mesh_device=None,
-    save_intermediate: bool = False,
 ) -> ttnn.Tensor:
     """TTNN implementation for expert_mlp_forward.
 
     This is exactly the expert_mlp_forward function from decode.py.
 
     Args:
-        post_dispatch: Input tensor [1, 1, B*S, H] in TILE layout
-        sparsity: Sparsity tensor indicating active (token_block, expert) pairs
-        weights: ThroughputExpertWeights with w1, w2, w3 and biases
+        post_dispatch: Input tensor [1, num_experts_per_device, total_tokens, H] in TILE layout
+        weights: ThroughputExpertWeights with w2, w2_bias, and either fused or unfused gate/up weights
         config: ThroughputExpertConfig
         program_config: ThroughputProgramConfig
         memory_config: Output memory configuration
-        batch_size: Global batch size
-        seq_len: Sequence length
-        mesh_device: TTNN mesh device (optional)
-        save_intermediate: Whether to save intermediate tensors
+        total_tokens: Total number of tokens (B*S)
 
     Returns:
-        Expert output tensor [experts_per_device, B, S, H] in ROW_MAJOR layout
+        Expert output tensor [experts_per_device, 1, total_tokens, H] in ROW_MAJOR layout
     """
     return expert_mlp_forward(
         experts_input=post_dispatch,
-        sparsity=sparsity,
         weights=weights,
         config=config,
-        program_config=program_config,
         memory_config=memory_config,
+        program_config=program_config,
         total_tokens=total_tokens,
-        mesh_device=mesh_device,
-        save_intermediate=save_intermediate,
     )
 
 
@@ -257,7 +238,7 @@ def _measure_perf_us(
     """Measure performance in microseconds."""
     ttnn.synchronize_device(mesh_device)
 
-    # Non-trace mode (trace mode not supported for MLP due to sparsity tensor)
+    # Non-trace mode
     for _ in range(warmup_iters):
         output = op_fn()
         ttnn.synchronize_device(mesh_device)
@@ -481,16 +462,8 @@ def _run_experts_mlp_test(
     # Create input tensor (post_dispatch output)
     # Shape: [1, 1, B*S, H]
     total_tokens = batch_size * seq_len
-    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
-
-    # Create sparsity tensor - for reference we'll compute dense
-    # In practice sparsity indicates which (token_block, expert) pairs are active
-    # For this test, we'll assume all tokens are active for all experts (dense case)
-    num_sparse_blocks = total_tokens // throughput_config.sparsity_block_size
     num_experts_per_device = throughput_config.num_experts_per_device
-
-    # Create full sparsity tensor (all ones = all active)
-    sparsity_torch = torch.ones(num_sparse_blocks, 1, 1, num_experts_per_device, dtype=torch.bfloat16)
+    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
 
     # Reference computation - use only first device's experts
     ref_output = gpt_oss_experts_mlp_reference(
@@ -514,13 +487,9 @@ def _run_experts_mlp_test(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_sparsity = ttnn.from_torch(
-        sparsity_torch,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # Repeat input across expert dimension for batched matmul:
+    # [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
+    tt_post_dispatch = ttnn.repeat(tt_post_dispatch, ttnn.Shape((1, num_experts_per_device, 1, 1)))
 
     # Create program config
     program_config = ThroughputProgramConfig()
@@ -529,13 +498,11 @@ def _run_experts_mlp_test(
     # Run TTNN implementation
     tt_output = gpt_oss_experts_mlp_ttnn(
         post_dispatch=tt_post_dispatch,
-        sparsity=tt_sparsity,
         weights=weights,
         config=throughput_config,
         program_config=program_config,
         memory_config=memory_config,
         total_tokens=total_tokens,
-        mesh_device=mesh_device,
     )
 
     # Convert output to torch - get first device output
@@ -553,24 +520,27 @@ def _run_experts_mlp_test(
     )
     assert passing, f"experts_mlp test failed. PCC: {pcc} < {expected_pcc}"
 
-    # Performance measurement (need fresh tensors since sparsity gets deallocated)
+    # Re-create input tensor for perf measurement since expert_mlp_forward deallocates it
+    tt_post_dispatch = ttnn.from_torch(
+        post_dispatch_torch,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_post_dispatch = ttnn.repeat(tt_post_dispatch, ttnn.Shape((1, num_experts_per_device, 1, 1)))
+
+    # Performance measurement
+    # expert_mlp_forward deallocates experts_input internally, so we must
+    # clone the input tensor for each iteration to avoid "Buffer not allocated" errors.
     def op_fn():
-        tt_sparsity_fresh = ttnn.from_torch(
-            sparsity_torch,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
         return gpt_oss_experts_mlp_ttnn(
-            post_dispatch=tt_post_dispatch,
-            sparsity=tt_sparsity_fresh,
+            post_dispatch=ttnn.clone(tt_post_dispatch),
             weights=weights,
             config=throughput_config,
             program_config=program_config,
             memory_config=memory_config,
             total_tokens=total_tokens,
-            mesh_device=mesh_device,
         )
 
     # Device performance measurement mode
@@ -586,9 +556,8 @@ def _run_experts_mlp_test(
         ttnn.synchronize_device(mesh_device)
         signpost("start")
         for _ in range(DEVICE_PERF_ITERS):
-            # NOTE: Each iteration creates a fresh sparsity tensor, preventing trace mode.
-            # The sync after each iteration inflates op-to-op latency but is required for
-            # accurate per-iteration measurement. Production would use traced execution
+            # NOTE: The sync after each iteration inflates op-to-op latency but is required
+            # for accurate per-iteration measurement. Production would use traced execution
             # with pipelined iterations. See module docstring for details.
             output = op_fn()
             ttnn.synchronize_device(mesh_device)
@@ -606,7 +575,6 @@ def _run_experts_mlp_test(
 
         perf_profiler.start("run")
         perf_profiler.start(step_name)
-        # Note: trace mode not supported for MLP due to sparsity tensor reallocation
         perf_us = _measure_perf_us(
             mesh_device,
             op_fn,
@@ -690,16 +658,10 @@ def test_gpt_oss_experts_mlp(
     """Test the gpt_oss_experts_mlp fused op.
 
     This tests the expert MLP computation:
-    - Reshape to sparse block format
-    - Gate projection (w1) with sparse_matmul + bias
-    - Up projection (w3) with sparse_matmul + bias
+    - Gate/Up projection with batched matmul + bias (fused or unfused)
     - SwiGLU activation
-    - Squeeze operations
-    - Down projection (w2) with sparse_matmul
-    - Permute and reshape for output
-
-    Note: This test uses dense reference computation. The TTNN implementation
-    uses sparse_matmul which should produce equivalent results on active pairs.
+    - Down projection (w2) with batched matmul + bias
+    - Reshape and layout conversion for output
     """
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
@@ -794,12 +756,14 @@ def test_gpt_oss_experts_mlp_single_device(
     num_devices = 1  # Single device
 
     # Create ThroughputExpertConfig for single device
+    # Use unfused mode since we manually create separate w1/w3 weights below
     throughput_config = ThroughputExpertConfig(
         intermediate_size=intermediate_size,
         num_experts=num_experts,
         hidden_size=hidden_size,
         num_experts_per_tok=num_experts_per_tok,
         num_devices=num_devices,
+        use_fused_gate_up=False,
     )
 
     # Create weights - for single device we use all experts
@@ -816,12 +780,8 @@ def test_gpt_oss_experts_mlp_single_device(
 
     # Create input tensor
     total_tokens = batch_size_per_device * seq_len
-    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
-
-    # Create sparsity tensor
-    num_sparse_blocks = total_tokens // throughput_config.sparsity_block_size
     num_experts_per_device = throughput_config.num_experts_per_device
-    sparsity_torch = torch.ones(num_sparse_blocks, 1, 1, num_experts_per_device, dtype=torch.bfloat16)
+    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
 
     # Reference computation
     ref_output = gpt_oss_experts_mlp_reference(
@@ -837,6 +797,7 @@ def test_gpt_oss_experts_mlp_single_device(
     )
 
     # Create TTNN weights for single device submesh
+    # Weights shape: [1, num_experts_per_device, H, I] for gate/up, [1, num_experts_per_device, I, H] for down
     w1_tt = ttnn.from_torch(
         w1_ref[:num_experts_per_device].unsqueeze(0),
         device=single_device_mesh,
@@ -858,22 +819,23 @@ def test_gpt_oss_experts_mlp_single_device(
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(single_device_mesh),
     )
+    # Bias shapes: [1, num_experts_per_device, 1, dim]
     w1_bias_tt = ttnn.from_torch(
-        w1_bias_ref[:num_experts_per_device].reshape(1, 1, 1, num_experts_per_device, 1, intermediate_size),
+        w1_bias_ref[:num_experts_per_device].unsqueeze(0),
         device=single_device_mesh,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(single_device_mesh),
     )
     w2_bias_tt = ttnn.from_torch(
-        torch.zeros(1, num_experts_per_device, 1, hidden_size).reshape(1, 1, 1, num_experts_per_device, 1, hidden_size),
+        torch.zeros(1, num_experts_per_device, 1, hidden_size),
         device=single_device_mesh,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(single_device_mesh),
     )
     w3_bias_tt = ttnn.from_torch(
-        w3_bias_ref[:num_experts_per_device].reshape(1, 1, 1, num_experts_per_device, 1, intermediate_size),
+        w3_bias_ref[:num_experts_per_device].unsqueeze(0),
         device=single_device_mesh,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
@@ -881,7 +843,7 @@ def test_gpt_oss_experts_mlp_single_device(
     )
 
     weights = ThroughputExpertWeights(
-        w1=w1_tt, w2=w2_tt, w3=w3_tt, w1_bias=w1_bias_tt, w2_bias=w2_bias_tt, w3_bias=w3_bias_tt
+        w2=w2_tt, w2_bias=w2_bias_tt, w1=w1_tt, w3=w3_tt, w1_bias=w1_bias_tt, w3_bias=w3_bias_tt
     )
 
     # Convert inputs to TTNN
@@ -892,13 +854,10 @@ def test_gpt_oss_experts_mlp_single_device(
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(single_device_mesh),
     )
-    tt_sparsity = ttnn.from_torch(
-        sparsity_torch,
-        device=single_device_mesh,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(single_device_mesh),
-    )
+
+    # Repeat input across expert dimension for batched matmul:
+    # [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
+    tt_post_dispatch = ttnn.repeat(tt_post_dispatch, ttnn.Shape((1, num_experts_per_device, 1, 1)))
 
     program_config = ThroughputProgramConfig()
     memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -906,14 +865,11 @@ def test_gpt_oss_experts_mlp_single_device(
     # Run TTNN implementation
     tt_output = expert_mlp_forward(
         experts_input=tt_post_dispatch,
-        sparsity=tt_sparsity,
         weights=weights,
         config=throughput_config,
-        program_config=program_config,
         memory_config=memory_config,
-        batch_size=batch_size_per_device,
-        seq_len=seq_len,
-        mesh_device=single_device_mesh,
+        program_config=program_config,
+        total_tokens=total_tokens,
     )
 
     # Convert output to torch
@@ -952,7 +908,6 @@ def test_gpt_oss_experts_mlp_device_perf(mode, seq_len):
     benchmark_data = BenchmarkData()
     step_name = f"gpt_oss_experts_mlp_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts_mlp.py"
-    # Use eager mode for MLP due to sparsity tensor reallocation
     expr = f"program_cache and not no_program_cache and eager and {mode} and {seq_len}"
     command = f'pytest {test_path}::test_gpt_oss_experts_mlp -k "{expr}"'
 

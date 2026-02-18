@@ -334,8 +334,8 @@ FUSED_OP_CONFIGS = {
         "test_function": "test_gpt_oss_experts_mlp",
         "env_var": "GPT_OSS_EXPERTS_MLP_DEVICE_PERF",
         "batch_size": 128,
-        "use_trace": False,  # MLP cannot use trace due to sparsity tensor reallocation
-        "description": "Expert MLP computation (sparse matmul + SwiGLU)",
+        "use_trace": False,  # MLP uses eager mode for device perf measurement
+        "description": "Expert MLP computation (batched matmul + SwiGLU)",
     },
 }
 

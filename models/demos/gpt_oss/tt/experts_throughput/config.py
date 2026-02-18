@@ -44,6 +44,10 @@ class ThroughputExpertConfig:
     sparsity_block_size: int = 32
     swiglu_limit: float = 7.0
     alpha: float = 1.702
+    use_fused_gate_up: bool = True  # If True, fuse w1 and w3 into single matmul
+    pad_w1_w3: bool = False
+    pad_w2: bool = False
+    use_experimental_all_reduce: bool = False
 
     def __post_init__(self):
         """Validate and compute derived values."""
@@ -133,24 +137,42 @@ class ThroughputProgramConfig:
     """Program configuration for throughput-optimized expert computations.
 
     Provides matmul program configs for the MLP operations within each expert.
+    Supports separate configurations for fused and unfused gate/up projections.
     """
 
-    # Core grid sizes for sparse matmul
-    gate_up_cores: tuple[int, int] = (5, 9)
-    down_cores: tuple[int, int] = (5, 9)
+    # Core grid sizes for unfused gate/up projections
+    gate_up_cores: tuple[int, int] = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
+    down_cores: tuple[int, int] = (5, 6)  # 30 cores - divides N=90 evenly (90/30=3)
 
-    # Sparse matmul parameters
-    # in0_block_w: int = 2
-    in0_block_w: int = 10
-    ## can be estimated by k // 32 (2880 / 32 = 90) therefore factors of 90 (30, 15, 10, 9 etc.)
-    out_subblock_h: int = 1
-    out_subblock_w: int = 1
-    per_core_M: int = 1
+    # Core grid sizes for fused gate/up projection (when use_fused_gate_up=True)
+    # If None, defaults to gate_up_cores
+    fused_gate_up_cores: tuple[int, int] | None = (
+        8,
+        8,
+    )  # 64 cores - with padding fused gate_up mm has 192 tiles which divides evenly (192/64=3)
+
+    # Matmul parameters for unfused mode
+    in0_block_w: int = 15
+    ## K dimension = 2880 / 32 = 90 tiles. Factors: 10, 15, 18, 30, 45
+    ## in0_block_w=15 gives 6 iterations - good balance of register usage and memory efficiency
+    out_subblock_h: int = 1  # M is small (4 tiles)
+    out_subblock_w: int = 1  # Conservative for unfused
+
+    # Matmul parameters for fused mode (when use_fused_gate_up=True)
+    # Fused output is 2x wider (N=180 vs 90), so may benefit from different config
+    fused_in0_block_w: int | None = 30  # Same K blocking as unfused
+    fused_out_subblock_h: int | None = 1  # M is small
+    fused_out_subblock_w: int | None = 3  # Wider output (N=180) benefits from larger subblock
 
     def __post_init__(self):
         """Validate configuration."""
         self._validate_cores("gate_up_cores", self.gate_up_cores)
         self._validate_cores("down_cores", self.down_cores)
+        if self.fused_gate_up_cores is not None:
+            self._validate_cores("fused_gate_up_cores", self.fused_gate_up_cores)
 
     def _validate_cores(self, name: str, cores: tuple[int, int]):
         """Validate core grid dimensions."""
@@ -160,17 +182,19 @@ class ThroughputProgramConfig:
         if core_x <= 0 or core_y <= 0:
             raise ValueError(f"{name} must have positive dimensions, got {cores}")
 
-    def get_gate_up_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for gate/up projections.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.gate_up_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -178,24 +202,68 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,
         )
 
-    def get_down_config(self, n: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    def get_fused_gate_up_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        """Get program config for FUSED gate/up projection.
+
+        This is used when use_fused_gate_up=True, where a single matmul produces
+        output of size 2*intermediate_size (twice the size of unfused).
+
+        Args:
+            n: Output feature dimension (2*intermediate_size for fused)
+            m: M dimension (total_tokens) for the matmul
+
+        Returns:
+            MatmulMultiCoreReuseMultiCast1DProgramConfig
+        """
+        # Use fused-specific cores if provided, otherwise default to gate_up_cores
+        cores = self.fused_gate_up_cores if self.fused_gate_up_cores is not None else self.gate_up_cores
+        core_x, core_y = cores
+
+        # Use fused-specific parameters if provided, otherwise default to unfused parameters
+        in0_block_w = self.fused_in0_block_w if self.fused_in0_block_w is not None else self.in0_block_w
+        out_subblock_h = self.fused_out_subblock_h if self.fused_out_subblock_h is not None else self.out_subblock_h
+        out_subblock_w = self.fused_out_subblock_w if self.fused_out_subblock_w is not None else self.out_subblock_w
+
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
+        per_core_N = n_tiles // (core_x * core_y)
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
+            per_core_N=max(1, per_core_N),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def get_down_config(self, n: int, m: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
         """Get program config for down projection.
 
         Args:
             n: Output feature dimension
+            m: M dimension (total_tokens) for the matmul
 
         Returns:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = self.down_cores
         n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        m_tiles = math.ceil(m / ttnn.TILE_SIZE)
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -203,7 +271,9 @@ class ThroughputProgramConfig:
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
-            per_core_M=self.per_core_M,
+            out_block_h=max(1, m_tiles),  # Same as per_core_M for 1D mcast
+            out_block_w=max(1, per_core_N),  # Same as per_core_N for 1D mcast
+            per_core_M=max(1, m_tiles),
             per_core_N=max(1, per_core_N),
             fuse_batch=False,
             fused_activation=None,

@@ -103,6 +103,7 @@ def _print_summary_table(results: list[DevicePerfResult]) -> None:
             )
 
 
+@pytest.mark.timeout(900)  # Allow 15 minutes for all 5 sub-tests with Tracy profiling
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
