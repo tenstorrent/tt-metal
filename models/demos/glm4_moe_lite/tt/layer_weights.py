@@ -518,6 +518,7 @@ def _prepare_fused_kv_branch_weights(
     return {
         "w_kv_a": w_kv_a_fused,
         "gamma": gamma_fused,
+        "gamma_torch": gamma_torch.squeeze(0),  # [kv_lora_rank] for host-side RMSNorm
         "trans_mat": trans_mat_fused,
         "nope_output": nope_output_fused,
         "rope_output": rope_output_fused,
