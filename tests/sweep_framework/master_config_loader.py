@@ -27,13 +27,20 @@ _current_dir = os.path.dirname(_current_file)
 _repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
-if _current_dir not in sys.path:
-    sys.path.insert(0, _current_dir)
 
-try:
-    import tests.sweep_framework.lead_models_filter as lead_models_filter
-except ModuleNotFoundError:
-    import lead_models_filter
+
+# Inline lead_models_filter state (avoids dependency on untracked/separate module)
+class lead_models_filter:
+    _lead_models_only = os.environ.get("TTNN_LEAD_MODELS_ONLY", "").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        cls._lead_models_only = enabled
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1" if enabled else "0"
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        return cls._lead_models_only
 
 
 # Get the base directory dynamically - import from model_tracer
