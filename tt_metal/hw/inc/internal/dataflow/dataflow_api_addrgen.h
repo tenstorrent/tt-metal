@@ -152,14 +152,14 @@ inline constexpr bool has_required_addrgen_traits_v =
  *
  * Return value: uint64_t
  *
- * | Argument    | Description                             | Data type | Valid range        | required |
- * |-------------|-----------------------------------------|-----------|--------------------|----------|
- * | noc_x_start | Physical x coordinate of the start core | uint32_t  | WH: 0-9, BH: 0-16  | True     |
- * | noc_y_start | Physical y coordinate of the start core | uint32_t  | WH: 0-11, BH: 0-11 | True     |
- * | noc_x_end   | Physical x coordinate of the end core   | uint32_t  | WH: 0-9, BH: 0-16  | True     |
- * | noc_y_end   | Physical y coordinate of the end core   | uint32_t  | WH: 0-11, BH: 0-11 | True     |
- * | addr        | Address in local L1 memory              | uint32_t  | 0..1MB             | True     |
- * | noc         | Which NOC to use for the transaction    | uint8_t   | 0 or 1             | False    |
+ * | Argument    | Description                                            | Data type | Valid range        | required |
+ * |-------------|--------------------------------------------------------|-----------|--------------------|----------|
+ * | noc_x_start | Physical x coordinate of the start core                | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_start | Physical y coordinate of the start core                | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | noc_x_end   | Physical x coordinate of the end core                  | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_end   | Physical y coordinate of the end core                  | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | addr        | L1 memory write address local to the destination core. | uint32_t  | 0..1MB             | True     |
+ * | noc         | Which NOC to use for the transaction                   | uint8_t   | 0 or 1             | False    |
  */
 // clang-format on
 FORCE_INLINE
