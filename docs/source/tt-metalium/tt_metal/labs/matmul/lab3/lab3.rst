@@ -803,6 +803,13 @@ Perform the following steps to complete the exercise:
 #. Update the sender kernel to operate on batches of tiles rather than individual tiles by
    reserving ``tiles_per_batch`` tiles in the CB at once using ``cb_reserve_back``.
    You can still read tiles from DRAM one at a time in an inner loop.
+   However, you should **not** issue a ``noc_async_read_barrier`` after each tile read from DRAM.
+   Instead, you should issue a single ``noc_async_read_barrier`` after all tiles in the batch
+   have been read into the CB. Because data in the CB is not used until all tiles in the batch have
+   been read, there is no need to wait on a barrier after each individual tile read.
+   Placing the barrier at the end of the batch allows DRAM reads to be overlapped and optimized
+   across the entire batch.
+
    Since you will need to update the CB write address in the inner loop, make sure to preserve
    the starting address of the batch (i.e., the starting CB write address) in a variable,
    so it can be used as the multicast address for the batch.
@@ -1099,6 +1106,10 @@ Perform the following steps to complete the exercise:
    experience the handshake overhead we explored in Exercise 3. To achieve performance
    improvement, update your code to push a slab at a time into the CBs and also multicast the slab
    rather than individual tiles, similarly to how you modified your code in Exercise 3.
+   When implementing this optimization, you should **not** issue a ``noc_async_read_barrier`` after
+   each tile read from DRAM. Instead, you should issue a single ``noc_async_read_barrier`` after
+   all tiles in the slab have been read into the CB, similar to how it was done in Exercise 3
+   for batched tiles.
 
 In this exercise, you have applied slab-level multicast to multi core matrix multiplication,
 combining the blocked compute structure from Lab 2 with the NoC multicast protocols practiced
