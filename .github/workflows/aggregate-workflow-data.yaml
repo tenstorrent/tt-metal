@@ -265,6 +265,7 @@ jobs:
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
+        if: github.ref == 'refs/heads/main'
         id: slack-report
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
