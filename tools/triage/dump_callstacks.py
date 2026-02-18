@@ -46,7 +46,7 @@ def dump_callstacks(
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
-        return callstack_provider.get_callstacks(location, risc_name)
+        return callstack_provider.get_cached_callstacks(location, risc_name)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
