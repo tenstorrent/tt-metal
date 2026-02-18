@@ -196,7 +196,10 @@ uint32_t read_mask_chunk(
     }
     noc_async_read_barrier();
     cb_push_back(cb_mask_in, mask_chunk_tiles);
-    mask_start_tile_id += mask_chunk_tiles;
+    // Advance by Sk_chunk_t (column stride), NOT mask_chunk_tiles (PNHt * Sk_chunk_t).
+    // The mask tensor has shape (PNHt, St) with row stride PSt. Each chunk advances
+    // Sk_chunk_t columns. Using mask_chunk_tiles would over-advance when PNHt > 1.
+    mask_start_tile_id += Sk_chunk_t;
     return mask_start_tile_id;
 }
 
