@@ -1,0 +1,9 @@
+{"event":"analysis_started","details":"Reading batch_norm_program_factory.cpp","ts":"2026-02-18T12:33:33+00:00"}
+{"event":"analysis_started","details":"Reading tilize_multi_core_interleaved_program_factory.cpp and all kernel files","ts":"2026-02-18T12:33:44+00:00"}
+{"event":"research_complete","details":"Read all kernel files, work_split, cb_utils, tilize_helpers, tensor_accessor docs, compute API headers. DeepWiki unavailable - using local docs only.","ts":"2026-02-18T12:36:28+00:00"}
+{"event":"deepwiki_queries","details":"Queried binary_dest_reuse_tiles (success), split_work_to_cores (failed), TensorAccessor (failed)","ts":"2026-02-18T12:36:54+00:00"}
+{"event":"kernel_files_read","details":"Read all 5 kernel/header files: reader_batch_norm.cpp, writer_batch_norm.cpp, batch_norm_kernel.cpp, batch_norm_sfpu_kernel.cpp, batch_norm_device_operation.hpp","ts":"2026-02-18T12:37:12+00:00"}
+{"event":"analysis_started","details":"Beginning untilize multi-core program factory analysis for output_stage role of row_centralize operation","ts":"2026-02-18T12:37:14+00:00"}
+{"event":"files_read","details":"Read all kernel files, helper libraries, types, work_split_tilize. DeepWiki partially available - got TensorAccessorArgs info, other queries returned 500 errors.","ts":"2026-02-18T12:37:24+00:00"}
+{"event":"deepwiki_success","details":"Got split_work_to_cores and SFPU vs FPU explanations from DeepWiki","ts":"2026-02-18T12:38:05+00:00"}
+{"event":"analysis_complete","details":"Wrote tilize_analysis.md covering all 12 analysis sections: work unit, tensor format, data flow, CBs, pipeline, index calc, memory access, core distribution, arguments, kernel implementations, notes, external sources.","ts":"2026-02-18T12:38:59+00:00"}
