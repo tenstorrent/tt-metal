@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+
+# SPDX-License-Identifier: Apache-2.0
+
 # PatchTSMixer for TT-NN
 
 PatchTSMixer is a lightweight MLP-Mixer based architecture for multivariate time series forecasting, implemented using TTNN APIs for Tenstorrent hardware (Wormhole).
