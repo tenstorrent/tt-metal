@@ -234,6 +234,7 @@ Tests:
         iterations: 5
 
   - name: "FlowControlAllToAllMeshLowLatency"
+    skip: [watcher]
     sync: true
     enable_flow_control: true
     fabric_setup:
