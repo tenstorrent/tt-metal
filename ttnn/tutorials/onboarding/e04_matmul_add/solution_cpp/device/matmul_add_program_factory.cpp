@@ -49,11 +49,14 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
     create_cb(cb_c, program, core, tile_size, 2, cb_format);
     create_cb(cb_out, program, core, tile_size, 2, cb_format);
 
-    // Custom kernels
+    // Custom kernels - compile args include TensorAccessorArgs + dimensions
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(*a.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*b.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*c.buffer()).append_to(reader_ct_args);
+    reader_ct_args.push_back(Mt);
+    reader_ct_args.push_back(Kt);
+    reader_ct_args.push_back(Nt);
 
     auto reader_id = CreateKernel(
         program,
@@ -64,6 +67,8 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
 
     std::vector<uint32_t> writer_ct_args;
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    writer_ct_args.push_back(Mt);
+    writer_ct_args.push_back(Nt);
 
     auto writer_id = CreateKernel(
         program,
@@ -78,9 +83,9 @@ MatmulAddOperation::ProgramFactory::cached_program_t MatmulAddOperation::Program
         core,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = {Mt, Kt, Nt}});
 
-    SetRuntimeArgs(
-        program, reader_id, core, {a.buffer()->address(), b.buffer()->address(), c.buffer()->address(), Mt, Kt, Nt});
-    SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), Mt, Nt});
+    // Runtime args: only buffer addresses (dimensions are compile args)
+    SetRuntimeArgs(program, reader_id, core, {a.buffer()->address(), b.buffer()->address(), c.buffer()->address()});
+    SetRuntimeArgs(program, writer_id, core, {output.buffer()->address()});
 
     return {std::move(program), {reader_id, writer_id, compute_id}};
 }
