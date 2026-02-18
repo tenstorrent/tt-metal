@@ -48,12 +48,6 @@ void MorehAdamOperation::validate_inputs(
     }
 }
 
-MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // For now we litteraly don't care and return a single factory. Whatever
-    return ProgramFactory{};
-}
-
 void MorehAdamOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
