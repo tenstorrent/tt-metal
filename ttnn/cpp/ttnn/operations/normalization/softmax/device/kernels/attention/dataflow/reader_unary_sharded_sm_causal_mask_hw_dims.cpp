@@ -47,7 +47,7 @@ void kernel_main() {
             ++mask_id;
 
             if (h == 0 && w == 0) {
-                dataflow_kernel_lib::generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
+                dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_reduce_scaler, reduce_scaler);
             }
         }
         noc_async_read_barrier();

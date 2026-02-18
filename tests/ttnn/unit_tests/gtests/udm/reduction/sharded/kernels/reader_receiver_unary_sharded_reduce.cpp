@@ -72,7 +72,7 @@ void kernel_main() {
     // Phase 1: Generate scaler tile for reduction
     // ============================================================================
     cb_reserve_back(cb_scaler, 1);
-    dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, winv_packed);
+    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_scaler, winv_packed);
     cb_push_back(cb_scaler, 1);
 
     // ============================================================================

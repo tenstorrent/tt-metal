@@ -19,7 +19,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = 2;
 #ifndef REDUCE_ROW_SUM_VIA_MM
-    dataflow_kernel_lib::generate_reduce_scaler(cb_id_in2, scaler);
+    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_id_in2, scaler);
 #else
     generate_mm_scaler(cb_id_in2, scaler);
 #endif

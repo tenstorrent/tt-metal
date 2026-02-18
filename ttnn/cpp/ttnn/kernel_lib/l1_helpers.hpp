@@ -8,6 +8,9 @@ namespace dataflow_kernel_lib {
 // Face size in uint32 (128 u32 = 256 bf16 = 16x16 face)
 constexpr uint32_t FACE_SIZE_U32 = 128;
 
+// Face size in uint32 for float32 (256 u32 = 256 f32 = 16x16 face)
+constexpr uint32_t FACE_SIZE_U32_FP32 = 256;
+
 /**
  * @brief Convert an L1 address to a volatile L1 pointer
  *

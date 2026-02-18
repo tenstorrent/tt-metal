@@ -73,7 +73,7 @@ void kernel_main() {
     // ==================== Initialize Scaler CB ====================
     // Generate scaler tile for reduction (1.0 for SUM, 1/W for MEAN)
     cb_reserve_back(cb_scaler, 1);
-    dataflow_kernel_lib::generate_reduce_scaler(cb_scaler, scaler_packed);
+    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_scaler, scaler_packed);
     cb_push_back(cb_scaler, 1);
 
     // ==================== Compute Initial Page IDs ====================
