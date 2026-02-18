@@ -26,7 +26,8 @@ class TtSwinMLP:
             self.parameters["fc1"]["weight"],
             bias=self.parameters["fc1"]["bias"],
             activation="gelu",
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -37,7 +38,8 @@ class TtSwinMLP:
             output,
             self.parameters["fc2"]["weight"],
             bias=self.parameters["fc2"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

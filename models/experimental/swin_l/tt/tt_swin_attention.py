@@ -109,7 +109,8 @@ class TtSwinAttention:
             input_tensor,
             self.parameters["qkv"]["weight"],
             bias=self.parameters["qkv"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -134,7 +135,8 @@ class TtSwinAttention:
         attn = ttnn.matmul(
             q,
             k,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(qkv)
@@ -157,7 +159,8 @@ class TtSwinAttention:
         output = ttnn.matmul(
             attn,
             v,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(v)
@@ -173,7 +176,8 @@ class TtSwinAttention:
             output,
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
