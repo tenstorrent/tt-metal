@@ -19,8 +19,6 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 
-#include "debug/dprint_tensix.h"
-
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
     // Perform sigmoid on scores
