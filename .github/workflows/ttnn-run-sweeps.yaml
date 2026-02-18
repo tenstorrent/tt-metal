@@ -714,6 +714,76 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
+  call-api:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions-setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install boto3 requests
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:5333267429815:role/github-actions-api-gateway-role
+          aws-region: us-east-2
+
+      - name: Print AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Call last_measurement API with Python
+        run: |
+          python3 -c "
+          import boto3
+          import requests
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+          from urllib.parse import urlparse
+
+          # API Gateway endpoint
+          url = 'https://ftuxhxqka0.execute-api.us-east-2.amazonaws.com/api-gw-data-db-main/api/v1/data_db_main/benchmarks/last_measurement'
+
+          # Query parameters
+          params = {
+              'project': 'tenstorrent/tt-metal',
+              'ml_model_name': 'tiiuae/falcon-7b-instruct',
+              'batch_size': '32',
+              'precision': 'prefill[BFLOAT16-DRAM]_decode[BFLOAT16-L1_SHARDED]'
+          }
+
+          # Create a request
+          request = AWSRequest(
+              method='GET',
+              url=url,
+              params=params
+          )
+
+          # Get credentials from the environment
+          session = boto3.Session()
+          credentials = session.get_credentials()
+
+          # Sign the request
+          SigV4Auth(credentials, 'execute-api', 'us-east-2').add_auth(request)
+
+          # Get the signed headers
+          signed_headers = dict(request.headers)
+
+          # Make the request
+          response = requests.get(
+              url,
+              params=params,
+              headers=signed_headers
+          )
+
+          print(f'Status Code: {response.status_code}')
+          print(f'Response: {response.text}')
+
+          response.raise_for_status()
+          "
+
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
