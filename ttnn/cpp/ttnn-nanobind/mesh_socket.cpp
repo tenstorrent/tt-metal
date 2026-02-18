@@ -149,6 +149,14 @@ void py_module_types(nb::module_& mod) {
             [](const tt::tt_metal::distributed::MeshSocket& socket) { return socket.get_mesh_device(); },
             R"doc(
                 Returns the mesh device of the socket.
+            )doc")
+        .def(
+            "get_connection_config",
+            [](const tt::tt_metal::distributed::MeshSocket& socket) {
+                return socket.get_config().socket_connection_config;
+            },
+            R"doc(
+            Returns the connection config of the socket.
             )doc");
 }
 
