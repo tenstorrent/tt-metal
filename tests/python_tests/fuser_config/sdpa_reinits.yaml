@@ -40,7 +40,7 @@ operations:
     output_format: "Float16_b"
     math:
       - type: "Fpu"
-        operation: "Elwsub"
+        operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "Column"
     packer: "Packer"

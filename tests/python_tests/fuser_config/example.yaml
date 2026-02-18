@@ -1,6 +1,4 @@
 dest_acc: "Yes"
-# profiler_enabled: true
-loop_factor: 16
 
 operations:
   - src_a: "input_A"

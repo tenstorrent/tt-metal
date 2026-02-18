@@ -22,7 +22,7 @@ from .fused_operation import FusedOperation
 from .llk_params import DestAccumulation, DestSync, PerfRunType
 from .perf import PerfReport
 from .profiler import Profiler, ProfilerData
-from .test_config import BootMode, ProfilerBuild, TestConfig
+from .test_config import BootMode, ProfilerBuild, TestConfig, TestMode
 
 
 @dataclass
@@ -105,15 +105,8 @@ class FuserConfig:
                     "Cannot fuse UnpackerTilizeA and other unpackers inside one l1-to-l1 run on Blackhole"
                 )
 
-    def run(self, worker_id="master", location="0,0", run_count=2):
-        from .fused_generator import FUSED_TESTS_DIR, FusedKernelGenerator
-        from .fused_golden import FusedGolden
-
-        write_pipeline_operands_to_l1(self.pipeline)
-
-        cpp_path = FUSED_TESTS_DIR / f"{self.global_config.test_name}.cpp"
-
-        test_config = TestConfig(
+    def create_test_config(self, cpp_path, profiler_enabled: bool) -> TestConfig:
+        return TestConfig(
             test_name=cpp_path,
             formats=FormatConfig(
                 unpack_A_src=DataFormat.Float16,
@@ -126,61 +119,74 @@ class FuserConfig:
             runtimes=set(),
             variant_stimuli=None,
             boot_mode=BootMode.DEFAULT,
-            profiler_build=(
-                ProfilerBuild.Yes
-                if self.global_config.profiler_enabled
-                else ProfilerBuild.No
-            ),
+            profiler_build=ProfilerBuild.Yes if profiler_enabled else ProfilerBuild.No,
             skip_build_header=True,
         )
 
-        if self.global_config.profiler_enabled:
-            run_types = [
-                PerfRunType.L1_TO_L1,
-                PerfRunType.UNPACK_ISOLATE,
-                PerfRunType.MATH_ISOLATE,
-                PerfRunType.PACK_ISOLATE,
-                PerfRunType.L1_CONGESTION,
-            ]
+    def generate_and_build_test(self, cpp_path, test_config: TestConfig):
+        from .fused_generator import FusedKernelGenerator
 
-            perf_report = PerfReport()
-            all_results = []
+        if TestConfig.MODE != TestMode.CONSUME:
+            code_generator = FusedKernelGenerator(self)
+            code_generator.write_kernel(cpp_path, self.global_config.regenerate_cpp)
 
-            for run_type in run_types:
-                runs = []
-                self.global_config.perf_run_type = run_type
-                code_generator = FusedKernelGenerator(self)
-                code_generator.write_kernel(cpp_path, self.global_config.regenerate_cpp)
+        test_config.generate_variant_hash()
 
-                test_config.generate_variant_hash()
-                test_config.build_elfs()
+        if TestConfig.MODE != TestMode.CONSUME:
+            test_config.build_elfs()
 
-                for run_index in range(run_count):
-                    elfs = test_config.run_elf_files(location)
-                    wait_for_tensix_operations_finished(elfs, location)
+    def run_perf_test(self, worker_id: str, location: str, run_count: int = 2):
+        from .fused_generator import FUSED_TESTS_DIR
 
-                    meta = Profiler._get_meta(
-                        test_config.test_name, test_config.variant_id
+        self.global_config.profiler_enabled = True
+        write_pipeline_operands_to_l1(self.pipeline)
+
+        run_types = [
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        ]
+
+        perf_report = PerfReport()
+        all_results = []
+
+        for run_type in run_types:
+            runs = []
+            self.global_config.perf_run_type = run_type
+
+            cpp_path = (
+                FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
+            )
+
+            test_config = self.create_test_config(cpp_path, profiler_enabled=True)
+            self.generate_and_build_test(cpp_path, test_config)
+
+            if TestConfig.MODE == TestMode.PRODUCE:
+                continue
+
+            for run_index in range(run_count):
+                elfs = test_config.run_elf_files(location)
+                wait_for_tensix_operations_finished(elfs, location)
+
+                meta = Profiler._get_meta(test_config.test_name, test_config.variant_id)
+                buffer_data = [
+                    read_words_from_device(
+                        addr=addr,
+                        word_count=TestConfig.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
+                        location=location,
                     )
-                    buffer_data = [
-                        read_words_from_device(
-                            addr=addr,
-                            word_count=TestConfig.THREAD_PERFORMANCE_DATA_BUFFER_LENGTH,
-                            location=location,
-                        )
-                        for addr in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
-                    ]
-                    profiler_data = Profiler._parse_buffers(buffer_data, meta)
-                    # Tag profiler data with run index for proper L1-to-L1 pairing
-                    profiler_data.df["run_index"] = run_index
-                    runs.append(profiler_data)
+                    for addr in TestConfig.THREAD_PERFORMANCE_DATA_BUFFER
+                ]
+                profiler_data = Profiler._parse_buffers(buffer_data, meta)
+                profiler_data.df["run_index"] = run_index
+                runs.append(profiler_data)
 
-                get_stats = Profiler.STATS_FUNCTION[run_type]
-                all_results.append(get_stats(ProfilerData.concat(runs)))
+            get_stats = Profiler.STATS_FUNCTION[run_type]
+            all_results.append(get_stats(ProfilerData.concat(runs)))
 
-            # Merge results with validation
-            # how="outer" keeps all markers (some may not appear in all run types)
-            # validate="1:1" catches duplicate markers within each run type
+        if TestConfig.MODE != TestMode.PRODUCE and all_results:
             results = reduce(
                 lambda left, right: pd.merge(
                     left, right, on="marker", how="outer", validate="1:1"
@@ -196,15 +202,23 @@ class FuserConfig:
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.{worker_id}.post.csv")
-        else:
-            code_generator = FusedKernelGenerator(self)
-            code_generator.write_kernel(cpp_path, self.global_config.regenerate_cpp)
 
-            test_config.generate_variant_hash()
-            test_config.build_elfs()
+    def run_regular_test(self, location: str):
+        from .fused_generator import FUSED_TESTS_DIR
+        from .fused_golden import FusedGolden
 
-            elfs = test_config.run_elf_files(location)
-            wait_for_tensix_operations_finished(elfs, location)
-            collect_pipeline_results(self.pipeline)
-            golden = FusedGolden()
-            assert golden.check_pipeline(self)
+        write_pipeline_operands_to_l1(self.pipeline)
+
+        cpp_path = FUSED_TESTS_DIR / f"{self.global_config.test_name}.cpp"
+
+        test_config = self.create_test_config(cpp_path, profiler_enabled=False)
+        self.generate_and_build_test(cpp_path, test_config)
+
+        if TestConfig.MODE == TestMode.PRODUCE:
+            return
+
+        elfs = test_config.run_elf_files(location)
+        wait_for_tensix_operations_finished(elfs, location)
+        collect_pipeline_results(self.pipeline)
+        golden = FusedGolden()
+        assert golden.check_pipeline(self)

@@ -87,7 +87,15 @@ class ComputeNode:
             return ""
 
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
-            return self.unpacker().perf_set_valid(operation, config, self)
+            if (
+                isinstance(self.unpacker, MatmulUnpacker)
+                or self.unpacker == MatmulUnpacker
+            ):
+                return self.unpacker().perf_set_valid(operation, config, self)
+            code = ""
+            for tile_idx in range(batch_tile_cnt):
+                code += self.unpacker().perf_set_valid(operation, config, self)
+            return code
 
         code = self.unpacker().init(operation, config, self)
         if isinstance(self.unpacker, MatmulUnpacker) or self.unpacker == MatmulUnpacker:
@@ -114,8 +122,11 @@ class ComputeNode:
             PerfRunType.L1_CONGESTION,
         ):
             code = ""
-            for tile_idx in range(batch_tile_cnt):
+            if isinstance(self.fpu, MatmulFpu):
                 code += self.unpacker().perf_clear_valid(operation, config, self)
+            else:
+                for tile_idx in range(batch_tile_cnt):
+                    code += self.unpacker().perf_clear_valid(operation, config, self)
             return code
 
         code = self.fpu.init(operation, config, self)

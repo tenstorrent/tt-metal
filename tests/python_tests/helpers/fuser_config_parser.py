@@ -336,7 +336,6 @@ def load_fuser_config(test_name: str) -> FuserConfig:
         config = yaml.safe_load(f)
 
     dest_acc = DEST_ACCUMULATION_MAP[config.get("dest_acc", "No")]
-    profiler_enabled = config.get("profiler_enabled", False)
     loop_factor = config.get("loop_factor", 16)
 
     operands = OperandRegistry()
@@ -351,7 +350,6 @@ def load_fuser_config(test_name: str) -> FuserConfig:
         global_config=GlobalConfig(
             dest_acc=dest_acc,
             test_name=test_name,
-            profiler_enabled=profiler_enabled,
             loop_factor=loop_factor,
         ),
     )
