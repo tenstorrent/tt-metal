@@ -249,6 +249,10 @@ public:
     void reshape(const MeshShape& new_shape);
     const MeshDeviceView& get_view() const;
 
+    // Returns the system mesh ID from the underlying view.
+    // This ID is assigned by the control plane and uniquely identifies the mesh in the system.
+    uint32_t get_system_mesh_id() const;
+
     std::string to_string() const;
     bool is_parent_mesh() const;
 
