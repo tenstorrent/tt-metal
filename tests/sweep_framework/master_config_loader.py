@@ -25,12 +25,18 @@ from framework.constants import LEAD_MODELS
 try:
     from tests.sweep_framework import lead_models_filter
 except ImportError:
-    # Fallback for direct script execution
-    import sys
-    import os
+    try:
+        # Try direct import first
+        import lead_models_filter
+    except ImportError:
+        # Fallback: add current directory to path
+        import sys
+        import os
 
-    sys.path.insert(0, os.path.dirname(__file__))
-    import lead_models_filter
+        current_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+        if current_dir not in sys.path:
+            sys.path.insert(0, current_dir)
+        import lead_models_filter
 
 
 # Get the base directory dynamically - import from model_tracer
