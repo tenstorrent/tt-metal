@@ -14,6 +14,30 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
 
+# Custom receiver mapping override for testing with 10 receivers per sender (80 total)
+# Keys are sender cores, values are receiver cores for each sender
+SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE = {
+    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9)],  # Bank 0
+    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1)],  # Bank 1
+    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7)],  # Bank 2
+    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3)],  # Bank 3
+    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (9, 0), (10, 0)],  # Bank 4
+    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (9, 2), (10, 2)],  # Bank 5
+    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (9, 6), (10, 6)],  # Bank 6
+    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (9, 4), (10, 4)],  # Bank 7
+}
+
+SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE = {
+    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9), (10, 9)],  # Bank 0
+    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1)],  # Bank 1
+    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7), (9, 7), (10, 7)],  # Bank 2
+    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3), (9, 3), (10, 3)],  # Bank 3
+    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (9, 0), (10, 0)],  # Bank 4
+    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (9, 2), (10, 2)],  # Bank 5
+    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6), (7, 6), (9, 6), (10, 6)],  # Bank 6
+    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4), (7, 4), (9, 4), (10, 4)],  # Bank 7
+}
+
 VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-1B": {"dim": 2048, "hidden_dim": 8192, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
@@ -30,17 +54,15 @@ VERIFIED_MODEL_CONFIGS = {
 
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
-    Check if model weights fit in global CB constraints:
+    Check if given model dimensions are supported to use the DRAM prefetcher on given device configuration:
     1. Max 65535 pages (tiles) per CB
     2. CB size must fit in L1 bank with room for input shards and prefetcher CBs
-
+    3. kv heads must be divisible by num_devices
     The largest weight is FF1/FF3: [dim, hidden_dim/num_devices] (N-sharded).
-
     Args:
         model_name: Name of the model (key in VERIFIED_MODEL_CONFIGS)
         num_devices: number of devices for tensor parallelism
         ring_size: total receiver cores (16 for default, 80 for custom mapping)
-
     Returns:
         True if weights fit in global CB, False otherwise
     """
@@ -50,7 +72,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
     MAX_L1_PER_BANK = 1000000 if num_devices == 4 else 850000
-    kv_heads_per_device = VERIFIED_MODEL_CONFIGS[model_name]["n_kv_heads"] % num_devices
+    kv_heads_divisible = VERIFIED_MODEL_CONFIGS[model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = VERIFIED_MODEL_CONFIGS[model_name]["dim"], VERIFIED_MODEL_CONFIGS[model_name]["hidden_dim"]
     n_per_device = hidden_dim // num_devices
     n_per_core = math.ceil(n_per_device / ring_size)
@@ -61,11 +83,11 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     h_tiles_padded = ((h_tiles + ring_size - 1) // ring_size) * ring_size
     tiles_per_core = (h_tiles_padded * w_tiles) // ring_size
 
-    # Check memory constraints
+    # Check memory constraints and kv heads divisible by num_devices
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK
-    return pages_ok and l1_ok and kv_heads_per_device == 0
+    return pages_ok and l1_ok and kv_heads_divisible
 
 
 @dataclass

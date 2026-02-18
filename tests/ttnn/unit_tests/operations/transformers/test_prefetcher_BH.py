@@ -23,7 +23,13 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.prefetcher import Prefetcher, VERIFIED_MODEL_CONFIGS, is_prefetcher_supported
+from models.tt_transformers.tt.prefetcher import (
+    Prefetcher,
+    VERIFIED_MODEL_CONFIGS,
+    is_prefetcher_supported,
+    SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE,
+    SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE,
+)
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -621,32 +627,6 @@ def run_prefetcher_all_matmuls(
 # =============================================================================
 # Test Cases
 # =============================================================================
-
-# Custom receiver mapping override for testing with 10 receivers per sender (80 total)
-# Keys are sender cores, values are receiver cores for each sender
-SENDER_RECEIVER_MAPPING_64_CORE_OVERRIDE = {
-    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9)],  # Bank 0
-    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1)],  # Bank 1
-    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7)],  # Bank 2
-    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3)],  # Bank 3
-    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (9, 0), (10, 0)],  # Bank 4
-    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (9, 2), (10, 2)],  # Bank 5
-    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (9, 6), (10, 6)],  # Bank 6
-    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (9, 4), (10, 4)],  # Bank 7
-}
-
-SENDER_RECEIVER_MAPPING_80_CORE_OVERRIDE = {
-    (0, 9): [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9), (10, 9)],  # Bank 0
-    (0, 1): [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1), (10, 1)],  # Bank 1
-    (0, 7): [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7), (8, 7), (9, 7), (10, 7)],  # Bank 2
-    (0, 3): [(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (8, 3), (9, 3), (10, 3)],  # Bank 3
-    (8, 0): [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (9, 0), (10, 0)],  # Bank 4
-    (8, 2): [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (9, 2), (10, 2)],  # Bank 5
-    (8, 6): [(0, 6), (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6), (7, 6), (9, 6), (10, 6)],  # Bank 6
-    (8, 4): [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4), (6, 4), (7, 4), (9, 4), (10, 4)],  # Bank 7
-}
-
-
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize(
@@ -702,7 +682,7 @@ def test_prefetcher_BH(
 
     Parameters:
         use_custom_mapping: If False, uses default prefetcher (column 0/7 senders, 2 receivers each).
-                           If True, uses custom 80-core mapping (8 senders, 10 receivers each).
+                           If True, uses custom 64 or 80-core mapping (8 senders, 8 or 10 receivers each).
 
     Tensor parallelism:
     - QKV: TP on qkv_size dimension (N-sharded)
