@@ -6,7 +6,6 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/vector_aligned.hpp>
 #include <utility>
 
 namespace tt::umd {
@@ -119,6 +118,12 @@ public:
      * barrier is not met within the timeout.
      */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    std::vector<MeshCoreCoord> get_active_cores() const;
+
+    MeshDevice* get_mesh_device() const;
+
+    H2DMode get_h2d_mode() const;
 
 private:
     // Helper struct for pinned buffer NOC address info

@@ -96,6 +96,14 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
+# Expose a custom target for the generated protobuf files so that external consumers
+# can depend on them directly without going through the fabric OBJECT library.
+add_custom_target(fabric_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
+add_dependencies(fabric fabric_generated_protos)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files fabric_generated_protos)
+endif()
+
 # Exclude protobuf generated files from unity builds (they have conflicting static symbols)
 set_source_files_properties(
     ${GENERATED_PROTO_SRCS}

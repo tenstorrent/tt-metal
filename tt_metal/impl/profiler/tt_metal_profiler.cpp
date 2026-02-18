@@ -731,6 +731,8 @@ void InitDeviceProfiler(IDevice* device) {
         } else {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
         }
+    } else {
+        profiler_state_manager->device_profiler_map.at(device_id).clearStateForDeviceReinit();
     }
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);

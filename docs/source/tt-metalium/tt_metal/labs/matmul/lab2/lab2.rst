@@ -752,7 +752,7 @@ Follow these steps to complete the exercise:
      into the destination register requires a new operation:
 
      - ``copy_tile(in_cb_id, in_tile_index, dst_tile_index)`` defined in
-       ``tt_metal/include/compute_kernel_api/tile_move_copy.h`` copies a tile from the intermediate
+       ``tt_metal/hw/inc/api/compute/tile_move_copy.h`` copies a tile from the intermediate
        CB to the destination register array at the specified index.
      - Before calling this function, you need to call ``copy_tile_to_dst_init_short(in_cb_id)``
        to set up the Tensix Engine for the copy operation.

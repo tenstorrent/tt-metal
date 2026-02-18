@@ -73,19 +73,19 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    SD_HF_DOWNLOAD_OVERRIDE=1 pytest models/demos/vision/generative/stable_diffusion/blackhole/tests --ignore=models/demos/vision/generative/stable_diffusion/blackhole/tests/test_perf.py
+    SD_HF_DOWNLOAD_OVERRIDE=1 pytest models/demos/vision/generative/stable_diffusion/blackhole/tests --timeout 420 --ignore=models/demos/vision/generative/stable_diffusion/blackhole/tests/test_perf.py
 
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
     for hf_model in "$llama8b"; do
         tt_cache=$TT_CACHE_HOME/$hf_model
-        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" --timeout 360 ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $hf_model completed"
     done
 
-    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py
-    pytest models/experimental/functional_unet/tests/test_unet_model.py
+    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py --timeout 300
+    pytest models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
 }
 
 run_python_model_tests_slow_runtime_mode_blackhole() {
@@ -96,5 +96,5 @@ run_python_model_tests_slow_runtime_mode_blackhole() {
         "comparison_mode_should_raise_exception": true,
         "comparison_mode_pcc": 0.998
     }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py --timeout 90
 }

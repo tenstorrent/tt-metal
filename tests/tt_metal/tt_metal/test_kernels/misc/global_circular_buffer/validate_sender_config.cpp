@@ -7,15 +7,11 @@
 #include "api/debug/ring_buffer.h"
 
 #if defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/common.h"
-
-namespace NAMESPACE {
-void MAIN {
+#include "api/compute/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-
-void kernel_main() {
 #endif
+void kernel_main() {
 #if !defined(UCK_CHLKC_MATH)
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(0);
 
@@ -93,6 +89,3 @@ void kernel_main() {
     while (!pass);
 #endif
 }
-#if defined(COMPILE_FOR_TRISC)
-}  // namespace NAMESPACE
-#endif

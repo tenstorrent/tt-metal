@@ -15,9 +15,9 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-template <bool blocking = false>
+template <bool blocking = false, class SenderType = tt::tt_fabric::WorkerToFabricEdmSender>
 FORCE_INLINE void perform_payload_send(
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    SenderType& fabric_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes,
     volatile PACKET_HEADER_TYPE* pkt_hdr) {

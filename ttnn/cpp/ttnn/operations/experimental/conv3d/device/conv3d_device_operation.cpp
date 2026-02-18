@@ -34,16 +34,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return Conv3dProgramFactory{};
-}
-
-void Conv3dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
@@ -78,12 +68,6 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(args.groups == 1, "Groups must be 1. got {}", args.groups);
     // assert padding on T is zero
-    TT_FATAL(
-        args.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        args.padding[0],
-        args.padding[1],
-        args.padding[2]);
     TT_FATAL(
         args.padding_mode == "zeros" || args.padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
@@ -194,9 +178,8 @@ tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
-    auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }

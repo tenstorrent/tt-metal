@@ -66,7 +66,7 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     // If the input is interleaved and an entire row of tiles can't fit in a CB at once
     if (!tensor.is_sharded() && num_tiles_per_row > max_tiles_per_cb) {
         // If the output is also interleaved and the tensor is only a single tile high, we can
-        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
+        // parallelize the work column wise. Otherwise we have to resort to the single core implementation,
         // as the current default multi core implementation processes an entire row of tiles at once.
         if (!output_is_sharded && num_tiles_per_col == 1) {
             return 0;
@@ -79,11 +79,6 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-
-void UntilizeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
 
 void UntilizeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -149,15 +144,41 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
             input_shard_height);
     }
 
+    if (output_is_sharded) {
+        TT_FATAL(
+            operation_attributes.output_mem_config.shard_spec().has_value() ||
+                operation_attributes.output_mem_config.nd_shard_spec().has_value(),
+            "Output memory config is sharded but no shard spec or nd shard spec is provided");
+        uint32_t output_shard_width;
+
+        if (operation_attributes.output_mem_config.shard_spec().has_value()) {
+            std::array<uint32_t, 2> output_shard_shape =
+                operation_attributes.output_mem_config.shard_spec().value().shape;
+            output_shard_width = output_shard_shape[1];
+        } else {
+            output_shard_width = operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
+        }
+
+        // Use the effective output element size for alignment checks.
+        // Untilize converts BFLOAT8_B inputs to BFLOAT16 outputs, so the element size becomes 2 bytes.
+        uint32_t output_element_size_in_bytes = input_tensor_a.element_size();
+        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+            output_element_size_in_bytes = 2;
+        }
+        const uint32_t output_row_size_bytes = output_shard_width * output_element_size_in_bytes;
+        const uint32_t alignment_requirement = input_tensor_a.device()->allocator()->get_alignment(output_buffer_type);
+        TT_FATAL(
+            output_row_size_bytes % alignment_requirement == 0,
+            "Output shard row size {} bytes must be aligned to {} bytes buffer alignment requirement",
+            output_row_size_bytes,
+            alignment_requirement);
+    }
+
     // We don't support input or output uneven sharding for the single core implementation
     if (!operation_attributes.use_multicore) {
         // Check if output shard has width less than a tile width
         if (output_is_sharded) {
             uint32_t output_shard_width;
-            TT_FATAL(
-                operation_attributes.output_mem_config.shard_spec().has_value() ||
-                    operation_attributes.output_mem_config.nd_shard_spec().has_value(),
-                "Output memory config is sharded but no shard spec or nd shard spec is provided");
             if (operation_attributes.output_mem_config.shard_spec().has_value()) {
                 output_shard_width = operation_attributes.output_mem_config.shard_spec().value().shape[1];
             } else {
@@ -203,10 +224,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         if (output_is_sharded) {
             uint32_t output_shard_width;
             uint32_t output_shard_height;
-            TT_FATAL(
-                operation_attributes.output_mem_config.shard_spec().has_value() ||
-                    operation_attributes.output_mem_config.nd_shard_spec().has_value(),
-                "Output memory config is sharded but no shard spec or nd shard spec is provided");
             if (operation_attributes.output_mem_config.shard_spec().has_value()) {
                 std::array<uint32_t, 2> output_shard_shape =
                     operation_attributes.output_mem_config.shard_spec().value().shape;
@@ -229,53 +246,6 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     !output_is_uneven_sharded,
                     "Uneven ND sharding of output tensor is not supported for single core implementation");
-            }
-        }
-    }
-
-    // We always support uneven input sharding for the multicore implementation. Uneven output sharding is only
-    // supported if the input and output memory layouts are identical (i.e. height->height, width->width, block->block)
-    // and the input and output shard specs are identical. Otherwise uneven output sharding is not supported.
-    if (output_is_sharded) {
-        bool output_is_uneven_sharded = false;
-        uint32_t output_shard_width;
-        uint32_t output_shard_height;
-        TT_FATAL(
-            operation_attributes.output_mem_config.shard_spec().has_value() ||
-                operation_attributes.output_mem_config.nd_shard_spec().has_value(),
-            "Output memory config is sharded but no shard spec or nd shard spec is provided");
-        if (operation_attributes.output_mem_config.shard_spec().has_value()) {
-            std::array<uint32_t, 2> output_shard_shape =
-                operation_attributes.output_mem_config.shard_spec().value().shape;
-            output_shard_width = output_shard_shape[1];
-            output_shard_height = output_shard_shape[0];
-            output_is_uneven_sharded =
-                (tensor_width % output_shard_width != 0) || (tensor_height % output_shard_height != 0);
-        } else {
-            const auto& nd_spec = operation_attributes.output_mem_config.nd_shard_spec().value();
-            output_is_uneven_sharded =
-                operations::data_movement::is_uneven_nd_sharding(input_tensor_a.padded_shape(), nd_spec.shard_shape);
-        }
-
-        if (output_is_uneven_sharded) {
-            TT_FATAL(
-                input_memory_layout == output_memory_layout,
-                "Input and output memory layouts must be identical if output is uneven sharded");
-
-            if (input_tensor_a.shard_spec().has_value() &&
-                operation_attributes.output_mem_config.shard_spec().has_value()) {
-                TT_FATAL(
-                    input_tensor_a.shard_spec().value() == operation_attributes.output_mem_config.shard_spec().value(),
-                    "Input and output shard specs must be identical if output is uneven sharded");
-            } else if (
-                input_tensor_a.nd_shard_spec().has_value() &&
-                operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-                TT_FATAL(
-                    input_tensor_a.nd_shard_spec().value() ==
-                        operation_attributes.output_mem_config.nd_shard_spec().value(),
-                    "Input and output nd shard specs must be identical if output is uneven sharded");
-            } else {
-                TT_FATAL(false, "Input and output shard specs must be identical if output is uneven sharded");
             }
         }
     }

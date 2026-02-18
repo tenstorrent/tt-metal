@@ -199,6 +199,33 @@ void physical_system_descriptor_to_proto(
     proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
     proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
     proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
+
+    // Convert pcie_devices_per_tray map
+    for (const auto& [host_name, tray_map] : descriptor.get_pcie_devices_per_tray()) {
+        auto* proto_host_pcie_map = proto_desc->add_pcie_devices_per_tray();
+        proto_host_pcie_map->set_host_name(host_name);
+
+        for (const auto& [tray_id, pcie_device_set] : tray_map) {
+            auto* proto_pcie_per_tray = proto_host_pcie_map->add_pcie_devices_per_tray();
+            proto_pcie_per_tray->set_tray_id(tray_id);
+
+            for (const auto& pcie_device_id : pcie_device_set) {
+                proto_pcie_per_tray->add_pcie_device_ids(pcie_device_id);
+            }
+        }
+    }
+
+    // Convert pcie_id_to_asic_location map
+    for (const auto& [host_name, pcie_map] : descriptor.get_pcie_id_to_asic_location()) {
+        auto* proto_host_map = proto_desc->add_pcie_id_to_asic_location();
+        proto_host_map->set_host_name(host_name);
+
+        for (const auto& [pcie_id, asic_location] : pcie_map) {
+            auto* proto_entry = proto_host_map->add_pcie_id_to_asic_location();
+            proto_entry->set_pcie_id(pcie_id);
+            proto_entry->set_asic_location(*asic_location);
+        }
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -271,6 +298,33 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
     descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
     descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
+    // Convert pcie_devices_per_tray map
+    auto& pcie_devices_per_tray = descriptor->get_pcie_devices_per_tray();
+    for (const auto& proto_host_pcie_map : proto_desc.pcie_devices_per_tray()) {
+        const std::string& host_name = proto_host_pcie_map.host_name();
+        auto& tray_map = pcie_devices_per_tray[host_name];
+
+        for (const auto& proto_pcie_per_tray : proto_host_pcie_map.pcie_devices_per_tray()) {
+            uint32_t tray_id = proto_pcie_per_tray.tray_id();
+            auto& pcie_device_set = tray_map[tray_id];
+
+            for (const auto& pcie_device_id : proto_pcie_per_tray.pcie_device_ids()) {
+                pcie_device_set.insert(pcie_device_id);
+            }
+        }
+    }
+
+    // Convert pcie_id_to_asic_location map
+    auto& pcie_id_to_asic_location = descriptor->get_pcie_id_to_asic_location();
+    for (const auto& proto_host_map : proto_desc.pcie_id_to_asic_location()) {
+        const std::string& host_name = proto_host_map.host_name();
+        auto& pcie_map = pcie_id_to_asic_location[host_name];
+
+        for (const auto& proto_entry : proto_host_map.pcie_id_to_asic_location()) {
+            pcie_map[proto_entry.pcie_id()] = ASICLocation{proto_entry.asic_location()};
+        }
+    }
 
     return descriptor;
 }
