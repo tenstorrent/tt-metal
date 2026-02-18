@@ -76,7 +76,6 @@ extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
-extern uint32_t noc_posted_atomics_num_issued[NUM_NOCS];
 
 enum class NocBarrierType : uint8_t {
     READS_NUM_ISSUED,
@@ -621,7 +620,9 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_atomics_sen
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_posted_atomics_sent(uint32_t noc) {
-    return (NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT) == noc_posted_atomics_num_issued[noc]);
+    return (
+        NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_ATOMIC_SENT) ==
+        get_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc));
 }
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
@@ -751,7 +752,7 @@ inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
     noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
     noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
     noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
-    noc_posted_atomics_num_issued[noc] = posted_atomics_num_issued;
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc, posted_atomics_num_issued);
 }
 
 template <NocBarrierType barrier_type, uint32_t status_register>
@@ -812,7 +813,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
         noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
         noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
         noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
-        noc_posted_atomics_num_issued[noc] = posted_atomics_num_issued;
+        set_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc, posted_atomics_num_issued);
     }
 }
 
@@ -1025,7 +1026,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
-            noc_posted_atomics_num_issued[noc] += 1;
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_ATOMICS_NUM_ISSUED>(noc, 1);
         } else {
             noc_nonposted_atomics_acked[noc] += 1;
         }
