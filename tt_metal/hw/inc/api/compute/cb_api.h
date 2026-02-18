@@ -167,6 +167,8 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
+#else
+    return 0;
 #endif  // TODO: AM; add Quasar implementation
 }
 
@@ -204,6 +206,8 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
+#else
+    return 0;
 #endif  // TODO: AM; add Quasar implementation
 }
 
