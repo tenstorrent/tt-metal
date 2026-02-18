@@ -429,7 +429,11 @@ class MLP(AbstractModule):
         num_layers, _, seq_len, _ = x.shape
         original_seq_len = seq_len
 
-        # Note: all_gather is handled by the caller (decoder block or test)
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        # All gather for efficient matmuls
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         pad_rows = 0
@@ -469,7 +473,10 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(activated)
 
-        # Note: reduce_scatter is handled by the caller (decoder block or test)
+        # Reduce-scatter across devices to sum partial results
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -478,13 +485,16 @@ class MLP(AbstractModule):
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
 
-        # Note: memory config check removed since reduce_scatter is handled by caller
-
+        assert output.memory_config() == cfg["output_memory_config"]
         return output
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        # Note: all_gather is handled by the caller (decoder block or test)
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        # All gather
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -500,9 +510,14 @@ class MLP(AbstractModule):
         ttnn.deallocate(w3_out)
 
         # Down projection
-        output = ttnn.linear(activated, **cfg["w2"])
+        w2_out = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
 
-        # Note: reduce_scatter is handled by the caller (decoder block or test)
+        # Add reduce-scatter
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
+        ttnn.deallocate(w2_out)
 
+        assert output.memory_config() == cfg["output_memory_config"]
         return output

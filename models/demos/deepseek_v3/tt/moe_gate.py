@@ -290,7 +290,7 @@ class MoEGate(AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # Note: memory config assertion removed to allow flexibility with all_gather configs
+        assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
         if cfg["linear_fallback"]:
