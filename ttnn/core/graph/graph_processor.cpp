@@ -582,7 +582,9 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         params[kBufferType] = fmt::format("{}", buffer->buffer_type());
     }
 
-    // For multi-device tensors, capture per-device addresses
+    // For multi-device (mesh) tensors, a single logical tensor has separate physical buffers
+    // across multiple chips. Capture each device's buffer address so the visualizer can show
+    // the full mesh placement. Only populated when the tensor uses DeviceStorage with a mesh_buffer.
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (std::holds_alternative<DeviceStorage>(storage)) {
         const auto& device_storage = std::get<DeviceStorage>(storage);

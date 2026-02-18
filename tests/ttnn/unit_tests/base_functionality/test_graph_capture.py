@@ -560,7 +560,7 @@ def test_stack_traces_captured_when_enabled(device, mode):
     try:
         ttnn.graph.begin_graph_capture(mode)
         input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-        output_tensor = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
     finally:
         ttnn.graph.disable_stack_traces()
@@ -585,7 +585,7 @@ def test_stack_traces_not_captured_when_disabled(device, mode):
     ttnn.graph.disable_stack_traces()
 
     ttnn.graph.begin_graph_capture(mode)
-    input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     captured_graph = ttnn.graph.end_graph_capture()
 
     # No function_start node should have non-empty stack traces
@@ -599,7 +599,7 @@ def test_stack_traces_not_captured_when_disabled(device, mode):
 def test_full_tensor_info_captured(device, mode):
     """Test that full tensor info (dtype, layout, memory_config, etc.) is captured"""
     ttnn.graph.begin_graph_capture(mode)
-    input_tensor = ttnn.from_torch(
+    ttnn.from_torch(
         torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.TILE_LAYOUT,
@@ -638,7 +638,7 @@ def test_duration_captured(device, mode):
     """Test that durations are captured for function_end and capture_end nodes"""
     ttnn.graph.begin_graph_capture(mode)
     input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.relu(input_tensor)
+    ttnn.relu(input_tensor)
     captured_graph = ttnn.graph.end_graph_capture()
 
     # Check function_end nodes have duration
@@ -667,9 +667,7 @@ def test_get_current_report(device):
     """Test get_current_report API during active capture"""
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
 
-    input_tensor = ttnn.from_torch(
-        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
-    )
+    ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
 
     # Get report while capture is active
     report = ttnn.graph.get_current_report()

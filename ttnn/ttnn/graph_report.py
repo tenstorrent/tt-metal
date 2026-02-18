@@ -24,8 +24,7 @@ import json
 import math
 import sqlite3
 from pathlib import Path
-from typing import Union, Optional, List
-import glob
+from typing import Union
 
 SUPPORTED_REPORT_VERSION = 1
 
