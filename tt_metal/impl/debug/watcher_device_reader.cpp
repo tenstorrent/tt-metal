@@ -754,7 +754,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             virtual_coord_.str(),
             assert_status.tripped());
     }
-    error_msg += assert_msg + ".";
+    error_msg += assert_msg;
     error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);

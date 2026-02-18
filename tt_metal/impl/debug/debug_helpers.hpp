@@ -89,30 +89,30 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Returns the assert message portion for a given assert type (no trailing period).
+// Returns the assert message portion for a given assert type
 // For DebugAssertTripped, line_num is used in the message.
 inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
             return fmt::format(
                 "tripped an assert on line {}. Note that file name reporting is not yet "
-                "implemented, and the reported line number for the assert may be from a different file",
+                "implemented, and the reported line number for the assert may be from a different file.",
                 line_num);
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
-                   "transactions (missing NOC reads flushed barrier)";
+                   "transactions (missing NOC reads flushed barrier).";
         case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
-                   "transactions (missing NOC non-posted writes sent barrier)";
+                   "transactions (missing NOC non-posted writes sent barrier).";
         case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
-                   "transactions (missing NOC non-posted atomics flushed barrier)";
+                   "transactions (missing NOC non-posted atomics flushed barrier).";
         case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
-                   "transactions (missing NOC posted writes sent barrier)";
-        case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds";
-        case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds";
-        default: return "";  // Caller handles unknown types
+                   "transactions (missing NOC posted writes sent barrier).";
+        case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
+        case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
+        default: return "";  // Unknown type
     }
 }
 
