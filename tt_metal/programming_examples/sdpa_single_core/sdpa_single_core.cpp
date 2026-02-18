@@ -119,6 +119,20 @@ void sdpa_single_core(
         CircularBufferConfig(v_buffer_size, {{v_cb_index, cb_data_format}}).set_page_size(v_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_v_config);
 
+    // cb_qkt_row_A — ping buffer for raw matmul output of one QKT row
+    const uint32_t qkt_row_A_cb_index = CBIndex::c_4;
+    auto cb_qkt_row_A_config =
+        CircularBufferConfig(subblock_h * Sk_chunk_t * single_tile_size, {{qkt_row_A_cb_index, cb_data_format}})
+            .set_page_size(qkt_row_A_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_qkt_row_A_config);
+
+    // cb_qkt_row_B — pong buffer for raw matmul output of one QKT row
+    const uint32_t qkt_row_B_cb_index = CBIndex::c_6;
+    auto cb_qkt_row_B_config =
+        CircularBufferConfig(subblock_h * Sk_chunk_t * single_tile_size, {{qkt_row_B_cb_index, cb_data_format}})
+            .set_page_size(qkt_row_B_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_qkt_row_B_config);
+
     const uint32_t identity_scalar_cb_index = CBIndex::c_5;
     auto c_identity_scalar_config = CircularBufferConfig(single_tile_size, {{identity_scalar_cb_index, cb_data_format}})
                                         .set_page_size(tt::CBIndex::c_5, single_tile_size);
@@ -258,7 +272,7 @@ int main() {
         constexpr int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        constexpr uint32_t Sq_chunk_t = 8;
+        constexpr uint32_t Sq_chunk_t = 7;
         constexpr uint32_t Sk_chunk_t = 16;
         constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
