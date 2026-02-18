@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
+#include <ostream>
 #include <filesystem>
 #include <algorithm>
 #include <unordered_set>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <cctype>
 #include <functional>
+#include <optional>
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
 
@@ -445,16 +447,14 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
     // ===== Step 2: Build GroupingInfo objects with adjacency graphs and ASIC counts =====
 
     // Process mesh instances
+    // Use a unique key per instance (name + mesh_id) to handle multiple instances with same name
     for (GlobalNodeId mesh_id : mesh_graph_descriptor.all_meshes()) {
         const auto& mesh_instance = mesh_graph_descriptor.get_instance(mesh_id);
         const std::string& mesh_type = mesh_instance.type;
         const std::string& mesh_name = mesh_instance.name;
 
-        // Skip if already processed (same name/type)
-        if (mgd_grouping_infos.find(mesh_type) != mgd_grouping_infos.end() &&
-            mgd_grouping_infos[mesh_type].find(mesh_name) != mgd_grouping_infos[mesh_type].end()) {
-            continue;
-        }
+        // Create unique instance key: use mesh_id to distinguish instances with same name
+        std::string instance_key = fmt::format("{}_{}", mesh_name, mesh_id);
 
         // Build adjacency graph for this mesh instance
         AdjacencyGraph<uint32_t> adjacency_graph = build_mgd_mesh_instance_adjacency(mesh_graph_descriptor, mesh_id);
@@ -464,13 +464,13 @@ std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> b
 
         // Create GroupingInfo
         GroupingInfo grouping_info;
-        grouping_info.name = mesh_name;
+        grouping_info.name = mesh_name;  // Keep original name for matching
         grouping_info.type = mesh_type;
         grouping_info.asic_count = asic_count;
         grouping_info.adjacency_graph = std::move(adjacency_graph);
         // items left empty - not needed for matching
 
-        mgd_grouping_infos[mesh_type][mesh_name] = std::move(grouping_info);
+        mgd_grouping_infos[mesh_type][instance_key] = std::move(grouping_info);
     }
 
     // Process graph instances
@@ -1437,170 +1437,98 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
     }
 }
 
-std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>>
+std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>>
 PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescriptor& mesh_graph_descriptor) const {
-    std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> result;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<GroupingInfo>>> result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
-    // Build flattened adjacency graph for all mesh group infos
+    // ===== PHASE 1: Build flattened adjacency graph for all mesh group infos =====
     // Get all mesh group infos from current grouping files
-    std::unordered_map<std::string, AdjacencyGraph<uint32_t>> mesh_flat_adjacency_graphs;
-    std::unordered_map<std::string, GroupingInfo> mesh_grouping_lookup;  // Map from name to GroupingInfo
+    std::unordered_map<std::string, AdjacencyGraph<FlattenedMeshNodeInfo>> mesh_flat_adjacency_graphs;
+    std::unordered_map<std::string, GroupingInfo> mesh_grouping_lookup;  // Lookup map for GroupingInfo by name
     auto mesh_it = resolved_groupings_cache_.find("MESH");
     if (mesh_it != resolved_groupings_cache_.end()) {
         for (const auto& mesh_group_info : mesh_it->second) {
             auto mesh = build_flattened_adjacency_mesh(mesh_group_info);
-            std::map<uint32_t, std::vector<uint32_t>> adj_map;
-            for (const auto& node : mesh.get_nodes()) {
-                std::vector<uint32_t> neighbor_ids;
-                for (const auto& n : mesh.get_neighbors(node)) {
-                    neighbor_ids.push_back(n.unique_id);
-                }
-                adj_map[node.unique_id] = std::move(neighbor_ids);
-            }
-            mesh_flat_adjacency_graphs[mesh_group_info.name] = AdjacencyGraph<uint32_t>(adj_map);
+            // Use the FlattenedMeshNodeInfo adjacency graph directly
+            mesh_flat_adjacency_graphs[mesh_group_info.name] = mesh;
+            // Build lookup map for efficient GroupingInfo retrieval
             mesh_grouping_lookup[mesh_group_info.name] = mesh_group_info;
         }
     } else {
         TT_THROW("Internal error: MESH grouping not found in resolved_groupings_cache_");
     }
 
-    // Try to fit the best mesh grouping for each MGD mesh instance using topology solver
-    // Fit with the most number matched
-    for (const auto& mesh_group_info_pair : mgd_grouping_infos["MESH"]) {
-        const std::string& instance_name = mesh_group_info_pair.first;
-        const GroupingInfo& mgd_grouping_info = mesh_group_info_pair.second;
+    // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
+    // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
+    for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
+        const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
+        const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
+        const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
 
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
-        log_critical(
-            tt::LogFabric,
-            "Matching MGD mesh instance: {} (logical grouping: {}, ASIC count: {}, required adjacency nodes: {})",
-            instance_name,
-            mgd_grouping_info.name,
-            mgd_grouping_info.asic_count,
-            required_nodes);
-
-        log_critical(tt::LogFabric, "  DEBUG: Required nodes from MGD adjacency graph: {}", required_nodes);
-
-        // Print the logical (MGD) mesh adjacency graph
-        log_critical(tt::LogFabric, "=== Logical (MGD) Mesh Adjacency Graph: {} ===", instance_name);
-        mgd_grouping_info.adjacency_graph.print_adjacency_map(fmt::format("Logical_MGD_{}", instance_name));
-
-        // Track the best match (most nodes matched)
-        size_t best_match_count = 0;
-        std::string best_match_name;
-
-        for (const auto& mesh_flat_adjacency_graph : mesh_flat_adjacency_graphs) {
-            const std::string& physical_grouping_name = mesh_flat_adjacency_graph.first;
-            // mesh_flat_adjacency_graph.second is the flattened adjacency graph (ASIC-level)
-            const auto& physical_adjacency_graph = mesh_flat_adjacency_graph.second;
-            // Get flattened node count (ASIC-level nodes after flattening)
-            size_t physical_flattened_nodes = physical_adjacency_graph.get_nodes().size();
-
-            log_critical(
-                tt::LogFabric,
-                "  DEBUG: Physical grouping '{}' has {} flattened nodes (required: {})",
-                physical_grouping_name,
-                physical_flattened_nodes,
-                required_nodes);
-
-            // Filter: skip physical groupings that don't have enough flattened nodes
-            if (physical_flattened_nodes < required_nodes) {
-                log_critical(
-                    tt::LogFabric,
-                    "  Skipping physical grouping: {} (flattened nodes: {} < required: {})",
-                    physical_grouping_name,
-                    physical_flattened_nodes,
-                    required_nodes);
-                continue;
-            }
-
-            log_critical(
-                tt::LogFabric,
-                "  Trying physical grouping: {} (flattened nodes: {})",
-                physical_grouping_name,
-                physical_flattened_nodes);
-
-            // Print the physical grouping mesh adjacency graph
-            log_critical(tt::LogFabric, "=== Physical Grouping Mesh Adjacency Graph: {} ===", physical_grouping_name);
-            physical_adjacency_graph.print_adjacency_map(fmt::format("Physical_{}", physical_grouping_name));
-
-            auto mapping_result = solve_topology_mapping(
-                mesh_flat_adjacency_graph.second,   // global: physical grouping that contains the pattern
-                mgd_grouping_info.adjacency_graph,  // target: MGD mesh pattern to find
-                {},
-                ConnectionValidationMode::STRICT,
-                true);  // quiet_mode
-
-            size_t matched_nodes = mapping_result.target_to_global.size();
-            size_t target_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
-            size_t global_nodes = physical_flattened_nodes;  // Use flattened node count
-
-            log_critical(
-                tt::LogFabric,
-                "    Mapping result: success={}, matched_nodes={}/{}, target_nodes={}, global_nodes={}",
-                mapping_result.success,
-                matched_nodes,
-                target_nodes,
-                target_nodes,
-                global_nodes);
-
-            if (!mapping_result.error_message.empty()) {
-                log_critical(tt::LogFabric, "    Error message: {}", mapping_result.error_message);
-            }
-
-            if (!mapping_result.warnings.empty()) {
-                std::string warnings_str;
-                for (size_t i = 0; i < mapping_result.warnings.size(); ++i) {
-                    if (i > 0) {
-                        warnings_str += "; ";
-                    }
-                    warnings_str += mapping_result.warnings[i];
-                }
-                log_critical(tt::LogFabric, "    Warnings: {}", warnings_str);
-            }
-
-            // If successful and matches more nodes than previous best, update best match
-            if (mapping_result.success) {
-                if (matched_nodes > best_match_count) {
-                    log_critical(tt::LogFabric, "    -> New best match! (previous best: {} nodes)", best_match_count);
-                    best_match_count = matched_nodes;
-                    best_match_name = physical_grouping_name;
-                } else {
-                    log_critical(
-                        tt::LogFabric,
-                        "    -> Match found but not better than current best ({} nodes)",
-                        best_match_count);
-                }
-            } else {
-                log_critical(tt::LogFabric, "    -> Mapping failed");
+        // Group valid candidates by node difference (map is ordered by key ascending)
+        std::map<size_t, std::vector<std::string>> candidates_by_diff;
+        for (const auto& [name, graph] : mesh_flat_adjacency_graphs) {
+            size_t n = graph.get_nodes().size();
+            if (n >= required_nodes) {
+                candidates_by_diff[n - required_nodes].push_back(name);
             }
         }
 
-        // Store the best match if found
-        if (!best_match_name.empty()) {
-            auto lookup_it = mesh_grouping_lookup.find(best_match_name);
-            if (lookup_it != mesh_grouping_lookup.end()) {
-                log_critical(
-                    tt::LogFabric,
-                    "  Final match for {}: {} (matched {} nodes)",
-                    instance_name,
-                    best_match_name,
-                    best_match_count);
-                result["MESH"][instance_name] = lookup_it->second;
+        // Process difference levels from closest to farthest; stop at first level with any match
+        std::vector<std::string> best_matches;
+        for (const auto& [node_diff, names] : candidates_by_diff) {
+            (void)node_diff;
+            for (const std::string& name : names) {
+                const auto& graph = mesh_flat_adjacency_graphs.at(name);
+                auto mapping_result = solve_topology_mapping<uint32_t, FlattenedMeshNodeInfo>(
+                    mgd_grouping_info.adjacency_graph, graph, {}, ConnectionValidationMode::STRICT, true);
+                if (mapping_result.success) {
+                    best_matches.push_back(name);
+                }
             }
+            if (!best_matches.empty()) {
+                break;  // Found matches at this (best) level
+            }
+        }
+
+        // Store all best matches
+        if (best_matches.empty()) {
+            // No match found - generate a GroupingInfo
+            GroupingInfo generated_grouping =
+                generate_grouping_info_for_mgd_group(instance_name, instance_type, mgd_grouping_info);
+            result[instance_type][instance_name].push_back(generated_grouping);
         } else {
-            log_critical(tt::LogFabric, "  No match found for MGD mesh instance: {}", instance_name);
+            for (const std::string& match_name : best_matches) {
+                // Look up the GroupingInfo from lookup map
+                auto lookup_it = mesh_grouping_lookup.find(match_name);
+                if (lookup_it != mesh_grouping_lookup.end()) {
+                    result[instance_type][instance_name].push_back(lookup_it->second);
+                }
+            }
         }
     }
 
     return result;
+}
+
+// =============================================================================
+// generate_grouping_info_for_mgd_group – Generate GroupingInfo when no match is found
+// =============================================================================
+
+GroupingInfo PhysicalGroupingDescriptor::generate_grouping_info_for_mgd_group(
+    const std::string& instance_name, const std::string& instance_type, const GroupingInfo& mgd_grouping_info) const {
+    (void)instance_name;
+    (void)instance_type;
+    (void)mgd_grouping_info;
+    TT_FATAL(false, "generate_grouping_info_for_mgd_group is not implemented");
 }
 
 // =============================================================================
@@ -2017,12 +1945,6 @@ AdjacencyGraph<FlattenedMeshNodeInfo> PhysicalGroupingDescriptor::build_flattene
 // Validate current preformed mesh groups with the physical system descriptor
 // ================================
 
-std::ostream& operator<<(std::ostream& os, const PhysicalGroupingDescriptor::FlattenedMeshNodeInfo& info) {
-    os << "FlattenedMeshNodeInfo(unique_id=" << info.unique_id << ", tray=" << info.tray_id
-       << ", loc=" << info.asic_location << ")";
-    return os;
-}
-
 namespace {
 
 using tt::tt_metal::AsicID;
@@ -2258,6 +2180,29 @@ bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_
     }
 
     return errors.empty();
+}
+
+// Stream operator for FlattenedMeshNodeInfo (required by topology solver)
+std::ostream& operator<<(std::ostream& os, const PhysicalGroupingDescriptor::FlattenedMeshNodeInfo& node_info) {
+    os << "FlattenedMeshNodeInfo{unique_id=" << node_info.unique_id;
+    if (node_info.asic_location > 0) {
+        os << ", asic_location=" << node_info.asic_location;
+    }
+    if (node_info.tray_id > 0) {
+        os << ", tray_id=" << node_info.tray_id;
+    }
+    if (!node_info.grouping_path.empty()) {
+        os << ", path=[";
+        for (size_t i = 0; i < node_info.grouping_path.size(); ++i) {
+            if (i > 0) {
+                os << "->";
+            }
+            os << node_info.grouping_path[i];
+        }
+        os << "]";
+    }
+    os << "}";
+    return os;
 }
 
 }  // namespace tt::tt_fabric

@@ -170,8 +170,6 @@ public:
         bool operator<(const FlattenedMeshNodeInfo& other) const { return unique_id < other.unique_id; }
     };
 
-    friend std::ostream& operator<<(std::ostream& os, const FlattenedMeshNodeInfo& info);
-
     // Build flattened adjacency graph forming one uniform mesh
     // Returns graph with FlattenedMeshNodeInfo as node type
     AdjacencyGraph<FlattenedMeshNodeInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
