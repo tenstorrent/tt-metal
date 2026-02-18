@@ -295,7 +295,12 @@ def gen_torch_compute_matmul_weight_tensors(ring2cores, num_layers, experts_per_
 
 def gen_dispatch_reference():
     # TODO: (GR)
-    pass
+
+    # compute output generation needs expert_mapping (same for dispatch and compute), expert_indices (compute input / dispatch output), sparse_buffer (compute input / dispatch output), no expert_scores
+    torch_expert_mapping = ()
+    torch_dispatch_output_sparse_buffer = ()
+    torch_dispatch_output_expert_indices = ()
+    return (torch_expert_mapping, torch_dispatch_output_sparse_buffer, torch_dispatch_output_expert_indices)
 
 
 def gen_compute_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
@@ -327,14 +332,26 @@ def gen_compute_reference(devices, num_layers, experts, total_tokens, hidden_siz
     # pull device dim back out for comparison
     # (L, E, T, H) -> (L, D, E/D, T, H)
     # TODO: (GR) possibly remove this, output needs to be applied to combine
-    return torch_output_ref.reshape(num_layers, devices, experts // devices, total_tokens, hidden_size)
+    torch_output_ref = torch_output_ref.reshape(num_layers, devices, experts // devices, total_tokens, hidden_size)
+
+    torch_compute_output_token_counts = ()
+    torch_compute_output_dense_expert_activation = ()
+    torch_compute_output = ()
+    return (torch_compute_output_token_counts, torch_compute_output_dense_expert_activation, torch_compute_output)
 
 
-def gen_combine_reference():
+def gen_combine_reference(
+    torch_expert_mapping,  # TODO: (GR) is this the correct shape/tensor
+    torch_compute_output_token_counts,
+    torch_compute_output_dense_expert_activation,
+    torch_compute_output,
+):
     # TODO: (GR)
-    # - run this block on the matmul output
-    # - make sure the shapes match up
-    # - use golden metadata output from compute
+    # needs
+    # expert_mapping -> (TBD from where, and if any reshape needed)
+    # dense_input_contribs_tensor -> primary compute output -> some reshape in between
+    # dense_metadata_tensor -> expert_activation from compute -> some reshape in between
+    # active_token_counts,  -> token_counts from compute -> no reshape
 
     cluster_factor, cluster_size, devices = get_cluster_dims(cluster_axis, mesh_shape)
 
@@ -396,9 +413,36 @@ def gen_combine_reference():
 
 
 def gen_output_reference(devices, num_layers, experts, total_tokens, hidden_size, torch_w0, torch_w1, torch_w2):
-    torch_dispatch_output_reference_tensor = gen_dispatch_reference()
-    torch_compute_output_reference_tensor = gen_compute_reference()
-    torch_output_reference_tensor, output_reference_data_map = gen_combine_reference()
+    # dispatch
+    (
+        torch_expert_mapping,
+        torch_dispatch_output_sparse_buffer,
+        torch_dispatch_output_expert_indices,
+    ) = gen_dispatch_reference()
+
+    # compute
+    # don't need e_t tensor for combine reference generation
+    (
+        torch_compute_output_token_counts,
+        torch_compute_output_dense_expert_activation,
+        torch_compute_output,
+    ) = gen_compute_reference(
+        torch_expert_mapping,  # global, reference generated in dispatch reference generation
+        torch_dispatch_output_sparse_buffer,  # from dispatch
+        torch_dispatch_output_expert_indices,  # from dispatch
+        torch_w0,  # global
+        torch_w1,  # global
+        torch_w2,  # global
+    )
+
+    # combine
+    torch_output_reference_tensor, output_reference_data_map = gen_combine_reference(
+        torch_expert_mapping,  # TODO: (GR) is this the correct shape/tensor
+        torch_compute_output_token_counts,
+        torch_compute_output_dense_expert_activation,
+        torch_compute_output,
+    )
+
     return torch_output_reference_tensor, output_reference_data_map
 
 
