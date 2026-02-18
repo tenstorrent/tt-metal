@@ -106,7 +106,11 @@ def _open_dp_mesh_device(effective_dp: int, num_cq: int, *, l1_small_size: int =
             ttnn, "DispatchCoreType", None
         )
         dispatch_core_config = getattr(ttnn, "DispatchCoreConfig", None)
-        if dispatch_core_type is not None and dispatch_core_config is not None and hasattr(dispatch_core_type, "WORKER"):
+        if (
+            dispatch_core_type is not None
+            and dispatch_core_config is not None
+            and hasattr(dispatch_core_type, "WORKER")
+        ):
             # N300 mesh dispatch typically uses ETH; explicitly request it to avoid default probing.
             dispatch_type = dispatch_core_type.ETH if hasattr(dispatch_core_type, "ETH") else dispatch_core_type.WORKER
             common_kwargs["dispatch_core_config"] = dispatch_core_config(type=dispatch_type)
@@ -204,7 +208,9 @@ def time_pipeline_single(pipeline, images: list[str], warmup: int, repeat: int, 
             ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
         ]
 
-    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(pixel_values_list, tt_inputs_host_list, batch_size=batch_size)
+    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(
+        pixel_values_list, tt_inputs_host_list, batch_size=batch_size
+    )
 
     for _ in range(max(0, int(warmup))):
         if iter_tt_inputs is not None:
@@ -244,11 +250,11 @@ def time_pipeline_single(pipeline, images: list[str], warmup: int, repeat: int, 
     }
     if hasattr(pipeline, "config") and not bool(getattr(pipeline.config, "allow_cpu_fallback", True)):
         counts = stats["fallback_counts"]
-        if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
-            counts.get("reassembly_readout_fallback_count", 0)
-        ) != 0 or int(
-            counts.get("upsample_host_fallback_count", 0)
-        ) != 0:
+        if (
+            int(counts.get("vit_backbone_fallback_count", 0)) != 0
+            or int(counts.get("reassembly_readout_fallback_count", 0)) != 0
+            or int(counts.get("upsample_host_fallback_count", 0)) != 0
+        ):
             raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
     return stats
 
@@ -268,9 +274,13 @@ def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warm
         raise RuntimeError("DP timing requires trace/trace_2cq execution mode")
     import ttnn  # type: ignore
 
-    tt_inputs_host_list = [ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list]
+    tt_inputs_host_list = [
+        ttnn.from_torch(pv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for pv in pixel_values_list
+    ]
 
-    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(pixel_values_list, tt_inputs_host_list, batch_size=batch_size)
+    iter_pixel_values, iter_tt_inputs = _select_iteration_inputs(
+        pixel_values_list, tt_inputs_host_list, batch_size=batch_size
+    )
 
     timings_ms: list[float] = []
     last = None
@@ -281,7 +291,9 @@ def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warm
     dp_exec = SubmeshTraceDPExecutor(tt_pipelines=tt_pipelines, execution_mode=exec_mode)
     dp = len(tt_pipelines)
     per_chip_batch = int(batch_size) // int(dp)
-    dp_tt_inputs = _build_dp_tt_inputs_host(iter_pixel_values, dp=int(dp), per_chip_batch=int(per_chip_batch), ttnn=ttnn)
+    dp_tt_inputs = _build_dp_tt_inputs_host(
+        iter_pixel_values, dp=int(dp), per_chip_batch=int(per_chip_batch), ttnn=ttnn
+    )
     dp_exec.prepare(dp_tt_inputs)
 
     for _ in range(max(0, int(warmup))):
@@ -315,11 +327,11 @@ def time_pipeline_dp(*, mesh_device, tt_pipelines: list, images: list[str], warm
         ],
     }
     counts = stats["fallback_counts"]
-    if int(counts.get("vit_backbone_fallback_count", 0)) != 0 or int(
-        counts.get("reassembly_readout_fallback_count", 0)
-    ) != 0 or int(
-        counts.get("upsample_host_fallback_count", 0)
-    ) != 0:
+    if (
+        int(counts.get("vit_backbone_fallback_count", 0)) != 0
+        or int(counts.get("reassembly_readout_fallback_count", 0)) != 0
+        or int(counts.get("upsample_host_fallback_count", 0)) != 0
+    ):
         raise RuntimeError(f"Unexpected TT host fallbacks in perf run: {counts}")
     return stats
 
@@ -396,7 +408,9 @@ def main():
         tt_perf_neck=False,
     )
     cpu = DPTFallbackPipeline(config=cfg_cpu, pretrained=bool(args.pretrained), device="cpu")
-    cpu_stats = time_pipeline_single(cpu, images, warmup=args.warmup, repeat=args.repeat, batch_size=effective_batch_size)
+    cpu_stats = time_pipeline_single(
+        cpu, images, warmup=args.warmup, repeat=args.repeat, batch_size=effective_batch_size
+    )
 
     result: dict[str, Any] = {
         "num_images": len(images),

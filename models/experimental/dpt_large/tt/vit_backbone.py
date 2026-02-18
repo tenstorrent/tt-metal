@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from .tt_modules import build_attn_padding_key_mask_4d, build_attn_padding_mask_4d, pad_tokens_3d, unpad_tokens_3d
+from .tt_modules import build_attn_padding_key_mask_4d, build_attn_padding_mask_4d, unpad_tokens_3d
 from .config import DPTLargeConfig
 from .perf_counters import inc_vit_backbone_fallback
 
@@ -213,7 +213,9 @@ class DPTViTBackboneTTNN(torch.nn.Module):
                 pass
 
     # ------------------------------------------------------------------ backbone implementations
-    def _pos_embed_for_hw(self, h_patches: int, w_patches: int, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    def _pos_embed_for_hw(
+        self, h_patches: int, w_patches: int, dtype: torch.dtype, device: torch.device
+    ) -> torch.Tensor:
         """Resize checkpoint positional embeddings to the runtime patch grid."""
         cache_key = (int(h_patches), int(w_patches), dtype, str(device))
         cached = self._pos_embed_cache.get(cache_key)

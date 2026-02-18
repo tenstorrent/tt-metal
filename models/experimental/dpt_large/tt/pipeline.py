@@ -399,7 +399,10 @@ class DPTTTPipeline:
 
                     t2 = time.perf_counter()
                     depth = self._forward_fusion_head(pyramid, execution_mode=effective_exec_mode)
-                    if requested_exec_mode in {"trace", "trace_2cq"} and self._fusion_trace_unavailable_reason is not None:
+                    if (
+                        requested_exec_mode in {"trace", "trace_2cq"}
+                        and self._fusion_trace_unavailable_reason is not None
+                    ):
                         effective_exec_mode = "eager"
                     fusion_head_ms += (time.perf_counter() - t2) * 1000.0
                     # depth may be a TT tensor, torch tensor, or numpy array; ensure
