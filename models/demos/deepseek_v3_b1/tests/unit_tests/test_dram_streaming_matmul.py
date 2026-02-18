@@ -129,6 +129,9 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
         fused_activation: Optional activation to fuse (e.g., "silu", "gelu", "relu")
     """
 
+    # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
+    num_loop_iters = 100 if m == 1 else 1
+
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 
@@ -219,9 +222,37 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     else:
         subblock_k = k // tile_w // 2
 
+    Kt = k // tile_w
+    num_subblocks_k = Kt // subblock_k
+
+    # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
+    in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
+    in1_dtype = ttnn.bfloat4_b
+    num_in1_buffers = 3 * num_subblocks_k
+    in1_CB_tiles = subblock_k * num_in1_buffers
+    # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]
+    working_buf_shard_shape = (tile_w, in1_CB_tiles * tile_w)
+    working_buf_total_width = in1_CB_tiles * tile_w * num_cores
+    working_buf_shard_spec = ttnn.ShardSpec(compute_core_grid, working_buf_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    working_buf_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, working_buf_shard_spec
+    )
+    working_buf_torch = torch.zeros([1, 1, tile_w, working_buf_total_width]).bfloat16().float()
+    working_buf_t = ttnn.from_torch(
+        working_buf_torch,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=working_buf_mem_config,
+        tile=in1_tile,
+    )
+
     # Run DRAM streaming matmul
     activation_str = f" + {fused_activation}" if fused_activation else ""
-    logger.info(f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n_padded}, num_cores={num_cores}")
+    logger.info(
+        f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n_padded}, "
+        f"num_cores={num_cores}, num_loop_iters={num_loop_iters}"
+    )
     try:
         ttnn_result = DRAMStreamingMatmul.op(
             in0_t,
@@ -232,6 +263,8 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
             math_approx_mode=True,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
+            num_loop_iters=num_loop_iters,
+            working_buf_tensor=working_buf_t,
         )
     except Exception as e:
         logger.error(f"DRAM streaming matmul{activation_str} failed: {e}")

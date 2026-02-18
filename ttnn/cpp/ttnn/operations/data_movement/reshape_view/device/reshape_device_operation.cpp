@@ -28,11 +28,6 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
         "Can only work with bfloat16/float32 or int32/uint32 tensors");
 }
 
-void ReshapeViewDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return TensorSpec(

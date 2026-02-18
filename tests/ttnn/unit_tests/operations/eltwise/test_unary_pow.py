@@ -70,6 +70,10 @@ def test_pow_arange_masking(exponent, device):
     [
         (ttnn.UnaryOpType.POWER_ITERATIVE, 0),
         (ttnn.UnaryOpType.POWER_ITERATIVE, 2),
+        (ttnn.UnaryOpType.POWER_ITERATIVE, 3.65),
+        (ttnn.UnaryOpType.POWER_ITERATIVE, -4.2),
+        (ttnn.UnaryOpType.POWER_ITERATIVE, -3.0),
+        (ttnn.UnaryOpType.POWER_ITERATIVE, 3.0),
         (ttnn.UnaryOpType.POWER, 0),
         (ttnn.UnaryOpType.POWER, 2),
         (ttnn.UnaryOpType.POWER, 1.5),
@@ -77,6 +81,11 @@ def test_pow_arange_masking(exponent, device):
     ],
 )
 def test_power_as_activation(device, op_type, exponent):
+    if op_type == ttnn.UnaryOpType.POWER_ITERATIVE and (exponent != int(exponent) or exponent < 0):
+        pytest.xfail(
+            "POWER_ITERATIVE only supports positive integer exponents (Non-integer values are truncated causing output mismatch with expected)"
+        )
+
     x_torch = torch.rand([16, 16], dtype=torch.bfloat16) + 1.5
     z_torch = torch.pow(x_torch + x_torch, exponent)
 

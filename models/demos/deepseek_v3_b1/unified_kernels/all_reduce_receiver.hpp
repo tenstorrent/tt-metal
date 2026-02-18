@@ -50,7 +50,6 @@ struct AllReduceReceiver {
         uint32_t numStandardTiles,
         uint32_t cbResidual,
         uint32_t hasResidual,
-        uint32_t usingPersistentBuffer,
         uint32_t skipLocalPush = 0>  // Skip cb_reserve/push on cb_in2 when fused with gather
     struct ReaderCTArgs {
         static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
@@ -62,7 +61,6 @@ struct AllReduceReceiver {
         static constexpr uint32_t num_standard_tiles = numStandardTiles;
         static constexpr uint32_t cb_residual = cbResidual;
         static constexpr bool has_residual = hasResidual;
-        static constexpr bool using_persistent_buffer = usingPersistentBuffer;
         static constexpr bool skip_local_push = skipLocalPush;
     };
 
@@ -129,7 +127,6 @@ struct AllReduceReceiver {
             constexpr uint8_t sender_num_hops = 1;
 
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-            open_connections(fabric_connection, 1, fabric_arg_idx);
 
             cb_reserve_back(ReaderCT::packet_header_cb_id, 1);
             const uint32_t sem_header_addr = get_write_ptr(ReaderCT::packet_header_cb_id);
@@ -137,20 +134,6 @@ struct AllReduceReceiver {
 
             const uint64_t sender_sem_noc_addr =
                 get_noc_addr(ReaderCT::remote_sender_noc_x, ReaderCT::remote_sender_noc_y, args.sender_semaphore_addr);
-
-            // Signal sender that receiver is ready (if not using persistent buffer)
-            if constexpr (!ReaderCT::using_persistent_buffer) {
-                auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
-                fabric_set_unicast_route(fabric_connection, sem_header_ptr, 0);
-                sem_header_ptr->to_chip_unicast(sender_num_hops);
-
-                sem_header_ptr->to_noc_unicast_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
-
-                auto& connection = fabric_connection.get(0).sender;
-                connection.wait_for_empty_write_slot();
-                connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
-            }
 
             // Push local and residual tiles to compute immediately (they're ready)
             // Skip local push if data is already in CB (e.g., from preceding gather operation)
@@ -169,8 +152,6 @@ struct AllReduceReceiver {
             noc_semaphore_wait(local_semaphore_ptr, 1);
             noc_semaphore_set(local_semaphore_ptr, 0);
 
-            close_connections(fabric_connection);
-
             // Remote data is now ready, push to compute
             cb_reserve_back(ReaderCT::cb_in1, ReaderCT::num_standard_tiles);
             cb_push_back(ReaderCT::cb_in1, ReaderCT::num_standard_tiles);
@@ -184,7 +165,8 @@ struct AllReduceReceiver {
             // ================================================================
             // TRISC (Compute) - performs reduction: local + remote → output
             // ================================================================
-            binary_op_init_common(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::cb_out0);
+            reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
+            pack_reconfig_data_format<true>(ComputeCT::cb_out0);
             add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
 
             constexpr uint32_t max_dst_tiles = 4;

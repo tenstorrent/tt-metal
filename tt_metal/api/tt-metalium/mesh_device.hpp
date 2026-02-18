@@ -160,9 +160,13 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
+    [[deprecated("This is an internal function. It will be removed.")]]
     void init_command_queue_host() override;
+    [[deprecated("This is an internal function. It will be removed.")]]
     void init_command_queue_device() override;
+    [[deprecated("This is an internal function. It will be removed.")]]
     bool compile_fabric() override;
+    [[deprecated("This is an internal function. It will be removed.")]]
     void configure_fabric() override;
     bool close() override;
     void enable_program_cache() override;

@@ -219,13 +219,13 @@ static Tensor create_scalar_config_tensor(
     return Tensor(std::move(buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
-std::vector<uint16_t> generate_core_starting_indices(
+std::vector<uint32_t> generate_core_starting_indices(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
     const tt::tt_metal::TensorMemoryLayout shard_scheme,
     const uint32_t num_cores_x,
     const uint32_t ncores) {
-    std::vector<uint16_t> starting_indices;
+    std::vector<uint32_t> starting_indices;
     uint32_t repeat_factor = 0;
     switch (shard_scheme) {
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: repeat_factor = 1; break;
@@ -276,7 +276,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_w,
     bool ceil_mode,
     bool return_indices,
-    std::vector<uint16_t> core_starting_indices,
+    std::vector<uint32_t> core_starting_indices,
     bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
@@ -299,6 +299,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
+    const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
+    TT_FATAL(
+        max_in_nhw_per_core <= std::numeric_limits<uint16_t>::max(),
+        "Input nhw per core {} exceeds uint16_t limit, this will cause overflow because the reader indices are stored "
+        "as uint16_t",
+        max_in_nhw_per_core);
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -311,6 +317,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_c,
         pool_type,
         return_indices,
+        in_h,
+        in_w,
         output_layout);
     uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
@@ -442,16 +450,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t intra_kernel_right_inc_cb_id = 32;
     uint32_t intra_kernel_down_left_wrap_inc_cb_id = 32;
     uint32_t compute_tmp_idx_cb_id = 32;
-    uint16_t right_inc = 0;
-    uint16_t down_left_wrap_inc = 0;
-    uint16_t up_left_wrap_inc = 0;
-    uint16_t intra_kernel_right_inc = 0;
-    uint16_t intra_kernel_down_left_wrap_inc = 0;
+    uint32_t right_inc = 0;
+    uint32_t down_left_wrap_inc = 0;
+    uint32_t up_left_wrap_inc = 0;
+    uint32_t intra_kernel_right_inc = 0;
+    uint32_t intra_kernel_down_left_wrap_inc = 0;
+    bool indexes_32_bit = false;
     if (return_indices) {
+        indexes_32_bit = params.index_format == tt::DataFormat::UInt32;
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         in_idx_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(in_idx_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.nbytes * tile_elems, 1);
+        tt::tt_metal::create_cb(
+            in_idx_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.index_nbytes * tile_elems, 1);
         pack_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(pack_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_tmp_cb_id, params.nbytes * tile_elems, 1);
@@ -519,14 +530,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             // batches this means we process multiple top left positions within the kernel for a single top left
             // position in the tensor, so when we move the kernel to a new position in the tensor we need to subtract
             // the difference between the first top left index in the kernel and the last one
-            uint16_t sticks_per_chunk =
+            uint32_t sticks_per_chunk =
                 kernel_w <= params.max_rows_for_reduction ? kernel_w : params.max_rows_for_reduction;
-            uint16_t w_chunks =
+            uint32_t w_chunks =
                 kernel_w % sticks_per_chunk == 0 ? kernel_w / sticks_per_chunk : (kernel_w / sticks_per_chunk) + 1;
-            uint16_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
-            uint16_t first_top_left_kernel_index = 0;
-            uint16_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
-            uint16_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
+            uint32_t last_w_chunk_w_offset = (w_chunks - 1) * sticks_per_chunk * dilation_w;
+            uint32_t first_top_left_kernel_index = 0;
+            uint32_t last_top_left_kernel_index = ((kernel_h - 1) * dilation_h * in_w) + last_w_chunk_w_offset;
+            uint32_t index_correction = last_top_left_kernel_index - first_top_left_kernel_index;
             right_inc -= index_correction;
             down_left_wrap_inc -= index_correction;
             up_left_wrap_inc -= index_correction;
@@ -721,11 +732,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         intra_kernel_down_left_wrap_inc,                                                     // 47
         intra_kernel_right_inc_cb_id,                                                        // 48
         intra_kernel_down_left_wrap_inc_cb_id,                                               // 49
-        config_tensor_in_dram,                                                               // 50
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 51
-        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 52
-        reader_indices_storage.get_buffer()->address(),                                      // 53
-        reader_indices_storage.get_buffer()->page_size(),                                    // 54
+        (uint32_t)indexes_32_bit,                                                            // 50
+        config_tensor_in_dram,                                                               // 51
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->address(),    // 52
+        one_scalar_per_core ? 0 : config_tensor.device_storage().get_buffer()->page_size(),  // 53
+        reader_indices_storage.get_buffer()->address(),                                      // 54
+        reader_indices_storage.get_buffer()->page_size(),                                    // 55
     };
 
     tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
@@ -795,7 +807,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         compute_tmp_idx_cb_id,                  // 33
         kernel_h,                               // 34
         kernel_w,                               // 35
-        clear_value_cb_id                       // 36
+        clear_value_cb_id,                      // 36
+        (uint32_t)indexes_32_bit                // 37
     };
 
     // Get device arch for compute kernel config initialization
@@ -806,10 +819,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         device_arch,
         compute_kernel_config,
         MathFidelity::HiFi4,
-        false,                                         // math_approx_mode
-        params.is_avg_pool && params.is_large_kernel,  // fp32_dest_acc_en
-        false,                                         // packer_l1_acc
-        params.is_large_kernel && return_indices       // dst_full_sync_en
+        false,                                                             // math_approx_mode
+        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
+        false,                                                             // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
     );
 
     auto compute_config = tt::tt_metal::ComputeConfig{
@@ -857,10 +870,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
 
-            args.push_back((uint32_t)(start_row));
-            args.push_back((uint32_t)(start_col));
+            args.push_back(start_row);
+            args.push_back(start_col);
         }
         SetRuntimeArgs(program, reader0_kernel, core, args);
+        if (params.split_reader) {
+            SetRuntimeArgs(program, reader1_kernel, core, args);
+        }
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
@@ -870,6 +886,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(
         input.dtype(),
+        in_h,
+        in_w,
         in_c,
         pad_h,
         pad_w,
@@ -1026,7 +1044,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
-    std::vector<uint16_t> core_starting_indices;
+    std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
         const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
         const uint32_t ncores = input.shard_spec().value().grid.num_cores();

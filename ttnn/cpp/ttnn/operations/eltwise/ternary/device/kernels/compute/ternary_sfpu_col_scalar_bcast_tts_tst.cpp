@@ -6,6 +6,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/lerp.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"

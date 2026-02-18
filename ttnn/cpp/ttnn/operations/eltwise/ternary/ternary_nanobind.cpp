@@ -200,6 +200,7 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
         Note:
@@ -216,6 +217,8 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             end, weight tensors should have same dtype as input
+
+            output_tensor dtype must match input dtype, or be FLOAT32 when inputs are BFLOAT16, or be BFLOAT16 when inputs are FLOAT32
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -230,24 +233,32 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
                const Tensor& input,
                const Tensor& end,
                const Tensor& weight,
-               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, end, weight, memory_config, output_tensor);
+            },
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& input,
                const Tensor& end,
                float weight,
-               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input, end, weight, memory_config, output_tensor);
+            },
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 }
 
 template <typename ternary_operation_t>
