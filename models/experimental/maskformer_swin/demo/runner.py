@@ -44,10 +44,15 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_ENABLE_SDPA": "0",
         "MASKFORMER_TT_ENABLE_FUSED_QKV": "0",
         "MASKFORMER_TT_ENABLE_L1_SEQ": "0",
-        "MASKFORMER_TT_DISABLE_CORE_GRID": "1",
+        "MASKFORMER_TT_DISABLE_CORE_GRID": "0",
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "1",
-        "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "1",
-        "MASKFORMER_TT_RETURN_TT_DECODER": "0",
+        # Keep host-side precompute (positional/query embeddings) amortized/cached.
+        "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
+        # Keep the model end-to-end on device (avoid TT->torch->TT detours between decoder and heads).
+        "MASKFORMER_TT_RETURN_TT_DECODER": "1",
+        # Pixel decoder: use native group norm + cache prepared conv2d weights for practical bring-up runtimes.
+        "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
+        "MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS": "1",
     },
     "stage2": {
         "MASKFORMER_TT_FUSE_LINEAR_ACT": "1",
@@ -58,7 +63,9 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_DISABLE_CORE_GRID": "0",
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "0",
         "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
-        "MASKFORMER_TT_RETURN_TT_DECODER": "0",
+        "MASKFORMER_TT_RETURN_TT_DECODER": "1",
+        "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
+        "MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS": "1",
     },
     "stage3": {
         "MASKFORMER_TT_FUSE_LINEAR_ACT": "1",
@@ -70,6 +77,8 @@ _OPT_STAGE_ENV = {
         "MASKFORMER_TT_DISABLE_MATMUL_PC": "0",
         "MASKFORMER_TT_DISABLE_DECODER_TT_CACHE": "0",
         "MASKFORMER_TT_RETURN_TT_DECODER": "1",
+        "MASKFORMER_TT_USE_NATIVE_GROUP_NORM": "1",
+        "MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS": "1",
     },
 }
 
@@ -152,6 +161,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             device = tt.open_device(**open_kwargs)
         except TypeError:
             device = tt.open_device(device_id=0)
+        _maybe_disable_program_cache(device)
         runner = _build_runner(ref_weights.config, tt_state_dict, device=device)
 
         outputs, perf = _timed_inference(
@@ -221,6 +231,26 @@ def main(argv: Optional[list[str]] = None) -> None:
                 pass
 
 
+def _maybe_disable_program_cache(device: object) -> None:
+    """Disable tt-metal program cache by default (N300 stability workaround).
+
+    Several tt-metal builds have exhibited hangs on repeated inference when the device
+    program cache is enabled. This model runs multiple forwards per invocation
+    (warmup + timed repeats), so disable the cache unless explicitly overridden.
+    """
+
+    disable = os.environ.get("MASKFORMER_TT_DISABLE_PROGRAM_CACHE", "1").strip() != "0"
+    if not disable:
+        return
+    if hasattr(device, "disable_and_clear_program_cache"):
+        device.disable_and_clear_program_cache()
+        print("[maskformer] Program cache disabled (MASKFORMER_TT_DISABLE_PROGRAM_CACHE=1)", flush=True)
+        return
+    if hasattr(device, "clear_program_cache"):
+        device.clear_program_cache()
+        print("[maskformer] Program cache cleared (disable_and_clear_program_cache unavailable)", flush=True)
+
+
 def _set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
@@ -283,11 +313,32 @@ class _MaskFormerRunner:
         self.decoder_return_tt = decoder_return_tt
 
     def forward(self, pixel_values: torch.Tensor, *, device: object) -> InferenceOutputs:
-        _ = device
+        debug = os.environ.get("MASKFORMER_TT_DEBUG_RUNNER", "0").strip() == "1"
+        sync_per_module = os.environ.get("MASKFORMER_TT_SYNC_PER_MODULE", "0").strip() == "1"
+        tt = require_ttnn("sync MaskFormer per-module") if sync_per_module else None
+        start_ts = time.perf_counter()
+        if debug:
+            print("[maskformer][runner] forward begin")
         features, _ = self.backbone.forward(pixel_values)
+        if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
+            tt.synchronize_device(device)
+        if debug:
+            print(f"[maskformer][runner] backbone done t={time.perf_counter() - start_ts:.2f}s")
         mask_features, _ = self.pixel_decoder.forward(features)
+        if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
+            tt.synchronize_device(device)
+        if debug:
+            print(f"[maskformer][runner] pixel_decoder done t={time.perf_counter() - start_ts:.2f}s")
         decoder_last, _, _ = self.transformer_decoder.forward_tt(features[-1], return_tt_tensor=self.decoder_return_tt)
+        if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
+            tt.synchronize_device(device)
+        if debug:
+            print(f"[maskformer][runner] transformer_decoder done t={time.perf_counter() - start_ts:.2f}s")
         class_logits, mask_logits = self.heads.forward(decoder_last, mask_features)
+        if sync_per_module and tt is not None and hasattr(tt, "synchronize_device"):
+            tt.synchronize_device(device)
+        if debug:
+            print(f"[maskformer][runner] heads done t={time.perf_counter() - start_ts:.2f}s")
         return InferenceOutputs(class_logits=class_logits, mask_logits=mask_logits)
 
 
@@ -618,6 +669,7 @@ def _run_coco_eval(
         gt_payload = json.load(fh)
     ann_by_image_id = {ann["image_id"]: ann for ann in gt_payload.get("annotations", [])}
     file_to_image_id = {img["file_name"]: img["id"] for img in gt_payload.get("images", [])}
+    image_by_id = {img["id"]: img for img in gt_payload.get("images", [])}
     pan_gt_by_file = {
         fn: ann_by_image_id[file_to_image_id[fn]] for fn in file_to_image_id if file_to_image_id[fn] in ann_by_image_id
     }
@@ -627,6 +679,8 @@ def _run_coco_eval(
     unions: Dict[int, int] = {}
     inference_latencies_ms = []
     num_with_gt = 0
+    subset_image_ids: set[int] = set()
+    subset_gt_annotations = []
 
     pred_dir = None
     pred_json = None
@@ -654,6 +708,8 @@ def _run_coco_eval(
         if gt_entry is None:
             continue
         num_with_gt += 1
+        subset_image_ids.add(int(gt_entry["image_id"]))
+        subset_gt_annotations.append(gt_entry)
 
         if have_panoptic and rgb2id is not None:
             gt_png = panoptic_root / gt_entry["file_name"]
@@ -702,9 +758,18 @@ def _run_coco_eval(
         try:
             from panopticapi.evaluation import pq_compute  # type: ignore
 
+            # panopticapi pq_compute expects predictions for every annotation present in the GT json.
+            # For subset evaluation, write a filtered GT json containing only the evaluated images.
+            gt_subset_json = pred_json.with_name("panoptic_gt_subset.json")
+            gt_subset = {
+                "images": [image_by_id[i] for i in sorted(subset_image_ids) if i in image_by_id],
+                "annotations": subset_gt_annotations,
+                "categories": gt_payload.get("categories", []),
+            }
+            gt_subset_json.write_text(json.dumps(gt_subset, indent=2))
             pred_json.write_text(json.dumps({"annotations": pred_annotations}, indent=2))
             pq_res = pq_compute(
-                gt_json_file=str(panoptic_json),
+                gt_json_file=str(gt_subset_json),
                 gt_folder=str(panoptic_root),
                 pred_json_file=str(pred_json),
                 pred_folder=str(pred_dir),

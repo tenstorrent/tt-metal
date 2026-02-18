@@ -6,7 +6,25 @@ import pytest
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_maskformer_swin_b_pcc(device, reset_seeds):
+def test_maskformer_swin_b_pcc(device, reset_seeds, monkeypatch):
+    # Workaround for hangs seen on repeated inference with program cache enabled.
+    if hasattr(device, "disable_and_clear_program_cache"):
+        device.disable_and_clear_program_cache()
+
+    # Keep the test deterministic and ensure it exercises the end-to-end TTNN path
+    # (no TT->torch->TT detours between decoder and heads).
+    monkeypatch.setenv("MASKFORMER_TT_FUSE_LINEAR_ACT", "1")
+    monkeypatch.setenv("MASKFORMER_TT_USE_LINEAR", "1")
+    monkeypatch.setenv("MASKFORMER_TT_ENABLE_SDPA", "0")
+    monkeypatch.setenv("MASKFORMER_TT_ENABLE_FUSED_QKV", "0")
+    monkeypatch.setenv("MASKFORMER_TT_ENABLE_L1_SEQ", "1")
+    monkeypatch.setenv("MASKFORMER_TT_DISABLE_CORE_GRID", "0")
+    monkeypatch.setenv("MASKFORMER_TT_DISABLE_MATMUL_PC", "0")
+    monkeypatch.setenv("MASKFORMER_TT_DISABLE_DECODER_TT_CACHE", "0")
+    monkeypatch.setenv("MASKFORMER_TT_RETURN_TT_DECODER", "1")
+    monkeypatch.setenv("MASKFORMER_TT_USE_NATIVE_GROUP_NORM", "1")
+    monkeypatch.setenv("MASKFORMER_TT_CACHE_PIXEL_DECODER_CONV2D_WEIGHTS", "1")
+
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
 
@@ -79,7 +97,7 @@ def test_maskformer_swin_b_pcc(device, reset_seeds):
 
     features, _ = backbone.forward(pixel_values)
     mask_features, _ = pixel_decoder.forward(features)
-    decoder_last, _, _ = transformer_decoder.forward_tt(features[-1])
+    decoder_last, _, _ = transformer_decoder.forward_tt(features[-1], return_tt_tensor=True)
     class_logits, mask_logits = heads.forward(decoder_last, mask_features)
 
     if hasattr(ttnn, "synchronize_device"):
