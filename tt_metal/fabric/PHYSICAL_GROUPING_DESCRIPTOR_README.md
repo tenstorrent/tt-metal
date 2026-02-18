@@ -550,16 +550,20 @@ PhysicalGroupingDescriptor pgd("path/to/physical_groupings.textproto");
 // Load MGD
 MeshGraphDescriptor mgd("path/to/mesh_graph_descriptor.textproto");
 
-// Get valid groupings for MGD instances
+// Get valid groupings for MGD instances (returns nested map: type -> name -> vector of GroupingInfo)
 auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd);
 
-// Access matched groupings
+// Access matched groupings organized by instance type and name
+// There can be multiple valid groupings for each MGD instance
 for (const auto& [instance_type, instances] : valid_groupings) {
-    for (const auto& [instance_name, grouping] : instances) {
+    for (const auto& [instance_name, groupings] : instances) {
         std::cout << "Instance " << instance_name
                   << " (type: " << instance_type << ")"
-                  << " matches grouping: " << grouping.name
-                  << " with " << grouping.asic_count << " ASICs\n";
+                  << " has " << groupings.size() << " valid grouping(s):\n";
+        for (const auto& grouping : groupings) {
+            std::cout << "  - " << grouping.name
+                      << " with " << grouping.asic_count << " ASICs\n";
+        }
     }
 }
 ```
