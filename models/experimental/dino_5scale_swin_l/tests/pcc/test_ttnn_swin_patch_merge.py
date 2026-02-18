@@ -12,7 +12,9 @@ import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.dino_5scale_swin_l.common import (
-    DINO_INPUT_H, DINO_INPUT_W, SWIN_L_EMBED_DIM, SWIN_L_NUM_HEADS, SWIN_L_WINDOW_SIZE,
+    DINO_INPUT_H,
+    DINO_INPUT_W,
+    SWIN_L_EMBED_DIM,
 )
 from loguru import logger
 
@@ -42,11 +44,16 @@ def test_ttnn_swin_patch_merge_pcc(device, swin_l_ref, swin_l_ckpt_path, stage_i
 
     # TTNN
     params = load_backbone_weights(swin_l_ckpt_path, device)
-    dim = SWIN_L_EMBED_DIM * (2 ** stage_idx)
+    dim = SWIN_L_EMBED_DIM * (2**stage_idx)
     ttnn_ds = TtSwinPatchMerge(device, params["stages"][stage_idx]["downsample"], dim=dim)
 
-    ttnn_x = ttnn.from_torch(pre_ds_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device,
-                              memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_x = ttnn.from_torch(
+        pre_ds_nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     ttnn_out = ttnn_ds(ttnn_x)
 
     result = ttnn.to_torch(ttnn.from_device(ttnn_out))

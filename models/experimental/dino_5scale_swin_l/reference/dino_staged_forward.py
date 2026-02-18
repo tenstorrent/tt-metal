@@ -11,7 +11,7 @@ Config and checkpoint paths are passed at init; checkpoint can be from
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 
@@ -20,11 +20,10 @@ def _import_mmdet():
     try:
         from mmdet.apis import init_detector
         from mmengine.config import Config
+
         return init_detector, Config
     except ImportError as e:
-        raise ImportError(
-            "DINO reference needs mmdet. Install with: pip install openmim && mim install mmdet"
-        ) from e
+        raise ImportError("DINO reference needs mmdet. Install with: pip install openmim && mim install mmdet") from e
 
 
 class DINOStagedForward:
@@ -112,16 +111,17 @@ class DINOStagedForward:
         from mmdet.structures import DetDataSample
 
         data_sample = DetDataSample()
-        data_sample.set_metainfo(dict(
-            batch_input_shape=batch_input_shape,
-            img_shape=img_shape,
-        ))
+        data_sample.set_metainfo(
+            dict(
+                batch_input_shape=batch_input_shape,
+                img_shape=img_shape,
+            )
+        )
         batch_data_samples = [data_sample]
 
         with torch.no_grad():
             det = self.model
-            encoder_inputs_dict, decoder_inputs_dict = det.pre_transformer(
-                img_feats, batch_data_samples)
+            encoder_inputs_dict, decoder_inputs_dict = det.pre_transformer(img_feats, batch_data_samples)
 
             encoder_outputs_dict = det.forward_encoder(**encoder_inputs_dict)
 
@@ -153,20 +153,22 @@ class DINOStagedForward:
         from mmdet.structures import DetDataSample
 
         data_sample = DetDataSample()
-        data_sample.set_metainfo(dict(
-            batch_input_shape=batch_input_shape,
-            img_shape=img_shape,
-        ))
+        data_sample.set_metainfo(
+            dict(
+                batch_input_shape=batch_input_shape,
+                img_shape=img_shape,
+            )
+        )
         batch_data_samples = [data_sample]
 
         with torch.no_grad():
             det = self.model
-            encoder_inputs_dict, decoder_inputs_dict = det.pre_transformer(
-                img_feats, batch_data_samples)
+            encoder_inputs_dict, decoder_inputs_dict = det.pre_transformer(img_feats, batch_data_samples)
             encoder_outputs_dict = det.forward_encoder(**encoder_inputs_dict)
 
             tmp_dec_in, head_inputs_dict = det.pre_decoder(
-                **encoder_outputs_dict, batch_data_samples=batch_data_samples)
+                **encoder_outputs_dict, batch_data_samples=batch_data_samples
+            )
             decoder_inputs_dict.update(tmp_dec_in)
 
             decoder_outputs_dict = det.forward_decoder(**decoder_inputs_dict)
@@ -189,6 +191,7 @@ class DINOStagedForward:
         """
         with torch.no_grad():
             from mmdet.apis import inference_detector
+
             result = inference_detector(self.model, x)
         return {
             "pred_instances": result.pred_instances,
