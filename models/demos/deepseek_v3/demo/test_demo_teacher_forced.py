@@ -46,6 +46,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     Phase 1 (offline, in generate_teacher_forced_file.py):
       - Run HuggingFace model to generate tokens and save as reference.
       - Saves: reference_tokens, prompt_tokens, generated_tokens, top5_tokens, tf_prompt_len
+      - Optionally saves generated_logits for per-step full-logit PCC comparison.
 
     Phase 2 (this test):
       - Run TT model with teacher forcing using the reference tokens.
@@ -82,6 +83,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     prompt_tokens = payload["prompt_tokens"]  # [1, prompt_len]
     generated_tokens = payload["generated_tokens"]  # [1, gen_len]
     top5_tokens = payload["top5_tokens"]  # [L, 5] HF model's predictions
+    generated_logits = payload.get("generated_logits", None)  # Optional [gen_len, vocab]
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
@@ -123,12 +125,22 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     assert (
         prompt_len + gen_len == total_ref_tokens
     ), f"prompt ({prompt_len}) + generated ({gen_len}) != total ({total_ref_tokens})"
+    has_generated_logits = isinstance(generated_logits, torch.Tensor)
+    if has_generated_logits:
+        assert (
+            generated_logits.dim() == 2
+        ), f"Expected generated_logits to be 2D [gen_len, vocab], got shape {generated_logits.shape}"
+        assert (
+            generated_logits.shape[0] == gen_len
+        ), f"generated_logits first dimension {generated_logits.shape[0]} != generated token length {gen_len}"
 
     logger.info("Reference file structure:")
     logger.info("  prompt_tokens: {} tokens", prompt_len)
     logger.info("  generated_tokens: {} tokens", gen_len)
     logger.info("  reference_tokens: {} tokens (prompt + generated)", total_ref_tokens)
     logger.info("  top5_tokens: {} (HF model predictions)", tuple(top5_tokens.shape))
+    if has_generated_logits:
+        logger.info("  generated_logits: {} (HF full logits per generated step)", tuple(generated_logits.shape))
 
     # Ensure the requested length is available in the reference payload.
     available_gen_tokens = generated_tokens[0].shape[-1]
@@ -185,6 +197,9 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     # check accuracy is present
     assert "accuracy_top1" in first_gen, "Top-1 accuracy should be present in results"
     assert "accuracy_top5" in first_gen, "Top-5 accuracy should be present in results"
+    if has_generated_logits:
+        assert "accuracy_logit_pcc" in first_gen, "Logit PCC should be present in results when generated_logits exist"
+        assert "logit_pcc_per_step" in first_gen, "Per-step logit PCC should be present when generated_logits exist"
 
     # Verify tokens were generated
     assert "tokens" in first_gen
@@ -227,9 +242,14 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
     tt_preds = first_gen["predicted_tokens"]
     total_compared = min(len(tt_preds), gen_len, max_new_tokens)
     assert total_compared > 0, "No tokens to compare"
+    logit_pcc_per_step = first_gen.get("logit_pcc_per_step", [])
+    if has_generated_logits:
+        assert (
+            len(logit_pcc_per_step) >= total_compared
+        ), f"logit_pcc_per_step has {len(logit_pcc_per_step)} entries, expected at least {total_compared}"
 
-    logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
-    logger.info("-" * 113)
+    logger.info(f"{'Progress':<15}{'Correct':<8}{'PCC':<10}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
+    logger.info("-" * 123)
 
     top1_correct = []
     top5_correct = []
@@ -273,10 +293,13 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         tt_text = sanitize(tokenizer.decode([tt_pred], skip_special_tokens=False))
         ref_top5_text = [tokenizer.decode([t], skip_special_tokens=False) for t in hf_top5]
         ref_top5_str = " ".join(f"{sanitize(t):<14}" for t in ref_top5_text)
+        pcc_str = "n/a"
+        if has_generated_logits and i < len(logit_pcc_per_step):
+            pcc_str = f"{float(logit_pcc_per_step[i]):.4f}"
 
         progress_str = f"{i+1}/{total_compared}"
         correct = "x" if top1_match else ("-" if top5_match else ("!" if true_match else " "))
-        logger.info(f"{progress_str:<15}{correct:<8}{true_text:<15}{tt_text:<15}{ref_top5_str}")
+        logger.info(f"{progress_str:<15}{correct:<8}{pcc_str:<10}{true_text:<15}{tt_text:<15}{ref_top5_str}")
 
     # Compute accuracies over every 100 tokens
     num_tokens = len(top1_correct)
@@ -286,17 +309,28 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
         end = min(start + 100, num_tokens)
         seg_top1 = 100 * sum(top1_correct[start:end]) / (end - start)
         seg_top5 = 100 * sum(top5_correct[start:end]) / (end - start)
+        seg_pcc_str = ""
+        if has_generated_logits:
+            seg_pcc = sum(float(v) for v in logit_pcc_per_step[start:end]) / (end - start)
+            seg_pcc_str = f", Logit PCC: {seg_pcc:.4f}"
         max_width = len(str(total_compared))
         logger.info(
-            f"Tokens {start:{max_width}d}-{end:{max_width}d}: Top-1 accuracy: {seg_top1:3.0f} %, Top-5 accuracy: {seg_top5:3.0f} %"
+            f"Tokens {start:{max_width}d}-{end:{max_width}d}: Top-1 accuracy: {seg_top1:3.0f} %, Top-5 accuracy: {seg_top5:3.0f} %{seg_pcc_str}"
         )
 
     # Report total accuracies
     total_top1 = sum(top1_correct) / num_tokens
     total_top5 = sum(top5_correct) / num_tokens
+    total_pcc = None
+    min_pcc = None
+    if has_generated_logits:
+        total_pcc = sum(float(v) for v in logit_pcc_per_step[:num_tokens]) / num_tokens
+        min_pcc = min(float(v) for v in logit_pcc_per_step[:num_tokens])
     logger.info(
         f"Total tokens {num_tokens}: Top-1 accuracy: {100 * total_top1:3.1f} %, Top-5 accuracy: {100 * total_top5:3.1f} %"
     )
+    if has_generated_logits:
+        logger.info(f"Total tokens {num_tokens}: Logit PCC mean: {total_pcc:.6f}, min: {min_pcc:.6f}")
 
     # Only show error summary when HF top-1 matches the true token (more actionable)
     logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
@@ -324,8 +358,17 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path, max_new_tokens: int
                 first_gen["accuracy_top5"],
                 total_top5,
             )
+    if has_generated_logits and isinstance(first_gen.get("accuracy_logit_pcc"), (int, float)):
+        if abs(first_gen["accuracy_logit_pcc"] - total_pcc) > 1e-4:
+            logger.warning(
+                "TokenAccuracy logit PCC {:.6f} != computed {:.6f}",
+                first_gen["accuracy_logit_pcc"],
+                total_pcc,
+            )
 
     logger.info(f"Top-1: {100 * total_top1:.0f}% | Top-5: {100 * total_top5:.0f}%")
+    if has_generated_logits:
+        logger.info(f"Logit PCC: mean={total_pcc:.6f} | min={min_pcc:.6f}")
 
     min_expected_top1 = 0.90
     min_expected_top5 = 0.99

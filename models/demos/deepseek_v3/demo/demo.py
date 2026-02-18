@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.deepseek_v3.tt.generator import SamplingParams as GeneratorSamplingParams
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -71,6 +72,27 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
     p.add_argument("--cache-dir", type=str, required=True)
+    p.add_argument(
+        "--sampling",
+        action="store_true",
+        default=False,
+        help="Enable stochastic sampling. By default decode is greedy argmax.",
+    )
+    p.add_argument(
+        "--sampling-temperature",
+        type=float,
+        help="Sampling temperature. Default when --sampling is enabled: 0.6.",
+    )
+    p.add_argument(
+        "--sampling-top-p",
+        type=float,
+        help="Top-p (nucleus) threshold. Default when --sampling is enabled: 0.95.",
+    )
+    p.add_argument(
+        "--sampling-top-k",
+        type=int,
+        help="Top-k cutoff. Default when --sampling is enabled: 0 (disabled).",
+    )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -254,6 +276,10 @@ def run_demo(
     signpost: bool = False,
     prefill_max_tokens: int = None,
     force_recalculate: bool = False,
+    sampling: bool = False,
+    sampling_temperature: float | None = None,
+    sampling_top_p: float | None = None,
+    sampling_top_k: int | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -375,10 +401,38 @@ def run_demo(
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
 
+        sampling_params = None
+        if sampling:
+            effective_temperature = 0.6 if sampling_temperature is None else float(sampling_temperature)
+            effective_top_p = 0.95 if sampling_top_p is None else float(sampling_top_p)
+            effective_top_k = 0 if sampling_top_k is None else int(sampling_top_k)
+
+            if effective_temperature <= 0:
+                raise SystemExit("--sampling-temperature must be > 0 when --sampling is enabled.")
+            if not (0.0 < effective_top_p <= 1.0):
+                raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
+            if effective_top_k < 0:
+                raise SystemExit("--sampling-top-k must be >= 0.")
+
+            sampling_params = GeneratorSamplingParams(
+                temperature=effective_temperature,
+                top_p=effective_top_p,
+                top_k=effective_top_k,
+            )
+            logger.info(
+                "Sampling enabled "
+                f"(temperature={effective_temperature}, top_p={effective_top_p}, top_k={effective_top_k})"
+            )
+        else:
+            if sampling_temperature is not None or sampling_top_p is not None or sampling_top_k is not None:
+                logger.warning("Sampling parameters were provided without --sampling; using greedy argmax decode.")
+            logger.info("Sampling disabled; using greedy argmax decode.")
+
         # Multi-prompt generation
         generations, statistics = gen.generate(
             prompt_list,
             max_new_tokens=max_new_tokens,
+            sampling=sampling_params,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
             repeat_batches=repeat_batches,
@@ -397,6 +451,9 @@ def run_demo(
                     {
                         "accuracy_top1": acc.get("top1"),
                         "accuracy_top5": acc.get("top5"),
+                        "accuracy_logit_pcc": acc.get("logit_pcc"),
+                        "accuracy_logit_pcc_min": acc.get("logit_pcc_min"),
+                        "logit_pcc_per_step": acc.get("logit_pcc_per_step"),
                         "predicted_tokens": token_acc._pred_tokens,
                     }
                 )
@@ -452,6 +509,10 @@ def main() -> None:
         enable_mem_profile=args.enable_mem_profile,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
+        sampling=bool(args.sampling),
+        sampling_temperature=args.sampling_temperature,
+        sampling_top_p=args.sampling_top_p,
+        sampling_top_k=args.sampling_top_k,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
