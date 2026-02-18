@@ -292,20 +292,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
-// clang-format off
-/**
- * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
- *
- * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
- *
- * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
- * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
- * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
- * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
- * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | Yes      |
- */
-// clang-format on
 [[deprecated(
     "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
     "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "
