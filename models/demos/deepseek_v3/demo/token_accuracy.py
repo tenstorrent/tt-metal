@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -28,6 +28,7 @@ class TokenAccuracy:
       - generated_tokens: Tensor [1, gen_len]  (ground-truth continuation)
       - top5_tokens: Tensor [L, 5] where L = prompt_len + gen_len
       - tf_prompt_len: int
+      - generated_logits: Optional Tensor [gen_len, vocab_size]
     """
 
     def __init__(self, reference_file: str | Path, prompt_len: Optional[int] = None) -> None:
@@ -44,6 +45,7 @@ class TokenAccuracy:
         self.generated_tokens = payload["generated_tokens"]  # [1, G]
         self.top5_tokens = payload["top5_tokens"]  # [P+G, 5]
         self.tf_prompt_len = int(payload["tf_prompt_len"])
+        self.generated_logits = payload.get("generated_logits", None)
 
         if (
             not isinstance(self.prompt_tokens, torch.Tensor)
@@ -81,6 +83,16 @@ class TokenAccuracy:
             raise ValueError(
                 f"tf_prompt_len in file ({self.tf_prompt_len}) != prompt_tokens length ({file_prompt_len}). File={self.reference_file}"
             )
+        if self.generated_logits is not None:
+            if not isinstance(self.generated_logits, torch.Tensor) or self.generated_logits.dim() != 2:
+                raise ValueError(
+                    f"generated_logits must be a Tensor of shape [G, V], got {type(self.generated_logits)} {getattr(self.generated_logits, 'shape', None)}"
+                )
+            if int(self.generated_logits.shape[0]) != file_gen_len:
+                raise ValueError(
+                    f"generated_logits length mismatch: expected G={file_gen_len}, got {int(self.generated_logits.shape[0])}"
+                )
+            self.generated_logits = self.generated_logits.to(torch.float32).contiguous()
 
         if prompt_len is not None and int(prompt_len) != self.tf_prompt_len:
             raise ValueError(f"prompt_len arg ({prompt_len}) != tf_prompt_len in file ({self.tf_prompt_len})")
@@ -91,6 +103,7 @@ class TokenAccuracy:
 
         # Collected TT predictions (one per generated token position)
         self._pred_tokens: List[int] = []
+        self._pred_logits: List[torch.Tensor] = []
         self._cursor = 0  # how many GT tokens have been consumed/forced
 
         # Optional token id metadata for nicer debugging / fallbacks
@@ -100,6 +113,7 @@ class TokenAccuracy:
     def reset(self) -> None:
         """Reset internal cursor/prediction buffer so the same instance can be reused safely."""
         self._pred_tokens.clear()
+        self._pred_logits.clear()
         self._cursor = 0
 
     def get_prompt_token_ids(self) -> List[int]:
@@ -111,11 +125,18 @@ class TokenAccuracy:
     def num_pred_tokens(self) -> int:
         return len(self._pred_tokens)
 
-    def collect_predicted_tokens(self, tt_pred_token: int) -> int:
+    def collect_predicted_tokens(self, tt_pred_token: int, tt_pred_logits: Optional[torch.Tensor] = None) -> int:
         """
         Record TT's predicted token for the *next* generated position,
         and return the ground-truth token to force into TT decode.
         """
+        if tt_pred_logits is not None:
+            if not isinstance(tt_pred_logits, torch.Tensor) or tt_pred_logits.dim() != 1:
+                raise ValueError(
+                    f"tt_pred_logits must be a 1D tensor [V], got {type(tt_pred_logits)} {getattr(tt_pred_logits, 'shape', None)}"
+                )
+            self._pred_logits.append(tt_pred_logits.detach().to(torch.float32).cpu().contiguous())
+
         if self._cursor >= self.num_gt_tokens():
             # If TT generates beyond GT length, just keep returning EOS-ish
             self._pred_tokens.append(int(tt_pred_token))
@@ -128,7 +149,7 @@ class TokenAccuracy:
         self._cursor += 1
         return forced
 
-    def compute_accuracy(self) -> Dict[str, float]:
+    def compute_accuracy(self) -> Dict[str, Any]:
         """
         Accuracy vs HF baseline top5_tokens:
           For generated step i:
@@ -138,7 +159,16 @@ class TokenAccuracy:
         """
         total = min(len(self._pred_tokens), self.num_gt_tokens())
         if total == 0:
-            return {"top1": 0.0, "top5": 0.0, "matches_top1": 0, "matches_top5": 0, "total": 0}
+            return {
+                "top1": 0.0,
+                "top5": 0.0,
+                "matches_top1": 0,
+                "matches_top5": 0,
+                "total": 0,
+                "logit_pcc": None,
+                "logit_pcc_min": None,
+                "logit_pcc_per_step": [],
+            }
 
         matches_top1 = 0
         matches_top5 = 0
@@ -154,10 +184,38 @@ class TokenAccuracy:
             if tt_pred in hf_top5:
                 matches_top5 += 1
 
-        return {
+        result = {
             "top1": matches_top1 / total,
             "top5": matches_top5 / total,
             "matches_top1": matches_top1,
             "matches_top5": matches_top5,
             "total": total,
+            "logit_pcc": None,
+            "logit_pcc_min": None,
+            "logit_pcc_per_step": [],
         }
+
+        if self.generated_logits is not None and len(self._pred_logits) >= total:
+            pcc_per_step = []
+            for i in range(total):
+                ref_logits = self.generated_logits[i]
+                tt_logits = self._pred_logits[i]
+                if tt_logits.numel() != ref_logits.numel():
+                    raise ValueError(
+                        f"TT and reference logits shape mismatch at step {i}: "
+                        f"{tuple(tt_logits.shape)} vs {tuple(ref_logits.shape)}"
+                    )
+                ref_centered = ref_logits - ref_logits.mean()
+                tt_centered = tt_logits - tt_logits.mean()
+                denom = torch.linalg.norm(ref_centered) * torch.linalg.norm(tt_centered)
+                if float(denom.item()) == 0.0:
+                    pcc = 0.0
+                else:
+                    pcc = float(torch.dot(ref_centered, tt_centered).item() / denom.item())
+                pcc_per_step.append(pcc)
+
+            result["logit_pcc"] = sum(pcc_per_step) / len(pcc_per_step)
+            result["logit_pcc_min"] = min(pcc_per_step)
+            result["logit_pcc_per_step"] = pcc_per_step
+
+        return result

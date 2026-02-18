@@ -56,6 +56,7 @@ def generate_reference(
     reference_file: Path = REFERENCE_FILE,
     prompt: str = TEST_PROMPT,
     debug_one_layer: bool = False,
+    save_full_logits: bool = False,
 ) -> Path:
     """
     Generate reference tokens using HuggingFace model and save to refpt file.
@@ -251,11 +252,15 @@ def generate_reference(
     # NOTE: use_cache=False avoids DynamicCache API mismatch with some transformers versions
     print(f"Generating up to {max_new_tokens} new tokens using model.generate()...")
 
-    def build_payload(reference_tokens_tensor: torch.Tensor, top5_tokens_full: torch.Tensor) -> dict:
+    def build_payload(
+        reference_tokens_tensor: torch.Tensor,
+        top5_tokens_full: torch.Tensor,
+        generated_logits_tensor: torch.Tensor | None = None,
+    ) -> dict:
         generated_tokens_tensor = reference_tokens_tensor[0, prompt_len:]
         generated_tokens = generated_tokens_tensor.tolist()
         generated_tokens_tensor = generated_tokens_tensor.unsqueeze(0)
-        return {
+        payload = {
             "reference_tokens": reference_tokens_tensor,  # [1, L]
             "prompt_tokens": torch.tensor(raw_prompt_tokens, dtype=torch.long).unsqueeze(0),  # [1, prompt_len]
             "generated_tokens": generated_tokens_tensor,  # [1, gen_len]
@@ -271,6 +276,9 @@ def generate_reference(
                 "safe_pad_id_used_for_generate": safe_pad_id,
             },
         }
+        if generated_logits_tensor is not None:
+            payload["generated_logits"] = generated_logits_tensor  # [gen_len, vocab_size]
+        return payload
 
     class ReferenceSnapshotter(StoppingCriteria):
         def __init__(
@@ -308,10 +316,7 @@ def generate_reference(
                     self.pbar.write(f"Decoded so far: {decoded!r}")
                 else:
                     print(f"Decoded so far: {decoded!r}")
-                payload = build_payload(
-                    reference_tokens_tensor,
-                    self.top5_tokens_full[:current_len].clone().cpu(),
-                )
+                payload = build_payload(reference_tokens_tensor, self.top5_tokens_full[:current_len].clone().cpu())
                 torch.save(payload, self.reference_file)
             return False
 
@@ -365,15 +370,34 @@ def generate_reference(
 
     total_length = int(full_sequence_tensor.numel())
     top5_tokens_full = snapshotter.top5_tokens_full[:total_length].clone().cpu()
+    generated_logits_full = None
+    if save_full_logits:
+        scores = getattr(outputs, "scores", None)
+        if scores is None:
+            raise RuntimeError("output_scores were not returned; cannot save full logits.")
+        step_logits = []
+        for step_scores in scores:
+            if step_scores is None:
+                continue
+            step_scores = step_scores[0] if step_scores.dim() == 2 else step_scores
+            step_logits.append(step_scores.detach().to(torch.float32).cpu())
+        if len(step_logits) < len(generated_tokens):
+            raise RuntimeError(
+                f"Expected at least {len(generated_tokens)} score tensors, got {len(step_logits)}. "
+                "Cannot align generated logits to generated tokens."
+            )
+        generated_logits_full = torch.stack(step_logits[: len(generated_tokens)], dim=0).contiguous()
 
     # --- Save payload (explicit prompt/generated + full sequence) ---
-    payload = build_payload(full_sequence_tensor.unsqueeze(0).cpu(), top5_tokens_full)
+    payload = build_payload(full_sequence_tensor.unsqueeze(0).cpu(), top5_tokens_full, generated_logits_full)
     torch.save(payload, reference_file)
 
     print(
         f"Saved reference file with {total_length} tokens " f"(prompt={prompt_len}, generated={len(generated_tokens)})"
     )
     print(f"Top5 tokens shape: {tuple(top5_tokens_full.shape)}")
+    if generated_logits_full is not None:
+        print(f"Generated logits shape: {tuple(generated_logits_full.shape)}")
     print(f"Reference file saved to: {reference_file}")
 
     return reference_file
@@ -399,6 +423,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use only the first decoder layer (debugging; not for real references).",
     )
+    parser.add_argument(
+        "--save-full-logits",
+        action="store_true",
+        help="Save full per-step generated logits to the .refpt payload as 'generated_logits'.",
+    )
     args = parser.parse_args()
 
     path = generate_reference(
@@ -406,5 +435,6 @@ if __name__ == "__main__":
         reference_file=args.output,
         prompt=args.prompt,
         debug_one_layer=args.debug_one_layer,
+        save_full_logits=args.save_full_logits,
     )
     print(f"\nDone. Reference saved to: {path}")

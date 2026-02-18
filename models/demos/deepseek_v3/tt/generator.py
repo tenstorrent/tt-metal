@@ -532,6 +532,53 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
+    def _sample_next_token(self, logits: torch.Tensor, sampling: SamplingParams | None) -> torch.Tensor:
+        """Sample next tokens from logits.
+
+        If sampling is disabled (or temperature <= 0), falls back to greedy argmax.
+        """
+        if sampling is None or float(sampling.temperature) <= 0:
+            return self._sample_greedy(logits)
+
+        temperature = float(sampling.temperature)
+        top_k = int(sampling.top_k)
+        top_p = float(sampling.top_p)
+
+        scores = logits / temperature
+
+        # Optional top-k filtering.
+        if top_k > 0:
+            top_k = min(top_k, scores.shape[-1])
+            kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
+            scores = scores.masked_fill(scores < kth_values, float("-inf"))
+
+        # Optional top-p (nucleus) filtering.
+        if 0.0 < top_p < 1.0:
+            sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
+            sorted_probs = torch.softmax(sorted_scores, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+            remove_mask = cumulative_probs > top_p
+            remove_mask[..., 0] = False
+            sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
+
+            filtered_scores = torch.full_like(scores, float("-inf"))
+            filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
+            scores = filtered_scores
+
+        probs = torch.softmax(scores, dim=-1)
+        row_sums = probs.sum(dim=-1)
+        valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
+
+        if valid_rows.all():
+            return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+        # Robust fallback for any numerically invalid rows.
+        sampled_tokens = self._sample_greedy(logits)
+        if valid_rows.any():
+            sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+        return sampled_tokens
+
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
 
@@ -691,10 +738,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.profile_decode:
                     next_tokens = next_tokens_override
                 else:
-                    next_tokens = self._sample_greedy(last_logits)
+                    next_tokens = self._sample_next_token(last_logits, sampling)
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
-                    forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+                    forced0 = teacher_forcing.collect_predicted_tokens(
+                        int(next_tokens[0].item()), tt_pred_logits=last_logits[0]
+                    )
                     next_tokens[0] = int(forced0)
 
                 # Positions for the first generated token are the prompt lengths
@@ -726,10 +775,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                     )
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
-                    pred_tokens = self._sample_greedy(logits)
+                    pred_tokens = self._sample_next_token(logits, sampling)
                     if teacher_forcing is not None:
                         # Record user-0 prediction for accuracy, then force teacher token.
-                        forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                        forced = teacher_forcing.collect_predicted_tokens(
+                            int(pred_tokens[0].item()), tt_pred_logits=logits[0]
+                        )
                         pred_tokens[0] = int(forced)
                     next_tokens = pred_tokens
                     positions += 1
