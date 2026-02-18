@@ -139,7 +139,7 @@ ALWI void matmul_tiles(
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 #else
-    MATH((llk_math_matmul(idst)));
+    MATH((llk_math_matmul_tile(idst)));
 #endif
 }
 
