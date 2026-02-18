@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from transformers.models.umt5.modeling_umt5 import UMT5EncoderModel
 
 from ..t5.encoder_pair import T5TokenizerEncoderPair
