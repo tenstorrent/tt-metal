@@ -4,6 +4,9 @@
 
 # Global build arguments (defined before FROM to be available in all stages)
 ARG UBUNTU_VERSION=22.04
+# PYTHON_VERSION must match the Ubuntu version:
+# Ubuntu 22.04 -> Python 3.10
+# Ubuntu 24.04 -> Python 3.12
 ARG PYTHON_VERSION=3.10
 
 FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
