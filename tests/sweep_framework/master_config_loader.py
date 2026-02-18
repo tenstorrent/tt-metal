@@ -198,7 +198,7 @@ class MasterConfigLoader:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
             # V1 loader uses original V1 JSON format
             original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
-            reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master.json")
+            reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
 
             if os.path.exists(reconstructed_path):
                 print(
