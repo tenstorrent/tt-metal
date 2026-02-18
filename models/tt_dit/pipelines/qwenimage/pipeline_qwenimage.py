@@ -241,18 +241,15 @@ class QwenImagePipeline:
         if self.transformers[idx].is_loaded():
             return
 
-        if not cache.initialize_from_cache(
+        cache.load_model(
             tt_model=self.transformers[idx],
-            torch_state_dict=self._transformer_state_dict,
+            get_torch_state_dict=lambda: self._transformer_state_dict,
             model_name=self._checkpoint_name,
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._submesh_devices[idx].shape),
-            dtype="bf16",
             is_fsdp=self._is_fsdp,
-        ):
-            logger.info("Loading transformer weights from PyTorch state dict")
-            self.transformers[idx].load_torch_state_dict(self._transformer_state_dict)
+        )
 
         ttnn.synchronize_device(self._submesh_devices[idx])
 

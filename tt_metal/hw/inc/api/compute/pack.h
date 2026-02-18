@@ -116,14 +116,16 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  *
  * Return value: None
  *
- * | Param Type | Name       | Description                        | Type     | Valid Range | Required |
- * |------------|------------|------------------------------------|----------|-------------|----------|
- * | Function   | new_cb_id  | New data format operand value      | uint32_t | Any         | True     |
+ * | Param Type | Name                    | Description                   | Type     | Valid Range | Required |
+ * |------------|-------------------------|-------------------------------|----------|-------------|----------|
+ * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration   | bool     | true/false  | False    |
+ * | Function   | new_cb_id               | New data format operand value | uint32_t | Any         | True     |
  */
 // clang-format on
+template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(new_cb_id)));
 #endif  // TODO: AM; add Quasar implementation
 }
 
@@ -141,15 +143,17 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  *
  * Return value: None
  *
- * | Param Type | Name       | Description                        | Type     | Valid Range | Required |
- * |------------|------------|------------------------------------|----------|-------------|----------|
- * | Function   | old_cb_id  | Previous data format operand value | uint32_t | Any         | True     |
- * | Function   | new_cb_id  | New data format operand value      | uint32_t | Any         | True     |
+ * | Param Type | Name                    | Description                        | Type     | Valid Range | Required |
+ * |------------|-------------------------|------------------------------------|----------|-------------|----------|
+ * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration        | bool     | true/false  | False    |
+ * | Function   | old_cb_id               | Previous data format operand value | uint32_t | Any         | True     |
+ * | Function   | new_cb_id               | New data format operand value      | uint32_t | Any         | True     |
  */
 // clang-format on
+template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_cb_id, new_cb_id)));
+    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(old_cb_id, new_cb_id)));
 #endif  // TODO: AM; add Quasar implementation
 }
 
