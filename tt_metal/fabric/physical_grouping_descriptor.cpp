@@ -1585,11 +1585,297 @@ PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(const MeshGraphDescripto
     return result;
 }
 
-AdjacencyGraph<uint32_t> PhysicalGroupingDescriptor::build_flattened_adjacency_graph(
+// =============================================================================
+// build_flattened_adjacency_mesh – flattened ASIC-level mesh from hierarchy
+// =============================================================================
+
+// Infer row_major_mesh dims [rows, cols] from items' corner orientations.
+// Returns empty if corners don't indicate a row_major layout (fallback to [1, n]).
+std::vector<int32_t> infer_dims_from_corners(const GroupingInfo& g) {
+    using CO = GroupingItemInfo::CornerOrientation;
+    const size_t n = g.items.size();
+    if (n == 0) {
+        return {};
+    }
+
+    auto has = [&](size_t i, CO c) {
+        const auto& corners = g.items[i].corners;
+        return std::find(corners.begin(), corners.end(), c) != corners.end();
+    };
+
+    if (n == 1) {
+        if (has(0, CO::NW) && has(0, CO::SE)) {
+            return {1, 1};
+        }
+        return {};
+    }
+
+    bool first_has_nw_sw = has(0, CO::NW) && has(0, CO::SW);
+    bool first_has_nw_ne = has(0, CO::NW) && has(0, CO::NE);
+    bool last_has_ne_se = has(n - 1, CO::NE) && has(n - 1, CO::SE);
+    bool last_has_sw_se = has(n - 1, CO::SW) && has(n - 1, CO::SE);
+
+    if (first_has_nw_sw && last_has_ne_se) {
+        return {1, static_cast<int32_t>(n)};
+    }
+    if (first_has_nw_ne && last_has_sw_se) {
+        return {static_cast<int32_t>(n), 1};
+    }
+
+    size_t nw_idx = n, ne_idx = n, sw_idx = n, se_idx = n;
+    for (size_t i = 0; i < n; ++i) {
+        if (has(i, CO::NW) && nw_idx == n) {
+            nw_idx = i;
+        }
+        if (has(i, CO::NE) && ne_idx == n) {
+            ne_idx = i;
+        }
+        if (has(i, CO::SW) && sw_idx == n) {
+            sw_idx = i;
+        }
+        if (has(i, CO::SE) && se_idx == n) {
+            se_idx = i;
+        }
+    }
+    if (nw_idx >= n || ne_idx >= n || sw_idx >= n || se_idx >= n) {
+        return {};
+    }
+    int32_t cols = static_cast<int32_t>(ne_idx - nw_idx + 1);
+    if (cols <= 0 || n % static_cast<size_t>(cols) != 0) {
+        return {};
+    }
+    int32_t rows = static_cast<int32_t>(n / static_cast<size_t>(cols));
+    return {rows, cols};
+}
+
+enum class CardinalDirection { North, South, East, West };
+enum class AdjacencyDirection { A_LEFT_OF_B, A_ABOVE_B, A_RIGHT_OF_B, A_BELOW_B };
+
+struct FlattenedMesh {
+    AdjacencyGraph<uint32_t> graph;
+    std::vector<int32_t> dims;  // Node-level [rows,cols] for leaf; item-level for compound
+    std::vector<uint32_t> nodes_row_major;
+    std::vector<FlattenedMesh> sub_meshes;  // For compound: items in row-major; empty for leaf
+
+    std::vector<uint32_t> get_edge(CardinalDirection dir) const {
+        if (sub_meshes.empty()) {
+            return get_edge_leaf(dir);
+        }
+        return get_edge_compound(dir);
+    }
+
+    std::vector<uint32_t> get_edge_leaf(CardinalDirection dir) const {
+        if (nodes_row_major.empty() || dims.empty()) {
+            return {};
+        }
+        int32_t rows = dims[0], cols = dims.size() >= 2 ? dims[1] : static_cast<int32_t>(nodes_row_major.size());
+        if (dims.size() == 1) {
+            rows = 1;
+            cols = dims[0];
+        }
+        int32_t n = static_cast<int32_t>(nodes_row_major.size());
+        std::vector<uint32_t> out;
+        switch (dir) {
+            case CardinalDirection::North:
+                for (int32_t c = 0; c < cols && c < n; ++c) {
+                    out.push_back(nodes_row_major[c]);
+                }
+                break;
+            case CardinalDirection::South:
+                for (int32_t c = (rows - 1) * cols; c < rows * cols && c < n; ++c) {
+                    out.push_back(nodes_row_major[c]);
+                }
+                break;
+            case CardinalDirection::West:
+                for (int32_t r = 0; r < rows; ++r) {
+                    int32_t idx = r * cols;
+                    if (idx < n) {
+                        out.push_back(nodes_row_major[idx]);
+                    }
+                }
+                break;
+            case CardinalDirection::East:
+                for (int32_t r = 0; r < rows; ++r) {
+                    int32_t idx = r * cols + (cols - 1);
+                    if (idx < n) {
+                        out.push_back(nodes_row_major[idx]);
+                    }
+                }
+                break;
+        }
+        return out;
+    }
+
+    std::vector<uint32_t> get_edge_compound(CardinalDirection dir) const {
+        if (sub_meshes.empty() || dims.size() < 2) {
+            return {};
+        }
+        int32_t item_rows = dims[0], item_cols = dims[1];
+        std::vector<uint32_t> out;
+        switch (dir) {
+            case CardinalDirection::North:
+                for (int32_t c = 0; c < item_cols; ++c) {
+                    auto e = sub_meshes[c].get_edge(CardinalDirection::North);
+                    out.insert(out.end(), e.begin(), e.end());
+                }
+                break;
+            case CardinalDirection::South:
+                for (int32_t c = 0; c < item_cols; ++c) {
+                    size_t i = static_cast<size_t>((item_rows - 1) * item_cols + c);
+                    auto e = sub_meshes[i].get_edge(CardinalDirection::South);
+                    out.insert(out.end(), e.begin(), e.end());
+                }
+                break;
+            case CardinalDirection::West:
+                for (int32_t r = 0; r < item_rows; ++r) {
+                    size_t i = static_cast<size_t>(r * item_cols);
+                    auto e = sub_meshes[i].get_edge(CardinalDirection::West);
+                    out.insert(out.end(), e.begin(), e.end());
+                }
+                break;
+            case CardinalDirection::East:
+                for (int32_t r = 0; r < item_rows; ++r) {
+                    size_t i = static_cast<size_t>(r * item_cols + (item_cols - 1));
+                    auto e = sub_meshes[i].get_edge(CardinalDirection::East);
+                    out.insert(out.end(), e.begin(), e.end());
+                }
+                break;
+        }
+        return out;
+    }
+};
+
+void join_two_adjacent_meshes(
+    std::map<uint32_t, std::set<uint32_t>>& adj_set,
+    const FlattenedMesh& a,
+    const FlattenedMesh& b,
+    AdjacencyDirection dir) {
+    std::pair<CardinalDirection, CardinalDirection> edges;
+    switch (dir) {
+        case AdjacencyDirection::A_LEFT_OF_B: edges = {CardinalDirection::East, CardinalDirection::West}; break;
+        case AdjacencyDirection::A_ABOVE_B: edges = {CardinalDirection::South, CardinalDirection::North}; break;
+        case AdjacencyDirection::A_RIGHT_OF_B: edges = {CardinalDirection::West, CardinalDirection::East}; break;
+        case AdjacencyDirection::A_BELOW_B: edges = {CardinalDirection::North, CardinalDirection::South}; break;
+    }
+    auto edge_a = a.get_edge(edges.first);
+    auto edge_b = b.get_edge(edges.second);
+    TT_FATAL(edge_a.size() == edge_b.size(), "Mesh boundary size mismatch: {} vs {}", edge_a.size(), edge_b.size());
+
+    for (size_t i = 0; i < edge_a.size(); ++i) {
+        adj_set[edge_a[i]].insert(edge_b[i]);
+        adj_set[edge_b[i]].insert(edge_a[i]);
+    }
+}
+
+AdjacencyGraph<uint32_t> join_mesh_level(const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& dims) {
+    if (meshes.empty()) {
+        return AdjacencyGraph<uint32_t>();
+    }
+    if (dims.size() < 2) {
+        if (meshes.size() == 1) {
+            return meshes[0].graph;
+        }
+        int32_t n = static_cast<int32_t>(meshes.size());
+        return join_mesh_level(meshes, std::vector<int32_t>{1, n});
+    }
+    int32_t rows = dims[0], cols = dims[1];
+    std::map<uint32_t, std::set<uint32_t>> adj_set;
+
+    for (const auto& m : meshes) {
+        for (uint32_t n : m.nodes_row_major) {
+            for (uint32_t nb : m.graph.get_neighbors(n)) {
+                adj_set[n].insert(nb);
+            }
+        }
+    }
+
+    for (int32_t r = 0; r < rows; ++r) {
+        for (int32_t c = 0; c < cols; ++c) {
+            size_t i = static_cast<size_t>(r * cols + c);
+            if (c + 1 < cols) {
+                size_t j = i + 1;
+                join_two_adjacent_meshes(adj_set, meshes[i], meshes[j], AdjacencyDirection::A_LEFT_OF_B);
+            }
+            if (r + 1 < rows) {
+                size_t j = static_cast<size_t>((r + 1) * cols + c);
+                join_two_adjacent_meshes(adj_set, meshes[i], meshes[j], AdjacencyDirection::A_ABOVE_B);
+            }
+        }
+    }
+    std::map<uint32_t, std::vector<uint32_t>> adj_map_final;
+    for (const auto& [n, neighbors] : adj_set) {
+        adj_map_final[n] = std::vector<uint32_t>(neighbors.begin(), neighbors.end());
+    }
+    return AdjacencyGraph<uint32_t>(adj_map_final);
+}
+
+FlattenedMesh build_flattened_mesh_for_item(
+    const GroupingItemInfo& item,
+    uint32_t& next_global_id,
+    const std::unordered_map<std::string, std::vector<GroupingInfo>>& cache,
+    const PhysicalGroupingDescriptor* desc) {
+    FlattenedMesh fm;
+
+    if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+        // Leaf: single ASIC
+        fm.dims = {1, 1};
+        fm.nodes_row_major = {next_global_id};
+        fm.graph = AdjacencyGraph<uint32_t>({{next_global_id, {}}});
+        next_global_id++;
+        return fm;
+    }
+
+    // GROUPING_REF: resolve and recurse
+    auto it = cache.find(item.grouping_name);
+    TT_FATAL(it != cache.end() && !it->second.empty(), "Unknown grouping: {}", item.grouping_name);
+    const GroupingInfo& sub = it->second[0];
+
+    if (sub.items.size() == 1) {
+        FlattenedMesh sub_fm = build_flattened_mesh_for_item(sub.items[0], next_global_id, cache, desc);
+        return sub_fm;
+    }
+
+    std::vector<FlattenedMesh> sub_meshes;
+    for (const auto& sub_item : sub.items) {
+        sub_meshes.push_back(build_flattened_mesh_for_item(sub_item, next_global_id, cache, desc));
+    }
+
+    std::vector<int32_t> layout = infer_dims_from_corners(sub);
+    if (layout.empty()) {
+        int32_t nn = static_cast<int32_t>(sub_meshes.size());
+        layout = nn > 0 ? std::vector<int32_t>{1, nn} : std::vector<int32_t>{1, 1};
+    }
+    fm.graph = join_mesh_level(sub_meshes, layout);
+    fm.dims = layout;
+    fm.sub_meshes = sub_meshes;
+    for (const auto& m : sub_meshes) {
+        fm.nodes_row_major.insert(fm.nodes_row_major.end(), m.nodes_row_major.begin(), m.nodes_row_major.end());
+    }
+    return fm;
+}
+
+AdjacencyGraph<uint32_t> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
-    (void)grouping;
-    TT_THROW("Not implemented");
-    return {};
+    if (grouping.items.empty()) {
+        return AdjacencyGraph<uint32_t>();
+    }
+
+    uint32_t next_id = 0;
+    std::vector<FlattenedMesh> meshes;
+    for (const auto& item : grouping.items) {
+        meshes.push_back(build_flattened_mesh_for_item(item, next_id, resolved_groupings_cache_, this));
+    }
+
+    if (meshes.size() == 1) {
+        return meshes[0].graph;
+    }
+
+    std::vector<int32_t> dims = infer_dims_from_corners(grouping);
+    if (dims.empty()) {
+        int32_t n = static_cast<int32_t>(meshes.size());
+        dims = n > 0 ? std::vector<int32_t>{1, n} : std::vector<int32_t>{1, 1};
+    }
+    return join_mesh_level(meshes, dims);
 }
 
 bool PhysicalGroupingDescriptor::validate_preformed_groups_from_physical_system_descriptor(
