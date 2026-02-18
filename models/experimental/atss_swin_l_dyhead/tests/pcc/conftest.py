@@ -4,12 +4,9 @@
 """
 Shared fixtures for ATSS Swin-L DyHead PCC tests.
 
-Checkpoint path is resolved from common.py (auto-downloads if missing).
-Override with env var ATSS_CKPT if needed.
+Checkpoint and config paths are resolved by common.py which supports
+env var overrides (ATSS_CHECKPOINT, ATSS_CONFIG) and auto-download.
 """
-
-import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -24,31 +21,29 @@ def _mmdet_importable():
         return False
 
 
-def _get_config_and_checkpoint():
-    from models.experimental.atss_swin_l_dyhead.common import ATSS_CHECKPOINT, ATSS_CONFIG
-
-    config = os.environ.get("ATSS_CONFIG", ATSS_CONFIG)
-    ckpt = os.environ.get("ATSS_CKPT", ATSS_CHECKPOINT)
-    return config, ckpt
-
-
 MMDET_SKIP = "mmdet not importable"
-CKPT_SKIP = "ATSS checkpoint not found. Set ATSS_CKPT env var."
+CKPT_SKIP = "ATSS checkpoint not found. Set ATSS_CHECKPOINT env var."
 
 
 @pytest.fixture(scope="module")
 def atss_ckpt_path():
-    _, ckpt_path = _get_config_and_checkpoint()
-    if not Path(ckpt_path).is_file():
+    from models.experimental.atss_swin_l_dyhead.common import get_checkpoint_path
+
+    try:
+        ckpt_path = get_checkpoint_path()
+    except FileNotFoundError:
         pytest.skip(CKPT_SKIP)
     return ckpt_path
 
 
 @pytest.fixture(scope="module")
 def atss_config_path():
-    config_path, _ = _get_config_and_checkpoint()
-    if not Path(config_path).is_file():
-        pytest.skip("ATSS config not found")
+    from models.experimental.atss_swin_l_dyhead.common import get_config_path
+
+    try:
+        config_path = get_config_path()
+    except FileNotFoundError:
+        pytest.skip("ATSS config not found. Set ATSS_CONFIG env var.")
     return config_path
 
 

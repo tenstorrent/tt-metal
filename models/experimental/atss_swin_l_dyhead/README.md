@@ -100,6 +100,18 @@ mim download mmdet --config atss_swin-l-p4-w12_fpn_dyhead_ms-2x_coco \
     --dest models/experimental/atss_swin_l_dyhead/weights/
 ```
 
+#### Environment variable overrides
+
+| Variable | Description |
+|---|---|
+| `ATSS_CHECKPOINT` | Path to the `.pth` checkpoint file. Skips auto-download when set. |
+| `ATSS_CONFIG` | Path to the mmdet config `.py` file. |
+
+```bash
+export ATSS_CHECKPOINT=/data/models/atss_swin-l.pth
+export ATSS_CONFIG=/data/models/atss_swin-l-config.py
+```
+
 ### Run PCC Tests
 
 ```bash
