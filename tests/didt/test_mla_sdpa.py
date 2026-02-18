@@ -115,6 +115,7 @@ class MLA_SDPATest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
+@skip_for_wormhole_b0("This test is for blackhole")
 def test_mla_sdpa(
     mesh_device,
     didt_workload_iterations,
@@ -154,8 +155,8 @@ def test_mla_sdpa(
     scale = qk_head_dim**-0.5
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
-        q_chunk_size=32,
-        k_chunk_size=32,
+        q_chunk_size=128,
+        k_chunk_size=512,
         exp_approx_mode=False,
     )
 
@@ -225,9 +226,6 @@ def test_specific_chip_mla_sdpa(
     )
 
 
-# @skip_for_blackhole("Multi-board Blackhole has not been tested")
-
-
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -260,6 +258,7 @@ def test_specific_chip_mla_sdpa(
         pytest.param((4, 3), id="4-3"),
     ],
 )
+@skip_for_wormhole_b0("This test is for blackhole")
 def test_mesh_size_mla_sdpa(
     mesh_device,
     sub_mesh_shape,
@@ -284,6 +283,7 @@ def test_mesh_size_mla_sdpa(
     ],
     indirect=["mesh_device"],
 )
+@skip_for_wormhole_b0("This test is for blackhole")
 def test_random_mesh_size_mla_sdpa(mesh_device, didt_workload_iterations, determinism_check_interval):
     # generate random sub-mesh shape and mesh coordinate
     valid_sub_mesh_shapes = [(x, y) for x in range(1, MESH_X + 1) for y in range(1, MESH_Y + 1)]
