@@ -147,7 +147,15 @@ python3 .claude/scripts/tdd-pipeline/tdd_orchestrator.py status --op-path <path>
 
 ### 2. Implement — Invoke Kernel Writer
 
-Launch `ttnn-kernel-writer` with a **stage-scoped** prompt:
+Launch `ttnn-kernel-writer` with a **stage-scoped** prompt.
+
+**Agent reuse rule**: Track the kernel-writer's `total_tokens` from the task notification after each invocation.
+- **< 160k tokens**: Resume the same agent (pass `resume: {agentId}`). Faster — agent already has design doc, kernel files, and prior work in context.
+- **>= 160k tokens**: Spawn a fresh agent. Context is getting heavy and risks compaction.
+
+This applies across both retries and new stages. The agent only knows what the current prompt tells it — scope is controlled by the prompt, not by spawning fresh.
+
+**Prompt template** (used for both fresh and resumed):
 
 ```
 Implement TDD stage '{stage_name}' for {op_name}.
