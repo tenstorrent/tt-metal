@@ -5,7 +5,7 @@
 import os
 from os import listdir
 from os.path import isfile, join
-from typing import Optional
+from typing import List, Optional, Union
 
 import jiwer
 import pytest
@@ -108,9 +108,7 @@ def load_conditional_generation_ref_model(model_repo, language, task):
     )
 
 
-def init_conditional_generation_tt_model(
-    hf_ref_model, config, mesh_device, weights_mesh_mapper, max_batch_size=WHISPER_BATCH_SIZE, max_seq_len=512
-):
+def init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper, max_seq_len=512):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
     ttnn_linear_weight = ttnn.from_torch(
@@ -126,17 +124,21 @@ def init_conditional_generation_tt_model(
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache, cross_attn_cache = init_kv_cache(
-        config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
+    kv_cache_per_batch_size, cross_attn_cache_per_batch_size = init_kv_cache(
+        config, mesh_device, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
-    return parameters, ttnn_linear_weight, kv_cache, cross_attn_cache
+    return parameters, ttnn_linear_weight, kv_cache_per_batch_size, cross_attn_cache_per_batch_size
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
 ):
     """
@@ -149,16 +151,23 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
         generation_params: Generation parameters for the model. If None, defaults will be used.
+        language: Language code for transcription (batch-homogeneous)
+        task: Task type ("transcribe" or "translate") (batch-homogeneous)
+        prompt: Optional prompt to guide style/spelling (batch-homogeneous)
+        use_trace: Whether to use traced execution for decoder (batch-homogeneous)
     """
     if generation_params is None:
         generation_params = GenerationParams()
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
-        model_repo, generation_params.language, generation_params.task
+        model_repo, language, task
     )
-    parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper, max_batch_size=batch_size_per_device
-    )
+    (
+        parameters,
+        ttnn_linear_weight,
+        kv_cache_per_batch_size,
+        cross_attn_cache_per_batch_size,
+    ) = init_conditional_generation_tt_model(hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper)
 
     # Create WhisperGenerator instance with persistent trace support
     generator = WhisperGenerator(
@@ -172,8 +181,8 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         input_mesh_mapper=input_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
         weights_mesh_mapper=weights_mesh_mapper,
-        kv_cache=kv_cache,
-        cross_attn_cache=cross_attn_cache,
+        kv_cache_per_batch_size=kv_cache_per_batch_size,
+        cross_attn_cache_per_batch_size=cross_attn_cache_per_batch_size,
         max_batch_size=batch_size_per_device,
     )
 
@@ -181,7 +190,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         current_batch,
         stream=False,
         return_perf_metrics=False,
-        generation_params_override: Optional[GenerationParams] = None,
+        generation_params_override: Optional[Union[GenerationParams, List[GenerationParams]]] = None,
     ):
         # Use override if provided, otherwise use the original generation_params
         params = generation_params_override if generation_params_override is not None else generation_params
@@ -194,6 +203,10 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         return generator.generate(
             current_batch=current_batch,
             generation_params=params,
+            language=language,
+            task=task,
+            prompt=prompt,
+            use_trace=use_trace,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
         )
@@ -302,72 +315,98 @@ def run_demo_whisper_for_conditional_generation_inference(
     num_inputs,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
+    run_both_batch_sizes=False,
 ):
     torch.manual_seed(0)
+
+    # Determine all batch sizes we'll iterate over, so we can pre-allocate for the max
+    final_batch_size_per_device_list = [1, WHISPER_BATCH_SIZE] if run_both_batch_sizes else [batch_size_per_device]
+    effective_max_batch_size = WHISPER_BATCH_SIZE if run_both_batch_sizes else batch_size_per_device
+
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device,
         model_repo,
         generation_params,
-        batch_size_per_device=batch_size_per_device,
+        language=language,
+        task=task,
+        prompt=prompt,
+        use_trace=use_trace,
+        batch_size_per_device=effective_max_batch_size,
     )
 
     # load data
     input_data = load_input_paths(input_path)
 
-    batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    total_inputs = num_inputs * batch_size
+    for batch_size_per_device in final_batch_size_per_device_list:
+        batch_size = batch_size_per_device * mesh_device.get_num_devices()
+        total_inputs = num_inputs * batch_size
 
-    input_data = repeat_inputs_cyclically(input_data, total_inputs)
+        input_data = repeat_inputs_cyclically(input_data, total_inputs)
 
-    total_ttft = 0
-    total_decode_throughput = 0
-    num_warmup_runs = 1
-    for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
-        current_batch_size = min(batch_size, total_inputs - i)
-        current_batch = []
-        for j in range(current_batch_size):
-            input_file_path = input_data[i + j]
-            logger.info(f"Input path: {input_file_path}")
-            samplerate, data = wavfile.read(input_file_path)
-            current_batch.append((samplerate, data))
+        total_ttft = 0
+        total_decode_throughput = 0
+        num_warmup_runs = 1
+        for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
+            current_batch_size = min(batch_size, total_inputs - i)
+            current_batch = []
+            for j in range(current_batch_size):
+                input_file_path = input_data[i + j]
+                logger.info(f"Input path: {input_file_path}")
+                samplerate, data = wavfile.read(input_file_path)
+                current_batch.append((samplerate, data))
 
-        # perform model inference
-        if stream:
-            # Handle streaming mode - iterate over generator
-            logger.info(f"Streaming mode enabled for conditional generation inference")
-            last_result = None
-            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=True):
-                last_result = result
-
-            # Extract final metrics from last result
-            if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
-                print()  # New line after streaming
-            else:
-                # Fallback if no results
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
-                    [""] * current_batch_size,
-                    None,
-                    None,
-                    0.0,
-                    0.0,
-                    False,
-                )
-        else:
-            # Non-streaming mode
-            ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
-                current_batch, stream=False, return_perf_metrics=True
+            # Slice generation_params to match the current batch size (it may have been
+            # built for a larger batch when run_both_batch_sizes is True)
+            current_gen_params = (
+                generation_params[:current_batch_size] if isinstance(generation_params, list) else generation_params
             )
 
-        if i >= num_warmup_runs:  # Exclude first compile run
-            total_ttft += ttft
-            total_decode_throughput += avg_decode_throughput
-        batch_start = i + 1
-        batch_end = i + current_batch_size
-        logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
+            # perform model inference
+            if stream:
+                # Handle streaming mode - iterate over generator
+                logger.info(f"Streaming mode enabled for conditional generation inference")
+                last_result = None
+                for result in model_pipeline(
+                    current_batch, stream=True, return_perf_metrics=True, generation_params_override=current_gen_params
+                ):
+                    last_result = result
+
+                # Extract final metrics from last result
+                if last_result is not None:
+                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
+                    print()  # New line after streaming
+                else:
+                    # Fallback if no results
+                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
+                        [""] * current_batch_size,
+                        None,
+                        None,
+                        0.0,
+                        0.0,
+                        False,
+                    )
+            else:
+                # Non-streaming mode
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
+                    current_batch,
+                    stream=False,
+                    return_perf_metrics=True,
+                    generation_params_override=current_gen_params,
+                )
+
+            if i >= num_warmup_runs:  # Exclude first compile run
+                total_ttft += ttft
+                total_decode_throughput += avg_decode_throughput
+            batch_start = i + 1
+            batch_end = i + current_batch_size
+            logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
     avg_ttft = total_ttft / (num_inputs - num_warmup_runs)
     avg_decode_throughput = total_decode_throughput / (num_inputs - num_warmup_runs)
     return avg_ttft, avg_decode_throughput
@@ -377,6 +416,10 @@ def run_demo_whisper_for_conditional_generation_dataset(
     mesh_device,
     model_repo,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "en",
+    task: str = "transcribe",
+    prompt: Optional[str] = None,
+    use_trace: bool = True,
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
@@ -386,6 +429,10 @@ def run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
+        language=language,
+        task=task,
+        prompt=prompt,
+        use_trace=use_trace,
         batch_size_per_device=batch_size_per_device,
     )
 
@@ -455,6 +502,8 @@ def run_demo_whisper_for_translation_dataset(
     model_repo,
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
+    language: str = "French",
+    task: str = "translate",
     batch_size_per_device=WHISPER_BATCH_SIZE,
     stream=False,
 ):
@@ -467,8 +516,6 @@ def run_demo_whisper_for_translation_dataset(
             logprob_threshold=-2.0,
             no_speech_threshold=0.6,
             return_timestamps=False,
-            language="French",
-            task="translate",
         )
 
     language_code_map = {
@@ -482,20 +529,20 @@ def run_demo_whisper_for_translation_dataset(
         "English": "en_us",
     }
 
-    source_lang_code_full = language_code_map.get(generation_params.language, "fr_fr")  # Default to French
-    logger.info(
-        f"Setting up translation pipeline: source_language={generation_params.language} -> target_language=English"
-    )
-    logger.info(f"Using source language code: {source_lang_code_full} with task={generation_params.task}")
+    source_lang_code_full = language_code_map.get(language, "fr_fr")  # Default to French
+    logger.info(f"Setting up translation pipeline: source_language={language} -> target_language=English")
+    logger.info(f"Using source language code: {source_lang_code_full} with task={task}")
 
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
         mesh_device,
         model_repo,
         generation_params,
+        language=language,
+        task=task,
         batch_size_per_device=batch_size_per_device,
     )
 
-    logger.info(f"Loading FLEURS dataset for {generation_params.language} (code: {source_lang_code_full})")
+    logger.info(f"Loading FLEURS dataset for {language} (code: {source_lang_code_full})")
 
     # Load source language dataset
     ds = load_dataset("google/fleurs", source_lang_code_full, split="validation", streaming=True)
@@ -513,7 +560,7 @@ def run_demo_whisper_for_translation_dataset(
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     total_inputs = num_inputs * batch_size
 
-    logger.info(f"Testing translation from {generation_params.language} to English")
+    logger.info(f"Testing translation from {language} to English")
     logger.info(
         f"Processing {total_inputs} samples (batch_size={batch_size}: {batch_size_per_device} per device x {mesh_device.get_num_devices()} devices)"
     )
@@ -722,6 +769,14 @@ def test_demo_for_audio_classification_dataset(
     "prompt",
     [None],
 )
+@pytest.mark.parametrize(
+    "use_per_request_params",
+    [True],
+)
+@pytest.mark.parametrize(
+    "run_both_batch_sizes",
+    [True],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize(
     "device_params",
@@ -744,6 +799,8 @@ def test_demo_for_conditional_generation(
     batch_size_per_device,
     stream,
     prompt,
+    use_per_request_params,
+    run_both_batch_sizes,
     request,
 ):
     # Skip test in CI when using generate_kwargs
@@ -754,24 +811,45 @@ def test_demo_for_conditional_generation(
     ):
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
-    generation_params = GenerationParams(
-        temperatures=temperatures,
-        compression_ratio_threshold=compression_ratio_threshold,
-        logprob_threshold=logprob_threshold,
-        no_speech_threshold=no_speech_threshold,
-        return_timestamps=return_timestamps,
-        language=language,
-        task=task,
-        prompt=prompt,
-    )
+    # Per-request params only apply when batch_size >= 2
+    if use_per_request_params and batch_size_per_device < 2:
+        pytest.skip("Per-request params require batch_size_per_device >= 2")
+
+    # When use_per_request_params, pass a list of different params per request (e.g., return_timestamps)
+    if use_per_request_params:
+        batch_size = batch_size_per_device * mesh_device.get_num_devices()
+        generation_params = []
+        for i in range(batch_size):
+            # Vary return_timestamps per request: even indices get timestamps, odd get plain text
+            params = GenerationParams(
+                temperatures=temperatures,
+                compression_ratio_threshold=compression_ratio_threshold,
+                logprob_threshold=logprob_threshold,
+                no_speech_threshold=no_speech_threshold,
+                return_timestamps=(i % 2 == 0),
+            )
+            generation_params.append(params)
+    else:
+        generation_params = GenerationParams(
+            temperatures=temperatures,
+            compression_ratio_threshold=compression_ratio_threshold,
+            logprob_threshold=logprob_threshold,
+            no_speech_threshold=no_speech_threshold,
+            return_timestamps=return_timestamps,
+        )
+
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
         mesh_device,
         num_inputs,
         model_repo,
         generation_params,
-        batch_size_per_device,
+        language=language,
+        task=task,
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
+        run_both_batch_sizes=run_both_batch_sizes,
     )
 
     if (
@@ -882,15 +960,15 @@ def test_demo_for_conditional_generation_dataset(
         logprob_threshold=logprob_threshold,
         no_speech_threshold=no_speech_threshold,
         return_timestamps=return_timestamps,
-        language=language,
-        task=task,
-        prompt=prompt,
     )
     return run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
         model_repo,
         generation_params,
-        batch_size_per_device,
+        language=language,
+        task=task,
+        prompt=prompt,
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
     )
 
@@ -951,14 +1029,14 @@ def test_demo_for_translation_dataset(
         logprob_threshold=logprob_threshold,
         no_speech_threshold=no_speech_threshold,
         return_timestamps=return_timestamps,
-        language=source_language,
-        task="translate",
     )
     return run_demo_whisper_for_translation_dataset(
         mesh_device,
         model_repo,
         num_inputs,
         generation_params,
-        batch_size_per_device,
+        language=source_language,
+        task="translate",
+        batch_size_per_device=batch_size_per_device,
         stream=stream,
     )
