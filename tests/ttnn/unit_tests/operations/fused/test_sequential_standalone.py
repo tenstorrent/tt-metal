@@ -315,95 +315,6 @@ class TestSourceTransformations:
         assert "__phase1_rt_offset + 3" in result
 
 
-class TestIfdefResolution:
-    """Tests for preprocessor directive resolution."""
-
-    def test_resolve_ifdef_rmsnorm_defined(self):
-        """Test resolving #ifdef RMSNORM when it's defined."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#ifdef RMSNORM
-int b = 2;
-#else
-int c = 3;
-#endif
-int d = 4;
-"""
-        result = resolve_ifdef_directives(source, {"RMSNORM"})
-        assert "int a = 1" in result
-        assert "int b = 2" in result
-        assert "int c = 3" not in result
-        assert "int d = 4" in result
-
-    def test_resolve_ifdef_rmsnorm_not_defined(self):
-        """Test resolving #ifdef RMSNORM when it's not defined."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#ifdef RMSNORM
-int b = 2;
-#else
-int c = 3;
-#endif
-int d = 4;
-"""
-        result = resolve_ifdef_directives(source, set())
-        assert "int a = 1" in result
-        assert "int b = 2" not in result
-        assert "int c = 3" in result
-        assert "int d = 4" in result
-
-    def test_resolve_ifdef_fuse_gamma_defined(self):
-        """Test resolving #ifdef FUSE_GAMMA when it's defined."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#ifdef FUSE_GAMMA
-int gamma_code = 2;
-#endif
-int b = 3;
-"""
-        result = resolve_ifdef_directives(source, {"FUSE_GAMMA"})
-        assert "int gamma_code = 2" in result
-        assert "int a = 1" in result
-        assert "int b = 3" in result
-
-    def test_resolve_ifdef_fuse_gamma_not_defined(self):
-        """Test resolving #ifdef FUSE_GAMMA when it's not defined."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#ifdef FUSE_GAMMA
-int gamma_code = 2;
-#endif
-int b = 3;
-"""
-        result = resolve_ifdef_directives(source, set())
-        assert "int gamma_code = 2" not in result
-        assert "int a = 1" in result
-        assert "int b = 3" in result
-
-    def test_resolve_leaves_unknown_defines(self):
-        """Test that unknown defines are left untouched."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-#ifdef SOME_OTHER_FLAG
-int a = 1;
-#endif
-"""
-        result = resolve_ifdef_directives(source, set())
-        # Unknown directive should pass through
-        assert "#ifdef SOME_OTHER_FLAG" in result
-        assert "int a = 1" in result
-        assert "#endif" in result
-
-
 class TestKernelBodyExtraction:
     """Tests for kernel body extraction."""
 
@@ -745,53 +656,81 @@ class TestMergeCompileTimeArgs:
         assert offsets == {0: 0, 1: 2, 2: 2}
 
 
-class TestMergeDefines:
-    """Tests for define merging."""
+class TestCategorizePhaseDefines:
+    """Tests for _categorize_phase_defines."""
 
-    def test_common_defines_kept(self):
-        """Test that common defines (REDUCE_OP etc.) are kept once."""
-        _merge_defines = _mock_sequential._merge_defines
+    def test_uniform_defines_kept(self):
+        """Test that defines with same value in all phases are uniform."""
+        _categorize = _mock_sequential._categorize_phase_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
+            {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
+        ]
+
+        uniform, per_phase = _categorize(phase_kernels, "compute")
+        uniform_names = [name for name, _ in uniform]
+
+        assert "REDUCE_OP" in uniform_names
+        assert "CUSTOM" in uniform_names
+        assert not per_phase  # nothing varies
+
+    def test_varying_value_defines_per_phase(self):
+        """Test that defines with different values go to per_phase."""
+        _categorize = _mock_sequential._categorize_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "1")])},
             {"compute": MagicMock(defines=[("REDUCE_OP", "PoolType::SUM"), ("CUSTOM", "2")])},
         ]
 
-        result = _merge_defines(phase_kernels, "compute")
-        names = [name for name, _ in result]
+        uniform, per_phase = _categorize(phase_kernels, "compute")
+        uniform_names = [name for name, _ in uniform]
 
-        # REDUCE_OP should appear once
-        assert names.count("REDUCE_OP") == 1
-        # CUSTOM from phase 0 keeps original name, phase 1 gets prefixed
-        assert "CUSTOM" in names
-        assert "PHASE1_CUSTOM" in names
+        # REDUCE_OP is uniform (same value)
+        assert "REDUCE_OP" in uniform_names
+        # CUSTOM varies in value
+        assert "CUSTOM" not in uniform_names
+        assert 0 in per_phase
+        assert 1 in per_phase
+        assert ("CUSTOM", "1") in per_phase[0]
+        assert ("CUSTOM", "2") in per_phase[1]
 
-    def test_source_level_defines_excluded(self):
-        """Test that source-level defines (RMSNORM, FUSE_GAMMA, etc.) are excluded."""
-        _merge_defines = _mock_sequential._merge_defines
+    def test_varying_presence_defines_per_phase(self):
+        """Test that defines present in only some phases go to per_phase."""
+        _categorize = _mock_sequential._categorize_phase_defines
 
         phase_kernels = [
-            {
-                "compute": MagicMock(
-                    defines=[
-                        ("RMSNORM", "1"),
-                        ("FUSE_PRE_ADD", "1"),
-                        ("FUSE_GAMMA", "1"),
-                        ("FUSE_BETA", "1"),
-                        ("NORMAL", "val"),
-                    ]
-                )
-            },
+            {"compute": MagicMock(defines=[("PHASE_SPECIFIC", "1"), ("SHARED", "val")])},
+            {"compute": MagicMock(defines=[("SHARED", "val")])},
         ]
 
-        result = _merge_defines(phase_kernels, "compute")
-        names = [name for name, _ in result]
+        uniform, per_phase = _categorize(phase_kernels, "compute")
+        uniform_names = [name for name, _ in uniform]
 
-        assert "RMSNORM" not in names
-        assert "FUSE_PRE_ADD" not in names
-        assert "FUSE_GAMMA" not in names
-        assert "FUSE_BETA" not in names
-        assert "NORMAL" in names
+        # SHARED same across all phases — uniform
+        assert "SHARED" in uniform_names
+        # PHASE_SPECIFIC only in phase 0 — varying
+        assert "PHASE_SPECIFIC" not in uniform_names
+        assert 0 in per_phase
+        assert ("PHASE_SPECIFIC", "1") in per_phase[0]
+        # Phase 1 has no varying defines
+        assert 1 not in per_phase
+
+    def test_single_phase_all_uniform(self):
+        """Test that single-phase fusion makes all defines uniform."""
+        _categorize = _mock_sequential._categorize_phase_defines
+
+        phase_kernels = [
+            {"compute": MagicMock(defines=[("MY_DEFINE", "1"), ("ANOTHER", "val")])},
+        ]
+
+        uniform, per_phase = _categorize(phase_kernels, "compute")
+        uniform_names = [name for name, _ in uniform]
+
+        assert "MY_DEFINE" in uniform_names
+        assert "ANOTHER" in uniform_names
+        assert not per_phase
 
 
 class TestValidateFp32Consistency:
@@ -1008,30 +947,35 @@ class TestCollectAllPreMainCode:
         """Wrap pre-main code in a minimal kernel source."""
         return f"{pre_main_body}\n\nvoid kernel_main() {{\n    // body\n}}\n"
 
+    @staticmethod
+    def _call(sources_with_indices):
+        """Call _collect_all_pre_main_code and merge the 3-tuple output into (combined_str, phase_names)."""
+        _fn = _mock_sequential._collect_all_pre_main_code
+        shared, per_phase, names = _fn(sources_with_indices)
+        parts = [shared] if shared.strip() else []
+        for idx in sorted(per_phase.keys()):
+            if per_phase[idx].strip():
+                parts.append(per_phase[idx])
+        return "\n\n".join(parts), names
+
     def test_single_phase_functions_prefixed(self):
         """Single phase: functions get phase0_ prefix."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source = self._make_source("ALWI void ACQ() { acquire_dst(); }")
-        result, names = _collect_all_pre_main_code([(0, source)])
+        result, names = self._call([(0, source)])
         assert "phase0_ACQ" in result
         assert names == {0: ["ACQ"]}
 
     def test_single_phase_shared_items_no_prefix(self):
         """Single phase: namespace aliases and using declarations NOT prefixed."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source = self._make_source("namespace g = norm;")
-        result, names = _collect_all_pre_main_code([(0, source)])
+        result, names = self._call([(0, source)])
         assert "namespace g = norm;" in result
         assert 0 not in names  # no phase-specific items
 
     def test_identical_functions_both_prefixed(self):
         """Identical function from two phases: both emitted with distinct prefixes."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source = self._make_source("namespace g = norm;\n\nALWI void ACQ() { acquire_dst(); }")
-        result, names = _collect_all_pre_main_code([(0, source), (1, source)])
+        result, names = self._call([(0, source), (1, source)])
         # Namespace alias: deduped (shared)
         assert result.count("namespace g = norm") == 1
         # Function: each phase gets its own prefixed copy
@@ -1042,21 +986,17 @@ class TestCollectAllPreMainCode:
 
     def test_different_helpers_both_prefixed(self):
         """Different helper functions from different ops are both prefixed."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source("ALWI void helper_a() { return; }")
         source1 = self._make_source("ALWI void helper_b() { return; }")
-        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, names = self._call([(0, source0), (1, source1)])
         assert "phase0_helper_a" in result
         assert "phase1_helper_b" in result
 
     def test_same_signature_different_body_both_emitted(self):
         """Same function signature but different body: both emitted with prefixes."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source("inline void process() {\n    int x = 1;\n}")
         source1 = self._make_source("inline void process() {\n    int x = 2;\n}")
-        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, names = self._call([(0, source0), (1, source1)])
         # Both versions kept with phase prefixes
         assert "phase0_process" in result
         assert "phase1_process" in result
@@ -1065,11 +1005,9 @@ class TestCollectAllPreMainCode:
 
     def test_global_vars_all_phases_prefixed(self):
         """Global variables from ALL phases get phase-prefixed."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source("uint32_t counter = 0;")
         source1 = self._make_source("uint32_t counter = 0;")
-        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, names = self._call([(0, source0), (1, source1)])
         assert "uint32_t phase0_counter = 0;" in result
         assert "uint32_t phase1_counter = 0;" in result
         assert "counter" in names[0]
@@ -1077,29 +1015,23 @@ class TestCollectAllPreMainCode:
 
     def test_namespace_blocks_deduped_by_signature(self):
         """Namespace blocks with same name are deduped (shared)."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         ns_block = "namespace my_ns {\n" "using T = uint32_t;\n" "inline void f() { return; }\n" "}  // namespace my_ns"
         source0 = self._make_source(ns_block)
         source1 = self._make_source(ns_block)
-        result, _ = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, _ = self._call([(0, source0), (1, source1)])
         # The opening "namespace my_ns {" should appear exactly once
         assert result.count("namespace my_ns {") == 1
 
     def test_different_namespaces_both_kept(self):
         """Different namespace blocks are both kept (shared, not prefixed)."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source("namespace ns_a {\ninline void fa() { return; }\n}")
         source1 = self._make_source("namespace ns_b {\ninline void fb() { return; }\n}")
-        result, _ = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, _ = self._call([(0, source0), (1, source1)])
         assert "ns_a" in result
         assert "ns_b" in result
 
     def test_mixed_content(self):
         """Mix of aliases, functions, and globals from multiple phases."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source(
             "namespace g = norm;\n\n" "ALWI void ACQ() { acquire_dst(); }\n\n" "uint32_t state = 0;"
         )
@@ -1109,7 +1041,7 @@ class TestCollectAllPreMainCode:
             "uint32_t state = 0;\n\n"
             "ALWI void extra() { return; }"
         )
-        result, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        result, names = self._call([(0, source0), (1, source1)])
         # Alias: deduped (shared)
         assert result.count("namespace g = norm") == 1
         # Function ACQ: both phases prefixed
@@ -1126,37 +1058,30 @@ class TestCollectAllPreMainCode:
 
     def test_phase_names_returned(self):
         """phase_names dict correctly tracks all prefixed names per phase."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source0 = self._make_source("ALWI void ACQ() { acquire_dst(); }\n\nuint32_t x = 1;")
         source1 = self._make_source("ALWI void REL() { release_dst(); }\n\nfloat y = 2.0;")
-        _, names = _collect_all_pre_main_code([(0, source0), (1, source1)])
+        _, names = self._call([(0, source0), (1, source1)])
         assert set(names[0]) == {"ACQ", "x"}
         assert set(names[1]) == {"REL", "y"}
 
     def test_empty(self):
-        """Empty input returns empty string and empty dict."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
-        result, names = _collect_all_pre_main_code([])
-        assert result == ""
+        """Empty input returns empty string and empty dicts."""
+        shared, per_phase, names = _mock_sequential._collect_all_pre_main_code([])
+        assert shared == ""
+        assert per_phase == {}
         assert names == {}
 
     def test_block_comments_stripped(self):
         """Block comments in pre-main are stripped before processing."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source = self._make_source("/**\n * @brief Helper\n */\n" "ALWI void helper() { return; }")
-        result, _ = _collect_all_pre_main_code([(0, source)])
+        result, _ = self._call([(0, source)])
         assert "@brief" not in result
         assert "phase0_helper" in result
 
     def test_pragma_stripped(self):
         """#pragma directives are stripped from pre-main."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         source = self._make_source("#pragma once\n\nnamespace g = norm;")
-        result, _ = _collect_all_pre_main_code([(0, source)])
+        result, _ = self._call([(0, source)])
         assert "#pragma" not in result
         assert "namespace g = norm" in result
 
@@ -1514,10 +1439,9 @@ void kernel_main() {
 
     def _merge_sources(self, *sources):
         """Run sources through the pre-main merging pipeline."""
-        _collect_all_pre_main_code = _mock_sequential._collect_all_pre_main_code
-
         indexed = list(enumerate(sources))
-        result, _ = _collect_all_pre_main_code(indexed)
+        shared, per_phase, _ = _mock_sequential._collect_all_pre_main_code(indexed)
+        result = shared + "\n\n" + "\n\n".join(per_phase.get(i, "") for i in sorted(per_phase.keys()))
         return result
 
     def _validate(self, result: str, label: str):
@@ -1801,92 +1725,6 @@ void kernel_main() {
         source = "void other_function() { int x = 1; }"
         body = extract_kernel_body(source)
         assert body == ""
-
-
-class TestIfdefRobustness:
-    """Tests for extended #ifdef resolution patterns."""
-
-    def test_not_defined_c_style(self):
-        """Test C++ standard !defined(X) syntax."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#if !defined(RMSNORM)
-int b = 2;
-#endif
-int c = 3;
-"""
-        result = resolve_ifdef_directives(source, set())
-        assert "int b = 2" in result
-
-        result2 = resolve_ifdef_directives(source, {"RMSNORM"})
-        assert "int b = 2" not in result2
-
-    def test_not_defined_no_parens(self):
-        """Test !defined X without parentheses."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-#if !defined FUSE_PRE_ADD
-int no_pre_add = 1;
-#endif
-"""
-        result = resolve_ifdef_directives(source, set())
-        assert "int no_pre_add = 1" in result
-
-        result2 = resolve_ifdef_directives(source, {"FUSE_PRE_ADD"})
-        assert "int no_pre_add = 1" not in result2
-
-    def test_if_0_if_1(self):
-        """Test #if 0 and #if 1 unconditional blocks."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-int a = 1;
-#if 0
-int dead_code = 999;
-#endif
-#if 1
-int always_here = 42;
-#endif
-int b = 2;
-"""
-        result = resolve_ifdef_directives(source, set())
-        assert "int dead_code = 999" not in result
-        assert "int always_here = 42" in result
-        assert "int a = 1" in result
-        assert "int b = 2" in result
-
-    def test_line_continuation(self):
-        """Test backslash line continuation in #if directives."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """int a = 1;
-#if defined FUSE_GAMMA \\
-|| defined FUSE_BETA
-int gamma_or_beta = 1;
-#endif
-int b = 2;"""
-        result = resolve_ifdef_directives(source, {"FUSE_GAMMA"})
-        assert "int gamma_or_beta = 1" in result
-
-    def test_mixed_defined_and_not_defined(self):
-        """Test #if defined(A) && !defined(B)."""
-        resolve_ifdef_directives = _mock_cpp_parser.resolve_ifdef_directives
-
-        source = """
-#if defined(RMSNORM) && !defined(FUSE_PRE_ADD)
-int rms_no_preadd = 1;
-#endif
-"""
-        # RMSNORM defined, FUSE_PRE_ADD not defined -> true
-        result = resolve_ifdef_directives(source, {"RMSNORM"})
-        assert "int rms_no_preadd = 1" in result
-
-        # Both defined -> false (because !defined(FUSE_PRE_ADD) is false)
-        result2 = resolve_ifdef_directives(source, {"RMSNORM", "FUSE_PRE_ADD"})
-        assert "int rms_no_preadd = 1" not in result2
 
 
 class TestCategorizePreMainVariables:
@@ -3079,25 +2917,25 @@ class TestSemaphoreInitialValue:
 
 
 class TestMustMatchDefines:
-    """Tests for MUST_MATCH_DEFINES validation in _merge_defines."""
+    """Tests for MUST_MATCH_DEFINES validation in _categorize_phase_defines."""
 
     def test_matching_accepted(self):
         """Same REDUCE_OP value across phases should be accepted."""
-        _merge_defines = _mock_sequential._merge_defines
+        _categorize = _mock_sequential._categorize_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("REDUCE_DIM", "1")])},
         ]
 
-        result = _merge_defines(phase_kernels, "compute")
-        names = [name for name, _ in result]
+        uniform, _ = _categorize(phase_kernels, "compute")
+        names = [name for name, _ in uniform]
         assert "REDUCE_OP" in names
         assert "REDUCE_DIM" in names
 
     def test_mismatched_rejected(self):
         """Different REDUCE_OP values across phases should raise ValueError."""
-        _merge_defines = _mock_sequential._merge_defines
+        _categorize = _mock_sequential._categorize_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0")])},
@@ -3105,21 +2943,21 @@ class TestMustMatchDefines:
         ]
 
         with pytest.raises(ValueError, match="REDUCE_OP.*inconsistent"):
-            _merge_defines(phase_kernels, "compute")
+            _categorize(phase_kernels, "compute")
 
     def test_present_in_one_phase_only(self):
         """Define present in only one phase should not raise (no conflict)."""
-        _merge_defines = _mock_sequential._merge_defines
+        _categorize = _mock_sequential._categorize_phase_defines
 
         phase_kernels = [
             {"compute": MagicMock(defines=[("REDUCE_OP", "0"), ("BCAST_LLKOP", "2")])},
             {"compute": MagicMock(defines=[])},
         ]
 
-        result = _merge_defines(phase_kernels, "compute")
-        names = [name for name, _ in result]
-        assert "REDUCE_OP" in names
-        assert "BCAST_LLKOP" in names
+        uniform, per_phase = _categorize(phase_kernels, "compute")
+        uniform_names = [name for name, _ in uniform]
+        assert "REDUCE_OP" in uniform_names
+        assert "BCAST_LLKOP" in uniform_names
 
 
 if __name__ == "__main__":
