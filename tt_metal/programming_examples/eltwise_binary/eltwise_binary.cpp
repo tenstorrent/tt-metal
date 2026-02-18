@@ -40,7 +40,7 @@ int main(int /*argc*/, char** /*argv*/) {
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-        constexpr CoreCoord core = {0, 0};
+        constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
         // Define some constants that will be used throughout the program.
         // * Processing 64 tiles
@@ -139,10 +139,16 @@ int main(int /*argc*/, char** /*argv*/) {
                                                                 // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
                                                                 // difference between them is the number of bits used during computation.
 
+        // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+        // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+        const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+        const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+        const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, reader, core, {src0_dram_buffer_addr, src1_dram_buffer_addr, n_tiles});
+        SetRuntimeArgs(program, writer, core, {dst_dram_buffer_addr, n_tiles});
         SetRuntimeArgs(program, compute, core, {n_tiles});
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates

@@ -44,7 +44,7 @@ int main() {
     Program program = CreateProgram();
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
-    constexpr CoreCoord core = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
     // Most data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
     // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
@@ -136,15 +136,17 @@ int main() {
     EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
     EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
-    SetRuntimeArgs(
-        program,
-        binary_reader_kernel_id,
-        core,
-        {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
+    SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer_addr, src1_dram_buffer_addr});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer_addr});
 
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));

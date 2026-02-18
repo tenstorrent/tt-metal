@@ -210,6 +210,12 @@ void matmul_multi_core(
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
     // Set Runtime Arguments for Kernels
     // Each core needs to know which portion of the work it's responsible for. We are parallelizing across output
     // tiles - each core computes different output tiles. Runtime arguments can be changed between program executions
@@ -226,17 +232,16 @@ void matmul_multi_core(
                     program,
                     reader_id,
                     core,
-                    {src0_dram_buffer->address(),  // Address of matrix A in DRAM
-                     src1_dram_buffer->address(),  // Address of matrix B in DRAM
-                     Mt,                           // Number of tiles in M dimension
-                     Kt,                           // Number of tiles in K dimension
-                     Nt,                           // Number of tiles in N dimension
-                     work_offset,                  // Starting offset for this core's work
-                     work_per_core});              // Amount of work for this core
+                    {src0_dram_buffer_addr,  // Address of matrix A in DRAM
+                     src1_dram_buffer_addr,  // Address of matrix B in DRAM
+                     Mt,                     // Number of tiles in M dimension
+                     Kt,                     // Number of tiles in K dimension
+                     Nt,                     // Number of tiles in N dimension
+                     work_offset,            // Starting offset for this core's work
+                     work_per_core});        // Amount of work for this core
 
                 // Set arguments for the writer kernel (data output)
-                tt_metal::SetRuntimeArgs(
-                    program, writer_id, core, {dst_dram_buffer->address(), work_per_core, work_offset});
+                tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_dram_buffer_addr, work_per_core, work_offset});
 
                 // Set arguments for the compute kernel
                 tt_metal::SetRuntimeArgs(
