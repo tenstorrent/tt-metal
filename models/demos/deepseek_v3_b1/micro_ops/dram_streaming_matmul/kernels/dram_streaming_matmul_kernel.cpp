@@ -105,8 +105,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),
         get_named_compile_time_arg_val("dram_mm_cb_mul_out"),
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
-        get_named_compile_time_arg_val("dram_mm_cb_out"),
-        get_named_compile_time_arg_val("dram_mm_per_core_n"),
+        get_named_compile_time_arg_val("dram_mm_cb_out"),         // cb_in0_wait
+        get_named_compile_time_arg_val("dram_mm_per_core_n"),     // cb_in0_wait_tiles
+        get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),     // cb_in1_wait (same as cb_in1)
+        get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),  // cb_in1_wait_tiles (same as num_tiles)
         get_named_compile_time_arg_val("dram_mm_cb_scalar"),
         get_named_compile_time_arg_val("dram_mm_mul_fp32_dest_acc_en")>;
     // Full init, CBs don't matter
