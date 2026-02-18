@@ -225,19 +225,21 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
 )
 # Typecast on both inputs and optional output
 def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
-    # TODO
-    if ttnn_fn == "ldexp":
-        pytest.skip("Skip for now, not sure why only ldexp op has very low pcc")
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn, ttnn_fn)
 
+    # ldexp(a, b) = a * 2^b: large exponents produce outputs with extreme dynamic
+    # range that bfloat8_b cannot represent with sufficient precision, so we
+    # constrain the exponent to keep outputs in a representable range.
+    b_low, b_high = (-5, 5) if ttnn_fn == "ldexp" else (-50, 50)
+
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
         a_shape
     )
-    torch_input_tensor_b = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
-        b_shape
-    )
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=b_low, high=b_high, dtype=torch.bfloat16), dtype
+    )(b_shape)
     out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.bfloat16), dtype)(out_shape)
 
     input_tensor_a = ttnn.from_torch(
