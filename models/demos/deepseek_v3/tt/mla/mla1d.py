@@ -209,7 +209,7 @@ class MLA1D(AbstractModule):
         # Create DRAM WIDTH sharded memory config for wq_b
         # wq_b: k=q_lora_rank, n=num_heads*q_head_dim (sharded by TP)
         wq_b_k = q_lora_rank  # 1536
-        wq_b_n = num_heads * q_head_dim // num_shards  # 3072 per device
+        wq_b_n = num_heads * q_head_dim // mesh_device.shape[1]  # 3072 per device
         wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
         wq_b_shard_shape = [wq_b_k, wq_b_n_padded // num_dram_banks]
         wq_b_dram_shard_grid = ttnn.CoreRangeSet(
@@ -223,7 +223,7 @@ class MLA1D(AbstractModule):
         # Create DRAM WIDTH sharded memory config for wo
         # wo: k=num_heads*v_head_dim, n=dim
         wo_k = num_heads * v_head_dim  # 16384
-        wo_n = dim  # 896
+        wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
         wo_shard_shape = [wo_k, wo_n_padded // num_dram_banks]
         wo_dram_shard_grid = ttnn.CoreRangeSet(
@@ -340,7 +340,7 @@ class MLA1D(AbstractModule):
         # Create DRAM HEIGHT sharded memory config for wkv_b1 (batch sharding)
         # wkv_b1: batch=num_heads_local, k=qk_nope_head_dim, n=kv_lora_rank
         # After transpose in _convert_weight: k=qk_nope_head_dim, n=kv_lora_rank
-        num_heads_local = num_heads // num_shards
+        num_heads_local = num_heads // mesh_device.shape[1]
         wkv_b1_batch = num_heads_local
         wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch, num_dram_banks)
         wkv_b1_k = qk_nope_head_dim  # 128
@@ -869,11 +869,11 @@ class MLA1D(AbstractModule):
         # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
         # =====================================================================
         wo_k = num_heads * v_head_dim  # 128 * 128 = 16384
-        wo_n = dim  # 896
+        wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
         wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
-        wo_num_in0_cores = 8
+        wo_num_in0_cores = 16
         wo_num_out_cores = 12
 
         # Program config for wo
@@ -1749,7 +1749,6 @@ class MLA1D(AbstractModule):
             **cfg["wq_b_in0_memory_config"],
         )
         tt_q = ttnn.to_memory_config(tt_q, memory_config=wq_b_in0_memory_config)
-
         # 1,1,32,1536, width sharded 8x2 [32,96]
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
@@ -1935,8 +1934,6 @@ class MLA1D(AbstractModule):
             **cfg["wo_in0_memory_config"],
         )
         v_out = ttnn.to_memory_config(v_out, memory_config=wo_in0_memory_config)
-        breakpoint()
-
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
         out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
