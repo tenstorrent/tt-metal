@@ -157,9 +157,7 @@ void kernel_main() {
 ## Build Commands
 
 ```bash
-./build_metal.sh                           # Build tt-metal
-cmake --build build -- onboarding          # Build exercises
-cmake --build build -- onboarding-clean    # Clean exercises
+./build_metal.sh                                      # Build tt-metal (includes onboarding)
 ttnn/tutorials/onboarding/run.sh "e04 and solution"  # Test
 ```
 
