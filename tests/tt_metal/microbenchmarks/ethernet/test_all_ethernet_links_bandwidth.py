@@ -27,7 +27,6 @@ if os.path.exists(FILE_NAME):
 # Accumulate BW results per test function for summary tables
 # Key: test_name -> {(packet_size, channel_count): avg_bw}
 _bw_summary = defaultdict(dict)
-_atexit_registered = False
 
 
 def _print_summary_tables():
@@ -98,11 +97,9 @@ def run_erisc_write_worker_bw_batch(
         logger.info("Error in running the test")
         assert False
 
-    global _atexit_registered
     test_name = request.node.name
-    if not _atexit_registered:
+    if not _bw_summary:
         atexit.register(_print_summary_tables)
-        _atexit_registered = True
 
     ARCH_NAME = os.getenv("ARCH_NAME")
 
