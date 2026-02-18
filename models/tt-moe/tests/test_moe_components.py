@@ -885,13 +885,24 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     up_input = torch.randn(1, 1, 16, intermediate_size) * 10  # Some values outside [-7.0, 7.0]
 
     # Convert to TTNN tensors and put on device
-    device = mesh_device.get_devices()[0] if hasattr(mesh_device, "get_devices") else mesh_device
+    # Use the mesh device with replication
+    gate_tt = ttnn.from_torch(
+        gate_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
-    gate_tt = ttnn.from_torch(gate_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    gate_tt = ttnn.to_device(gate_tt, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    up_tt = ttnn.from_torch(up_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    up_tt = ttnn.to_device(up_tt, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    up_tt = ttnn.from_torch(
+        up_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
     # Apply clamped SwiGLU activation
     activated = DistributedExpert._apply_clamped_swiglu(
@@ -901,8 +912,8 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     # Bring back to CPU
     activated = ttnn.from_device(activated)
 
-    # Convert back to torch
-    activated_torch = ttnn.to_torch(activated)
+    # Convert back to torch (handle mesh device)
+    activated_torch = ttnn.to_torch(activated, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
     # Compute reference implementation
     gate_clamped = torch.clamp(gate_input, max=7.0)
@@ -963,16 +974,32 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     state_dict["down_proj_bias"] = torch.zeros(128, 2880, dtype=torch.bfloat16)
 
     # ========================================
-    # Step 2: Convert weights using ThroughputExpert
+    # Step 2: Convert weights using DistributedExpert
     # ========================================
-    logger.info("Converting weights using ThroughputExpert.convert_weights...")
+    logger.info("Converting weights using DistributedExpert.convert_weights...")
     from pathlib import Path
 
-    converted_weights = ThroughputExpert.convert_weights(
-        config, [state_dict], Path("/tmp"), mesh_device  # List of state dicts  # Weight cache dir
+    # Update config for DistributedExpert
+    expert_config = {
+        "num_experts": 128,
+        "num_experts_per_device": 4,  # 128 experts / 32 devices
+        "tp_size": 1,  # No tensor parallelism in test
+        "ep_size": 32,  # Expert parallel across all devices
+        "hidden_size": 2880,
+        "intermediate_size": 2880,
+        "batch_size": batch_size,
+        "seq_len": seq_len,
+        "swiglu_alpha": 1.702,
+        "swiglu_limit": 7.0,
+        "memory_config": "L1_MEMORY_CONFIG",
+        "output_memory_config": "L1_MEMORY_CONFIG",
+    }
+
+    converted_weights = DistributedExpert.convert_weights(
+        expert_config, [state_dict], Path("/tmp"), mesh_device  # List of state dicts  # Weight cache dir
     )
 
-    logger.info(f"Converted weights: ThroughputExpertWeights object with w1, w2, w3, biases")
+    logger.info(f"Converted weights: TTNNDistributedExpertWeights object")
 
     # ========================================
     # Step 3: Create test data
@@ -1041,34 +1068,26 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     # ========================================
     # Step 5: Create decode config with weights
     # ========================================
-    decode_config = ThroughputExpert.decode_model_config(config, mesh_device)
-
-    # Add converted weights to config as a weights object
-    decode_config["weights"] = converted_weights
-
-    # Add all-to-all configuration to the decode_config
-    decode_config["cluster_axis"] = 0
-    decode_config["dispatch_topology"] = "Linear"  # Use Linear to avoid ring issues
-    decode_config["combine_topology"] = "Linear"
-    decode_config["num_experts"] = num_experts
-    decode_config["num_experts_per_tok"] = num_experts_per_tok
-
-    # Create remap_topk_mask (optional, can be None)
-    remap_topk_mask = None  # Will be created internally if not provided
+    # Update expert_config with runtime parameters
+    expert_config["weights"] = converted_weights
+    expert_config["cluster_axis"] = 0
+    expert_config["dispatch_topology"] = "Linear"  # Use Linear to avoid ring issues
+    expert_config["combine_topology"] = "Linear"
+    expert_config["num_experts"] = num_experts
+    expert_config["num_experts_per_tok"] = num_experts_per_tok
 
     # ========================================
     # Step 6: Run forward pass
     # ========================================
-    logger.info(f"Running ThroughputExpert forward_decode...")
+    logger.info(f"Running DistributedExpert forward_decode...")
     try:
         logger.info("Calling forward_decode...")
-        tt_output = ThroughputExpert.forward_decode(
+        tt_output = DistributedExpert.forward_decode(
             tt_input,  # hidden_states
             tt_indices,  # topk_expert_indices
             tt_weights,  # topk_expert_weights
-            decode_config,  # config (includes all parameters and weights)
+            expert_config,  # config (includes all parameters and weights)
             expert_mapping,  # expert_mapping_tensors
-            remap_topk_mask,  # remap_topk_mask (optional)
             mesh_device,  # mesh_device
         )
         logger.info(f"forward_decode completed, output shape: {tt_output.shape}")
@@ -1093,9 +1112,9 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
         assert not torch.isnan(output_torch).any(), "Output contains NaN values"
         assert not torch.isinf(output_torch).any(), "Output contains Inf values"
 
-        logger.info("✅ ThroughputExpert forward_decode completed successfully")
+        logger.info("✅ DistributedExpert forward_decode completed successfully")
     except Exception as e:
-        logger.error(f"❌ ThroughputExpert forward_decode failed: {e}")
+        logger.error(f"❌ DistributedExpert forward_decode failed: {e}")
         raise
 
     # Cleanup
@@ -1105,13 +1124,15 @@ def test_08_gpt_oss_clamped_swiglu(mesh_device):
     ttnn.deallocate(expert_mapping)
     ttnn.deallocate(tt_output)
 
-    # Cleanup converted weights (ThroughputExpertWeights object)
-    ttnn.deallocate(converted_weights.w1)
-    ttnn.deallocate(converted_weights.w2)
-    ttnn.deallocate(converted_weights.w3)
-    ttnn.deallocate(converted_weights.w1_bias)
-    ttnn.deallocate(converted_weights.w2_bias)
-    ttnn.deallocate(converted_weights.w3_bias)
+    # Cleanup converted weights (TTNNDistributedExpertWeights object)
+    if hasattr(converted_weights, "gate_up_proj_weights"):
+        ttnn.deallocate(converted_weights.gate_up_proj_weights)
+    if hasattr(converted_weights, "down_proj_weights"):
+        ttnn.deallocate(converted_weights.down_proj_weights)
+    if hasattr(converted_weights, "gate_up_proj_biases"):
+        ttnn.deallocate(converted_weights.gate_up_proj_biases)
+    if hasattr(converted_weights, "down_proj_biases"):
+        ttnn.deallocate(converted_weights.down_proj_biases)
 
 
 @pytest.mark.parametrize(

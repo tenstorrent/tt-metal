@@ -268,6 +268,18 @@ class MoEBlock:
         Args:
             state_dict: Dictionary containing weights for router and experts
         """
+        # Strip module prefix if present in configuration
+        module_prefix = self.config.get("module_prefix", "")
+        if module_prefix:
+            stripped_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith(module_prefix + "."):
+                    new_key = key[len(module_prefix) + 1 :]
+                    stripped_dict[new_key] = value
+                else:
+                    stripped_dict[key] = value
+            state_dict = stripped_dict
+
         # Load router weights
         router_state = self._extract_router_weights(state_dict)
         if router_state:
@@ -313,8 +325,23 @@ class MoEBlock:
 
     def _extract_expert_weights(self, state_dict: dict) -> dict:
         """Extract distributed expert weights from state dict."""
-        # All models now use DistributedExperts, weights are under mlp.experts.
-        return {k.replace("mlp.", ""): v for k, v in state_dict.items() if k.startswith("mlp.experts.")}
+        expert_state = {}
+
+        # Try both naming conventions:
+        # 1. Keys under "mlp.experts." (DeepSeek style)
+        for k, v in state_dict.items():
+            if k.startswith("mlp.experts."):
+                expert_state[k.replace("mlp.", "")] = v
+
+        # 2. Direct keys under "mlp." (GPT-OSS test style) - only if no experts. prefix found
+        if not expert_state:
+            for k, v in state_dict.items():
+                if k.startswith("mlp.") and any(proj in k for proj in ["gate_up_proj", "down_proj"]):
+                    # Remove mlp. prefix and add experts. prefix
+                    key = k.replace("mlp.", "experts.")
+                    expert_state[key] = v
+
+        return expert_state
 
     def _extract_shared_expert_weights(self, state_dict: dict) -> dict:
         """Extract shared expert weights from state dict."""
