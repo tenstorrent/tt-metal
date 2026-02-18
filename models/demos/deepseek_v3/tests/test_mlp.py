@@ -134,6 +134,7 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -141,7 +142,6 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         ("prefill", _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [

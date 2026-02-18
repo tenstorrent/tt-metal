@@ -15,12 +15,6 @@
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
-
-SliceReshardAsyncDeviceOperation::program_factory_t SliceReshardAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return SliceReshardAsyncProgramFactory{};
-}
-
 void SliceReshardAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.dim == 0, "Error, neighbor pad currently only supports sharding dim 0, provided {}", args.dim);
@@ -53,9 +47,6 @@ Tensor SliceReshardAsyncDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SliceReshardAsyncDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<SliceReshardAsyncDeviceOperation>(
         args.dim,
         args.output_dim_offset,
@@ -65,8 +56,7 @@ tt::stl::hash::hash_t SliceReshardAsyncDeviceOperation::compute_program_hash(
         args.output_mem_config,
         args.topology,
         args.ring_size,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
