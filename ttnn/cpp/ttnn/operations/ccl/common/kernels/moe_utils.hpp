@@ -4,6 +4,7 @@
 #include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
@@ -46,8 +47,8 @@ PolarState polar_state;
 struct MuxSyncCoreArgs {
     static constexpr uint16_t is_sync_core_arg_offset = 1;
     static constexpr uint16_t termination_sync_address_arg_offset = 10;
-    static constexpr uint16_t termination_master_noc_x_arg_offset = 2;
-    static constexpr uint16_t termination_master_noc_y_arg_offset = 3;
+    static constexpr uint16_t termination_master_noc_x_arg_offset = 15;
+    static constexpr uint16_t termination_master_noc_y_arg_offset = 16;
 
 public:
     const bool is_sync_core;
@@ -62,25 +63,28 @@ public:
         termination_master_noc_y(get_arg_val<uint32_t>(arg_idx + termination_master_noc_y_arg_offset)) {};
 };
 
-struct MuxConnectionBaseArgs {
+// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
+template <uint32_t RtArgIncrement, uint32_t MxXRtOffset, uint32_t MxYRtOffset>
+struct MuxBaseArgsImpl {
 private:
-    static constexpr uint16_t fabric_mux_x_arg_offset = 2;
-    static constexpr uint16_t fabric_mux_y_arg_offset = 3;
+    static constexpr uint16_t fabric_mux_x_arg_offset = MxXRtOffset;
+    static constexpr uint16_t fabric_mux_y_arg_offset = MxYRtOffset;
 
 protected:
-    // 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
-    static constexpr uint32_t all_rt_arg_count = 17;
+    static constexpr uint32_t all_rt_arg_count = RtArgIncrement;
 
 public:
     const uint8_t fabric_mux_x;
     const uint8_t fabric_mux_y;
 
-    MuxConnectionBaseArgs(const uint32_t arg_idx) :
+    MuxBaseArgsImpl(const uint32_t arg_idx) :
         fabric_mux_x(get_arg_val<uint32_t>(arg_idx + fabric_mux_x_arg_offset)),
         fabric_mux_y(get_arg_val<uint32_t>(arg_idx + fabric_mux_y_arg_offset)) {};
 
     static void increment(uint32_t& arg_idx) { arg_idx += all_rt_arg_count; };
 };
+// 17 RT args per active mux sender from ttnn::ccl::fabric_mux_connection_rt_args
+using MuxConnectionBaseArgs = MuxBaseArgsImpl<17, 2, 3>;
 
 template <size_t MuxStatusAddress>
 struct MuxConnectionStatusArgs : MuxConnectionBaseArgs {
@@ -142,11 +146,14 @@ public:
             get_semaphore(get_arg_val<uint32_t>(arg_idx + local_buffer_index_address_arg_offset))) {};
 };
 
+// 2 RT args per mux worker from ttnn::operations::ccl::moe::detail::add_termination_master_rt_args
+using MuxDisconnectionBaseArgs = MuxBaseArgsImpl<2, 0, 1>;
+
 template <size_t TerminationSignalAddress>
-struct MuxTerminationArgs : MuxConnectionBaseArgs {
+struct MuxTerminationArgs : MuxDisconnectionBaseArgs {
     static constexpr size_t fabric_mux_termination_signal_address = TerminationSignalAddress;
 
-    MuxTerminationArgs(const uint32_t arg_idx) : MuxConnectionBaseArgs(arg_idx) {};
+    MuxTerminationArgs(const uint32_t arg_idx) : MuxDisconnectionBaseArgs(arg_idx) {};
 };
 
 template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t MuxChannelBufferSize, size_t MuxStatusAddress>
@@ -154,7 +161,7 @@ inline void open_direction_connections_async(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
     uint32_t rt_args_idx) {
-    for (uint32_t i = 0; i < Size; i++) {
+    for (uint32_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             MuxConnectionArgs<MuxNumBuffersPerChannel, MuxChannelBufferSize, MuxStatusAddress> args(rt_args_idx);
 
@@ -186,6 +193,9 @@ inline void open_direction_connections_barrier(
     for (uint32_t i = 0; i < Size; ++i) {
         if (directions[i]) {
             MuxConnectionStatusArgs<MuxStatusAddress> args(rt_args_idx);
+
+            // DPRINT << "OPENING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+            //                    << "\n";
 
             tt::tt_fabric::wait_for_fabric_endpoint_ready(
                 args.fabric_mux_x,
@@ -246,7 +256,7 @@ inline void close_direction_connections(
     }
 }
 
-template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress>
+template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress, size_t NumMuxWorkers = 0>
 inline void close_direction_connections(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
@@ -259,15 +269,22 @@ inline void close_direction_connections(
     }
 
     if (is_sync_core) {
+        // fast forward past the normal mux rt args to the list of coordinates needed by termination master
         for (uint32_t i = 0; i < Size; ++i) {
             if (directions[i]) {
-                MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
-
-                tt::tt_fabric::fabric_endpoint_terminate(
-                    args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
-
-                args.increment(arg_idx);
+                MuxConnectionBaseArgs::increment(arg_idx);
             }
+        }
+        for (uint32_t i = 0; i < NumMuxWorkers; ++i) {
+            MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
+
+            // DPRINT << "CLOSING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
+            //                    << "\n";
+
+            tt::tt_fabric::fabric_endpoint_terminate(
+                args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
+
+            args.increment(arg_idx);
         }
     }
 }
@@ -392,7 +409,8 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
-        perform_payload_send<true, SenderType>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        perform_payload_send<true, true, SenderType>(
+            fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
         offset += curr_packet_size;
@@ -752,6 +770,67 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     fabric_connections[route].wait_for_empty_write_slot();
     fabric_connections[route].send_payload_flush_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
+// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
+// with just 2 packets instead of (dispatch_devices - 1) unicast packets
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ttnn::operations::ccl::common::ReplicateGroup Axis,
+    bool DoubleAntipodalAtomicInc = false,
+    class SenderType = WorkerToFabricEdmSender>
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
+    std::array<SenderType, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    uint64_t semaphore_noc_addr) {
+    using ttnn::operations::ccl::common::ReplicateGroup;
+    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
+
+    // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
+    // dispatch_devices=MeshRows ReplicateGroup::ROWS (axis=1): targets on same row, dispatch horizontally (EAST/WEST),
+    // dispatch_devices=MeshCols
+    constexpr uint32_t dispatch_devices =
+        Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    // Split the ring: positive direction gets half, negative direction gets the other half
+    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
+    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
+    // dispatch_devices) if DoubleAntipodalAtomicInc is true
+    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2;
+    constexpr uint32_t negative_range =
+        DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range;
+
+    // Determine directions based on axis:
+    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
+    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
+    constexpr uint32_t positive_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    constexpr uint32_t negative_direction =
+        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+
+    // Send multicast in positive direction (start_distance=1, range=positive_range)
+    if constexpr (positive_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connections[positive_direction],
+            packet_header_pos,
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(positive_range));
+    }
+
+    // Send multicast in negative direction (start_distance=1, range=negative_range)
+    if constexpr (negative_range > 0) {
+        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connections[negative_direction],
+            packet_header_neg,
+            cmd_header,
+            static_cast<uint8_t>(1),
+            static_cast<uint8_t>(negative_range));
+    }
 }
 
 template <typename T, uint32_t Size, bool ReturnIdx>
