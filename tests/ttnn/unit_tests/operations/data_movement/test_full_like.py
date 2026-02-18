@@ -29,6 +29,7 @@ from tests.ttnn.utils_for_testing import assert_equal
     "layout",
     [
         ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
 def test_full_like_int(device, input_shape, fill_value, layout):
@@ -72,6 +73,7 @@ def test_full_like_int(device, input_shape, fill_value, layout):
     "layout",
     [
         ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
 def test_full_like_float(device, input_shape, fill_value, dtype, layout):
@@ -100,6 +102,7 @@ def test_full_like_float(device, input_shape, fill_value, dtype, layout):
     "layout",
     [
         ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
 def test_full_like_callback(device, input_shape, fill_value, layout):

@@ -11,8 +11,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "full_like_program_factory_interleaved.hpp"
 
-namespace ttnn::operations::full_like {
+namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -45,7 +46,7 @@ union datatype {
     float f32;
 } u;
 
-FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFactory::create(
+FullLikeInterleavedProgramFactory::cached_program_t FullLikeInterleavedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -54,24 +55,27 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     DataType dtype{operation_attributes.dtype};
     IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
+    const auto& layout = operation_attributes.layout;
 
-    auto num_tiles = input.physical_volume() / TILE_HW;
+    auto num_pages = (layout == Layout::TILE) ? (input.physical_volume() / TILE_HW)
+                                              : input.physical_volume() / input.logical_shape()[-1];
 
     Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
-    uint32_t single_tile_size = tt::tile_size(data_format);
+    uint32_t single_page_size =
+        (layout == Layout::TILE) ? tt::tile_size(data_format) : input.logical_shape()[-1] * tt::datum_size(data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     constexpr CBIndex cb_fill_value_id = CBIndex::c_24;
 
-    auto cb_value_config = tt::tt_metal::CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
-                               .set_page_size(cb_fill_value_id, single_tile_size);
+    auto cb_value_config = tt::tt_metal::CircularBufferConfig(single_page_size, {{cb_fill_value_id, data_format}})
+                               .set_page_size(cb_fill_value_id, single_page_size);
     CreateCircularBuffer(program, all_cores, cb_value_config);
     std::map<std::string, std::string> writer_defines;
 
@@ -93,7 +97,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         }
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, TILE_HW, single_tile_size};
+    uint32_t elems_per_page = (layout == Layout::TILE) ? TILE_HW : input.logical_shape()[-1];
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, elems_per_page, single_page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(
@@ -102,27 +107,27 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
-    uint32_t tiles_offset = 0;
+    uint32_t pages_offset = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord core(i / num_cores_y, i % num_cores_y);
 
-        uint32_t num_tiles_per_core = 0;
+        uint32_t num_pages_per_core = 0;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_pages_per_core = num_pages_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), u.u32, num_tiles_per_core, tiles_offset});
+        SetRuntimeArgs(program, writer_id, core, {output.buffer()->address(), u.u32, num_pages_per_core, pages_offset});
 
-        tiles_offset += num_tiles_per_core;
+        pages_offset += num_pages_per_core;
     }
 
     return {std::move(program), {writer_id, num_cores, num_cores_y}};
 }
 
-void FullLikeOperation::ProgramFactory::override_runtime_arguments(
+void FullLikeInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& /*tensor_args*/,
@@ -142,4 +147,4 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::full_like
+}  // namespace ttnn::prim

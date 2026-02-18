@@ -13,7 +13,7 @@ target_sources(
         FILES full_like.hpp
     PRIVATE
         device/full_like_device_operation.cpp
-        device/full_like_factory.cpp
+        device/full_like_program_factory_interleaved.cpp
         full_like.cpp
 )
 
