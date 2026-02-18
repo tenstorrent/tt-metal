@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
@@ -121,14 +122,22 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
                     constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-                    const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-                    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_2, scalar_w);
+                    constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        cb_in_2,
+                        ckernel::PoolType::AVG,
+                        ckernel::ReduceDim::REDUCE_SCALAR,
+                        reduce_factor_w>();
                 }
 
                 if constexpr (!use_welford && is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
-                    const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-                    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_in_4, scalar_c);
+                    constexpr uint32_t reduce_factor_c = get_named_compile_time_arg_val("reduce_factor_c");
+                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                        cb_in_4,
+                        ckernel::PoolType::AVG,
+                        ckernel::ReduceDim::REDUCE_SCALAR,
+                        reduce_factor_c>();
                 }
 
                 constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;

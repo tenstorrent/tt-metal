@@ -27,6 +27,7 @@
 #include "tt_metal/hw/inc/experimental/udm/udm_api.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/nd_iter_args.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "llk_defs.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/debug/dprint.h"
 
@@ -37,9 +38,6 @@ void kernel_main() {
 
     // Output tensor accessor: starts after input args
     auto output_args = MeshTensorAccessorArgs<decltype(input_args)::next_compile_time_args_offset(), 0>();
-
-    // Packed scaler value for reduction (1.0 for SUM, 1/W for MEAN)
-    constexpr uint32_t scaler_packed = get_compile_time_arg_val(decltype(output_args)::next_compile_time_args_offset());
 
     // CB indices
     constexpr uint32_t cb_in0 = 0;     // Input tiles (row of width tiles)
@@ -72,9 +70,8 @@ void kernel_main() {
 
     // ==================== Initialize Scaler CB ====================
     // Generate scaler tile for reduction (1.0 for SUM, 1/W for MEAN)
-    cb_reserve_back(cb_scaler, 1);
-    dataflow_kernel_lib::generate_reduce_scaler_legacy(cb_scaler, scaler_packed);
-    cb_push_back(cb_scaler, 1);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     // ==================== Compute Initial Page IDs ====================
     uint32_t input_page_id = iter_args.initial_page_id();

@@ -575,6 +575,11 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
                        "welford_writer_unary_sharded_gn_rm_gb_v2.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_sharded_gn_rm_gb_v2.cpp");
+    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"reduce_factor_w", num_rows_per_batch_per_core * num_datum_row_per_group},
+        {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
+    };
+
     auto writer_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -583,7 +588,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
             .compile_args = writer_mcast_sender_compile_time_args,
-            .defines = writer_defines});
+            .defines = writer_defines,
+            .named_compile_args = writer_named_compile_time_args});
     // defines
     std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
@@ -860,13 +866,6 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
-    float winv = 1.0f / std::sqrt(num_rows_per_batch_per_core * num_datum_row_per_group);  // bcast-w scaler
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    bfloat16 bfloat_winv_value = bfloat16::truncate(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
-    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
-    uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
         float f;
         uint32_t u;
@@ -996,8 +995,8 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t input_mask_tile_start_id = 0;
     for (auto core : core_coords) {
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(packed_cinv_value);
-        writer_mcast_sender_args.push_back(packed_winv_value);
+        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
+        writer_mcast_sender_args.push_back(0);  // placeholder (scaler moved to CT args)
         writer_mcast_sender_args.push_back(e.u);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
         writer_mcast_sender_args.push_back(beta_dram_addr);
