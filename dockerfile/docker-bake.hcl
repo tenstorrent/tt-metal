@@ -5,6 +5,11 @@
 # previously duplicated across shell scripts, GitHub workflows, and
 # composite actions.
 #
+# References:
+# https://docs.docker.com/build/bake/reference/
+# https://docs.docker.com/guides/bake/
+# https://docs.docker.com/reference/cli/docker/buildx/bake/
+#
 # USAGE (local development):
 #   docker buildx bake dev              # Build dev image (tools+venvs built automatically)
 #   docker buildx bake ci-test          # Build CI test image
@@ -24,11 +29,11 @@
 #
 # USAGE (CI / GHCR overrides):
 #   Workflows override tool/venv contexts to point to pre-built GHCR images and
-#   invoke bake one target at a time via .github/actions/manual-docker-bake.
-#   This avoids large multi-target metadata fan-out on registry lookups.
-#     docker buildx bake dev \
-#       --set '*.contexts.ccache-layer=docker-image://ghcr.io/.../ccache:tag' \
-#       --set '*.contexts.mold-layer=docker-image://ghcr.io/.../mold:tag' \
+#   invoke bake via .github/actions/manual-docker-bake (manual CLI instead of
+#   docker/bake-action, which had registry metadata timeout issues).
+#     docker buildx bake ci-build ci-test dev \
+#       --set 'ci-build.contexts.ccache-layer=docker-image://ghcr.io/.../ccache:tag' \
+#       --set 'ci-build.contexts.mold-layer=docker-image://ghcr.io/.../mold:tag' \
 #       ...
 #
 # ARCHITECTURE:
