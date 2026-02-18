@@ -109,7 +109,10 @@ class InspectorRpcController(InspectorData):
             except capnp.lib.capnp.KjException as e:
                 if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
                     message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
-                    raise InspectorRpcRemoteException(message)
+                    raise InspectorRpcRemoteException(message) from e
+                raise InspectorException(f"Inspector RPC call '{name}' failed: {e.description}") from e
+            except Exception as e:
+                raise InspectorException(f"Inspector RPC call '{name}' failed: {e}") from e
 
         return method
 
@@ -167,10 +170,11 @@ def run(args, context) -> InspectorData:
     rpc_host = args["--inspector-rpc-host"]
 
     # First try to connect to Inspector RPC
+    rpc_error: Exception | None = None
     try:
         return InspectorRpcController(rpc_host, rpc_port)
-    except:
-        pass
+    except Exception as exc:
+        rpc_error = exc
 
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
@@ -180,12 +184,16 @@ def run(args, context) -> InspectorData:
     # Try to load serialized RPC data
     try:
         return InspectorRpcSerialized(log_directory)
-    except:
+    except Exception as serialized_exc:
+        rpc_error_text = f"{type(rpc_error).__name__}: {rpc_error}" if rpc_error is not None else "unknown RPC failure"
+        serialized_error_text = f"{type(serialized_exc).__name__}: {serialized_exc}"
         raise InspectorException(
             "There is no Inspector RPC data, cannot continue. "
             "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
             "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
+            "TT_METAL_INSPECTOR_RPC=1.\n"
+            f"RPC connection failure: {rpc_error_text}\n"
+            f"Serialized data failure: {serialized_error_text}"
         )
 
 

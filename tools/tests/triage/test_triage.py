@@ -25,6 +25,7 @@ sys.path.insert(0, triage_home)
 
 import triage
 from triage import run_script, FAILURE_CHECKS, ScriptArguments
+from metal_device_id_mapping import MetalDeviceIdMapping
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -498,3 +499,90 @@ class TestTriage:
             ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
         return result
+
+
+def _make_triage_script(
+    name: str,
+    failed: bool = False,
+    failure_message: str | None = None,
+    depends: list[triage.TriageScript] | None = None,
+) -> triage.TriageScript:
+    return triage.TriageScript(
+        name=name,
+        path=name,
+        config=triage.ScriptConfig(),
+        module=sys.modules[__name__],
+        run_method=lambda args, context: None,
+        documentation="Usage:\n    test_script\n\nDescription:\n    test\n\nOwner:\n    test-owner\n",
+        depends=depends or [],
+        failed=failed,
+        failure_message=failure_message,
+    )
+
+
+def test_metal_device_id_mapping_none_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return None
+
+    with pytest.raises(triage.TTTriageError, match="getMetalDeviceIdMappings.*None|returned no data"):
+        MetalDeviceIdMapping(FakeInspectorData())
+
+
+def test_metal_device_id_mapping_malformed_result_has_descriptive_error():
+    class FakeInspectorData:
+        def getMetalDeviceIdMappings(self):
+            return object()
+
+    with pytest.raises(triage.TTTriageError, match="malformed result type|missing 'mappings'"):
+        MetalDeviceIdMapping(FakeInspectorData())
+
+
+def test_summarize_failure_message_prefers_root_cause_line():
+    traceback_message = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/foo.py", line 1, in <module>\n'
+        "    run()\n"
+        "AttributeError: 'NoneType' object has no attribute 'mappings'\n"
+    )
+    assert (
+        triage.summarize_failure_message(traceback_message)
+        == "AttributeError: 'NoneType' object has no attribute 'mappings'"
+    )
+
+
+def test_build_dependency_failure_lines_lists_dependency_names_and_summaries():
+    failing_dep = _make_triage_script(
+        "metal_device_id_mapping.py",
+        failed=True,
+        failure_message="Traceback...\nAttributeError: 'NoneType' object has no attribute 'mappings'",
+    )
+    parent = _make_triage_script("run_checks.py", depends=[failing_dep])
+
+    lines = triage.build_dependency_failure_lines(parent)
+    joined = "\n".join(lines)
+
+    assert "Failed dependencies:" in joined
+    assert "metal_device_id_mapping.py" in joined
+    assert "'NoneType' object has no attribute 'mappings'" in joined
+    assert "Action:" in joined
+
+
+def test_serialize_result_prints_summary_before_details(capsys):
+    script = _make_triage_script(
+        "dispatcher_data.py",
+        failed=True,
+        failure_message=(
+            "Traceback (most recent call last):\n"
+            '  File "/tmp/dispatcher_data.py", line 1, in run\n'
+            "    fail()\n"
+            "RuntimeError: Inspector RPC unavailable\n"
+        ),
+    )
+
+    triage.serialize_result(script, None)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert "Summary: RuntimeError: Inspector RPC unavailable" in output
+    assert "Details:" in output
