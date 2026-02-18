@@ -14,13 +14,14 @@
     },
 
     "experts": {
-      "type": "throughput",
       "distributed": true,
       "shared": false,
       "quantized": false,
-      "activation": "swiglu",
-      "swiglu_alpha": 1.702,
-      "swiglu_limit": 7.0
+      "activation": {
+        "type": "clamped_swiglu",
+        "alpha": 1.702,
+        "gate_limit": 7.0
+      }
     },
 
     "collective": {

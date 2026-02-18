@@ -22,7 +22,6 @@ try:
     from .components.collective.all_to_all_ops import AllToAllConfig
     from .components.experts.distributed_expert import DistributedExpert
     from .components.experts.shared_expert import SharedExpert
-    from .components.experts.throughput_expert import ThroughputExpert
     from .components.routers.moe_gate import MoEGateRouter
     from .components.routers.topk_router import TopKRouter
     from .utils.lazy_state_dict import LazyStateDict
@@ -30,7 +29,6 @@ except ImportError:
     from components.collective.all_to_all_ops import AllToAllConfig
     from components.experts.distributed_expert import DistributedExpert
     from components.experts.shared_expert import SharedExpert
-    from components.experts.throughput_expert import ThroughputExpert
     from components.routers.moe_gate import MoEGateRouter
     from components.routers.topk_router import TopKRouter
     from utils.lazy_state_dict import LazyStateDict
@@ -165,13 +163,9 @@ class MoEBlock:
         """Initialize expert configurations based on simplified JSON."""
         experts_config = self.config["experts"]
 
-        # Determine expert type from config
-        expert_type = experts_config.get("type", "distributed")  # Default to distributed
-
-        # Check router type for hints
-        router_config = self.config.get("router", {})
-        if router_config.get("use_throughput_experts", False):
-            expert_type = "throughput"
+        # All experts now use distributed implementation
+        # GPT-OSS uses DistributedExpert with clamped SwiGLU activation
+        expert_type = "distributed"
 
         self.expert_type = expert_type
         logger.info(f"Using expert type: {expert_type}")
@@ -192,15 +186,11 @@ class MoEBlock:
                 "output_memory_config": "L1_MEMORY_CONFIG",
             }
 
-            # Add ThroughputExpert specific parameters if needed
-            if expert_type == "throughput":
-                base_config.update(
-                    {
-                        "swiglu_alpha": experts_config.get("swiglu_alpha", 1.702),
-                        "swiglu_limit": experts_config.get("swiglu_limit", 7.0),
-                        "sparsity_block_size": self.model_params.get("sparsity_block_size", 32),
-                    }
-                )
+            # Add activation parameters if present (for GPT-OSS clamped SwiGLU)
+            if "swiglu_alpha" in experts_config:
+                base_config["swiglu_alpha"] = experts_config["swiglu_alpha"]
+            if "swiglu_limit" in experts_config:
+                base_config["swiglu_limit"] = experts_config["swiglu_limit"]
 
             # Add quantization parameters if needed
             if experts_config.get("quantized", False):
@@ -328,16 +318,8 @@ class MoEBlock:
 
     def _extract_expert_weights(self, state_dict: dict) -> dict:
         """Extract distributed expert weights from state dict."""
-        if self.expert_type == "throughput":
-            # For ThroughputExperts, weights are directly under mlp. (gate_up_proj, down_proj)
-            expert_state = {}
-            for key in ["mlp.gate_up_proj", "mlp.gate_up_proj_bias", "mlp.down_proj", "mlp.down_proj_bias"]:
-                if key in state_dict:
-                    expert_state[key.replace("mlp.", "")] = state_dict[key]
-            return expert_state
-        else:
-            # For DistributedExperts, weights are under mlp.experts.
-            return {k.replace("mlp.", ""): v for k, v in state_dict.items() if k.startswith("mlp.experts.")}
+        # All models now use DistributedExperts, weights are under mlp.experts.
+        return {k.replace("mlp.", ""): v for k, v in state_dict.items() if k.startswith("mlp.experts.")}
 
     def _extract_shared_expert_weights(self, state_dict: dict) -> dict:
         """Extract shared expert weights from state dict."""
@@ -370,21 +352,13 @@ class MoEBlock:
 
         config = ExpertConfig(self.distributed_expert_config)
 
-        # Convert weights based on expert type
-        if self.expert_type == "throughput":
-            weight_configs = ThroughputExpert.convert_weights(
-                config, (expert_state,), Path("/tmp/moe_expert_weights"), self.mesh_device
-            )
-        else:
-            weight_configs = DistributedExpert.convert_weights(
-                config, (expert_state,), Path("/tmp/moe_expert_weights"), self.mesh_device
-            )
+        # Convert weights using DistributedExpert
+        weight_configs = DistributedExpert.convert_weights(
+            config, (expert_state,), Path("/tmp/moe_expert_weights"), self.mesh_device
+        )
 
-        # Create decode config based on expert type
-        if self.expert_type == "throughput":
-            self.distributed_expert_decode_config = ThroughputExpert.decode_model_config(config, self.mesh_device)
-        else:
-            self.distributed_expert_decode_config = DistributedExpert.decode_model_config(config, self.mesh_device)
+        # Create decode config
+        self.distributed_expert_decode_config = DistributedExpert.decode_model_config(config, self.mesh_device)
 
         # Add all-to-all and other required configurations
         self.distributed_expert_decode_config["cluster_axis"] = self.all_to_all_config.cluster_axis
@@ -394,18 +368,12 @@ class MoEBlock:
         self.distributed_expert_decode_config["num_experts_per_tok"] = self.num_experts_per_tok
         self.distributed_expert_decode_config["hidden_size"] = self.hidden_size
 
-        if self.expert_type == "throughput":
-            self.distributed_expert_decode_config["intermediate_size"] = self.intermediate_size
-            # ThroughputExpert.convert_weights returns ThroughputExpertWeights object, not a dict
-            # Store it directly in the config under "weights" key
-            self.distributed_expert_decode_config["weights"] = weight_configs
-        else:
-            # DistributedExpert returns a dict, so merge as before
-            for key, value in weight_configs.items():
-                if key in self.distributed_expert_decode_config:
-                    self.distributed_expert_decode_config[key].update(value)
-                else:
-                    self.distributed_expert_decode_config[key] = value
+        # DistributedExpert returns a dict, merge the weights
+        for key, value in weight_configs.items():
+            if key in self.distributed_expert_decode_config:
+                self.distributed_expert_decode_config[key].update(value)
+            else:
+                self.distributed_expert_decode_config[key] = value
 
     def _load_shared_expert_weights(self, shared_state: dict):
         """Load shared expert weights with simplified conversion."""
@@ -564,39 +532,15 @@ class MoEBlock:
             x_chunk = ttnn.to_layout(x_chunk, ttnn.TILE_LAYOUT)
 
             # Run experts based on expert type
-            # Both expert types now handle all-to-all operations internally
-            if self.expert_type == "throughput":
-                # Create remap_topk_mask if it doesn't exist
-                if not hasattr(self, "remap_topk_mask"):
-                    num_dispatch_rows = self.mesh_device.shape[0] if self.all_to_all_config.cluster_axis == 0 else 1
-                    self.remap_topk_mask = ttnn.ones(
-                        (1, num_dispatch_rows, 1, self.num_experts),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=self.mesh_device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
-
-                # ThroughputExpert with integrated all-to-all
-                experts_output = ThroughputExpert.forward_decode(
-                    x_chunk,  # Original input, not dispatch_output
-                    indices_chunk,
-                    weights_chunk,
-                    self.distributed_expert_decode_config,  # Includes all config
-                    self.expert_mapping_tensors,
-                    self.remap_topk_mask,
-                    self.mesh_device,
-                )
-            else:
-                # DistributedExpert with integrated all-to-all
-                experts_output = DistributedExpert.forward_decode(
-                    x_chunk,  # Original input, not dispatch_output
-                    indices_chunk,
-                    weights_chunk,
-                    self.distributed_expert_decode_config,
-                    self.expert_mapping_tensors,
-                    self.mesh_device,
-                )
+            # DistributedExpert with integrated all-to-all (now used for all models)
+            experts_output = DistributedExpert.forward_decode(
+                x_chunk,  # Original input, not dispatch_output
+                indices_chunk,
+                weights_chunk,
+                self.distributed_expert_decode_config,
+                self.expert_mapping_tensors,
+                self.mesh_device,
+            )
 
             # Cleanup
             ttnn.deallocate(x_chunk)

@@ -7,7 +7,7 @@ Test suite for GPT-OSS MoE integration with TT-MoE infrastructure.
 This module tests:
 1. Configuration loading for GPT-OSS
 2. TopKRouter functionality
-3. ThroughputExpert integration
+3. DistributedExpert with clamped SwiGLU activation
 4. MoE block compatibility with GPT-OSS settings
 5. Comparison with reference GPT-OSS implementation (if available)
 """
@@ -247,25 +247,25 @@ def test_topk_router_forward(mesh_device_fixture):
     logger.info("✅ TopKRouter forward pass successful")
 
 
-def test_throughput_expert_import():
-    """Test that ThroughputExpert can be imported."""
-    import sys
+def test_gpt_oss_expert_type():
+    """Test that GPT-OSS now uses DistributedExpert with clamped SwiGLU activation."""
+    # GPT-OSS now uses DistributedExpert with clamped SwiGLU activation
+    # This is configured through the JSON config file
+    config_path = Path(__file__).parent.parent / "configs" / "gpt_oss.json"
 
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    with open(config_path) as f:
+        config = json.load(f)
 
-    try:
-        from components.experts.throughput_expert import ThroughputExpert
+    # Check that experts use distributed implementation
+    assert config["moe_block"]["experts"]["distributed"] == True
 
-        logger.info("✅ ThroughputExpert imported successfully")
-    except ImportError as e:
-        pytest.fail(f"Failed to import ThroughputExpert: {e}")
+    # Check that activation is configured for clamped SwiGLU
+    activation = config["moe_block"]["experts"].get("activation", {})
+    assert activation.get("type") == "clamped_swiglu"
+    assert activation.get("alpha") == 1.702
+    assert activation.get("gate_limit") == 7.0
 
-    # Verify key methods exist
-    assert hasattr(ThroughputExpert, "convert_weights")
-    assert hasattr(ThroughputExpert, "decode_model_config")
-    assert hasattr(ThroughputExpert, "forward_decode")
-
-    logger.info("✅ ThroughputExpert has required methods")
+    logger.info("✅ GPT-OSS correctly configured to use DistributedExpert with clamped SwiGLU")
 
 
 @pytest.mark.parametrize(

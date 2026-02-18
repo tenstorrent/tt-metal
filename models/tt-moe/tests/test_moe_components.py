@@ -868,17 +868,62 @@ def test_07_shared_expert_with_reference_comparison(mesh_device):
     assert passed, f"PCC check failed! PCC: {pcc:.6f} < 0.98"
 
 
-def test_08_throughput_expert_basic(mesh_device):
-    """Test ThroughputExpert basic functionality for GPT-OSS with real weights."""
+def test_08_gpt_oss_clamped_swiglu(mesh_device):
+    """Test GPT-OSS clamped SwiGLU activation function."""
     logger.info("=" * 60)
-    logger.info("Test 08: ThroughputExpert Basic Functionality (GPT-OSS)")
+    logger.info("Test 08: GPT-OSS Clamped SwiGLU Activation")
     logger.info("=" * 60)
 
-    # Check if ThroughputExpert exists
-    try:
-        from components.experts.throughput_expert import ThroughputExpert
-    except ImportError as e:
-        pytest.skip(f"ThroughputExpert not implemented yet: {e}")
+    from components.experts.distributed_expert import DistributedExpert
+
+    # Create tensors for testing the activation function
+    intermediate_size = 32
+
+    # Create test inputs with values that will be clamped
+    torch.manual_seed(42)
+    gate_input = torch.randn(1, 1, 16, intermediate_size) * 10  # Some values > 7.0
+    up_input = torch.randn(1, 1, 16, intermediate_size) * 10  # Some values outside [-7.0, 7.0]
+
+    # Convert to TTNN tensors and put on device
+    device = mesh_device.get_devices()[0] if hasattr(mesh_device, "get_devices") else mesh_device
+
+    gate_tt = ttnn.from_torch(gate_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    gate_tt = ttnn.to_device(gate_tt, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    up_tt = ttnn.from_torch(up_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    up_tt = ttnn.to_device(up_tt, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # Apply clamped SwiGLU activation
+    activated = DistributedExpert._apply_clamped_swiglu(
+        gate=gate_tt, up=up_tt, alpha=1.702, limit=7.0, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    # Bring back to CPU
+    activated = ttnn.from_device(activated)
+
+    # Convert back to torch
+    activated_torch = ttnn.to_torch(activated)
+
+    # Compute reference implementation
+    gate_clamped = torch.clamp(gate_input, max=7.0)
+    up_clamped = torch.clamp(up_input, min=-7.0, max=7.0)
+    gate_sigmoid = torch.sigmoid(gate_clamped * 1.702)
+    reference = (up_clamped + 1.0) * (gate_clamped * gate_sigmoid)
+
+    # Check that values match (allow for some precision loss)
+    diff = torch.abs(activated_torch - reference)
+    max_diff = diff.max().item()
+    mean_diff = diff.mean().item()
+
+    logger.info(f"Max difference: {max_diff}")
+    logger.info(f"Mean difference: {mean_diff}")
+
+    # Check that clamping worked (relaxed tolerances for bfloat16 precision)
+    assert activated_torch.max().item() < 150, "Output values should be bounded by clamping"
+    assert max_diff < 0.5, f"Max difference {max_diff} exceeds tolerance for bfloat16"
+    assert mean_diff < 0.05, f"Mean difference {mean_diff} exceeds tolerance for bfloat16"
+
+    logger.info("✅ GPT-OSS clamped SwiGLU activation test passed!")
 
     # Create GPT-OSS config
     config = {

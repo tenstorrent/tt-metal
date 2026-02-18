@@ -109,12 +109,46 @@ class DistributedExpert:
             input_memory_config = ttnn.DRAM_MEMORY_CONFIG
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
+        # Get activation configuration
+        # Support both HF config objects and plain dicts
+        activation_type = "swiglu"  # Default
+        swiglu_alpha = 1.702  # Default
+        swiglu_limit = 7.0  # Default
+
+        if hasattr(hf_config, "activation"):
+            activation_config = hf_config.activation
+            # Handle nested activation dict
+            if isinstance(activation_config, dict):
+                activation_type = activation_config.get("type", "swiglu")
+                swiglu_alpha = activation_config.get("alpha", activation_config.get("swiglu_alpha", 1.702))
+                swiglu_limit = activation_config.get("gate_limit", activation_config.get("swiglu_limit", 7.0))
+            else:
+                # Handle flat string
+                activation_type = activation_config
+        elif isinstance(hf_config, dict):
+            # Check for nested activation dict in config
+            if "activation" in hf_config:
+                activation_config = hf_config["activation"]
+                if isinstance(activation_config, dict):
+                    activation_type = activation_config.get("type", "swiglu")
+                    swiglu_alpha = activation_config.get("alpha", activation_config.get("swiglu_alpha", 1.702))
+                    swiglu_limit = activation_config.get("gate_limit", activation_config.get("swiglu_limit", 7.0))
+                else:
+                    activation_type = activation_config
+            # Also check for flat config values
+            activation_type = hf_config.get("activation_type", activation_type)
+            swiglu_alpha = hf_config.get("swiglu_alpha", swiglu_alpha)
+            swiglu_limit = hf_config.get("swiglu_limit", swiglu_limit)
+
         # Create config dictionary that includes weight references
         config = {
             "mesh_device": mesh_device,
             "input_memory_config": input_memory_config,
             "output_memory_config": output_memory_config,
             "num_experts_per_device": num_experts_per_device,
+            "activation": activation_type,
+            "swiglu_alpha": swiglu_alpha,
+            "swiglu_limit": swiglu_limit,
         }
 
         # Add linear configs with proper structure
@@ -236,6 +270,61 @@ class DistributedExpert:
         return weight_config
 
     @classmethod
+    def _apply_clamped_swiglu(
+        cls,
+        gate: ttnn.Tensor,
+        up: ttnn.Tensor,
+        alpha: float = 1.702,
+        limit: float = 7.0,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
+    ) -> ttnn.Tensor:
+        """
+        Apply clamped SwiGLU activation for GPT-OSS.
+
+        Formula: (up + 1) * (gate * sigmoid(gate * alpha))
+        With clamping: gate clamped to (None, limit], up clamped to [-limit, limit]
+
+        Args:
+            gate: Gate projection output
+            up: Up projection output
+            alpha: Sigmoid scaling factor (default 1.702 for GPT-OSS)
+            limit: Clamping limit (default 7.0)
+            memory_config: Memory configuration for operations
+
+        Returns:
+            Activated tensor
+        """
+        # Clamp gate (max only) - matches reference implementation
+        gate_clamped = ttnn.clamp(gate, min=None, max=limit)
+        ttnn.deallocate(gate)
+
+        # Clamp up (both min and max)
+        up_clamped = ttnn.clamp(up, min=-limit, max=limit)
+        ttnn.deallocate(up)
+
+        # Compute gate_alpha = gate * alpha
+        gate_alpha = ttnn.mul(gate_clamped, alpha)
+
+        # Compute gate_sigmoid = sigmoid(gate_alpha)
+        gate_sigmoid = ttnn.sigmoid(gate_alpha)
+        ttnn.deallocate(gate_alpha)
+
+        # Compute glu = gate * gate_sigmoid
+        glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
+        ttnn.deallocate(gate_clamped)
+        ttnn.deallocate(gate_sigmoid)
+
+        # Add 1 to up: up = up + 1
+        up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
+
+        # Multiply: result = up * glu
+        result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
+        ttnn.deallocate(up_clamped)
+        ttnn.deallocate(glu)
+
+        return result
+
+    @classmethod
     def _forward(cls, x: ttnn.Tensor, cfg: Dict) -> ttnn.Tensor:
         """
         Forward pass through distributed experts.
@@ -297,10 +386,23 @@ class DistributedExpert:
         _log_expert_stats("w1_out", w1_out)
         _log_expert_stats("w3_out", w3_out)
 
-        # Apply activation and multiply (SwiGLU)
-        activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
+        # Apply activation based on configuration
+        activation_type = cfg.get("activation", "swiglu")
+
+        if activation_type == "clamped_swiglu":
+            # Use clamped SwiGLU for GPT-OSS
+            activated = cls._apply_clamped_swiglu(
+                gate=w1_out,
+                up=w3_out,
+                alpha=cfg.get("swiglu_alpha", 1.702),
+                limit=cfg.get("swiglu_limit", 7.0),
+                memory_config=cfg["output_memory_config"],
+            )
+        else:
+            # Use simple SwiGLU for DeepSeek (default)
+            activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
         _log_expert_stats("activated", activated)
 
         # Down projection
