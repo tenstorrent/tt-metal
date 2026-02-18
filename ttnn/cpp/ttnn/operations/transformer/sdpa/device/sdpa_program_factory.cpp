@@ -506,6 +506,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
 
+    auto throttle_level = ttnn::get_throttle_level(compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), static_cast<int>(core_grid.size()), defines, throttle_level);
+
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
     auto reader_kernels_id = CreateKernel(
