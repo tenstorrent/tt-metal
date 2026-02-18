@@ -121,15 +121,16 @@ def create_expert_matmul_tensors(
 # ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
-def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
+def create_shared_expert_tensors(device, M, K_gate, mcast_grid, mesh_mapper=None):
     """
     Create all tensors needed by SharedExpertOp.
 
     Args:
-        device: TT device
+        device: TT device or mesh device
         M: Batch dimension (1)
         K_gate: Gate/Up input dimension (7168)
         mcast_grid: CoreRangeSet for mcast destination (same as routed input mcast)
+        mesh_mapper: Optional mesh mapper for multi-device replication
 
     Returns:
         dict with all ttnn tensors, torch tensors, and validation data.
@@ -161,6 +162,8 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
     torch_down_weights = torch.randn((K_down, N), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
+    from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+
     # ── Activation tensor ──
     act_shard = ttnn.ShardSpec(sender_core_grid, (M, K_gate), ttnn.ShardOrientation.ROW_MAJOR)
     act_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, act_shard)
@@ -171,6 +174,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=act_mem,
         tile=a_tile,
+        **from_torch_kwargs,
     )
 
     # ── Gate/Up weights (stacked, HEIGHT_SHARDED on 128 compute cores) ──
@@ -201,6 +205,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=gu_mem,
         tile=b_tile,
+        **from_torch_kwargs,
     )
 
     # ── Down proj weights ──
@@ -213,6 +218,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=down_mem,
         tile=b_tile,
+        **from_torch_kwargs,
     )
 
     # ── Output ──
@@ -225,6 +231,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=out_mem,
         tile=out_tile,
+        **from_torch_kwargs,
     )
 
     # ── Down mcast destination tensor (gated reduce output [1, K_down] → all 130 cores) ──
@@ -239,6 +246,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=down_mcast_dst_mem,
         tile=a_tile,
+        **from_torch_kwargs,
     )
 
     # ── Output mcast destination tensor (shared expert output [1, N] → all 130 cores) ──
@@ -255,6 +263,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=output_mcast_dst_mem,
         tile=out_tile,
+        **from_torch_kwargs,
     )
 
     # ── Tensor-backed CB tensors ──
@@ -271,6 +280,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=ag_dummy_mem,
         tile=a_tile,
+        **from_torch_kwargs,
     )
     ttnn_bg_gather_dst = ttnn.from_torch(
         torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
@@ -279,6 +289,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=ag_dummy_mem,
         tile=a_tile,
+        **from_torch_kwargs,
     )
 
     # Determine face-view tile for intermed/mcast_src CBs
@@ -299,6 +310,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=gu_out_mem,
         tile=a_tile,
+        **from_torch_kwargs,
     )
 
     # CB 32: Gated reduce intermediate (2 face tiles on sender core)
@@ -311,6 +323,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=intermed_mem,
         tile=face_tile,
+        **from_torch_kwargs,
     )
 
     # CB 33: Gated reduce output / down mcast source (1 face tile on sender core)
@@ -323,6 +336,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=mcast_src_mem,
         tile=face_tile,
+        **from_torch_kwargs,
     )
 
     # CB 36: Down proj matmul output (N_per_core/32 tiles of [1,32] per core on 112 matmul cores)
@@ -338,6 +352,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=down_matmul_out_mem,
         tile=out_tile,
+        **from_torch_kwargs,
     )
 
     # CB 37: Residual add output (same shape as down matmul output on 112 matmul cores)
@@ -352,6 +367,7 @@ def create_shared_expert_tensors(device, M, K_gate, mcast_grid):
         device=device,
         memory_config=residual_add_out_mem,
         tile=out_tile,
+        **from_torch_kwargs,
     )
 
     return {
