@@ -405,11 +405,12 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
                     runtime_args=ncrisc_runtime_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_1,
-                        noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
-                        noc_mode=self.noc_mode,
-                    ),
+                    # config=ttnn.DataMovementConfigDescriptor(
+                    #     processor=ttnn.DataMovementProcessor.RISCV_1,
+                    #     noc=ttnn.NOC.RISCV_0_default,  # TODO: Shouldn't be hardcoded here
+                    #     noc_mode=self.noc_mode,
+                    # ),
+                    config=ttnn.ReaderConfigDescriptor(),
                 )
             )
 
@@ -424,11 +425,12 @@ class UnifiedKernelDescriptor:
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
                     runtime_args=brisc_runtime_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
-                        noc_mode=self.noc_mode,
-                    ),
+                    # config=ttnn.DataMovementConfigDescriptor(
+                    #     processor=ttnn.DataMovementProcessor.RISCV_0,
+                    #     noc=ttnn.NOC.RISCV_1_default,  # TODO: Shouldn't be hardcoded here
+                    #     noc_mode=self.noc_mode,
+                    # ),
+                    config=ttnn.WriterConfigDescriptor(),
                 )
             )
 
