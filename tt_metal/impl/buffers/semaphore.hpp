@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal {
 
-constexpr std::uint32_t NUM_SEMAPHORES = 32;
+constexpr std::uint32_t NUM_SEMAPHORES = 16;
 
 class Semaphore {
 public:
