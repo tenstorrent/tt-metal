@@ -170,12 +170,6 @@ private:
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
-
-    // Generate a GroupingInfo when no match is found for an MGD group
-    GroupingInfo generate_grouping_info_for_mgd_group(
-        const std::string& instance_name,
-        const std::string& instance_type,
-        const GroupingInfo& mgd_grouping_info) const;
 };
 
 }  // namespace tt::tt_fabric
