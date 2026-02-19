@@ -995,79 +995,7 @@ void PhysicalGroupingDescriptor::validate_required_groupings(
         }
     }
 
-    // Count tray preset types and custom "hosts" groupings
-    int tray_1_count = 0;
-    int tray_2_count = 0;
-    int tray_3_count = 0;
-    int tray_4_count = 0;
-    int hosts_count = 0;
-    int meshes_count = 0;
-
-    for (const auto& grouping : proto.groupings()) {
-        if (grouping.has_custom_type()) {
-            const std::string& custom_type = grouping.custom_type();
-            if (custom_type == "hosts") {
-                hosts_count++;
-            } else if (custom_type == "meshes" || custom_type == "MESH") {
-                meshes_count++;
-            }
-        } else if (grouping.has_preset_type()) {
-            switch (grouping.preset_type()) {
-                case proto::TRAY_1: tray_1_count++; break;
-                case proto::TRAY_2: tray_2_count++; break;
-                case proto::TRAY_3: tray_3_count++; break;
-                case proto::TRAY_4: tray_4_count++; break;
-                case proto::MESH: meshes_count++; break;
-                default: break;
-            }
-        }
-    }
-
-    // Validate exactly one TRAY_1 grouping
-    if (tray_1_count == 0) {
-        errors.push_back("Exactly one grouping with preset_type 'TRAY_1' is required but none are defined");
-    } else if (tray_1_count > 1) {
-        errors.push_back(
-            fmt::format("Exactly one grouping with preset_type 'TRAY_1' is required but {} are defined", tray_1_count));
-    }
-
-    // Validate exactly one TRAY_2 grouping
-    if (tray_2_count == 0) {
-        errors.push_back("Exactly one grouping with preset_type 'TRAY_2' is required but none are defined");
-    } else if (tray_2_count > 1) {
-        errors.push_back(
-            fmt::format("Exactly one grouping with preset_type 'TRAY_2' is required but {} are defined", tray_2_count));
-    }
-
-    // Validate exactly one TRAY_3 grouping
-    if (tray_3_count == 0) {
-        errors.push_back("Exactly one grouping with preset_type 'TRAY_3' is required but none are defined");
-    } else if (tray_3_count > 1) {
-        errors.push_back(
-            fmt::format("Exactly one grouping with preset_type 'TRAY_3' is required but {} are defined", tray_3_count));
-    }
-
-    // Validate exactly one TRAY_4 grouping
-    if (tray_4_count == 0) {
-        errors.push_back("Exactly one grouping with preset_type 'TRAY_4' is required but none are defined");
-    } else if (tray_4_count > 1) {
-        errors.push_back(
-            fmt::format("Exactly one grouping with preset_type 'TRAY_4' is required but {} are defined", tray_4_count));
-    }
-
-    // Validate exactly one "hosts" grouping
-    if (hosts_count == 0) {
-        errors.push_back("Exactly one grouping with custom_type 'hosts' is required but none are defined");
-    } else if (hosts_count > 1) {
-        errors.push_back(
-            fmt::format("Exactly one grouping with custom_type 'hosts' is required but {} are defined", hosts_count));
-    }
-
-    // Validate at least one "meshes" grouping (still required)
-    if (meshes_count == 0) {
-        errors.push_back(
-            "At least one grouping with custom_type 'meshes' or preset_type 'MESH' is required but none are defined");
-    }
+    // TRAY, HOST, and MESH definitions are no longer required - validation removed
 }
 
 void PhysicalGroupingDescriptor::validate_grouping_references(
@@ -2372,9 +2300,12 @@ bool validate(
     }
 
     // Add trait constraints for tray_id and asic_location
-    // FIXME: Change this to use FATAL once intermesh mapping is in
-    constraints.add_required_trait_constraint<uint32_t>(target_tray_traits, global_tray_traits);
-    constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits);
+    TT_FATAL(
+        constraints.add_required_trait_constraint<uint32_t>(target_tray_traits, global_tray_traits),
+        "Internal error: Failed to add required trait constraint for tray_id");
+    TT_FATAL(
+        constraints.add_required_trait_constraint<uint32_t>(target_location_traits, global_location_traits),
+        "Internal error: Failed to add required trait constraint for asic_location");
 
     auto result =
         solve_topology_mapping(flat_mesh, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
