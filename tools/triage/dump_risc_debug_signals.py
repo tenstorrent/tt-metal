@@ -18,7 +18,7 @@ Owner:
 
 import json
 import os
-from triage import ScriptConfig, log_warning, run_script, log_check_location, ScriptPriority
+from triage import ScriptConfig, log_warning, run_script, log_check_location
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -30,7 +30,6 @@ from ttexalens.hardware.risc_debug import RiscHaltError
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
     disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
-    priority=ScriptPriority.LOW,
 )
 
 # RISC cores to check for each block type
@@ -154,7 +153,7 @@ def run(args, context: Context):
             )
 
         if all_debug_bus_data:
-            output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT", "debug_bus_signals.json")
+            output_path = os.getenv("TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH", "debug_bus_signals.json")
             with open(output_path, "w") as f:
                 json.dump(all_debug_bus_data, f, indent=2)
             log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")

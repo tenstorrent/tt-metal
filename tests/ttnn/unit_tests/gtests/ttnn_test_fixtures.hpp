@@ -53,7 +53,6 @@ protected:
 
     void SetUp() override {
         device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
-        device_holder_->enable_program_cache();
         device_ = device_holder_.get();
     }
 

@@ -30,5 +30,5 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: "debug_bus_signals_${{ steps.generate-artifact-name.outputs.artifact-name }}"
-        path: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_OUTPUT }}
+        path: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH }}
         if-no-files-found: ignore
