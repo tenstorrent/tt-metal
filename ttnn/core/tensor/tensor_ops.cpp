@@ -160,9 +160,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
 }
 
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        return input_tensor;
-    }
+    TT_FATAL(is_cpu_tensor(input_tensor), "Tensor is not on device!");
 
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
