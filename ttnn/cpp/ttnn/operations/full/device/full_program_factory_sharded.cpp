@@ -11,7 +11,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include "full_program_factory_sharded.hpp"
-#include "full_program_factory_common.hpp"
 
 namespace ttnn::operations::full {
 
@@ -101,13 +100,16 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
         default: break;
     }
 
-    datatype u;
+    union datatype {
+        uint32_t u32;
+        float f32;
+    } u;
     if (std::holds_alternative<int>(fill_value)) {
         u.u32 = std::get<int>(fill_value);
     } else if (std::holds_alternative<float>(fill_value)) {
         auto float_fill_value = std::get<float>(fill_value);
         if (dtype == DataType::BFLOAT16) {
-            u.u32 = get_bfloat16_rounded(float_fill_value);
+            u.u32 = static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(float_fill_value))) << 16;
         } else {
             u.f32 = float_fill_value;
         }
