@@ -371,6 +371,7 @@ def run_prefetcher_all_matmuls(
     model_dims,
     enable_trace=True,
     receiver_mapping_override=None,
+    ring_size=16,
 ):
     """
     Run the prefetcher with all 5 matmuls (QKV, WO, FF1, FF3, FF2) for num_layers.
@@ -395,6 +396,7 @@ def run_prefetcher_all_matmuls(
         num_tensors=num_tensors_per_layer,
         num_layers=num_layers,
         receiver_mapping_override=receiver_mapping_override,
+        num_receiver_cores=ring_size // 8,
     )
 
     # Initialize prefetcher for decode mode
@@ -582,7 +584,7 @@ def run_prefetcher_all_matmuls(
 # Test Cases
 # =============================================================================
 @pytest.mark.skipif(not is_blackhole(), reason="This test only runs on Blackhole")
-@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -657,4 +659,5 @@ def test_prefetcher_BH(
         model_dims=VERIFIED_MODEL_CONFIGS[model_name],
         enable_trace=enable_trace,
         receiver_mapping_override=receiver_mapping,
+        ring_size=ring_size,
     )

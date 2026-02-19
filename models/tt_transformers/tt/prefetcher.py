@@ -17,7 +17,7 @@ from models.tt_transformers.tt.common import Mode
 VERIFIED_MODEL_CONFIGS = {
     "Llama-3.2-1B": {"dim": 2048, "hidden_dim": 8192, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.2-3B": {"dim": 3072, "hidden_dim": 8192, "n_heads": 24, "n_kv_heads": 8},
-    "Llama-3.1-8B": {"dim": 4096, "hidden_dim": 14336, "n_heads": 16, "n_kv_heads": 4},
+    "Llama-3.1-8B": {"dim": 4096, "hidden_dim": 14336, "n_heads": 32, "n_kv_heads": 8},
     "Llama-3.3-70B": {"dim": 8192, "hidden_dim": 28672, "n_heads": 64, "n_kv_heads": 8},
     "Qwen3-32B": {"dim": 5120, "hidden_dim": 22016, "n_heads": 40, "n_kv_heads": 8},
     "Qwen3-VL-7B": {"dim": 4096, "hidden_dim": 11008, "n_heads": 32, "n_kv_heads": 8},
@@ -65,7 +65,7 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
-    MAX_L1_PER_BANK = 1000000 if num_devices == 4 else 850000
+    MAX_L1_PER_BANK = 1000000 if num_devices == 4 or num_devices == 8 else 850000
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
         VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
@@ -83,6 +83,9 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     pages_ok = tiles_per_core <= MAX_CB_PAGES
     bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK
+    logger.info(
+        f"DRAM Prefetcher support check: tiles_per_core: {tiles_per_core} <= {MAX_CB_PAGES} is {pages_ok}, bytes_per_core: {bytes_per_core} <= {MAX_L1_PER_BANK} is {l1_ok}, kv_heads_divisible: {kv_heads_divisible}"
+    )
     return pages_ok and l1_ok and kv_heads_divisible
 
 
