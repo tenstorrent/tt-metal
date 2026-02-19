@@ -29,8 +29,10 @@ void sdpa_single_core(
     const uint32_t subblock_h,
     const uint32_t num_q_chunks,
     const uint32_t num_k_chunks,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const uint32_t mm_throttle_level = 0) {
     TT_FATAL(subblock_h == 1 || subblock_h == 2, "subblock_h must be 1 or 2. Got {}.", subblock_h);
+    TT_FATAL(mm_throttle_level <= 5, "mm_throttle_level must be 0-5. Got {}.", mm_throttle_level);
     TT_FATAL(
         Sq_chunk_t % subblock_h == 0, "Sq_chunk_t ({}) must be divisible by subblock_h ({}).", Sq_chunk_t, subblock_h);
 
@@ -193,6 +195,9 @@ void sdpa_single_core(
     std::map<std::string, std::string> defines;
     constexpr bool exp_approx_mode = true;
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (mm_throttle_level > 0) {
+        defines["MM_THROTTLE"] = std::to_string(mm_throttle_level);
+    }
 
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args = {
@@ -305,9 +310,18 @@ int main() {
         constexpr uint32_t subblock_h = 1;
         constexpr uint32_t num_q_chunks = 3;
         constexpr uint32_t num_k_chunks = 5;
+        constexpr uint32_t mm_throttle_level = 1;
 
         sdpa_single_core(
-            Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, subblock_h, num_q_chunks, num_k_chunks, mesh_device);
+            Sq_chunk_t,
+            Sk_chunk_t,
+            Sv_chunk_t,
+            head_dim_t,
+            subblock_h,
+            num_q_chunks,
+            num_k_chunks,
+            mesh_device,
+            mm_throttle_level);
 
         pass &= mesh_device->close();
 
