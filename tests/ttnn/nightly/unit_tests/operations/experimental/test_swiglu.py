@@ -2,22 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Standalone SwiGLU activation correctness test for GPT-OSS MoE.
+Standalone SwiGLU SFPU accuracy test.
 
-Tests the SwiGLU activation formula:
+Tests the SwiGLU activation kernel in isolation, without matmul or weight
+quantization, by feeding bf16 gate/up tiles directly through the SFPU and
+comparing against a PyTorch reference.
+
+Formula:
     gate_clamped = clamp(gate, max=7.0)
     up_clamped   = clamp(up, min=-7.0, max=7.0)
-    result       = (up_clamped + 1) * gate_clamped * sigmoid(alpha * gate_clamped)
-
-where alpha = 1.702.
-
-This test validates:
-1. The PyTorch reference implementation is correct
-2. The TT device implementation matches the reference (via the full MOE op)
+    result       = (up_clamped + 1) * gate_clamped * sigmoid(1.702 * gate_clamped)
 """
 
-import itertools
-import math
 import pytest
 import torch
 import ttnn
@@ -27,167 +23,197 @@ from models.common.utility_functions import comp_pcc
 
 
 # ---------------------------------------------------------------------------
-# Reference implementation
+# Reference
 # ---------------------------------------------------------------------------
 def swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
-    """
-    PyTorch reference for GPT-OSS SwiGLU.
-
-    Args:
-        gate: Gate projection output (W0 @ input)
-        up: Up projection output (W1 @ input)
-        alpha: Sigmoid scaling factor (default: 1.702 for GPT-OSS)
-        clamp_limit: Symmetric clamp bound (default: 7.0 for GPT-OSS)
-
-    Returns:
-        SwiGLU activated tensor
-    """
     gate = torch.clamp(gate, max=clamp_limit)
     up = torch.clamp(up, min=-clamp_limit, max=clamp_limit)
-    up_plus_1 = up + 1.0
-    glu = gate * torch.sigmoid(alpha * gate)
-    return up_plus_1 * glu
+    return (up + 1.0) * gate * torch.sigmoid(alpha * gate)
 
 
 # ---------------------------------------------------------------------------
-# Pure PyTorch reference tests (no hardware needed)
+# Standalone SFPU test via generic_op
 # ---------------------------------------------------------------------------
-class TestSwiGLUReference:
-    """Tests for the PyTorch SwiGLU reference implementation."""
+# Inline reader kernel: reads gate tiles into CB0 and up tiles into CB1
+# from two DRAM-interleaved tensors.
+BINARY_READER_SOURCE = r"""
+#include "api/dataflow/dataflow_api.h"
 
-    def test_basic_values(self):
-        """SwiGLU with known values."""
-        gate = torch.tensor([0.0, 1.0, -1.0, 0.5], dtype=torch.float32)
-        up = torch.tensor([0.0, 1.0, -1.0, 0.5], dtype=torch.float32)
-        result = swiglu_reference(gate, up)
+void kernel_main() {
+    const uint32_t gate_addr = get_arg_val<uint32_t>(0);
+    const uint32_t up_addr   = get_arg_val<uint32_t>(1);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t start_id  = get_arg_val<uint32_t>(3);
 
-        # gate=0: clamp(0)=0, sigmoid(0)=0.5, 0*0.5=0, (up+1)*0 = 0
-        assert result[0].item() == pytest.approx(0.0, abs=1e-6)
+    constexpr auto gate_args = TensorAccessorArgs<0>();
+    constexpr auto up_args   = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
 
-        # gate=1: clamp(1)=1, sigmoid(1.702)~0.846, 1*0.846=0.846, (1+1)*0.846 = 1.692
-        expected_1 = 2.0 * 1.0 * torch.sigmoid(torch.tensor(1.702)).item()
-        assert result[1].item() == pytest.approx(expected_1, rel=1e-4)
+    constexpr uint32_t cb_gate = 0;
+    constexpr uint32_t cb_up   = 1;
 
-    def test_clamping_gate(self):
-        """Gate values above clamp_limit should be clamped."""
-        gate = torch.tensor([10.0, 7.0, 6.9], dtype=torch.float32)
-        up = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)  # up+1 = 1
+    const uint32_t gate_page_bytes = get_tile_size(cb_gate);
+    const uint32_t up_page_bytes   = get_tile_size(cb_up);
 
-        result = swiglu_reference(gate, up)
+    const auto gate_s = TensorAccessor(gate_args, gate_addr, gate_page_bytes);
+    const auto up_s   = TensorAccessor(up_args,   up_addr,   up_page_bytes);
 
-        # gate=10 clamped to 7, gate=7 stays, gate=6.9 stays
-        # up=0 -> up+1 = 1 -> result = gate_clamped * sigmoid(alpha * gate_clamped)
-        r_7 = 7.0 * torch.sigmoid(torch.tensor(1.702 * 7.0)).item()
-        r_69 = 6.9 * torch.sigmoid(torch.tensor(1.702 * 6.9)).item()
+    uint32_t end_id = start_id + num_tiles;
+    for (uint32_t i = start_id; i < end_id; ++i) {
+        cb_reserve_back(cb_gate, 1);
+        noc_async_read_page(i, gate_s, get_write_ptr(cb_gate));
+        noc_async_read_barrier();
+        cb_push_back(cb_gate, 1);
 
-        assert result[0].item() == pytest.approx(r_7, rel=1e-4), "gate=10 should be clamped to 7"
-        assert result[1].item() == pytest.approx(r_7, rel=1e-4), "gate=7 should stay at 7"
-        assert result[2].item() == pytest.approx(r_69, rel=1e-4), "gate=6.9 should stay at 6.9"
+        cb_reserve_back(cb_up, 1);
+        noc_async_read_page(i, up_s, get_write_ptr(cb_up));
+        noc_async_read_barrier();
+        cb_push_back(cb_up, 1);
+    }
+}
+"""
 
-    def test_clamping_up(self):
-        """Up values should be clamped symmetrically."""
-        gate = torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32)
-        up = torch.tensor([10.0, -10.0, 7.0, -7.0], dtype=torch.float32)
+# Path to the compute kernel (lives next to swiglu_sfpu.h so the include resolves)
+COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/test_swiglu_compute.cpp"
 
-        result = swiglu_reference(gate, up)
+# Reuse the standard unary writer
+WRITER_KERNEL_PATH = (
+    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+)
 
-        g = 1.0 * torch.sigmoid(torch.tensor(1.702)).item()  # gate part
-        # up=10 clamped to 7 -> (7+1)*g = 8*g
-        # up=-10 clamped to -7 -> (-7+1)*g = -6*g
-        # up=7 -> (7+1)*g = 8*g
-        # up=-7 -> (-7+1)*g = -6*g
-        assert result[0].item() == pytest.approx(8.0 * g, rel=1e-4)
-        assert result[1].item() == pytest.approx(-6.0 * g, rel=1e-4)
-        assert result[2].item() == pytest.approx(8.0 * g, rel=1e-4)
-        assert result[3].item() == pytest.approx(-6.0 * g, rel=1e-4)
-
-    def test_bfloat16_range(self):
-        """SwiGLU should work with bfloat16 typical values."""
-        torch.manual_seed(42)
-        gate = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
-        up = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
-
-        result = swiglu_reference(gate.float(), up.float())
-        result_bf16 = swiglu_reference(gate, up)
-
-        # Check PCC between float32 and bfloat16 computation
-        pcc = comp_pcc(result.bfloat16(), result_bf16)[0]
-        assert pcc, f"BF16 PCC too low: {pcc}"
-
-    def test_shape_preservation(self):
-        """Output shape should match input shapes."""
-        for shape in [(1, 1, 32, 32), (2, 4, 32, 64), (1, 1, 32, 2048)]:
-            gate = torch.randn(shape, dtype=torch.float32)
-            up = torch.randn(shape, dtype=torch.float32)
-            result = swiglu_reference(gate, up)
-            assert result.shape == gate.shape, f"Shape mismatch for {shape}"
-
-    def test_vs_silu(self):
-        """SwiGLU with alpha=1, no clamp, and up=0 should NOT equal SiLU (different formula)."""
-        x = torch.randn(32, dtype=torch.float32)
-
-        # SiLU: x * sigmoid(x)
-        silu_result = torch.nn.functional.silu(x)
-
-        # SwiGLU with alpha=1, no clamp, up=0: (0+1) * x * sigmoid(1*x) = x * sigmoid(x)
-        swiglu_result = swiglu_reference(x, torch.zeros_like(x), alpha=1.0, clamp_limit=float("inf"))
-
-        # These SHOULD be equal when alpha=1, up=0, no clamp
-        assert torch.allclose(silu_result, swiglu_result, atol=1e-6), "SwiGLU(alpha=1, up=0) should equal SiLU"
+# bf16 tile page size
+BF16_TILE_PAGE_SIZE = 2 * 1024  # 32 x 32 x 2 bytes
 
 
-# ---------------------------------------------------------------------------
-# Integration test: run through the MOE op on device
-# ---------------------------------------------------------------------------
-# This imports the MOE test infrastructure and runs a minimal config
-# to verify the SwiGLU activation on actual hardware.
-import sys
-import os
+def run_swiglu_sfpu_test(device, num_tiles):
+    """
+    Run the SwiGLU SFPU in isolation on device and compare against PyTorch.
 
-sys.path.insert(0, os.path.dirname(__file__))
-from test_moe import run_test_moe
+    Creates bf16 gate and up tensors, feeds them through the standalone
+    SwiGLU compute kernel (no matmul, no weight quantization), and checks
+    PCC against the reference.
+    """
+    shape = [1, num_tiles, 32, 32]
 
-PCC_THRESHOLD = 0.95  # Relaxed threshold for initial bring-up
+    # Create random bf16 inputs in a range that exercises clamping
+    torch.manual_seed(42)
+    torch_gate = (torch.randn(shape) * 4.0).to(torch.bfloat16)  # some values > 7
+    torch_up = (torch.randn(shape) * 4.0).to(torch.bfloat16)  # some values outside [-7, 7]
+
+    # PyTorch reference (in float32 for precision)
+    torch_ref = swiglu_reference(torch_gate.float(), torch_up.float())
+
+    # Send to device
+    dram_config = ttnn.DRAM_MEMORY_CONFIG
+    gate_tensor = ttnn.from_torch(
+        torch_gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_config
+    )
+    up_tensor = ttnn.from_torch(
+        torch_up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_config
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram_config
+    )
+
+    # ---- Core grid: single core for simplicity ----
+    core = ttnn.CoreCoord(0, 0)
+    core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+
+    # ---- Circular buffers ----
+    cb_total_size = 2 * BF16_TILE_PAGE_SIZE  # double buffer
+
+    gate_cb_format = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=BF16_TILE_PAGE_SIZE)
+    up_cb_format = ttnn.CBFormatDescriptor(buffer_index=1, data_format=ttnn.bfloat16, page_size=BF16_TILE_PAGE_SIZE)
+    out_cb_format = ttnn.CBFormatDescriptor(buffer_index=16, data_format=ttnn.bfloat16, page_size=BF16_TILE_PAGE_SIZE)
+
+    gate_cb = ttnn.CBDescriptor(total_size=cb_total_size, core_ranges=core_range, format_descriptors=[gate_cb_format])
+    up_cb = ttnn.CBDescriptor(total_size=cb_total_size, core_ranges=core_range, format_descriptors=[up_cb_format])
+    out_cb = ttnn.CBDescriptor(total_size=cb_total_size, core_ranges=core_range, format_descriptors=[out_cb_format])
+
+    # ---- Reader kernel (inline source, reads two tensors) ----
+    gate_cta = list(ttnn.TensorAccessorArgs(gate_tensor).get_compile_time_args())
+    up_cta = list(ttnn.TensorAccessorArgs(up_tensor).get_compile_time_args())
+    reader_compile_time_args = gate_cta + up_cta
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    reader_rt_args[0][0] = [gate_tensor.buffer_address(), up_tensor.buffer_address(), num_tiles, 0]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=BINARY_READER_SOURCE,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=core_range,
+        compile_time_args=reader_compile_time_args,
+        runtime_args=reader_rt_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Writer kernel (reuse standard unary writer) ----
+    writer_compile_time_args = [16]  # output CB index
+    writer_compile_time_args.extend(list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()))
+
+    writer_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args[0][0] = [output_tensor.buffer_address(), num_tiles, 0]
+
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_range,
+        compile_time_args=writer_compile_time_args,
+        runtime_args=writer_rt_args,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # ---- Compute kernel (SwiGLU SFPU) ----
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=COMPUTE_KERNEL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_range,
+        compile_time_args=[num_tiles],
+        defines=[],
+        runtime_args=[],
+        config=ttnn.ComputeConfigDescriptor(math_approx_mode=True),
+    )
+
+    # ---- Program descriptor ----
+    program = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=[gate_cb, up_cb, out_cb],
+    )
+
+    # ---- Execute ----
+    io_tensors = [gate_tensor, up_tensor, output_tensor]
+    result = ttnn.generic_op(io_tensors, program)
+
+    # ---- Compare ----
+    torch_output = ttnn.to_torch(result)
+
+    passing, pcc_value = comp_pcc(torch_ref, torch_output)
+
+    return passing, pcc_value
+
+
+PCC_THRESHOLD = 0.999  # High threshold: no weight quantization error
 
 
 @pytest.mark.parametrize(
     "device_params",
     [
         pytest.param(
-            {
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
-            },
+            {"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW},
             id="dispatch_row",
         )
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "M, K, N, E, L",
-    [(32, 7168, 2048, 2, 1)],
-    ids=["M=32-K=7168-N=2048-E=2-L=1"],
-)
-def test_swiglu_via_moe(device, M, K, N, E, L):
+@pytest.mark.parametrize("num_tiles", [1, 4, 16], ids=["1tile", "4tiles", "16tiles"])
+def test_swiglu_sfpu(device, num_tiles):
     """
-    Test SwiGLU activation by running it through the full MOE kernel.
+    Test SwiGLU SFPU in isolation.
 
-    Uses the MOE test infrastructure with check_accuracy=True to verify
-    that the SwiGLU output matches the PyTorch reference.
+    Feeds bf16 gate/up tiles directly through the SFPU kernel (no matmul,
+    no weight quantization) and compares against PyTorch reference.
+    Expects PCC > 0.999 since the only error source is bf16 SFPU precision.
     """
-    accuracy_metrics = run_test_moe(
-        device,
-        M,
-        K,
-        N,
-        E,
-        L,
-        check_accuracy=True,
-        dump_outputs=False,
-    )
-
-    for (layer_id, expert_id), metrics in accuracy_metrics.items():
-        pcc_value = metrics.get("pcc", 0.0)
-        logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC = {pcc_value:.6f}")
-        assert (
-            pcc_value >= PCC_THRESHOLD
-        ), f"PCC too low for layer {layer_id}, expert {expert_id}: {pcc_value:.6f} < {PCC_THRESHOLD}"
+    passing, pcc_value = run_swiglu_sfpu_test(device, num_tiles)
+    logger.info(f"SwiGLU SFPU standalone ({num_tiles} tiles): PCC = {pcc_value}")
+    assert pcc_value >= PCC_THRESHOLD, f"PCC {pcc_value} < {PCC_THRESHOLD}"

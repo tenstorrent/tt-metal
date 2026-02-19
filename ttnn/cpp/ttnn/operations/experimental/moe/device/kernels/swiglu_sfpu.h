@@ -23,10 +23,10 @@
 //   PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false, MyConfig>(gate, up, out)));
 //
 // This header is designed to be reusable across different models.
-// Include it from a compute kernel that runs SFPU on the PACK thread.
+// Include it from a compute kernel that runs SFPU on the PACK or MATH thread.
 //=============================================================================
 
-#ifdef TRISC_PACK
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
 
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
@@ -133,4 +133,4 @@ inline void llk_math_eltwise_binary_sfpu_swiglu(
 
 }  // namespace ckernel
 
-#endif  // TRISC_PACK
+#endif  // TRISC_PACK || TRISC_MATH
